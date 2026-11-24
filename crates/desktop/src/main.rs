@@ -18,10 +18,11 @@ use massorca_desktop::service::LaunchOptions;
 use massorca_desktop::shell::{self, Shell};
 use massorca_desktop::single_instance::{self, LaunchPlan};
 use massorca_desktop::store::ClientDataSource;
+use massorca_desktop::ui_state;
 use massorca_desktop::window_identity;
 use massorca_profile::claim_desktop;
+use massorca_ui::Assets;
 use massorca_ui::tokens::{LAYOUT_WINDOW_MIN_HEIGHT, LAYOUT_WINDOW_MIN_WIDTH};
-use massorca_ui::{Appearance, Assets};
 use std::io::Write;
 
 fn main() {
@@ -56,12 +57,17 @@ fn main() {
         // The running window was raised for this launch, so there is nothing left to open.
         LaunchPlan::HandedOff => return,
     };
+    // Read before the window opens, so the first frame already paints the theme saved last.
+    let saved = profile.as_ref().map(ui_state::load).unwrap_or_default();
     let debug_page = options.page;
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx| {
-            if let Err(error) = massorca_ui::init(Appearance::Dark, cx) {
+            if let Err(error) = massorca_ui::init(saved.theme, cx) {
                 report(&error.to_string());
+            }
+            if let Some(profile) = profile {
+                ui_state::install(cx, profile, saved.clone());
             }
             shell::bind_keys(cx);
             // The bridge starts before the window so the first paint already shows "Connecting".
@@ -79,6 +85,7 @@ fn main() {
             };
             let window_size = size(px(1440.), px(900.));
             let bounds = Bounds::centered(None, window_size, cx);
+            let open_regions = saved.open_regions.clone();
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -108,6 +115,7 @@ fn main() {
                             Some(source) => Shell::with_client(source, window, cx),
                             None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
                         };
+                        shell.restore_open_regions(open_regions);
                         if let Some(field) = launch.debug_focus {
                             shell.start_debug_input(field, window, cx);
                         }

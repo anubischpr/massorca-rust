@@ -3821,6 +3821,8 @@ dependencies = [
  "massorca-protocol",
  "massorca-server",
  "massorca-ui",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

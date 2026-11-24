@@ -17,6 +17,8 @@ massorca-core-remote.workspace = true
 massorca-profile.workspace = true
 massorca-protocol.workspace = true
 massorca-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
 [build-dependencies]

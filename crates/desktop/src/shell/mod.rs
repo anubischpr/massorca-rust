@@ -55,6 +55,7 @@ use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
+use crate::ui_state;
 use actions::{
     CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenQuickOpen, OpenSettings,
     ToggleCommandPalette,
@@ -265,6 +266,11 @@ impl Shell {
         )
     }
 
+    /// Opens the regions the last run left open (SET-02); called before the first frame.
+    pub fn restore_open_regions(&mut self, open: Vec<Region>) {
+        self.model.restore_open_regions(open);
+    }
+
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
@@ -323,6 +329,12 @@ impl Shell {
             }
             cx.notify();
         });
+        // Every change of the shell is checked for a new set of open regions, so the next start opens the same ones.
+        cx.observe_self(|shell, cx| {
+            let open = shell.model.regions().open().to_vec();
+            ui_state::remember(cx, |state| state.open_regions = open);
+        })
+        .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
         let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
