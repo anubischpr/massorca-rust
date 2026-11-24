@@ -55,7 +55,7 @@ fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value, resume: bo
 
 /// A sandbox with these kinds and a folder workspace `main`: `fake` (argv prompt, resumable), `fake-none` (prompt
 /// `none`), `fake-silent` (prompt `none` and no status mechanism, so it can never report `idle`) and `fake-once` (argv
-/// prompt, no resume form).
+/// prompt, no resume form) and `fake-query` (`startup-query` prompt, resumable).
 fn sandbox() -> Sandbox {
     let sandbox = Sandbox::new();
     declare(&sandbox, "fake", json!({ "mode": "argv" }), status(), true);
@@ -86,6 +86,13 @@ fn sandbox() -> Sandbox {
         json!({ "mode": "argv" }),
         status(),
         false,
+    );
+    declare(
+        &sandbox,
+        "fake-query",
+        json!({ "mode": "startup-query", "flag": "--query" }),
+        status(),
+        true,
     );
     declare(
         &sandbox,
@@ -202,6 +209,23 @@ fn a_prompt_to_an_idle_agent_drives_it_to_working_then_done() {
     let done = until(&sandbox, &session, "done");
     assert_eq!(activity(&done), ("done", Some("success"), "hook"));
     assert_eq!(done["result"], "done: hold this");
+}
+
+#[test]
+fn a_startup_query_prompt_reaches_the_agent_as_its_query_flag_at_launch() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-query", &["--prompt", "hold query"]);
+    let session = session_of(&started);
+    let terminal = terminal_of(&started);
+    let working = until(&sandbox, &session, "working");
+    assert_eq!(activity(&working), ("working", None, "hook"));
+    wait_for_line(&sandbox, &terminal, "fake-agent: working on hold query");
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: hold query");
 }
 
 #[test]

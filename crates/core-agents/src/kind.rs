@@ -106,6 +106,9 @@ pub enum PromptMode {
     Argv,
     /// The declared flag, then the text.
     Flag,
+    /// The declared flag and the text as one argument, `<flag>=<text>`. The agent takes the text as its startup query and
+    /// submits it itself once its composer is ready, so MassOrca types nothing later (0054; pv96 `hermes-query`).
+    StartupQuery,
     /// The kind cannot take a prompt at launch.
     None,
 }
@@ -125,7 +128,7 @@ pub enum PasteMode {
 pub struct PromptDecl {
     #[serde(default)]
     pub mode: PromptMode,
-    /// The flag of `flag` mode.
+    /// The flag of `flag` and `startup-query` modes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag: Option<String>,
     /// Put `--` before the text in `argv` mode.
@@ -408,8 +411,15 @@ impl KindDecl {
             PromptMode::Flag if flag.is_none_or(|flag| flag.trim().is_empty()) => {
                 problems.push("prompt.flag is required in flag mode".to_owned());
             }
+            PromptMode::StartupQuery if flag.is_none_or(|flag| flag.trim().is_empty()) => {
+                problems.push("prompt.flag is required in startup-query mode".to_owned());
+            }
+            // Why: the flag and the text form one argument, so a flag with `=` would split it at the wrong place.
+            PromptMode::StartupQuery if flag.is_some_and(|flag| flag.contains('=')) => {
+                problems.push("prompt.flag must not contain '=' in startup-query mode".to_owned());
+            }
             PromptMode::Argv | PromptMode::None if flag.is_some() => {
-                problems.push("prompt.flag is only used in flag mode".to_owned());
+                problems.push("prompt.flag is only used in flag and startup-query mode".to_owned());
             }
             _ => {}
         }
@@ -671,6 +681,40 @@ mod tests {
             value["prompt"] = serde_json::json!({ "mode": "flag", "flag": "--prompt" });
         });
         assert!(fine.is_empty(), "{fine:?}");
+    }
+
+    #[test]
+    fn startup_query_mode_needs_a_flag_that_cannot_take_an_equals_sign() {
+        let mut value = minimal();
+        value["prompt"] = serde_json::json!({ "mode": "startup-query", "flag": "--query" });
+        let kind = parse(value);
+        assert_eq!(kind.prompt.mode, PromptMode::StartupQuery);
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+
+        let missing =
+            problems_of(|value| value["prompt"] = serde_json::json!({ "mode": "startup-query" }));
+        assert!(
+            missing
+                .iter()
+                .any(|problem| problem.contains("prompt.flag")),
+            "{missing:?}"
+        );
+        let joined = problems_of(|value| {
+            value["prompt"] = serde_json::json!({ "mode": "startup-query", "flag": "--query=" });
+        });
+        assert!(
+            joined.iter().any(|problem| problem.contains("'='")),
+            "{joined:?}"
+        );
+        let separated = problems_of(|value| {
+            value["prompt"] = serde_json::json!({ "mode": "startup-query", "flag": "--query", "separator": true });
+        });
+        assert!(
+            separated
+                .iter()
+                .any(|problem| problem.contains("prompt.separator")),
+            "{separated:?}"
+        );
     }
 
     #[test]

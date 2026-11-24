@@ -311,6 +311,14 @@ cannot wait for one, so `agent.start` refuses such a first prompt with `agent.pr
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
 
+A first prompt for a kind whose `prompt.mode` is `startup-query` is one launch argument, `<flag>=<text>`,
+after the kind's arguments and the caller's (0054). The agent takes it as its startup query and submits
+it itself once its own composer is ready, so MassOrca neither waits for `idle` nor types the text later:
+no prompt is held on the run, and the kind's status is not needed for it. The `flag` is required and holds
+no `=`; the text keeps the limits of every mode (8 KiB, no control character except tab, line feed and
+carriage return). Later prompts of such a kind are typed as for any other kind. The contract is the Hermes
+startup query of pv96 (`hermes chat --query=<text>`, decision 0054 amendment). No built-in kind uses it yet.
+
 `agent.resume` (0054) starts a new run of an exited session, in the same session: the kind's resume
 arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
 one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
