@@ -75,6 +75,8 @@ fn seed(store: &Store) -> String {
         holds_secrets: false,
         mode: RunMode::default(),
         pending_permission_mode: None,
+        retained: false,
+        released_at: None,
     };
     store.insert_agent_session(&row).expect("session");
     row.id

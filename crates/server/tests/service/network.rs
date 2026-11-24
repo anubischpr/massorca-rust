@@ -441,7 +441,7 @@ async fn revoking_closes_the_device_at_once_and_refuses_it_later() {
         .await
         .unwrap();
 
-    let closed = timeout(Duration::from_secs(5), async {
+    let closed = timeout(super::common::REPLY_WAIT, async {
         loop {
             match device.call::<_, WhoAmI>(devices::WHOAMI, &()).await {
                 Err(ClientError::Disconnected) => break,
@@ -483,7 +483,7 @@ async fn revoking_ends_the_device_streams_with_the_reason() {
         .await
         .unwrap();
 
-    let ended = timeout(Duration::from_secs(5), async {
+    let ended = timeout(super::common::REPLY_WAIT, async {
         loop {
             match events.next().await {
                 Some(Ok(_)) => {}
@@ -556,7 +556,7 @@ async fn a_hello_without_auth_gets_no_service() {
         })
         .await
         .unwrap();
-    let answer = timeout(Duration::from_secs(5), inbound.recv())
+    let answer = timeout(super::common::REPLY_WAIT, inbound.recv())
         .await
         .unwrap();
     match answer {
@@ -574,7 +574,7 @@ async fn a_hello_without_auth_gets_no_service() {
         ))
         .await
         .ok();
-    let closed = timeout(Duration::from_secs(5), inbound.recv())
+    let closed = timeout(super::common::REPLY_WAIT, inbound.recv())
         .await
         .unwrap();
     assert!(closed.is_none(), "{closed:?}");

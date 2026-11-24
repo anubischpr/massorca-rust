@@ -74,7 +74,7 @@ async fn an_oversized_stream_item_ends_its_stream_and_keeps_the_connection() {
         topic: "project.added".to_owned(),
         id: oversized_text(),
     });
-    let item = timeout(Duration::from_secs(5), events.next())
+    let item = timeout(super::common::REPLY_WAIT, events.next())
         .await
         .expect("the stream reports in time")
         .expect("the stream ends with an error")

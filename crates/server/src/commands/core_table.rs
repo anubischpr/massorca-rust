@@ -549,6 +549,28 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("session"),
         ),
         command(
+            "agent.release",
+            "Archive an exited agent session's output and free its terminal; the record stays",
+            "agent.release",
+            selector("session"),
+        ),
+        command(
+            "agent.retain",
+            "Keep an agent session's exited terminal from eviction, or clear it with retained false",
+            "agent.retain",
+            json!({
+                "type": "object",
+                "required": ["session", "retained"],
+                "properties": { "session": { "type": "string" }, "retained": { "type": "boolean" } }
+            }),
+        ),
+        command(
+            "agent.archive",
+            "Show the archived output of a released agent session",
+            "agent.archive",
+            selector("session"),
+        ),
+        command(
             "agent.hook",
             "Report an agent run's status from its hook",
             "agent.hook",

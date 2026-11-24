@@ -23,6 +23,9 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
+/// How long a test waits for a reply it expects; generous because loaded CI runners stall for seconds.
+pub const REPLY_WAIT: Duration = Duration::from_secs(30);
+
 pub const SERVER_NAME: &str = "massorca-test";
 pub const SERVER_VERSION: &str = "0.0.0-test";
 
@@ -238,7 +241,7 @@ impl Raw {
 
     /// The next message, or `None` once the service has closed the connection.
     pub async fn recv(&mut self) -> Option<Message> {
-        self.recv_within(Duration::from_secs(5)).await
+        self.recv_within(REPLY_WAIT).await
     }
 
     pub async fn recv_within(&mut self, limit: Duration) -> Option<Message> {

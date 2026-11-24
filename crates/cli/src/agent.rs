@@ -81,6 +81,25 @@ pub enum AgentCommand {
         /// Session id, or a unique prefix of at least 8 characters.
         session: String,
     },
+    /// Archives an exited session's output (its newest 256 KiB) and frees its terminal. The record stays. Refused for a
+    /// live run.
+    Release {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
+    /// Keeps a session's exited terminal from eviction, or clears that with --off. A release clears it too.
+    Retain {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// Clears the retain.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Shows the archived output of a released session.
+    Archive {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Connects this terminal to the session's run. Ctrl+] detaches; the agent keeps running.
     Attach {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -424,6 +443,21 @@ pub async fn execute(
                 &forgotten,
                 &[format!("forgot agent session {}", forgotten.id)],
             );
+        }
+        AgentCommand::Release { session } => {
+            let released = client.agent_release(&session).await?;
+            output.success(
+                &released,
+                &[format!("released agent session {}", released.id)],
+            );
+        }
+        AgentCommand::Retain { session, off } => {
+            let retained = client.agent_retain(&session, !off).await?;
+            output.success(&retained, &agent_text::session_details(&retained));
+        }
+        AgentCommand::Archive { session } => {
+            let archive = client.agent_archive(&session).await?;
+            output.success(&archive, &agent_text::archive_lines(&archive));
         }
         AgentCommand::Accounts { command } => {
             agent_accounts::execute(target, &client, command, output, json).await?;

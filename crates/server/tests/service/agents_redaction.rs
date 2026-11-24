@@ -7,7 +7,8 @@ use massorca_core_store::{
     WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, now_ms,
 };
 use massorca_protocol::methods::agents::{
-    self, AgentSession, AgentSessionList, AgentSessionRef, AgentWatchEvent, AgentWatchParams,
+    self, AgentArchive, AgentSession, AgentSessionList, AgentSessionRef, AgentWatchEvent,
+    AgentWatchParams,
 };
 
 use super::common::{connect, profile, stop, temp_home};
@@ -68,6 +69,8 @@ fn seed(store: &Store) -> (String, String) {
         holds_secrets,
         mode: RunMode::default(),
         pending_permission_mode: None,
+        retained: false,
+        released_at: None,
     };
     let (marked, plain) = (row(true), row(false));
     store.insert_agent_session(&marked).expect("marked session");
@@ -167,6 +170,61 @@ async fn a_standard_device_sees_a_marked_run_but_not_its_result() {
     };
     assert_eq!(event["id"], marked.as_str());
     assert!(!event.to_string().contains(RESULT), "{event}");
+    drop((device, owner));
+    stop(running).await;
+}
+
+const ARCHIVED: &str = "agent-archive-placeholder-9d2c";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_standard_device_does_not_read_the_archived_output_of_a_marked_run() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let store = Store::open(profile(home.path(), "server").store_path()).expect("the store");
+    let (marked, plain) = seed(&store);
+    for session in [&marked, &plain] {
+        assert!(
+            store
+                .release_agent_session(session, ARCHIVED, false, now_ms())
+                .expect("the release is recorded")
+        );
+    }
+    let (_client_home, hosts) = client_side();
+    let (device, _) = pair(&hosts, &offer(home.path(), false, None).await, "plain")
+        .await
+        .expect("the device pairs");
+    let owner = connect(home.path(), "server").await;
+
+    for (client, admin) in [(&device, false), (&owner, true)] {
+        let archive: AgentArchive = client
+            .call(
+                agents::ARCHIVE,
+                &AgentSessionRef {
+                    session: marked.clone(),
+                },
+            )
+            .await
+            .expect("agent.archive answers");
+        assert!(archive.released, "the run is released");
+        assert_eq!(archive.text.is_some(), admin, "marked, admin={admin}");
+        assert_eq!(archive.withheld, !admin, "marked, admin={admin}");
+
+        let unmarked: AgentArchive = client
+            .call(
+                agents::ARCHIVE,
+                &AgentSessionRef {
+                    session: plain.clone(),
+                },
+            )
+            .await
+            .expect("agent.archive answers");
+        assert_eq!(
+            unmarked.text.as_deref(),
+            Some(ARCHIVED),
+            "unmarked, admin={admin}"
+        );
+        assert!(!unmarked.withheld);
+    }
     drop((device, owner));
     stop(running).await;
 }

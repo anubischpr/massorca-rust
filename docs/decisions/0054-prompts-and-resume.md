@@ -61,3 +61,28 @@ agent's own conversation id (AG-11).
   now) relies on the person knowing the agent is ready.
 - A prompt typed while an agent shows a permission question would answer
   the question; `force` exists for exactly that, deliberately.
+
+## Amendment: startup-query mode (2026-11-24)
+
+The first prompt can also reach the agent as its startup query, `prompt.mode: "startup-query"`
+(inventory AG-05). The source is the Hermes startup query of pv96, commit `d3c6311a531`, read only:
+
+- `src/shared/tui-agent-config.ts:285`: Hermes declares `promptInjectionMode: 'hermes-query'`.
+- `src/shared/tui-agent-startup.ts:128-147`: the plan has `followupPrompt: null`, and the comment at 143
+  says Hermes owns readiness and submission for `chat --query`. Orca never types the prompt.
+- `src/shared/hermes-startup-query.ts:132-138`: the invocation is the kept arguments with `chat`, then
+  `--query=<text>`, then `--tui`. The `chat` subcommand must come before the query flag.
+- `src/shared/hermes-startup-query.ts:17`, `:161`, `:190`: pv96 carries the text in the environment variable
+  `ORCA_HERMES_STARTUP_QUERY` and a `sh -c` wrapper that eval-expands it into that argument, because it types
+  one shell line. The running Hermes receives the text as an argument either way.
+
+Decision: a `startup-query` mode, named for the generic contract rather than pv96's agent-specific
+`hermes-query`. The launch plan adds one argument, `<flag>=<text>`, after the kind's and the caller's
+arguments, as `flag` mode does, but as one token, so text that starts with `-` cannot read as an option.
+The `flag` is required and holds no `=`, and a `separator` is refused. The run holds no prompt and MassOrca
+types nothing later, so no readiness signal is needed; the agent submits the query itself. The environment
+variable and the shell wrapper are not adopted: the spawn takes argv directly, with no shell line to quote.
+A kind that uses the mode declares its subcommand in `args` (for Hermes, `chat`, then `--tui`).
+
+Not verified against a real Hermes binary. The fake agent accepts `--query=<text>` as its prompt, which
+covers the argument shape and the launch path only. No built-in kind uses the mode yet.

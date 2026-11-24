@@ -35,7 +35,7 @@ fn create_params(name: &str) -> TeamCreateParams {
 
 /// The next change event on `events`, within five seconds.
 async fn next_event(events: &mut Subscription) -> ChangeEvent {
-    timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+    timeout(super::common::REPLY_WAIT, events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
         .expect("stream open")

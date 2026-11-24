@@ -1,7 +1,6 @@
 //! The secret vault methods (decision 0071): round trips without values, refusals with typed codes, and the events.
 
 use std::path::Path;
-use std::time::Duration;
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::events::{self, ChangeEvent};
@@ -218,7 +217,7 @@ async fn unlink_removes_only_the_link() {
 
 async fn next_event(subscription: &mut massorca_client::Subscription) -> ChangeEvent {
     timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         subscription.next_as::<ChangeEvent>(),
     )
     .await

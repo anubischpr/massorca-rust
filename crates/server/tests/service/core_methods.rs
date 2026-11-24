@@ -1,7 +1,6 @@
 //! Core methods: identity, dispatch errors, parameter decoding, registration rules and the command table.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use massorca_protocol::methods::config::ConfigList;
 use massorca_protocol::methods::{config, events, extensions, projects, service, workspaces};
@@ -409,7 +408,7 @@ async fn a_panicking_handler_is_answered_as_internal_and_the_connection_keeps_wo
     let client = connect(home.path(), "default").await;
 
     let answer = timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         client.call::<_, Value>("test.panic", &Value::Null),
     )
     .await
@@ -418,7 +417,7 @@ async fn a_panicking_handler_is_answered_as_internal_and_the_connection_keeps_wo
     assert_eq!(remote_code(&error), codes::INTERNAL);
 
     let info = timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         client.call::<_, Value>(service::INFO, &Value::Null),
     )
     .await

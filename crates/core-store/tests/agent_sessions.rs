@@ -4,8 +4,8 @@ mod common;
 
 use common::{assert_conflict, project_row, workspace_row};
 use massorca_core_store::{
-    AgentAccountRow, AgentSessionRow, BotRow, RunExit, RunExitReason, RunMode, Store, StoreError,
-    StoredActivity, TeamRow, new_id,
+    AgentAccountRow, AgentSessionArchive, AgentSessionRow, BotRow, RunExit, RunExitReason, RunMode,
+    Store, StoreError, StoredActivity, TeamRow, new_id,
 };
 
 /// A store with one project and one workspace; returns the store and the workspace id.
@@ -37,7 +37,130 @@ fn session_row(workspace_id: &str, created_at: i64) -> AgentSessionRow {
         holds_secrets: false,
         mode: RunMode::default(),
         pending_permission_mode: None,
+        retained: false,
+        released_at: None,
     }
+}
+
+/// An exited session, which is the only kind a release can take.
+fn exited_row(workspace_id: &str) -> AgentSessionRow {
+    let mut row = session_row(workspace_id, 10);
+    row.exit = Some(RunExit {
+        code: Some(0),
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: 20,
+    });
+    row
+}
+
+#[test]
+fn a_release_keeps_the_record_and_its_archive_and_marks_it_released() {
+    let (store, workspace) = store_with_workspace();
+    let row = exited_row(&workspace);
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(
+        store
+            .release_agent_session(&row.id, "last lines", true, 30)
+            .unwrap()
+    );
+
+    let released = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(released.released_at, Some(30));
+    assert_eq!(
+        released.exit, row.exit,
+        "the record keeps how its run ended"
+    );
+    assert_eq!(
+        store.get_agent_session_archive(&row.id).unwrap(),
+        Some(AgentSessionArchive {
+            text: "last lines".to_owned(),
+            truncated: true,
+            released_at: 30,
+        })
+    );
+    assert!(
+        !store
+            .release_agent_session(&row.id, "later", false, 40)
+            .unwrap(),
+        "a second release changes nothing"
+    );
+    assert_eq!(
+        store
+            .get_agent_session_archive(&row.id)
+            .unwrap()
+            .unwrap()
+            .text,
+        "last lines"
+    );
+}
+
+#[test]
+fn a_live_session_cannot_be_released() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(
+        !store
+            .release_agent_session(&row.id, "text", false, 30)
+            .unwrap()
+    );
+    assert_eq!(store.get_agent_session_archive(&row.id).unwrap(), None);
+    assert_eq!(
+        store
+            .get_agent_session(&row.id)
+            .unwrap()
+            .unwrap()
+            .released_at,
+        None
+    );
+}
+
+#[test]
+fn retain_is_a_flag_that_a_release_clears_and_a_restart_keeps() {
+    let (store, workspace) = store_with_workspace();
+    let row = exited_row(&workspace);
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(store.set_agent_session_retained(&row.id, true).unwrap());
+    assert!(store.get_agent_session(&row.id).unwrap().unwrap().retained);
+
+    store
+        .release_agent_session(&row.id, "text", false, 30)
+        .unwrap();
+    let released = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert!(!released.retained, "an explicit release clears the retain");
+    assert_eq!(released.released_at, Some(30));
+
+    assert!(store.set_agent_session_retained(&row.id, true).unwrap());
+    let restarted = store
+        .restart_agent_session(&row.id, &new_id(), false, &RunMode::default(), None)
+        .unwrap();
+    assert!(restarted);
+    let resumed = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert!(resumed.retained, "a new run keeps the retain");
+    assert_eq!(resumed.released_at, None, "a new run is not released");
+    assert_eq!(
+        store.get_agent_session_archive(&row.id).unwrap(),
+        None,
+        "a new run drops the archive of the one before"
+    );
+    assert!(!store.set_agent_session_retained("missing", true).unwrap());
+}
+
+#[test]
+fn deleting_a_session_deletes_its_archive() {
+    let (store, workspace) = store_with_workspace();
+    let row = exited_row(&workspace);
+    store.insert_agent_session(&row).unwrap();
+    store
+        .release_agent_session(&row.id, "text", false, 30)
+        .unwrap();
+
+    assert!(store.delete_agent_session(&row.id).unwrap());
+    assert_eq!(store.get_agent_session_archive(&row.id).unwrap(), None);
 }
 
 #[test]

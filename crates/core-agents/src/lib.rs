@@ -28,6 +28,7 @@ pub use packages::{BuiltInPackages, KindPackages, PackageKind, PackageState, use
 pub use provided_env::{EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, ProviderError, SecretGrant};
 pub use resolve::SearchEnv;
 pub use sessions::{
-    AgentError, Agents, AgentsConfig, Change, DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX,
-    DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult, RepoOps,
+    AgentError, Agents, AgentsConfig, ArchivedOutput, Change, DELEGATION_DEPTH_DEFAULT,
+    DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult,
+    RepoOps,
 };
