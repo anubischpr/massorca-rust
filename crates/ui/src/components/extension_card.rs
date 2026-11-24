@@ -17,9 +17,9 @@ use crate::tokens::{
     TYPE_CAPTION, TYPE_MONO_SM, TYPE_TITLE_SM,
 };
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, ImageSource, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    img, px, relative,
+    AnyElement, App, ClickEvent, Div, ElementId, ImageSource, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, img, px, relative,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -109,6 +109,26 @@ fn route_click(
             handler(action, window, cx);
         }
     }
+}
+
+/// The name's press: it opens the item page, and stops here so the card does not open the page a second time.
+fn name_press(
+    handler: &Option<ActionHandler>,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let handler = handler.clone();
+    move |_, window, cx| {
+        cx.stop_propagation();
+        if let Some(handler) = &handler {
+            handler(ExtensionAction::Open, window, cx);
+        }
+    }
+}
+
+/// A group of controls on the card: a press on it is the control's own, so the card does not also open its page.
+fn control_group(id: &ElementId, name: &'static str) -> Stateful<Div> {
+    div()
+        .id((id.clone(), name))
+        .on_click(|_, _, cx| cx.stop_propagation())
 }
 
 /// The switch handler: a toggle carries the state it switches to.
@@ -297,7 +317,7 @@ impl ExtensionCard {
                     .label("Enabled")
                     .disabled(stale)
                     .on_change(route_toggle(handler));
-                let mut row = div()
+                let mut row = control_group(id, "switch-row")
                     .flex()
                     .items_center()
                     .gap(px(SPACE_2))
@@ -530,10 +550,19 @@ impl RenderOnce for ExtensionCard {
         let p = theme.palette;
         let fills = Surface::Raised.fills(&theme);
         let id = self.id.clone();
+        let card_focus = window
+            .use_keyed_state(
+                ElementId::NamedChild(Arc::new(id.clone()), "card".into()),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
         let card = div()
             .id(id.clone())
             .role(Role::ListItem)
             .aria_label(self.name.clone())
+            .track_focus(&card_focus)
             .flex()
             .flex_col()
             .gap(px(SPACE_3))
@@ -550,6 +579,7 @@ impl RenderOnce for ExtensionCard {
         }
 
         let handler = self.on_action.clone();
+        let card = card.on_click(route_click(&handler, ExtensionAction::Open));
         let disabled_extension =
             matches!(self.state, ExtensionState::Installed { enabled: false, .. });
         let name_color = if disabled_extension {
@@ -578,7 +608,7 @@ impl RenderOnce for ExtensionCard {
             .text_color(name_color)
             .hover(|s| s.underline())
             .active(move |s| s.bg(fills.pressed))
-            .on_click(route_click(&handler, ExtensionAction::Open))
+            .on_click(name_press(&handler))
             .child(self.name.clone());
         let plate = div()
             .id((id.clone(), "icon"))
@@ -590,7 +620,6 @@ impl RenderOnce for ExtensionCard {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .on_click(route_click(&handler, ExtensionAction::Open))
             .child(match (self.agent, self.logo.clone()) {
                 (Some(agent), _) => div()
                     .debug_selector(|| "card-agent".into())
@@ -652,6 +681,7 @@ impl RenderOnce for ExtensionCard {
             );
         let mut card = card.child(header).child(
             div()
+                .debug_selector(|| "description".into())
                 .min_w_0()
                 .text_style(TYPE_BODY)
                 .text_color(p.text.secondary)
@@ -696,7 +726,7 @@ impl RenderOnce for ExtensionCard {
                         .child(footer.left),
                 )
                 .child(
-                    div()
+                    control_group(&id, "actions")
                         .flex()
                         .items_center()
                         .gap(px(SPACE_2))
@@ -714,6 +744,7 @@ impl RenderOnce for ExtensionCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::press_key;
     use std::cell::RefCell;
 
     #[test]
@@ -832,6 +863,45 @@ mod tests {
                     .agent(AgentKind::GentleShell),
             )
         }
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_card_body_opens_the_item_page(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: true,
+        });
+        cx.run_until_parked();
+
+        let body = cx
+            .debug_bounds("description")
+            .expect("description is drawn")
+            .center();
+        cx.simulate_click(body, gpui::Modifiers::none());
+
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Open]);
+    }
+
+    #[gpui::test]
+    fn enter_on_the_focused_card_opens_the_item_page(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: true,
+        });
+        cx.run_until_parked();
+
+        // A press on the body focuses the card; Enter on the focused card then opens it.
+        let body = cx
+            .debug_bounds("description")
+            .expect("description is drawn")
+            .center();
+        cx.simulate_click(body, gpui::Modifiers::none());
+        seen.borrow_mut().clear();
+        press_key(cx, "enter");
+
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Open]);
     }
 
     /// Hosts one card, installed and enabled or in the catalog, and records the actions it sends.
