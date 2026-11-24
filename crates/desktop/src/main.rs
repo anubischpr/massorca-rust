@@ -4,7 +4,8 @@
 //! Flags: `--sample`, `--profile <name>`, `--home <dir>`, `--no-autostart`, `--page <name>` (a debug
 //! page, see `launch_options::DebugPage`). Like the CLI, it reads `MASSORCA_HOME`, `MASSORCA_PROFILE` and
 //! `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused for
-//! automated checks (see `launch_options`).
+//! automated checks (see `launch_options`). A second launch for the same profile raises the running
+//! window and exits (PLAT-07).
 
 use gpui::{
     AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
@@ -15,8 +16,10 @@ use massorca_desktop::launch_options::WindowLaunch;
 use massorca_desktop::model::teams::SampleTeamsSource;
 use massorca_desktop::service::LaunchOptions;
 use massorca_desktop::shell::{self, Shell};
+use massorca_desktop::single_instance;
 use massorca_desktop::store::ClientDataSource;
 use massorca_desktop::window_identity;
+use massorca_profile::{DesktopClaim, claim_desktop};
 use massorca_ui::tokens::{LAYOUT_WINDOW_MIN_HEIGHT, LAYOUT_WINDOW_MIN_WIDTH};
 use massorca_ui::{Appearance, Assets};
 use std::io::Write;
@@ -31,6 +34,30 @@ fn main() {
             }
         };
     let launch = WindowLaunch::from_env(|key| std::env::var(key).ok());
+    // An automated launch is never handed off to the user's window, so it claims nothing.
+    let profile = if launch.background {
+        None
+    } else {
+        match options.resolve_profile() {
+            Ok(profile) => Some(profile),
+            Err(message) => {
+                report(&message);
+                std::process::exit(2);
+            }
+        }
+    };
+    let owner = match profile.as_ref().map(claim_desktop) {
+        None => None,
+        Some(Ok(DesktopClaim::Owner(owner))) => Some(owner),
+        // The running window was raised for this launch, so there is nothing left to open.
+        Some(Ok(DesktopClaim::HandedOff)) => return,
+        Some(Err(error)) => {
+            report(&format!(
+                "cannot claim the profile for this window: {error}"
+            ));
+            std::process::exit(1);
+        }
+    };
     let debug_page = options.page;
     gpui_platform::application()
         .with_assets(Assets)
@@ -93,6 +120,12 @@ fn main() {
                     })
                 },
             );
+            // Only an opened window can be raised, so later launches are answered from here on.
+            if let (Some(owner), Ok(window)) = (owner, opened.as_ref()) {
+                single_instance::raise_on_handoff(owner, *window, cx).unwrap_or_else(|error| {
+                    report(&format!("cannot answer later launches: {error}"))
+                });
+            }
             match opened {
                 // GPUI applies the requested size only when it activates a window; a hidden one never is.
                 Ok(window) if launch.background => {
