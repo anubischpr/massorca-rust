@@ -73,3 +73,13 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# uniffi-bindgen-react-native output that `ubrn build android --and-generate` writes again on every build (README.md).
+# Only the TypeScript under src/ is committed.
+/cpp/
+/ios/
+/MassorcaMobile.podspec
+/android/CMakeLists.txt
+/android/cpp-adapter.cpp
+/android/src/main/
+/android/app/src/main/jniLibs/
