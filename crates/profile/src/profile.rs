@@ -86,11 +86,35 @@ impl Profile {
         self.dir.join("service.sock")
     }
 
+    /// The desktop's own folder: its single-instance lock and endpoint, and its UI state (PLAT-07, SET-02).
+    pub fn desktop_dir(&self) -> PathBuf {
+        self.dir.join("desktop")
+    }
+
+    /// Held by the desktop that owns this profile; the operating system releases it when that process ends.
+    pub fn desktop_lock_path(&self) -> PathBuf {
+        self.desktop_dir().join("instance.lock")
+    }
+
+    /// The desktop's endpoint on Unix; Windows uses `desktop_pipe_name`.
+    pub fn desktop_socket_path(&self) -> PathBuf {
+        self.desktop_dir().join("instance.sock")
+    }
+
     /// Windows pipe name. FNV-1a keeps it identical across builds, which std's hashers do not. It hashes `pipe_key`,
     /// so every spelling of one directory names one pipe.
     pub fn pipe_name(&self) -> String {
+        self.named_pipe("massorca")
+    }
+
+    /// Windows pipe name of the desktop's endpoint: the same hash as `pipe_name`, under its own prefix.
+    pub fn desktop_pipe_name(&self) -> String {
+        self.named_pipe("massorca-desktop")
+    }
+
+    fn named_pipe(&self, prefix: &str) -> String {
         let hash = fnv1a_64(pipe_key(&self.dir).as_bytes());
-        format!("massorca-{}-{hash:016x}", self.name)
+        format!("{prefix}-{}-{hash:016x}", self.name)
     }
 }
 

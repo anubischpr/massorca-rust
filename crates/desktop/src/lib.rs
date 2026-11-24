@@ -5,5 +5,6 @@ pub mod launch_options;
 pub mod model;
 pub mod service;
 pub mod shell;
+pub mod single_instance;
 pub mod store;
 pub mod window_identity;
