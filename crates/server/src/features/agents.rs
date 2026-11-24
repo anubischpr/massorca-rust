@@ -10,14 +10,14 @@ use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
-    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentBringBackParams,
-    AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds, AgentListParams,
-    AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef,
-    AgentQueueList, AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
-    QueuedPrompt,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
+    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -50,6 +50,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_QUEUE, Owner::Core)?,
+        // Release and retain of a session, and its archived output (decision 0090).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_RELEASE, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -119,6 +123,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             forget,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RELEASE,
+            capabilities::AGENT_RELEASE,
+            Permission::Workspace,
+            release,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RETAIN,
+            capabilities::AGENT_RELEASE,
+            Permission::Workspace,
+            retain,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ARCHIVE,
+            capabilities::AGENT_RELEASE,
+            Permission::Read,
+            archive,
         )?,
         methods.register(
             Owner::Core,
@@ -322,6 +347,39 @@ async fn mark_seen(
 async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     let session = on_agents(&ctx, move |agents| agents.forget(&params.session)).await?;
     Ok(for_caller(&ctx, session))
+}
+
+/// Releases an exited session: its output is archived, its terminal freed, its record kept (decision 0090).
+async fn release(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| agents.release(&params.session)).await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Sets or clears a session's durable retain (decision 0090).
+async fn retain(ctx: RequestCtx, params: AgentRetainParams) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.set_retained(&params.session, params.retained)
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// The archived output of a released session. A run that holds vault secrets shows its text to host-admin callers only,
+/// as its result is (decision 0071).
+async fn archive(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentArchive, ErrorBody> {
+    let (session, output) =
+        on_agents(&ctx, move |agents| agents.archived_output(&params.session)).await?;
+    let withheld = session.holds_secrets && !is_host_admin(&ctx);
+    Ok(AgentArchive {
+        session: session.id,
+        released: session.released,
+        text: match (&output, withheld) {
+            (Some(output), false) => Some(output.text.clone()),
+            _ => None,
+        },
+        truncated: !withheld && output.as_ref().is_some_and(|output| output.truncated),
+        withheld: withheld && output.is_some(),
+    })
 }
 
 /// Starts a new run of an exited session, which keeps its id (0054), in the mode decision 0083 gives it.

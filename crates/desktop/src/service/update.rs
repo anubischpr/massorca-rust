@@ -564,6 +564,8 @@ pub(crate) mod fixtures {
             mode_confirmed: false,
             mode_source: None,
             pending_permission_mode: None,
+            retained: false,
+            released: false,
         }
     }
 

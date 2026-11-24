@@ -172,6 +172,9 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
 | `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
+| `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
+| `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
+| `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
@@ -308,6 +311,14 @@ cannot wait for one, so `agent.start` refuses such a first prompt with `agent.pr
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
 
+A first prompt for a kind whose `prompt.mode` is `startup-query` is one launch argument, `<flag>=<text>`,
+after the kind's arguments and the caller's (0054). The agent takes it as its startup query and submits
+it itself once its own composer is ready, so MassOrca neither waits for `idle` nor types the text later:
+no prompt is held on the run, and the kind's status is not needed for it. The `flag` is required and holds
+no `=`; the text keeps the limits of every mode (8 KiB, no control character except tab, line feed and
+carriage return). Later prompts of such a kind are typed as for any other kind. The contract is the Hermes
+startup query of pv96 (`hermes chat --query=<text>`, decision 0054 amendment). No built-in kind uses it yet.
+
 `agent.resume` (0054) starts a new run of an exited session, in the same session: the kind's resume
 arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
 one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
@@ -373,6 +384,20 @@ pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `age
 `agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
 mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
 `agent.queue.resume {session}` returns the queue as it is after the lift.
+
+## Release and retain (decision 0090)
+
+`agent release` archives the newest 256 KiB of a run's terminal text (scrollback and visible rows, without escape codes),
+then closes and frees the terminal and keeps the record, marked `released`. Only an exited run can be released; a live
+one is refused with `agent.busy`. The archive lives in `agent_session_archives` and is read with `agent.archive`. When the
+output cannot be read the terminal is kept and the release fails with `agent.archive_failed`. A release clears the retain.
+
+`agent retain` is a durable flag on the session (`retained`). It keeps the session's exited terminal out of the eviction
+that `max_exited` applies: the terminal manager counts only unpinned exited terminals and never forgets a pinned one. Every
+later run's terminal is pinned when it starts. It does not block a release.
+
+`agent forget` deletes the record, its terminal, its files and its archive. `agent resume` of a released session starts a
+new run and drops the archive of the run before. The reference and deviations are in `docs/decisions/0090-agent-release-and-retain.md`.
 
 ## Delegation
 
@@ -462,6 +487,9 @@ massorca agent list [--workspace <ws>]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
 massorca agent forget <session>
+massorca agent release <session>
+massorca agent retain <session> [--off]
+massorca agent archive <session>
 massorca agent attach <session>
 massorca agent prompt <session> <text> [--force]
 massorca agent resume <session>

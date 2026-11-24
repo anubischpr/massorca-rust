@@ -220,6 +220,8 @@ pub const AGENT_QUEUE_FULL: &str = "agent.queue_full";
 pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 /// The request id belongs to a prompt the session already delivered, so it is not typed again (decision 0084).
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
+/// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
+pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";

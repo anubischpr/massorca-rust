@@ -588,6 +588,8 @@ mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         row.id
@@ -634,6 +636,8 @@ mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
 
@@ -909,6 +913,8 @@ mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         let kept = agents
@@ -953,6 +959,8 @@ mod tests {
             holds_secrets: true,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         row.id
@@ -1048,6 +1056,8 @@ mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         row.id

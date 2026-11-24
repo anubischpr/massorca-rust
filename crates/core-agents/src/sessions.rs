@@ -83,6 +83,29 @@ pub type Listener = Box<dyn Fn(Change) + Send + Sync>;
 /// Shortest id prefix a session selector may be.
 pub const MIN_SELECTOR_PREFIX: usize = 8;
 
+/// The most output a release archives, in bytes: the newest of the terminal's text, cut on a character boundary (decision
+/// 0090, the same bound as pv96's archive). The tail is the evidence, so the head goes first.
+pub const ARCHIVE_MAX_BYTES: usize = 262_144;
+
+/// The archived output of a released session, as its owner may read it (decision 0090).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedOutput {
+    pub text: String,
+    pub truncated: bool,
+}
+
+/// The newest `max_bytes` of `text`, cut on a character boundary, and whether anything was cut.
+fn keep_archive_tail(text: &str, max_bytes: usize) -> (String, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_owned(), false);
+    }
+    let mut start = text.len() - max_bytes;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    (text[start..].to_owned(), true)
+}
+
 /// A refused or failed agent call: a stable protocol code, a message for humans, optional data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentError {
@@ -544,6 +567,8 @@ impl Agents {
             holds_secrets,
             mode: mode.mode,
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
@@ -714,7 +739,15 @@ impl Agents {
             ));
         }
         clear_starting(&run_dir);
+        if let Some(previous) = row.terminal_id.as_deref().filter(|old| *old != terminal_id) {
+            // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited terminal.
+            let _ = self.inner.config.terminals.pin(previous, false);
+        }
         let fresh = self.reload(&row.id)?;
+        if fresh.retained {
+            // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
+            let _ = self.inner.config.terminals.pin(&terminal_id, true);
+        }
         let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         session.secrets_withheld = withheld(grant);
@@ -1252,6 +1285,99 @@ impl Agents {
         Ok(session)
     }
 
+    /// Releases an exited session (decision 0090): archives the newest output of its terminal, frees the terminal, clears
+    /// its retain and keeps the record, marked released. A live run is refused with `agent.busy`. When the terminal's
+    /// output cannot be read, the terminal is kept and the release fails with `agent.archive_failed`. A terminal the
+    /// manager no longer has has no output left, so its archive is empty.
+    pub fn release(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let id = self.resolve(selector)?.id;
+        let mut live = lock(&self.inner.status);
+        let row = self.reload(&id)?;
+        let current = self.view_with(&mut live, row.clone())?;
+        if current.execution.state != TerminalState::Exited {
+            return Err(AgentError::new(
+                codes::AGENT_BUSY,
+                format!("session {} is still running; stop it first", current.id),
+            ));
+        }
+        if row.released_at.is_some() {
+            return Ok(current);
+        }
+        let (text, truncated) = match &row.terminal_id {
+            Some(terminal) => match self.inner.config.terminals.text(terminal) {
+                Ok(text) => keep_archive_tail(&text, ARCHIVE_MAX_BYTES),
+                Err(TerminalError::NotFound) => (String::new(), false),
+                Err(error) => {
+                    return Err(AgentError::new(
+                        codes::AGENT_ARCHIVE_FAILED,
+                        format!(
+                            "the output of session {id} could not be archived, so its terminal was kept: {error}"
+                        ),
+                    ));
+                }
+            },
+            None => (String::new(), false),
+        };
+        if !self
+            .store()
+            .release_agent_session(&id, &text, truncated, now_ms())?
+        {
+            // Nothing was recorded, so the terminal is kept.
+            return Err(AgentError::new(
+                codes::AGENT_BUSY,
+                format!("session {id} has no recorded end yet; stop it first"),
+            ));
+        }
+        let released = self.reload(&id)?;
+        let session = self.view_with(&mut live, released)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+        drop(live);
+        if let Some(terminal) = &row.terminal_id {
+            let _ = self.inner.config.terminals.close(terminal);
+        }
+        Ok(session)
+    }
+
+    /// Sets or clears a session's retain (decision 0090). A retained session's exited terminal is kept from eviction: the
+    /// terminal is pinned now and every later run's terminal is pinned when it starts. Retaining a released session only
+    /// sets the flag, since its terminal is gone.
+    pub fn set_retained(&self, selector: &str, retained: bool) -> Result<AgentSession, AgentError> {
+        let id = self.resolve(selector)?.id;
+        let mut live = lock(&self.inner.status);
+        // Pinned before the flag is saved, so a failed pin leaves the session as it was.
+        if let Some(terminal) = &self.reload(&id)?.terminal_id {
+            match self.inner.config.terminals.pin(terminal, retained) {
+                // A terminal the manager no longer has has nothing left to keep.
+                Ok(()) | Err(TerminalError::NotFound) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        self.store().set_agent_session_retained(&id, retained)?;
+        let row = self.reload(&id)?;
+        let session = self.view_with(&mut live, row)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(session)
+    }
+
+    /// A session and its archived output (decision 0090): `None` when the session was not released. The text is not
+    /// redacted here; the service applies decision 0071 to it.
+    pub fn archived_output(
+        &self,
+        selector: &str,
+    ) -> Result<(AgentSession, Option<ArchivedOutput>), AgentError> {
+        let id = self.resolve(selector)?.id;
+        let session = self.show(&id)?;
+        let output = self
+            .store()
+            .get_agent_session_archive(&id)?
+            .map(|archive| ArchivedOutput {
+                text: archive.text,
+                truncated: archive.truncated,
+            });
+        Ok((session, output))
+    }
+
     /// Marks every session whose run was live when the service last stopped as exited with reason `service_stopped`
     /// (0051). Called once at service start, before any run exists. Returns how many sessions changed.
     /// A run that was `working` or `waiting` then is `done` with outcome `interrupted` (0052).
@@ -1547,6 +1673,8 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         secrets_withheld: None,
         permission_mode: row.mode.permission_mode,
         mode_confirmed: row.mode.confirmed,
+        retained: row.retained,
+        released: row.released_at.is_some(),
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
     }
@@ -1915,6 +2043,8 @@ pub(crate) mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&stale).unwrap();
         agents
@@ -2071,6 +2201,8 @@ pub(crate) mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         let end = RunExit {
@@ -2147,6 +2279,8 @@ pub(crate) mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
 
@@ -2154,5 +2288,89 @@ pub(crate) mod tests {
             .resume(&row.id, None, SecretGrant::Provide)
             .unwrap_err();
         assert_eq!(error.code, codes::AGENT_RESUME_UNAVAILABLE, "{error}");
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::tests::service;
+    use super::*;
+
+    /// An exited session of `workspace` whose terminal is `terminal`, which the terminal manager may not know.
+    fn exited_row(workspace: &str, terminal: &str) -> AgentSessionRow {
+        AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace.to_owned(),
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: Some(terminal.to_owned()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: Some(RunExit {
+                code: Some(0),
+                signal: None,
+                reason: RunExitReason::Exited,
+                at: now_ms(),
+            }),
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+            retained: false,
+            released_at: None,
+        }
+    }
+
+    #[test]
+    fn release_keeps_the_record_and_archives_an_empty_tail_when_the_terminal_is_gone() {
+        let (agents, workspace, _profile) = service();
+        let row = exited_row(&workspace, "gone");
+        agents.store().insert_agent_session(&row).unwrap();
+
+        let released = agents.release(&row.id).unwrap();
+        assert!(released.released);
+        assert_eq!(released.execution.state, TerminalState::Exited);
+        let (session, output) = agents.archived_output(&row.id).unwrap();
+        assert!(session.released);
+        assert_eq!(
+            output,
+            Some(ArchivedOutput {
+                text: String::new(),
+                truncated: false,
+            })
+        );
+        assert!(
+            agents.release(&row.id).unwrap().released,
+            "a second release changes nothing"
+        );
+    }
+
+    #[test]
+    fn retain_is_a_flag_that_a_release_clears() {
+        let (agents, workspace, _profile) = service();
+        let row = exited_row(&workspace, "gone");
+        agents.store().insert_agent_session(&row).unwrap();
+
+        assert!(agents.set_retained(&row.id, true).unwrap().retained);
+        let released = agents.release(&row.id).unwrap();
+        assert!(!released.retained, "an explicit release clears the retain");
+        assert!(released.released);
+        assert!(!agents.set_retained(&row.id, false).unwrap().retained);
+    }
+
+    #[test]
+    fn the_archive_keeps_the_newest_bytes_on_a_char_boundary() {
+        let text = format!("{}é{}", "x".repeat(10), "y".repeat(3));
+        assert_eq!(keep_archive_tail("abc", 5), ("abc".to_owned(), false));
+        assert_eq!(keep_archive_tail(&text, 6), ("xéyyy".to_owned(), true));
+        assert_eq!(keep_archive_tail(&text, 5), ("éyyy".to_owned(), true));
+        // Four bytes would start inside the two-byte é: the cut moves forward to the next character.
+        assert_eq!(keep_archive_tail(&text, 4), ("yyy".to_owned(), true));
+        assert_eq!(ARCHIVE_MAX_BYTES, 262_144);
     }
 }

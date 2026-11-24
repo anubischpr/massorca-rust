@@ -21,6 +21,16 @@ pub const SHOW: &str = "agent.show";
 pub const STOP: &str = "agent.stop";
 /// Params: [`AgentSessionRef`]. Result: [`AgentSession`], the forgotten record. The session must be exited.
 pub const FORGET: &str = "agent.forget";
+/// Params: [`AgentSessionRef`]. Result: [`AgentSession`], released: its terminal output is archived and its terminal freed,
+/// and the record stays. The session must be exited; a live run is refused with `agent.busy`. Capability `agent-release/1`
+/// (decision 0090).
+pub const RELEASE: &str = "agent.release";
+/// Params: [`AgentRetainParams`]. Result: [`AgentSession`]. Sets or clears the durable retain of a session (capability
+/// `agent-release/1`, decision 0090).
+pub const RETAIN: &str = "agent.retain";
+/// Params: [`AgentSessionRef`]. Result: [`AgentArchive`], the archived output of a released session (capability
+/// `agent-release/1`, decision 0090).
+pub const ARCHIVE: &str = "agent.archive";
 /// Params: [`AgentPromptParams`]. Result: [`PromptReceipt`].
 pub const PROMPT: &str = "agent.prompt";
 /// Params: [`AgentResumeParams`] (an [`AgentSessionRef`] with an optional mode). Result: [`AgentSession`].
@@ -755,6 +765,14 @@ pub struct AgentSession {
     /// A mode `agent.set_mode` stored for the next resume; the running mode is unchanged until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_permission_mode: Option<String>,
+    /// Whether the session is retained (decision 0090): its exited terminal is kept from eviction until a release or a
+    /// `agent.retain` clears it. Absent when false, and from a peer without capability `agent-release/1`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retained: bool,
+    /// Whether the session was released (decision 0090): its terminal output is archived, its terminal is freed and its
+    /// record stays. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub released: bool,
 }
 
 /// Where a session's mode came from (decision 0083).
@@ -955,4 +973,28 @@ mod tests {
             assert_eq!(decoded, origin, "{wire}");
         }
     }
+}
+
+/// Params of `agent.retain`. `retained: false` clears the retain (`agent retain --off`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRetainParams {
+    pub session: String,
+    pub retained: bool,
+}
+
+/// Result of `agent.archive`: the archived tail of a released session's terminal output (decision 0090).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentArchive {
+    pub session: String,
+    /// Whether the session was released. A session that was not has no archive.
+    pub released: bool,
+    /// The newest output kept, at most 256 KiB of UTF-8, cut on a character boundary. Absent when there is no archive, or
+    /// when `withheld` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Whether older output was cut to keep the bound.
+    pub truncated: bool,
+    /// The run holds vault secrets (decision 0071) and the caller is below host-admin scope, so the text is not sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub withheld: bool,
 }

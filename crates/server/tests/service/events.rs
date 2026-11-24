@@ -27,7 +27,7 @@ async fn subscribers_receive_published_events() {
     running.events().publish(event.clone());
 
     let received = timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         subscription.next_as::<ChangeEvent>(),
     )
     .await
@@ -91,7 +91,7 @@ async fn shutting_down_ends_open_streams_with_a_reason() {
         .await
         .expect("service.shutdown is answered");
 
-    match timeout(Duration::from_secs(5), subscription.next())
+    match timeout(super::common::REPLY_WAIT, subscription.next())
         .await
         .expect("the stream ends")
     {

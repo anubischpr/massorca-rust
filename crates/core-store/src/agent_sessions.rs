@@ -100,9 +100,24 @@ pub struct AgentSessionRow {
     pub mode: RunMode,
     /// A mode `agent.set_mode` chose for the next resume, kept apart from the running one.
     pub pending_permission_mode: Option<String>,
+    /// Whether the session is retained (`agent retain`, decision 0090): its exited terminal is not evicted.
+    pub retained: bool,
+    /// When the session was released (`agent release`): its terminal is freed and its archive is kept. `None` until then.
+    pub released_at: Option<i64>,
 }
 
-const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode FROM agent_sessions";
+/// The archived tail of a released session's terminal output (decision 0090).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionArchive {
+    /// The newest output kept, at most the caller's bound, cut on a character boundary.
+    pub text: String,
+    /// Whether older output was cut to keep the bound.
+    pub truncated: bool,
+    /// When the session was released.
+    pub released_at: i64,
+}
+
+const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode, retained, released_at FROM agent_sessions";
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
     let exit = match row.get::<_, Option<RunExitReason>>("exit_reason")? {
@@ -148,6 +163,8 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
             confirmed: row.get("mode_confirmed")?,
         },
         pending_permission_mode: row.get("pending_permission_mode")?,
+        retained: row.get("retained")?,
+        released_at: row.get("released_at")?,
     })
 }
 
@@ -158,7 +175,7 @@ impl Store {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
         self.lock().execute(
-            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode, retained, released_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 row.id,
                 row.kind,
@@ -185,7 +202,9 @@ impl Store {
                 row.mode.permission_mode,
                 row.mode.source,
                 row.mode.confirmed,
-                row.pending_permission_mode
+                row.pending_permission_mode,
+                row.retained,
+                row.released_at
             ],
         )?;
         Ok(())
@@ -286,8 +305,10 @@ impl Store {
         mode: &RunMode,
         pending: Option<&str>,
     ) -> Result<bool, StoreError> {
-        let changed = self.lock().execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+        let connection = self.lock();
+        let transaction = connection.unchecked_transaction()?;
+        let changed = transaction.execute(
+            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL, released_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
             params![
                 id,
                 terminal_id,
@@ -297,6 +318,66 @@ impl Store {
                 mode.confirmed,
                 pending
             ],
+        )?;
+        // A new run replaces the archive of the one before it (decision 0090).
+        if changed > 0 {
+            transaction.execute(
+                "DELETE FROM agent_session_archives WHERE session_id = ?1",
+                [id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(changed > 0)
+    }
+
+    /// Releases an exited session (decision 0090): writes its archived output, marks the row released at `at` and clears
+    /// its retain, in one transaction. Returns whether the row changed; a live or already released session does not change.
+    pub fn release_agent_session(
+        &self,
+        id: &str,
+        text: &str,
+        truncated: bool,
+        at: i64,
+    ) -> Result<bool, StoreError> {
+        let connection = self.lock();
+        let transaction = connection.unchecked_transaction()?;
+        let changed = transaction.execute(
+            "UPDATE agent_sessions SET released_at = ?2, retained = 0 WHERE id = ?1 AND exit_reason IS NOT NULL AND released_at IS NULL",
+            params![id, at],
+        )?;
+        if changed > 0 {
+            transaction.execute(
+                "INSERT OR REPLACE INTO agent_session_archives (session_id, text, truncated, released_at) VALUES (?1, ?2, ?3, ?4)",
+                params![id, text, truncated, at],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(changed > 0)
+    }
+
+    /// The archived output of a released session, if it has one.
+    pub fn get_agent_session_archive(
+        &self,
+        id: &str,
+    ) -> Result<Option<AgentSessionArchive>, StoreError> {
+        self.query_optional(
+            "SELECT text, truncated, released_at FROM agent_session_archives WHERE session_id = ?1",
+            [id],
+            |row| {
+                Ok(AgentSessionArchive {
+                    text: row.get("text")?,
+                    truncated: row.get("truncated")?,
+                    released_at: row.get("released_at")?,
+                })
+            },
+        )
+    }
+
+    /// Sets or clears a session's retain (decision 0090). Returns whether a row matched.
+    pub fn set_agent_session_retained(&self, id: &str, retained: bool) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET retained = ?2 WHERE id = ?1",
+            params![id, retained],
         )?;
         Ok(changed > 0)
     }
