@@ -88,6 +88,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.accounts.import",
             "agent.accounts.list",
             "agent.accounts.remove",
+            "agent.accounts.sign-in",
             "agent.attach",
             "agent.bring-back",
             "agent.delegate",
