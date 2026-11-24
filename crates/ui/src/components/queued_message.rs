@@ -7,7 +7,7 @@ pub mod state;
 
 pub use state::{
     QueueStatus, QueueView, QueuedItem, QueuedMessagesEvent, RowStep, WaitReason, caption,
-    focus_after_removal, header_label,
+    focus_after_removal, header_label, queue_paused, send_now_blocked,
 };
 
 use std::fmt;
@@ -97,7 +97,9 @@ impl QueuedMessages {
     }
 
     fn send_now_allowed(&self, item: &QueuedItem) -> bool {
-        self.send_now_enabled && matches!(item.status, QueueStatus::Waiting(WaitReason::AgentBusy))
+        self.send_now_enabled
+            && matches!(item.status, QueueStatus::Waiting(_))
+            && send_now_blocked(&item.status).is_none()
     }
 
     /// Opens the inline "Send now?" question on a row.
@@ -212,12 +214,12 @@ impl QueuedMessages {
             Some(RowStep::Edit) => row.child(self.editor_view(id, dock, cx)),
             None => {
                 let (leading, reason_color) = match &item.status {
-                    QueueStatus::Waiting(WaitReason::AgentBusy) => (
-                        Icon::new(IconName::Clock).color(p.text.tertiary),
-                        p.text.tertiary,
-                    ),
                     QueueStatus::Waiting(WaitReason::HostUnconfirmed) => (
                         Icon::new(IconName::CloudOff).color(p.agent.unreachable),
+                        p.text.tertiary,
+                    ),
+                    QueueStatus::Waiting(_) => (
+                        Icon::new(IconName::Clock).color(p.text.tertiary),
                         p.text.tertiary,
                     ),
                     QueueStatus::Sending => (
@@ -284,7 +286,7 @@ impl QueuedMessages {
             .size(ButtonSize::Compact)
             .disabled(!self.send_now_allowed(item) || sending)
             .disabled_reason(if self.send_now_enabled {
-                "Waits for VPS to confirm"
+                send_now_blocked(&item.status).unwrap_or_default()
             } else {
                 "The session cannot run right now"
             })
@@ -438,6 +440,30 @@ impl Render for QueuedMessages {
                     ),
             );
         }
+        if queue_paused(&self.items) {
+            let resume_dock = cx.entity();
+            dock = dock.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(SPACE_2))
+                    .px(px(SPACE_3))
+                    .py(px(SPACE_1))
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.secondary)
+                    .child("The queue is paused. Resume to send it in order.")
+                    .child(
+                        Button::new("queued-resume", "Resume")
+                            .variant(ButtonVariant::Secondary)
+                            .size(ButtonSize::Compact)
+                            .on_click(move |_, cx| {
+                                resume_dock
+                                    .update(cx, |_, cx| cx.emit(QueuedMessagesEvent::Resume));
+                            }),
+                    ),
+            );
+        }
         let visible = self.view.visible(len);
         let mut list = div()
             .id("queued-list")
@@ -503,6 +529,8 @@ mod tests {
         assert!(
             !dock.send_now_allowed(&item(3, QueueStatus::Waiting(WaitReason::HostUnconfirmed)))
         );
+        assert!(!dock.send_now_allowed(&item(4, QueueStatus::Waiting(WaitReason::AgentAsking))));
+        assert!(dock.send_now_allowed(&item(5, QueueStatus::Waiting(WaitReason::PausedByStop))));
     }
 
     /// Subscribes to a dock and collects its events.

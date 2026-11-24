@@ -16,7 +16,7 @@ use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
     BORDER_WIDTH_THICK, Color, DURATION_TOOLTIP_DELAY, Palette, RADIUS_MD,
     SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ICON_SM,
-    SIZE_ROW_TWO_LINE, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
+    SIZE_ROW_TWO_LINE, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
 };
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, ElementId, FocusHandle, InteractiveElement,
@@ -252,6 +252,7 @@ pub struct ListRow {
     id: ElementId,
     title: SharedString,
     secondary: Option<SharedString>,
+    secondary_icon: Option<IconName>,
     leading: Vec<RowLeading>,
     trailing: Option<AnyElement>,
     hover_action: Option<AnyElement>,
@@ -296,6 +297,7 @@ impl ListRow {
             id: id.into(),
             title: title.into(),
             secondary: None,
+            secondary_icon: None,
             leading: Vec::new(),
             trailing: None,
             hover_action: None,
@@ -326,6 +328,12 @@ impl ListRow {
     /// The line under the title (one line beside it, or under it in a two-line row).
     pub fn secondary(mut self, text: impl Into<SharedString>) -> Self {
         self.secondary = Some(text.into());
+        self
+    }
+
+    /// A 12 px icon before the secondary line, such as the branch a child session runs on (WS-35).
+    pub fn secondary_icon(mut self, icon: IconName) -> Self {
+        self.secondary_icon = Some(icon);
         self
     }
 
@@ -628,23 +636,38 @@ impl RenderOnce for ListRow {
                 .tooltip(move |_, cx| cx.new(|_| NameTooltip(text.clone())).into());
         }
 
-        let (leading, secondary) = match self.error {
-            Some(reason) => (error_leading(self.leading, ink, &p), Some(reason)),
+        // An error's reason replaces the secondary line, and its icon with it.
+        let (leading, secondary, secondary_icon) = match self.error {
+            Some(reason) => (error_leading(self.leading, ink, &p), Some(reason), None),
             None => (
                 self.leading
                     .into_iter()
                     .map(|item| item.element(ink))
                     .collect(),
                 self.secondary,
+                self.secondary_icon,
             ),
         };
         let secondary = secondary.map(|text| {
             div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_1))
                 .min_w_0()
-                .truncate()
-                .text_style(TYPE_BODY_SM)
-                .text_color(ink.secondary)
-                .child(text)
+                .children(secondary_icon.map(|icon| {
+                    div()
+                        .flex_shrink_0()
+                        .debug_selector(|| "row-secondary-icon".into())
+                        .child(Icon::new(icon).size(IconSize::XSmall).color(ink.secondary))
+                }))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(ink.secondary)
+                        .child(text),
+                )
         });
         let title_style = if self.selected || self.title_strong {
             TYPE_BODY_STRONG
@@ -818,6 +841,31 @@ mod tests {
         assert_eq!(error_slot(&session), Some(0));
         assert_eq!(error_slot(&[RowLeading::Icon(IconName::Folder)]), Some(0));
         assert_eq!(error_slot(&[]), None);
+    }
+
+    /// Hosts a child session row that runs on its own branch.
+    struct BranchHarness;
+
+    impl Render for BranchHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(400.)).child(
+                ListRow::new("child", "Feed endpoints")
+                    .surface(Surface::Frame)
+                    .secondary("feat/feed")
+                    .secondary_icon(IconName::GitBranch),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_secondary_icon_sits_before_the_secondary_line(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| BranchHarness);
+        cx.run_until_parked();
+        let icon = cx
+            .debug_bounds("row-secondary-icon")
+            .expect("the icon is drawn");
+        let title = cx.debug_bounds("row-title").expect("the title is drawn");
+        assert!(icon.origin.x > title.origin.x + title.size.width);
     }
 
     /// Hosts one host row in a column of `width`, to measure the width of its name.

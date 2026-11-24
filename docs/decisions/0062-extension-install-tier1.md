@@ -48,6 +48,34 @@ step here that executes anything. Code (tier 2, Wasmtime) is out of scope.
 
 Unknown fields are kept on read and write, so a newer service can add fields.
 
+#### Leftovers after a crash
+
+An install writes `pkgs/<id>/.staging-<pid>-<n>/`, renames it to its version
+folder and commits `lock.json` last. A crash or a kill in between leaves a
+staging folder, or a version folder no lockfile entry names. A removal or a
+refresh that could not delete an old folder, for example while Windows held a
+file open, leaves one too.
+
+At start, before requests are served and so with no install in flight, the
+service removes them (`Extensions::sweep_leftovers`):
+
+- It reads `lock.json` first. If the lockfile cannot be read or parsed, it
+  removes nothing. If there is no `lock.json`, it removes only staging folders,
+  so a profile copied without its lockfile keeps its packages.
+- It keeps every folder any entry's `path` names, disabled entries and
+  entries sharing an id included.
+- Under `pkgs/<id>/` it removes only `.staging-*` folders and
+  `<version>-<hash8>` folders no entry names, then `pkgs/<id>/` itself when
+  it is empty. Files, other names, and anything outside `pkgs/` stay.
+- It never follows a link or a junction: neither is treated as a folder, and
+  removal deletes a link inside a leftover without entering it.
+- Every extensions call counts as service activity until it returns, so a
+  restarting service keeps the profile lock until a running install ends, and
+  the next start's sweep never sees that install's folder.
+- A failed removal does not stop the others. The first failure is returned
+  after the rest and logged as a warning; the start goes on, and the next
+  start tries again.
+
 ### Sources
 
 Tier 1 installs from three sources:
@@ -325,8 +353,10 @@ fixed with a test, except where a row says otherwise.
   registered on that attempt. npm leaves the launcher on `PATH`, so a later install finds it and registers it without
   running anything: verify runs only after a vendor installer, because running a found program would break the review's
   "nothing runs" promise. A session started with that CLI then fails when the program runs. The same holds for every
-  built-in that declares verify. No uninstall is declared: the vendor's own is `gentle-shell self-uninstall`, which is not on the program
-  allowlist, and the vendor says npm removal on Windows is not verified yet. The npm name appears only inside the quoted
+  built-in that declares verify. The uninstall is `npm uninstall -g gentle-pi`, the reverse of the npm install, offered
+  only for a CLI the package installed. The vendor's own `gentle-shell self-uninstall` is not on the program allowlist.
+  The vendor has not verified npm removal on Windows; it is still offered there because the same npm install ran
+  there, and a removal that fails is reported as failed, never as done. The npm name appears only inside the quoted
   install command; every user-visible name is "Gentle Shell".
   A Gentle Shell the vendor's bundle installer put on the machine (a generated `gentle-shell.cmd` launcher in a bundle
   folder on `PATH`, with its own runtime) resolves like any program, so the install registers it and runs nothing.
@@ -363,13 +393,15 @@ Checked against the vendor pages on 2026-11-22. Each package's `cli` block recor
 | `massorca.claude` | Windows | `winget install Anthropic.ClaudeCode` | https://code.claude.com/docs/en/setup | 2026-11-22 |
 | `massorca.claude` | Linux | `npm install -g @anthropic-ai/claude-code@latest` | https://code.claude.com/docs/en/setup | 2026-11-22 |
 | `massorca.claude` | macOS | `brew install --cask claude-code` | https://code.claude.com/docs/en/setup | 2026-11-22 |
-| `massorca.codex` | all | `npm install -g @openai/codex` (no verify, no uninstall: not documented) | https://github.com/openai/codex | 2026-11-22 |
+| `massorca.codex` | all | `npm install -g @openai/codex`, uninstall `npm uninstall -g @openai/codex` (ours: reverses the npm install; the vendor documents none) (no verify: not documented) | https://github.com/openai/codex | 2026-11-22 |
 | `massorca.antigravity` | Windows | `powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 \| iex"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
 | `massorca.antigravity` | Linux, macOS | `bash -c "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh \| bash"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
-| `massorca.gentle-shell` | all | `npm install -g gentle-pi`, verify `gentle-shell --version` (no uninstall: see above) | https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md | 2026-11-22 |
+| `massorca.gentle-shell` | all | `npm install -g gentle-pi`, verify `gentle-shell --version`, uninstall `npm uninstall -g gentle-pi` (ours: reverses the npm install, see above) | https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md | 2026-11-22 |
 
 Uninstall commands, where documented: Claude `winget uninstall Anthropic.ClaudeCode`, `npm uninstall -g
-@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Antigravity and Codex document none; Gentle Shell's own uninstall is off the allowlist.
+@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Codex and Gentle Shell declare the npm uninstall of the
+package their npm install added, on every OS. Antigravity declares none: its install is a vendor script with no
+documented uninstall, so removing it never offers one.
 
 ## Alternatives
 
