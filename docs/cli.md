@@ -20,6 +20,9 @@ A profile name is 1 to 32 characters: a lowercase letter or digit first, then lo
 letters, digits, `-` or `_`.
 
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
+Every log line is redacted before it is written: values under secret-looking keys (`password=`, `token=`,
+`secret=`, `api_key`, `Authorization: Bearer ...` and similar), URL passwords, and tokens with a known secret
+prefix (`sk-`, `ghp_`, a pairing offer) are written as `[redacted]`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
 `service stop`, `service restart`, `service unit`, `open`, `pair accept` and the `host` commands except
