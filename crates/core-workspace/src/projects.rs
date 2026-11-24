@@ -13,6 +13,7 @@ use crate::error::DomainError;
 use crate::layout::WorkspaceLayout;
 use crate::names;
 use crate::paths;
+use crate::project_icon_detection::detect_project_icon;
 use crate::views;
 use crate::workspaces::Workspaces;
 
@@ -79,6 +80,7 @@ impl Workspaces {
                 paths::path_text(&root)?
             }
         };
+        let icon = icon.or_else(|| detect_project_icon(&root));
         let row = ProjectRow {
             id: new_id(),
             kind,
