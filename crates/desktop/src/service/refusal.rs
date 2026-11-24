@@ -102,7 +102,7 @@ impl From<&ClientError> for Refusal {
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)
             | ClientError::UntrustedEndpoint(_) => unreachable_service(),
-            ClientError::ServerIdentityMismatch => host_failure(HOST_IDENTITY_MISMATCH, error),
+            ClientError::ServerIdentityMismatch(_) => host_failure(HOST_IDENTITY_MISMATCH, error),
             ClientError::HostNotFound(_) => host_failure(HOST_NOT_FOUND, error),
             ClientError::HostExists(_) => host_failure(HOST_EXISTS, error),
             ClientError::InvalidHostName(_) => host_failure(HOST_INVALID_NAME, error),
@@ -301,8 +301,16 @@ mod tests {
             Refusal::Failed { code, .. } if code == "host.invalid_name"
         ));
         assert!(matches!(
-            Refusal::from(&ClientError::ServerIdentityMismatch),
-            Refusal::Failed { code, .. } if code == "host.identity_mismatch"
+            Refusal::from(&ClientError::ServerIdentityMismatch(Box::new(
+                massorca_client::IdentityMismatch {
+                    host: "vps".into(),
+                    trusted_from: massorca_client::TrustedFrom::Pairing,
+                    expected: "sha256:old".into(),
+                    actual: Some("sha256:new".into()),
+                }
+            ))),
+            Refusal::Failed { code, message }
+                if code == "host.identity_mismatch" && message.contains("Pairing page")
         ));
     }
 
