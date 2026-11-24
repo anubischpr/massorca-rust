@@ -3592,6 +3592,7 @@ dependencies = [
  "clap",
  "crossterm",
  "massorca-client",
+ "massorca-core-agents",
  "massorca-core-remote",
  "massorca-core-store",
  "massorca-core-terminal",
@@ -3794,6 +3795,7 @@ name = "massorca-core-workspace"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "icu_normalizer",
  "massorca-core-git",
  "massorca-core-store",
  "massorca-process",

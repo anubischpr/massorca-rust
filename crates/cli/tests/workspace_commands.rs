@@ -498,3 +498,58 @@ fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
             .stdout(contains("prunable: "));
     }
 }
+
+#[test]
+fn workspace_create_without_a_name_generates_one_for_the_branch_and_folder() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo"]);
+    let name = created["name"]
+        .as_str()
+        .expect("a generated name")
+        .to_owned();
+    assert_eq!(created["branch"], name.as_str());
+    let path = PathBuf::from(created["path"].as_str().expect("path"));
+    assert_eq!(
+        path.file_name().and_then(|leaf| leaf.to_str()),
+        Some(name.as_str())
+    );
+
+    let text = sandbox
+        .run("default", &["workspace", "create", "repo"])
+        .success();
+    let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
+    let second = listed["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .find(|other| *other != name)
+        .expect("the second workspace")
+        .to_owned();
+    assert!(
+        stdout_text(&text).contains(&format!("created workspace {second} (worktree)")),
+        "the text output names the generated workspace: {}",
+        stdout_text(&text)
+    );
+}
+
+#[test]
+fn a_custom_branch_prefix_set_through_config_prefixes_the_branch_of_a_named_workspace() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "workspaces.branch_prefix", "custom"],
+    );
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "workspaces.branch_prefix_custom", "team"],
+    );
+
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+
+    assert_eq!(created["name"], "feature");
+    assert_eq!(created["branch"], "team/feature");
+}

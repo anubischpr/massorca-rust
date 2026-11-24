@@ -73,6 +73,7 @@ pub fn report(rules: &HookRules, event: &str, payload: Option<&str>, at_ms: i64)
             outcome: outcome.map(|outcome| outcome.as_str().to_owned()),
             source: SOURCE_HOOK.to_owned(),
             at: at_ms,
+            seen_at: None,
         },
         result,
         learned_ref: field(&rules.learn).filter(|id| !id.is_empty()),
@@ -88,6 +89,7 @@ pub fn on_exit(activity: Option<&StoredActivity>, at_ms: i64) -> Option<StoredAc
         outcome: Some(DoneOutcome::Interrupted.as_str().to_owned()),
         source: SOURCE_PROCESS.to_owned(),
         at: at_ms,
+        seen_at: None,
     })
 }
 
@@ -216,6 +218,7 @@ mod tests {
                 outcome: None,
                 source: "hook".to_owned(),
                 at: 1,
+                seen_at: None,
             };
             let after = on_exit(Some(&activity), 9).expect("interrupted");
             assert_eq!(after.state, "done");
@@ -229,6 +232,7 @@ mod tests {
                 outcome: None,
                 source: "hook".to_owned(),
                 at: 1,
+                seen_at: None,
             };
             assert_eq!(on_exit(Some(&activity), 9), None);
         }

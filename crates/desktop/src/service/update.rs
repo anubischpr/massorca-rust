@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AccountSummary, AgentKind, AgentSession};
+use massorca_protocol::methods::agents::{
+    AccountSummary, AgentKind, AgentQueueList, AgentSession, QueuedPrompt,
+};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
@@ -47,6 +49,10 @@ pub enum StoreUpdate {
     AgentGone(String),
     /// Every agent kind the service declares, after a connect. Replaces what was held.
     AgentKindsResync(Vec<AgentKind>),
+    /// Every session's prompt queue after a connect, or `None` when the service offers no queue. Replaces what was held.
+    AgentQueuesResync(Option<Vec<AgentQueueList>>),
+    /// One session's prompt queue as the service lists it now.
+    AgentQueueChanged(AgentQueueList),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -210,6 +216,9 @@ pub struct StoreState {
     pub extensions: Option<ExtensionsRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
+    /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
+    /// while the service offers no queue.
+    pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
 }
 
 impl Default for StoreState {
@@ -235,6 +244,7 @@ impl Default for StoreState {
             extension_read: 0,
             extensions: None,
             accounts: BTreeMap::new(),
+            agent_queues: None,
         }
     }
 }
@@ -298,8 +308,31 @@ impl StoreState {
                 replace_by(&mut self.agents, session, |s| s.id.clone());
                 self.agents.sort_by(agent_order);
             }
-            StoreUpdate::AgentGone(id) => self.agents.retain(|s| s.id != id),
+            StoreUpdate::AgentGone(id) => {
+                self.agents.retain(|s| s.id != id);
+                if let Some(queues) = &mut self.agent_queues {
+                    queues.remove(&id);
+                }
+            }
             StoreUpdate::AgentKindsResync(kinds) => self.agent_kinds = kinds,
+            StoreUpdate::AgentQueuesResync(queues) => {
+                self.agent_queues = queues.map(|lists| {
+                    lists
+                        .into_iter()
+                        .filter(|list| !list.items.is_empty())
+                        .map(|list| (list.session, list.items))
+                        .collect()
+                });
+            }
+            StoreUpdate::AgentQueueChanged(list) => {
+                if let Some(queues) = &mut self.agent_queues {
+                    if list.items.is_empty() {
+                        queues.remove(&list.session);
+                    } else {
+                        queues.insert(list.session, list.items);
+                    }
+                }
+            }
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
@@ -445,7 +478,8 @@ fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use massorca_protocol::methods::agents::{
-        AgentKind, Execution, KindCredentials, KindPackage, PackageState, StatusMechanism,
+        AgentKind, Execution, KindCredentials, KindPackage, PackageState, QUEUE_REASON_BUSY,
+        QueueState, StatusMechanism,
     };
     use massorca_protocol::methods::projects::ProjectKind;
     use massorca_protocol::methods::teams::{Board, Team, TeamAccess, TeamCharacter};
@@ -560,6 +594,20 @@ pub(crate) mod fixtures {
             projects: Vec::new(),
         }
     }
+
+    /// Prompt `id` of `session`'s queue at `position`, waiting behind a busy agent.
+    pub fn queued(id: &str, session: &str, position: u64) -> QueuedPrompt {
+        QueuedPrompt {
+            id: id.into(),
+            session: session.into(),
+            position,
+            text: format!("prompt {id}"),
+            state: QueueState::Waiting,
+            reason: Some(QUEUE_REASON_BUSY.into()),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -568,7 +616,7 @@ mod tests {
         Activity, ActivitySource, ActivityState, PackageState,
     };
 
-    use super::fixtures::{agent, agent_kind, project, team, workspace};
+    use super::fixtures::{agent, agent_kind, project, queued, team, workspace};
     use super::*;
 
     fn resynced() -> StoreState {
@@ -709,6 +757,7 @@ mod tests {
             outcome: None,
             source: ActivitySource::Hook,
             at_ms: 11,
+            seen_at_ms: None,
         });
         state.apply(StoreUpdate::AgentChanged(working.clone()), now);
         assert_eq!(state.agents, vec![working]);
@@ -858,8 +907,17 @@ mod tests {
             )
         );
         assert!(matches!(
-            HostLink::from_error(&ClientError::ServerIdentityMismatch),
-            HostLink::Failed(message) if message.starts_with("The host's identity")
+            HostLink::from_error(&ClientError::ServerIdentityMismatch(Box::new(
+                massorca_client::IdentityMismatch {
+                    host: "vps".into(),
+                    trusted_from: massorca_client::TrustedFrom::Pairing,
+                    expected: "sha256:old".into(),
+                    actual: Some("sha256:new".into()),
+                }
+            ))),
+            HostLink::Failed(message)
+                if message.starts_with("Vps presented a different server key")
+                    && message.contains("sha256:new")
         ));
     }
 
@@ -905,5 +963,62 @@ mod tests {
         );
         assert_eq!(state.secrets.status, Some(Err(gone)));
         assert_eq!(state.secrets.list, Some(Ok(Vec::new())), "the list stays");
+    }
+
+    fn queue(session: &str, items: Vec<QueuedPrompt>) -> AgentQueueList {
+        AgentQueueList {
+            session: session.into(),
+            items,
+        }
+    }
+
+    #[test]
+    fn a_service_without_the_queue_holds_none_and_ignores_queue_changes() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::AgentQueuesResync(None), now);
+        state.apply(
+            StoreUpdate::AgentQueueChanged(queue("s1", vec![queued("q1", "s1", 1)])),
+            now,
+        );
+        assert_eq!(state.agent_queues, None);
+    }
+
+    #[test]
+    fn a_queue_change_replaces_the_sessions_queue_and_an_empty_or_gone_one_leaves() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::AgentQueuesResync(Some(vec![
+                queue("s1", vec![queued("q1", "s1", 1)]),
+                queue("s2", Vec::new()),
+            ])),
+            now,
+        );
+        let held = |state: &StoreState| {
+            state
+                .agent_queues
+                .as_ref()
+                .map(|queues| queues.keys().cloned().collect::<Vec<_>>())
+        };
+        assert_eq!(held(&state), Some(vec!["s1".to_owned()]));
+        state.apply(
+            StoreUpdate::AgentQueueChanged(queue(
+                "s2",
+                vec![queued("q2", "s2", 1), queued("q3", "s2", 2)],
+            )),
+            now,
+        );
+        assert_eq!(
+            state
+                .agent_queues
+                .as_ref()
+                .and_then(|q| q.get("s2"))
+                .map(Vec::len),
+            Some(2)
+        );
+        state.apply(StoreUpdate::AgentQueueChanged(queue("s1", Vec::new())), now);
+        state.apply(StoreUpdate::AgentGone("s2".into()), now);
+        assert_eq!(held(&state), Some(Vec::new()));
     }
 }

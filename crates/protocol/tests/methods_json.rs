@@ -190,6 +190,32 @@ fn project_add_params_carry_set_options() {
 }
 
 #[test]
+fn project_inspect_params_and_inspection_have_the_documented_shape() {
+    assert_wire(
+        &projects::ProjectInspectParams {
+            path: "/repos/app/src".to_owned(),
+        },
+        &json!({ "path": "/repos/app/src" }),
+    );
+    assert_wire(
+        &projects::ProjectInspection {
+            path: "/notes".to_owned(),
+            kind: projects::ProjectKind::Folder,
+            registered: None,
+        },
+        &json!({ "path": "/notes", "kind": "folder" }),
+    );
+    assert_wire(
+        &projects::ProjectInspection {
+            path: "/repos/app".to_owned(),
+            kind: projects::ProjectKind::Git,
+            registered: Some("p1".to_owned()),
+        },
+        &json!({ "path": "/repos/app", "kind": "git", "registered": "p1" }),
+    );
+}
+
+#[test]
 fn project_set_base_params_send_null_to_clear_the_base() {
     assert_wire(
         &projects::ProjectSetBaseParams {
@@ -278,6 +304,13 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
+}
+
+#[test]
+fn workspace_create_params_without_a_name_decode_as_a_blank_name() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).expect("decodes");
+    assert_eq!(params.name, "");
 }
 
 #[test]

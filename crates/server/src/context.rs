@@ -50,6 +50,9 @@ pub struct AppState {
     pub agents: Agents,
     /// Installed extensions of the profile (decision 0062). Other features register remove guards and cleanups here.
     pub extensions: Arc<Extensions>,
+    /// Keeps the agents' remove guard registered on `extensions` while the service runs: a package whose kind a live or
+    /// resumable session uses is not removed, disabled or updated away.
+    pub(crate) _kind_guard: massorca_core_extensions::hooks::HookHandle,
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,

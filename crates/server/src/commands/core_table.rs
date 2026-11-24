@@ -103,6 +103,16 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("project"),
         ),
         command(
+            "project.inspect",
+            "Show what adding a path would register",
+            "project.inspect",
+            json!({
+                "type": "object",
+                "required": ["path"],
+                "properties": { "path": { "type": "string" } }
+            }),
+        ),
+        command(
             "project.rm",
             "Remove a project",
             "project.remove",
@@ -131,7 +141,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "workspace.create",
             json!({
                 "type": "object",
-                "required": ["project", "name"],
+                "required": ["project"],
                 "properties": {
                     "project": { "type": "string" },
                     "name": { "type": "string" },
@@ -458,6 +468,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "force": { "type": "boolean" }
                 }
             }),
+        ),
+        command(
+            "agent.seen",
+            "Mark an agent session's waiting or done state as seen",
+            "agent.mark_seen",
+            selector("session"),
         ),
         command(
             "agent.forget",

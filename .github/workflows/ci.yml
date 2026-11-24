@@ -219,6 +219,32 @@ jobs:
           save-if: false
       - run: cargo test -p massorca-desktop --test '*' --locked
 
+  # The phone's binding (decision 0080, task A3): it must keep cross-compiling for both Android ABIs, with the NDK the
+  # runner image ships. Build only; nothing is published.
+  android-client:
+    name: Android client (cross-compile)
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - name: Use the runner's Android NDK
+        run: |
+          set -euo pipefail
+          test -d "$ANDROID_NDK_LATEST_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - run: cargo install --locked cargo-ndk --version 4.1.2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-client
+      - name: Build the binding for arm64-v8a and x86_64
+        run: cargo ndk -t arm64-v8a -t x86_64 build --locked -p massorca-client-ffi
+
   # Linux programs for the desktop bundle (decisions 0075, 0076): build and check only, no secrets, nothing published.
   # zig pins the glibc version the programs link against, so the floor does not depend on the runner image.
   linux-programs:

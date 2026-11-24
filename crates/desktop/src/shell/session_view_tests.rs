@@ -3,22 +3,26 @@
 //! service, and each test answers its calls by hand.
 
 use super::*;
+use crate::model::agent_queue::row_id;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
-use crate::service::fixtures::{agent, agent_kind, project, workspace};
-use crate::service::{Command, ConnectionState, Refusal, Script, ServiceHandle, StoreUpdate};
+use crate::service::fixtures::{agent, agent_kind, project, queued, workspace};
+use crate::service::{
+    Command, ConnectionState, QueueCommand, Refusal, Script, ServiceHandle, StoreUpdate,
+};
 use crate::store::ServiceStore;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentPromptParams,
-    AgentSession, AgentSetModeParams, ModeApplied, ModeSource, PackageState, PromptReceipt,
-    ReceiptKind,
+    AgentQueueList, AgentSession, AgentSetModeParams, ModeApplied, ModeSource, PackageState,
+    PromptReceipt, QUEUE_REASON_PAUSED_STOPPED, QueuedPrompt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::composer::ComposerEvent;
 use massorca_ui::components::composer::policy::PrimaryAction;
+use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -46,6 +50,16 @@ fn session_rig(
     kinds: Vec<AgentKind>,
     sessions: Vec<AgentSession>,
 ) -> (Rig, &mut VisualTestContext) {
+    queue_rig(cx, kinds, sessions, None)
+}
+
+/// As `session_rig`, on a service that keeps these queues, or none when `queues` is `None`.
+fn queue_rig(
+    cx: &mut TestAppContext,
+    kinds: Vec<AgentKind>,
+    sessions: Vec<AgentSession>,
+    queues: Option<Vec<AgentQueueList>>,
+) -> (Rig, &mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
@@ -72,6 +86,7 @@ fn session_rig(
         },
         StoreUpdate::AgentKindsResync(kinds),
         StoreUpdate::AgentsResync(sessions),
+        StoreUpdate::AgentQueuesResync(queues),
     ];
     for update in listed {
         updates.send(update).expect("the store listens");
@@ -110,6 +125,7 @@ fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
         outcome: None,
         source: ActivitySource::Hook,
         at_ms: 1,
+        seen_at_ms: None,
     });
     session
 }
@@ -391,6 +407,220 @@ fn after_a_resume_the_session_view_attaches_the_terminal_of_the_new_run(cx: &mut
             .read_with(cx, |shell, _| shell.terminal_views.contains_key("t2")),
         "the canvas follows the session to its new terminal"
     );
+}
+
+/// s1's queue as the service lists it.
+fn s1_queue(items: Vec<QueuedPrompt>) -> Option<Vec<AgentQueueList>> {
+    Some(vec![AgentQueueList {
+        session: "s1".to_owned(),
+        items,
+    }])
+}
+
+fn dock_of(rig: &Rig, cx: &mut VisualTestContext) -> Entity<QueuedMessages> {
+    rig.shell
+        .read_with(cx, |shell, _| shell.session_composers["s1"].dock.clone())
+}
+
+fn queue_call(script: &mut Script) -> Option<QueueCommand> {
+    while let Some(command) = script.next() {
+        if let Command::AgentQueue(command) = command {
+            return Some(command);
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn send_while_the_agent_works_queues_the_text_for_the_session(cx: &mut TestAppContext) {
+    let (mut rig, cx) = queue_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+        s1_queue(Vec::new()),
+    );
+    type_and_send(&rig, cx, "also add tests");
+    cx.run_until_parked();
+    let Some(QueueCommand::Add { params, reply }) = queue_call(&mut rig.script) else {
+        panic!("the text is queued through agent.queue");
+    };
+    assert_eq!(params.session, "s1");
+    assert_eq!(params.text, "also add tests");
+    draw(cx);
+    let composer = composer_of(&rig, cx);
+    assert_eq!(reason_of(&composer, cx).as_deref(), Some("Queueing…"));
+    reply
+        .send(Ok(queued("q1", "s1", 1)))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    assert_eq!(
+        draft_of(&composer, cx),
+        "",
+        "accepted: the draft is cleared"
+    );
+}
+
+#[gpui::test]
+fn a_refused_queue_keeps_the_draft_with_the_services_sentence(cx: &mut TestAppContext) {
+    let (mut rig, cx) = queue_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+        s1_queue(Vec::new()),
+    );
+    type_and_send(&rig, cx, "also add tests");
+    cx.run_until_parked();
+    let Some(QueueCommand::Add { reply, .. }) = queue_call(&mut rig.script) else {
+        panic!("the text is queued through agent.queue");
+    };
+    let refusal = refused(codes::AGENT_BUSY, "the queue of session s1 is full");
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    let error = composer.read_with(cx, |composer, _| {
+        composer.error_reason().map(ToString::to_string)
+    });
+    assert_eq!(error, Some(refusal.sentence()));
+    assert_eq!(draft_of(&composer, cx), "also add tests");
+}
+
+/// The texts the dock of s1 holds.
+fn dock_texts(rig: &Rig, cx: &mut VisualTestContext) -> Vec<String> {
+    dock_of(rig, cx).read_with(cx, |dock, _| {
+        dock.items()
+            .iter()
+            .map(|item| item.text.to_string())
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn the_dock_draws_the_stores_queue_and_follows_its_changes(cx: &mut TestAppContext) {
+    let (rig, cx) = queue_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+        s1_queue(vec![queued("q1", "s1", 1), queued("q2", "s1", 2)]),
+    );
+    draw(cx);
+    assert!(
+        cx.debug_bounds("session-queue").is_some(),
+        "the dock is drawn"
+    );
+    assert_eq!(dock_texts(&rig, cx), ["prompt q1", "prompt q2"]);
+    rig.updates
+        .send(StoreUpdate::AgentQueueChanged(AgentQueueList {
+            session: "s1".to_owned(),
+            items: vec![queued("q2", "s1", 2)],
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        dock_texts(&rig, cx),
+        ["prompt q2"],
+        "the delivered head left"
+    );
+    rig.updates
+        .send(StoreUpdate::AgentQueueChanged(AgentQueueList {
+            session: "s1".to_owned(),
+            items: Vec::new(),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("session-queue").is_none(),
+        "an empty queue has no dock"
+    );
+}
+
+#[gpui::test]
+fn the_docks_actions_ask_the_service_by_prompt_id(cx: &mut TestAppContext) {
+    let (mut rig, cx) = queue_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+        s1_queue(vec![queued("q1", "s1", 1), queued("q2", "s1", 2)]),
+    );
+    let dock = dock_of(&rig, cx);
+    let emit = |event: QueuedMessagesEvent, cx: &mut VisualTestContext| {
+        dock.update(cx, |_, cx| cx.emit(event));
+        cx.run_until_parked();
+    };
+    emit(
+        QueuedMessagesEvent::Edited {
+            id: row_id("q2"),
+            text: "new words".into(),
+        },
+        cx,
+    );
+    let Some(QueueCommand::Edit { params, .. }) = queue_call(&mut rig.script) else {
+        panic!("an edit is sent as agent.queue.edit");
+    };
+    assert_eq!(
+        (params.id.as_str(), params.text.as_str()),
+        ("q2", "new words")
+    );
+    emit(QueuedMessagesEvent::Removed(row_id("q1")), cx);
+    let Some(QueueCommand::Remove { id, .. }) = queue_call(&mut rig.script) else {
+        panic!("a removal is sent as agent.queue.remove");
+    };
+    assert_eq!(id, "q1");
+    emit(QueuedMessagesEvent::SendNow(row_id("q2")), cx);
+    let Some(QueueCommand::SendNow { id, reply }) = queue_call(&mut rig.script) else {
+        panic!("send now is sent as agent.queue.send_now");
+    };
+    assert_eq!(id, "q2");
+    let refusal = refused(codes::AGENT_BUSY, "session s1 is asking a question");
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
+    assert_eq!(
+        notice,
+        Some(format!(
+            "Could not send the queued message: {}",
+            refusal.sentence()
+        ))
+    );
+}
+
+#[gpui::test]
+fn a_paused_queue_offers_resume_and_sends_agent_queue_resume(cx: &mut TestAppContext) {
+    let mut paused = queued("q1", "s1", 1);
+    paused.reason = Some(QUEUE_REASON_PAUSED_STOPPED.to_owned());
+    let (mut rig, cx) = queue_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Done))],
+        s1_queue(vec![paused]),
+    );
+    draw(cx);
+    click(cx, "button:queued-resume");
+    let Some(QueueCommand::Resume { session, .. }) = queue_call(&mut rig.script) else {
+        panic!("Resume is sent as agent.queue.resume");
+    };
+    assert_eq!(session, "s1");
+}
+
+#[gpui::test]
+fn without_the_queue_there_is_no_dock_and_nothing_queues(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+    );
+    assert!(cx.debug_bounds("session-queue").is_none());
+    type_and_send(&rig, cx, "later");
+    cx.run_until_parked();
+    assert!(queue_call(&mut rig.script).is_none(), "nothing is queued");
+    assert_eq!(draft_of(&composer_of(&rig, cx), cx), "later");
 }
 
 /// Claude with two modes, Plan the vendor's own default and a bypass mode.

@@ -19,6 +19,7 @@ use crate::device;
 use crate::error::CliError;
 use crate::extension;
 use crate::host;
+use crate::open;
 use crate::output::{self, Output};
 use crate::pair;
 use crate::profile_secure;
@@ -94,6 +95,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
     let autostart = globals.autostart;
     match command {
         Commands::Service { command } => service_command(&globals, command, output),
+        Commands::Open => {
+            globals.local_only("open")?;
+            open::run(&globals.profile()?, globals.autostart, output)
+        }
         Commands::Settings { command } => {
             let target = globals.target()?;
             block_on(config::execute(&target, autostart, command, output))

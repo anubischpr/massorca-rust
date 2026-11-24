@@ -1,5 +1,7 @@
 use tokio_tungstenite::tungstenite;
 
+use crate::Pin;
+
 /// Why a network operation failed. Neither `Debug` nor `Display` ever carries key bytes.
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
@@ -13,8 +15,10 @@ pub enum NetError {
     Certificate(String),
     #[error("invalid pin: {0}")]
     InvalidPin(String),
+    /// The server presented another key than the pinned one: `actual` is its pin, `None` when its certificate could not be
+    /// read.
     #[error("the server's certificate does not match the pinned key")]
-    ServerPinMismatch,
+    ServerPinMismatch { actual: Option<Pin> },
     #[error("no address to connect to")]
     NoAddress,
     #[error("timed out")]

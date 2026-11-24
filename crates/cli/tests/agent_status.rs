@@ -400,3 +400,32 @@ fn a_hook_with_a_command_line_it_does_not_expect_still_exits_zero() {
         );
     }
 }
+
+#[test]
+fn a_waiting_marked_seen_comes_back_unseen_with_the_next_attention_state() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, terminal) = start(&sandbox, "ask: may I", &[]);
+    let waiting = until(&sandbox, &session, "waiting");
+    assert!(waiting["activity"].get("seen_at_ms").is_none(), "{waiting}");
+
+    let seen = sandbox.json_ok("default", &["agent", "seen", &session]);
+    assert_eq!(activity(&seen), ("waiting", None, "hook"));
+    assert!(
+        seen["activity"]["seen_at_ms"].as_i64().unwrap_or(0) > 0,
+        "{seen}"
+    );
+    sandbox
+        .run("default", &["agent", "status", &session])
+        .success()
+        .stdout(contains("seen: yes"));
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "yes"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(activity(&done), ("done", Some("success"), "hook"));
+    assert!(
+        done["activity"].get("seen_at_ms").is_none(),
+        "a new attention state is unseen: {done}"
+    );
+}

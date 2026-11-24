@@ -60,6 +60,9 @@ pub struct StoredActivity {
     pub outcome: Option<String>,
     pub source: String,
     pub at: i64,
+    /// When someone marked this activity as seen; only a `waiting` or `done` can be. Written by
+    /// [`Store::mark_agent_session_seen`] alone, and cleared whenever the activity changes.
+    pub seen_at: Option<i64>,
 }
 
 /// The permission mode of a session's current or last run (decision 0083).
@@ -99,7 +102,7 @@ pub struct AgentSessionRow {
     pub pending_permission_mode: Option<String>,
 }
 
-const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode FROM agent_sessions";
+const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode FROM agent_sessions";
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
     let exit = match row.get::<_, Option<RunExitReason>>("exit_reason")? {
@@ -119,6 +122,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
                 .get::<_, Option<String>>("activity_source")?
                 .unwrap_or_default(),
             at: row.get::<_, Option<i64>>("activity_at")?.unwrap_or(0),
+            seen_at: row.get("activity_seen_at")?,
         }),
         None => None,
     };
@@ -154,7 +158,7 @@ impl Store {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
         self.lock().execute(
-            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             params![
                 row.id,
                 row.kind,
@@ -174,6 +178,7 @@ impl Store {
                 activity.and_then(|activity| activity.outcome.clone()),
                 activity.map(|activity| activity.source.clone()),
                 activity.map(|activity| activity.at),
+                activity.and_then(|activity| activity.seen_at),
                 row.result,
                 row.brought_back_at,
                 row.holds_secrets,
@@ -282,7 +287,7 @@ impl Store {
         pending: Option<&str>,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
             params![
                 id,
                 terminal_id,
@@ -297,7 +302,8 @@ impl Store {
     }
 
     /// Writes a session's activity and result (0052), replacing both, and sets its agent ref from `agent_ref_if_unset`
-    /// only when the row has none. One statement, so a reader never sees half a change. Returns whether a row matched.
+    /// only when the row has none. One statement, so a reader never sees half a change. A different activity clears the
+    /// seen mark; the argument's `seen_at` is not written. Returns whether a row matched.
     pub fn set_agent_session_status(
         &self,
         id: &str,
@@ -306,7 +312,7 @@ impl Store {
         agent_ref_if_unset: Option<&str>,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET activity = ?2, activity_outcome = ?3, activity_source = ?4, activity_at = ?5, result = ?6, agent_ref = COALESCE(agent_ref, ?7) WHERE id = ?1",
+            "UPDATE agent_sessions SET activity_seen_at = CASE WHEN activity IS ?2 AND activity_outcome IS ?3 AND activity_source IS ?4 AND activity_at IS ?5 THEN activity_seen_at END, activity = ?2, activity_outcome = ?3, activity_source = ?4, activity_at = ?5, result = ?6, agent_ref = COALESCE(agent_ref, ?7) WHERE id = ?1",
             params![
                 id,
                 activity.map(|activity| activity.state.clone()),
@@ -316,6 +322,22 @@ impl Store {
                 result,
                 agent_ref_if_unset
             ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Marks a session's current `waiting` or `done` as seen at `at` (inventory STAT-19). With `saw`, only the activity
+    /// recorded at that time is marked, so a late mark never lands on a newer one. An activity already seen keeps its first
+    /// mark. Returns whether the mark was written.
+    pub fn mark_agent_session_seen(
+        &self,
+        id: &str,
+        saw: Option<i64>,
+        at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET activity_seen_at = ?2 WHERE id = ?1 AND activity IN ('waiting','done') AND activity_seen_at IS NULL AND (?3 IS NULL OR activity_at = ?3)",
+            params![id, at, saw],
         )?;
         Ok(changed > 0)
     }

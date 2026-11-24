@@ -60,6 +60,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Starts the MassOrca desktop app on this profile and returns at once.
+    Open,
     /// Reads, changes and resets settings. `config` is an older name for it.
     #[command(alias = "config")]
     Settings {
@@ -224,6 +226,11 @@ pub enum ProjectCommand {
         /// Project id, name or path.
         project: String,
     },
+    /// Shows what `project add` without a kind would register for a directory, without registering it.
+    Inspect {
+        /// Directory to inspect. A relative path is taken from the current directory.
+        path: PathBuf,
+    },
     /// Unregisters a project. Refused while it has workspaces, unless their records are forgotten. Its files stay.
     Rm {
         /// Project id, name or path.
@@ -294,9 +301,11 @@ pub enum WorkspaceCommand {
 pub struct WorkspaceCreateArgs {
     /// Project id, name or path.
     pub project: String,
-    /// Name of the workspace; also its branch and directory name unless set otherwise.
-    pub name: String,
-    /// Branch to create or check out. Defaults to the workspace name.
+    /// Name of the workspace, cleaned for its folder and branch (accents folded, other characters
+    /// become `-`). Omit it to generate one.
+    pub name: Option<String>,
+    /// Branch to create or check out. Defaults to the workspace name, after the branch prefix
+    /// (`workspaces.branch_prefix`) when one is set.
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
     /// Commit or ref the new branch starts from. `origin/x` means the remote-tracking branch. Defaults to the
