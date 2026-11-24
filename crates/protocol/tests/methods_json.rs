@@ -23,6 +23,7 @@ fn sample_project() -> projects::Project {
         name: "app".to_owned(),
         workspaces_root: "/repos/app-workspaces".to_owned(),
         added_at_ms: 1_767_225_600_000_i64,
+        base_ref: None,
     }
 }
 
@@ -52,6 +53,7 @@ fn sample_workspace() -> workspaces::Workspace {
         created_at_ms: 1_767_225_600_500_i64,
         locked: None,
         prunable: None,
+        base_refresh: None,
     }
 }
 
@@ -94,6 +96,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(projects::LIST, "project.list");
     assert_eq!(projects::SHOW, "project.show");
     assert_eq!(projects::REMOVE, "project.remove");
+    assert_eq!(projects::SET_BASE, "project.set_base");
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
@@ -114,6 +117,7 @@ fn no_core_method_uses_the_reserved_extension_prefix() {
         projects::LIST,
         projects::SHOW,
         projects::REMOVE,
+        projects::SET_BASE,
         workspaces::CREATE,
         workspaces::LIST,
         workspaces::SHOW,
@@ -186,6 +190,35 @@ fn project_add_params_carry_set_options() {
 }
 
 #[test]
+fn project_set_base_params_send_null_to_clear_the_base() {
+    assert_wire(
+        &projects::ProjectSetBaseParams {
+            project: "app".to_owned(),
+            base: Some("origin/develop".to_owned()),
+        },
+        &json!({ "project": "app", "base": "origin/develop" }),
+    );
+    assert_wire(
+        &projects::ProjectSetBaseParams {
+            project: "app".to_owned(),
+            base: None,
+        },
+        &json!({ "project": "app", "base": null }),
+    );
+}
+
+#[test]
+fn project_omits_base_ref_until_it_is_set() {
+    let mut project = sample_project();
+    assert_wire(&project, &sample_project_json());
+
+    project.base_ref = Some("origin/develop".to_owned());
+    let mut expected = sample_project_json();
+    expected["base_ref"] = json!("origin/develop");
+    assert_wire(&project, &expected);
+}
+
+#[test]
 fn project_kind_uses_snake_case_names() {
     assert_wire(&projects::ProjectKind::Git, &json!("git"));
     assert_wire(&projects::ProjectKind::Folder, &json!("folder"));
@@ -239,6 +272,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         },
@@ -247,10 +281,33 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
 }
 
 #[test]
+fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
+    assert_wire(
+        &workspaces::WorkspaceCreateParams {
+            project: "app".to_owned(),
+            name: "feat-x".to_owned(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: true,
+            path: None,
+            request_id: None,
+        },
+        &json!({
+            "project": "app",
+            "name": "feat-x",
+            "existing_branch": false,
+            "refresh_base": true
+        }),
+    );
+}
+
+#[test]
 fn workspace_create_params_default_existing_branch_to_false() {
     let params: workspaces::WorkspaceCreateParams =
         serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
     assert!(!params.existing_branch);
+    assert!(!params.refresh_base);
     assert!(params.branch.is_none());
     assert!(params.request_id.is_none());
 }
@@ -486,6 +543,7 @@ fn topic_constants_match_the_contract() {
     assert_eq!(events::TOPIC_WORKSPACE_REMOVED, "workspace.removed");
     assert_eq!(events::TOPIC_PROJECT_ADDED, "project.added");
     assert_eq!(events::TOPIC_PROJECT_REMOVED, "project.removed");
+    assert_eq!(events::TOPIC_PROJECT_CHANGED, "project.changed");
 }
 
 #[test]

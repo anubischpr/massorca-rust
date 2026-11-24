@@ -30,7 +30,7 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
   kinds/*.json            declared kinds (owner `user`)
   homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
   accounts/<kind>/<id>/   credential home per account (0059)
-  runs/<session>/         generated hook settings for a run (0053)
+  runs/<session>/         generated hook settings for a run (0053); `starting` while a start is unsettled
 ```
 
 ## Kind packages (decision 0059)
@@ -304,6 +304,24 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+### Crash-safe start
+
+A start or resume is recorded before its program starts and settled after: the service writes an
+empty `starting` file in the run's directory, starts the terminal, records the run in the session
+row (a new row for `agent.start`, the new terminal for `agent.resume`), and only then removes the
+file. A service that dies in between leaves the file. Its program does not outlive it (0051: a job
+object per terminal on Windows, the session on Unix).
+
+The next service start settles every marked directory before it serves. With no session row, the
+start never reached its row: the directory, which may hold the run's hook token and launch files, is
+deleted, so a retry with the same `request_id` starts afresh instead of finding a session with no
+run. With a row, the start or resume was recorded and only the mark is removed; the row is marked
+stale like any other run of the previous service.
+
+The CLI tests reach both points through `MASSORCA_TEST_CRASH_AT` (`agent-start-spawned`,
+`agent-resume-spawned`), which makes the service exit there at once, as a crash would. It is inert
+unless set.
 
 ## Prompt queue (decision 0084)
 

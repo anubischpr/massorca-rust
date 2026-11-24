@@ -29,6 +29,20 @@ impl Activity {
         }
     }
 
+    /// Runs `call` on the blocking pool, counted until it returns even when the awaiting request is aborted.
+    pub(crate) async fn blocking<T, F>(&self, call: F) -> Result<T, tokio::task::JoinError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let work = self.enter();
+        tokio::task::spawn_blocking(move || {
+            let _work = work;
+            call()
+        })
+        .await
+    }
+
     /// Waits until no unit of work is counted.
     pub(crate) async fn idle(&self) {
         let mut count = self.count.subscribe();
@@ -67,6 +81,39 @@ mod tests {
 
         activity.idle().await;
         assert!(started.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn a_blocking_call_stays_counted_after_its_request_is_aborted() {
+        let activity = Activity::default();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (entered, started) = std::sync::mpsc::channel::<()>();
+        let runner = activity.clone();
+        let request = tokio::spawn(async move {
+            runner
+                .blocking(move || {
+                    let _ = entered.send(());
+                    let _ = wait.recv();
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || started.recv())
+            .await
+            .expect("joins")
+            .expect("the call started");
+        request.abort();
+        let _ = request.await;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), activity.idle())
+                .await
+                .is_err(),
+            "the running call is still counted"
+        );
+        release.send(()).expect("the call is released");
+        tokio::time::timeout(Duration::from_secs(5), activity.idle())
+            .await
+            .expect("idle once the call returns");
     }
 
     #[tokio::test]
