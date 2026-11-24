@@ -34,6 +34,8 @@ pub struct NavRow {
 pub enum TreeRow {
     Project {
         name: String,
+        /// The project's emoji icon, drawn before its name.
+        emoji: Option<String>,
     },
     Host {
         name: String,
@@ -129,11 +131,20 @@ pub fn sidebar_content(snapshot: &ShellSnapshot, mode: Mode) -> SidebarContent {
     }
 }
 
+/// A project row's label: its emoji before its name, when it has one.
+pub fn project_label(name: &str, emoji: Option<&str>) -> String {
+    match emoji {
+        Some(emoji) => format!("{emoji} {name}"),
+        None => name.to_owned(),
+    }
+}
+
 fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     for project in projects {
         rows.push(TreeRow::Project {
             name: project.name.clone(),
+            emoji: project.emoji.clone(),
         });
         for host in &project.hosts {
             rows.push(TreeRow::Host {
@@ -320,7 +331,8 @@ mod tests {
         assert_eq!(
             tree[0],
             TreeRow::Project {
-                name: "massorca-rust".into()
+                name: "massorca-rust".into(),
+                emoji: None,
             }
         );
         assert!(matches!(
@@ -409,6 +421,24 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_project_row_takes_its_emoji_into_its_label() {
+        let groups = vec![ProjectGroup {
+            name: "massorca".into(),
+            emoji: Some("🚀".into()),
+            hosts: Vec::new(),
+        }];
+        assert_eq!(
+            flatten(&groups, None)[0],
+            TreeRow::Project {
+                name: "massorca".into(),
+                emoji: Some("🚀".into()),
+            }
+        );
+        assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
+        assert_eq!(project_label("massorca", None), "massorca");
+    }
+
     /// One project and host holding these workspaces, each as its id and its sessions.
     fn snapshot(workspaces: Vec<(&str, Vec<SessionRow>)>, open: Option<&str>) -> ShellSnapshot {
         let workspaces = workspaces
@@ -424,6 +454,7 @@ mod tests {
         ShellSnapshot {
             projects: vec![ProjectGroup {
                 name: "massorca".into(),
+                emoji: None,
                 hosts: vec![HostGroup {
                     name: "This PC".into(),
                     reach: HostReach::Connected,

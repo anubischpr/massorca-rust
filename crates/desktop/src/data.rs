@@ -44,6 +44,7 @@ impl DataSource for SampleDataSource {
         ShellSnapshot {
             projects: vec![
                 ProjectGroup {
+                    emoji: None,
                     name: "massorca-rust".into(),
                     hosts: vec![
                         HostGroup {
@@ -90,6 +91,7 @@ impl DataSource for SampleDataSource {
                     ],
                 },
                 ProjectGroup {
+                    emoji: None,
                     name: "datalake".into(),
                     hosts: vec![HostGroup {
                         name: "This PC".into(),
