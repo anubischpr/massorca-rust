@@ -45,6 +45,7 @@ use crate::model::start_page::{
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::Refusal;
+use massorca_protocol::codes;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
@@ -59,6 +60,8 @@ pub(super) struct StartFrame {
     pub mode: StartMode,
     /// Why the chosen agent cannot start, when it cannot.
     pub kind_notice: Option<KindNotice>,
+    /// The service refused because the data folder is not secured.
+    pub profile_unsafe: bool,
 }
 
 /// Why the chosen agent cannot start, and the Marketplace page that can install or turn it on.
@@ -66,6 +69,24 @@ pub(super) struct StartFrame {
 pub(super) struct KindNotice {
     pub text: String,
     pub page: MarketplacePage,
+}
+
+/// The banner a data folder that is not secured gets: the service refuses every call until the
+/// owner runs the CLI, since no protocol method secures it (`profile.unsafe_location`).
+pub(super) const PROFILE_UNSAFE_TEXT: &str = "This data folder is not secured, so the service refuses every call. Run `massorca profile secure --yes` in a terminal, then try again.";
+
+/// The banner on both start pages while the last refusal was `profile.unsafe_location`.
+pub(super) fn profile_banner() -> impl IntoElement {
+    div()
+        .debug_selector(|| "start-profile-banner".to_owned())
+        .child(
+            Banner::new(
+                "start-profile-banner",
+                BannerVariant::Warning,
+                PROFILE_UNSAFE_TEXT,
+            )
+            .title("Secure the data folder"),
+        )
 }
 
 /// What the page says when the service declares no agent at all.
@@ -221,6 +242,9 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
         .child(placement)
+        .when(frame.profile_unsafe, |column| {
+            column.child(profile_banner())
+        })
         .child(composer);
     if page.missing {
         column = column.child(
@@ -732,6 +756,18 @@ impl Shell {
         Ok((kind, permission_mode))
     }
 
+    /// Keeps the data-folder banner in step with the last answer: on after `profile.unsafe_location`,
+    /// off after any call goes through.
+    pub(super) fn note_refusal(&mut self, refusal: Option<&Refusal>) {
+        match refusal {
+            None => self.profile_unsafe = false,
+            Some(refusal) if refusal.code() == Some(codes::PROFILE_UNSAFE_LOCATION) => {
+                self.profile_unsafe = true;
+            }
+            Some(_) => {}
+        }
+    }
+
     /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
     /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
     /// back to the composer with its sentence.
@@ -744,6 +780,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.start_pending = None;
+        self.note_refusal(answer.as_ref().err());
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));

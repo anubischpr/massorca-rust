@@ -252,3 +252,59 @@ fn a_project_added_from_the_page_menu_becomes_the_pages_project(cx: &mut TestApp
         Some("p3".to_owned())
     );
 }
+
+/// The refusal a data folder that is not secured gives every call (Windows, a new profile).
+fn unsafe_location() -> Refusal {
+    Refusal::Failed {
+        code: massorca_protocol::codes::PROFILE_UNSAFE_LOCATION.to_owned(),
+        message: "the data folder is in an unsafe location".to_owned(),
+    }
+}
+
+#[gpui::test]
+fn an_unsafe_data_folder_refusal_shows_a_banner_with_the_command_to_run(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("start-profile-banner").is_none());
+    type_and_send(&rig, cx, "fix the login");
+    let (_, reply) = expect_create(&mut rig.script);
+    reply
+        .send(Err(unsafe_location()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("start-profile-banner").is_some(),
+        "the banner is drawn on the page"
+    );
+    assert!(super::start_page::PROFILE_UNSAFE_TEXT.contains("massorca profile secure --yes"));
+}
+
+#[gpui::test]
+fn an_unsafe_data_folder_refusal_of_add_project_shows_the_banner_too(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    click(cx, "button:home-start-project");
+    click(cx, "menu-item-4");
+    rig.shell.update(cx, |shell, cx| {
+        let dialog = shell
+            .dialogs
+            .add_project
+            .as_mut()
+            .expect("the dialog opens");
+        dialog.form.path = "/repos/gamma".to_owned();
+        shell.submit_add_project(cx);
+    });
+    cx.run_until_parked();
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::AddProject { reply, .. }) => break reply,
+            Some(_) => {}
+            None => panic!("a project.add call was expected"),
+        }
+    };
+    reply
+        .send(Err(unsafe_location()))
+        .expect("the shell waits for the add");
+    cx.run_until_parked();
+    assert!(rig.shell.read_with(cx, |shell, _| shell.profile_unsafe));
+}

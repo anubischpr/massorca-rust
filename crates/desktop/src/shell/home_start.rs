@@ -16,7 +16,9 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 use super::Shell;
-use super::start_page::{KindNotice, key_hints, kind_notice_row, refuse_send, starting_line};
+use super::start_page::{
+    KindNotice, key_hints, kind_notice_row, profile_banner, refuse_send, starting_line,
+};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, create_params, home_project,
@@ -36,6 +38,8 @@ pub(super) struct HomeFrame {
     pub mode: StartMode,
     /// Why the chosen agent cannot start, when it cannot.
     pub kind_notice: Option<KindNotice>,
+    /// The service refused because the data folder is not secured.
+    pub profile_unsafe: bool,
 }
 
 /// The project menu of this page: the shared rows, with "No project" off until the service can
@@ -116,6 +120,9 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
                 .child("What should we work on?"),
         )
         .child(div().flex().flex_row().justify_center().child(project))
+        .when(frame.profile_unsafe, |column| {
+            column.child(profile_banner())
+        })
         .child(composer)
         .into_any_element()
 }
@@ -150,6 +157,7 @@ impl Shell {
             starting,
             mode: self.start_mode(HOME_START),
             kind_notice: self.kind_notice(&composer, cx),
+            profile_unsafe: self.profile_unsafe,
             composer,
         })
     }

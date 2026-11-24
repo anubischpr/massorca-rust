@@ -430,6 +430,7 @@ impl Shell {
     /// A new project closes the dialog and is chosen in the create form that asked for it. A
     /// refusal keeps the dialog open with its reason shown.
     fn finish_add_project(&mut self, result: Result<Project, Refusal>, cx: &mut Context<Self>) {
+        self.note_refusal(result.as_ref().err());
         match result {
             Ok(project) => {
                 self.dialogs.add_project = None;

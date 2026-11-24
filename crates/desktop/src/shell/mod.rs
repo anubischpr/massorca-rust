@@ -187,6 +187,8 @@ pub struct Shell {
     start_pending: Option<crate::model::start_page::StartingSession>,
     /// The project the start page with no workspace creates in; `None` stands for the first one.
     home_project: Option<String>,
+    /// The last start-page call was refused because the data folder is not secured.
+    profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
     /// The call in flight for each session, if any: one at a time per session.
@@ -495,6 +497,7 @@ impl Shell {
             start_composers: HashMap::new(),
             start_pending: None,
             home_project: None,
+            profile_unsafe: false,
             session_composers: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
@@ -727,6 +730,7 @@ impl Render for Shell {
             let mode = self.start_mode(&page.id);
             let kind_notice = self.kind_notice(&composer, cx);
             start_page::StartFrame {
+                profile_unsafe: self.profile_unsafe,
                 kind_notice,
                 page,
                 composer,
