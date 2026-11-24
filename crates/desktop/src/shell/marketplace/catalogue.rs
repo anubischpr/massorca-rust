@@ -296,6 +296,7 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     card.on_action(move |action, _, cx| {
         let _ = shell.update(cx, |shell, cx| match action {
             ExtensionAction::Toggle(enabled) => shell.set_marketplace_enabled(id, enabled, cx),
+            ExtensionAction::Update => shell.update_package(id, cx),
             _ => shell.open_marketplace(MarketplacePage::Item(id), cx),
         });
     })

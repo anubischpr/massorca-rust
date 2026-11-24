@@ -205,6 +205,8 @@ pub struct Shell {
     marketplace_review: Option<marketplace::InstallReview>,
     /// The last refused change to an installed package, with the item it concerns.
     marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
+    /// The update checks of the installed packages, and the review each checked package returned (decision 0062).
+    marketplace_updates: marketplace::UpdateChecks,
     /// What the Connection part knows beyond the service's account lists.
     marketplace_accounts: marketplace::AccountsUi,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
@@ -312,8 +314,21 @@ impl Shell {
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
                 let (installed, catalogue) = state.extension_lists();
                 shell.marketplace.follow_extensions(installed, catalogue);
+                let checks = state
+                    .extensions
+                    .as_ref()
+                    .map(|read| read.number)
+                    .and_then(|read| {
+                        shell
+                            .marketplace_updates
+                            .begin(read, installed)
+                            .map(|checks| (read, checks))
+                    });
                 shell.follow_service_accounts(state);
                 shell.model.set_marketplace(shell.marketplace.snapshot());
+                if let Some((read, checks)) = checks {
+                    shell.start_update_checks(read, checks, cx);
+                }
             }
             cx.notify();
         });
@@ -450,6 +465,7 @@ impl Shell {
             marketplace_uninstall: None,
             marketplace_review: None,
             marketplace_item_error: None,
+            marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,

@@ -6,6 +6,7 @@ mod catalogue;
 mod dialogs;
 #[cfg(test)]
 mod extension_tests;
+mod extension_updates;
 mod import;
 mod item;
 mod item_images;
@@ -23,6 +24,7 @@ use crate::model::marketplace::{
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
+pub(super) use extension_updates::UpdateChecks;
 use std::collections::BTreeSet;
 
 use gpui::{

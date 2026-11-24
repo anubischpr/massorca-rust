@@ -156,7 +156,7 @@ impl Shell {
     }
 
     /// A refused change shows its sentence under the item; a change that worked needs no words here.
-    fn finish_package_change(
+    pub(super) fn finish_package_change(
         &mut self,
         item: MarketplaceItemId,
         result: Result<(), Refusal>,

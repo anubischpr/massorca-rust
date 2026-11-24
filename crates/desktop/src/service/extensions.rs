@@ -10,7 +10,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
     ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
     ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRemoveParams, ExtensionRemoved,
-    ExtensionReview, ExtensionSetEnabledParams,
+    ExtensionReview, ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -52,6 +52,11 @@ pub(crate) enum ExtensionCommand {
     Remove {
         params: ExtensionRemoveParams,
         reply: oneshot::Sender<Result<ExtensionRemoved, Refusal>>,
+    },
+    /// `extensions.update`: brings an installed package up to date, with the consent of its new review.
+    Update {
+        params: ExtensionUpdateParams,
+        reply: oneshot::Sender<Result<ExtensionInstalled, Refusal>>,
     },
 }
 
@@ -114,6 +119,15 @@ impl ServiceHandle {
             .await
     }
 
+    /// `extensions.update`. The list changes through the reads that follow the answer, not from the answer.
+    pub async fn update_extension(
+        &self,
+        params: ExtensionUpdateParams,
+    ) -> Result<ExtensionInstalled, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::Update { params, reply }))
+            .await
+    }
+
     /// `extensions.asset`: a listed image of a package, base64. Nothing changes on the service.
     pub async fn extension_asset(
         &self,
@@ -160,6 +174,11 @@ pub(super) fn spawn_call(
         ExtensionCommand::SetEnabled { params, reply } => {
             write(client, updates, reads, reply, move |client| async move {
                 client.extension_set_enabled(&params).await
+            });
+        }
+        ExtensionCommand::Update { params, reply } => {
+            write(client, updates, reads, reply, move |client| async move {
+                client.extension_update(&params).await
             });
         }
         ExtensionCommand::Remove { params, reply } => {
@@ -218,6 +237,9 @@ pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         ExtensionCommand::Remove { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::Update { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }

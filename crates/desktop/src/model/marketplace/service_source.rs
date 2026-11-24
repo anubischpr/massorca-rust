@@ -4,12 +4,12 @@
 use std::collections::BTreeMap;
 
 use massorca_protocol::methods::agents::{AccountSummary, AgentKind, PackageState};
-use massorca_protocol::methods::extensions::ExtensionItem;
+use massorca_protocol::methods::extensions::{ExtensionItem, ExtensionReview};
 
 use super::service_accounts::ServiceAccounts;
 
 use super::extension_items::{
-    ExtensionIds, extension_items, provides_agent, state_of as package_state,
+    ExtensionIds, extension_items, provides_agent, state_of as package_state, update_version,
 };
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
@@ -22,12 +22,14 @@ use crate::service::Refusal;
 pub(super) const SERVICE_HOST: HostId = HostId(1);
 
 /// The Marketplace a connected service makes up. It is empty until a connect reads its lists.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ServiceMarketplace {
     snapshot: MarketplaceSnapshot,
     kinds: Vec<AgentKind>,
     installed: Vec<ExtensionItem>,
     catalogue: Vec<ExtensionItem>,
+    /// The current update checks: each installed package's review, from the last read.
+    reviews: Vec<ExtensionReview>,
     ids: ExtensionIds,
     /// The accounts of every kind, as the service lists them.
     accounts: ServiceAccounts,
@@ -38,12 +40,17 @@ impl ServiceMarketplace {
     fn rebuild(&mut self) {
         let base = agent_snapshot(&self.kinds);
         let kind_ids: Vec<String> = self.kinds.iter().map(|kind| kind.id.clone()).collect();
-        let extensions =
-            extension_items(&self.installed, &self.catalogue, &kind_ids, &mut self.ids);
+        let extensions = extension_items(
+            &self.installed,
+            &self.catalogue,
+            &kind_ids,
+            &mut self.ids,
+            &self.reviews,
+        );
         let agents = base
             .items
             .into_iter()
-            .map(|agent| with_package(agent, &self.installed, &self.catalogue));
+            .map(|agent| with_package(agent, &self.installed, &self.catalogue, &self.reviews));
         let items = agents.chain(extensions).collect();
         self.snapshot = MarketplaceSnapshot { items, ..base };
     }
@@ -55,6 +62,7 @@ fn with_package(
     mut agent: MarketplaceItem,
     installed: &[ExtensionItem],
     catalogue: &[ExtensionItem],
+    reviews: &[ExtensionReview],
 ) -> MarketplaceItem {
     let Some(kind) = agent.agent_kind.as_deref() else {
         return agent;
@@ -64,7 +72,7 @@ fn with_package(
         .chain(catalogue)
         .find(|entry| provides_agent(entry, kind));
     if let Some(entry) = package {
-        agent.state = package_state(entry.state);
+        agent.state = package_state(entry.state, update_version(entry, reviews));
         agent.extension = Some(Box::new(entry.clone()));
     }
     agent
@@ -170,6 +178,11 @@ impl MarketplaceSource for ServiceMarketplace {
     fn follow_extensions(&mut self, installed: &[ExtensionItem], catalogue: &[ExtensionItem]) {
         self.installed = installed.to_vec();
         self.catalogue = catalogue.to_vec();
+        self.rebuild();
+    }
+
+    fn follow_update_reviews(&mut self, reviews: &[ExtensionReview]) {
+        self.reviews = reviews.to_vec();
         self.rebuild();
     }
 

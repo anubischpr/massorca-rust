@@ -827,3 +827,195 @@ fn the_information_part_links_each_page_the_package_lists(cx: &mut TestAppContex
         "a page the package does not list has no row"
     );
 }
+
+/// An installed package from a folder: not built in, so the update check inspects it.
+fn folder_package() -> ExtensionItem {
+    let mut item = installed_package(true);
+    if let Some(installed) = item.installed.as_mut() {
+        installed.source = SourceRef {
+            kind: SourceKind::Dir,
+            reference: "/packages/notes".to_owned(),
+        };
+    }
+    item
+}
+
+/// The folder package as a later read lists it, once an update installed version 2.0.0.
+fn updated_folder_package() -> ExtensionItem {
+    let mut item = folder_package();
+    if let Some(installed) = item.installed.as_mut() {
+        installed.version = "2.0.0".to_owned();
+        installed.sha256 = "fresh".to_owned();
+    }
+    item
+}
+
+/// Takes the inspect the update check of a folder package sent and returns its reply.
+fn next_update_check(rig: &mut Rig) -> oneshot::Sender<Result<ExtensionReview, Refusal>> {
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, "dir:/packages/notes");
+            reply
+        }
+        _ => panic!("the update check inspects the folder package"),
+    }
+}
+
+#[gpui::test]
+fn a_newer_review_lists_the_folder_package_on_updates_with_its_version(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![folder_package()], Vec::new());
+    let reply = next_update_check(&mut rig);
+    let _ = reply.send(Ok(ExtensionReview {
+        version: "2.0.0".to_owned(),
+        sha256: "fresh".to_owned(),
+        ..review(false)
+    }));
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: Some("2.0.0".to_owned())
+        })
+    );
+    draw(cx);
+    draw(cx);
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "drawing the page does not inspect the package again"
+    );
+}
+
+#[gpui::test]
+fn a_review_with_the_installed_sha256_is_not_an_update(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![folder_package()], Vec::new());
+    let reply = next_update_check(&mut rig);
+    let _ = reply.send(Ok(review(false)));
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: None
+        })
+    );
+}
+
+#[gpui::test]
+fn a_built_in_package_is_not_inspected(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(cx, vec![installed_package(true)], Vec::new());
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "a built-in package is refreshed by the service, so it is not inspected"
+    );
+}
+
+#[gpui::test]
+fn an_inspect_refusal_leaves_the_package_off_updates_and_is_not_asked_again(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, id) = open_listed(cx, vec![folder_package()], Vec::new());
+    let reply = next_update_check(&mut rig);
+    let _ = reply.send(Err(Refusal::unavailable("the service is busy")));
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: None
+        })
+    );
+    draw(cx);
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "a refused check is not retried"
+    );
+}
+
+#[gpui::test]
+fn update_sends_the_consent_of_the_checked_review_and_the_list_refreshes(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![folder_package()], Vec::new());
+    let reply = next_update_check(&mut rig);
+    let _ = reply.send(Ok(ExtensionReview {
+        version: "2.0.0".to_owned(),
+        sha256: "fresh".to_owned(),
+        consent: "consent-2".to_owned(),
+        ..review(false)
+    }));
+    cx.run_until_parked();
+    assert_eq!(
+        id,
+        MarketplaceItemId(1000),
+        "the first package is item 1000"
+    );
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Updates, cx)
+    });
+    click(cx, "button:marketplace-card-1000-update");
+    cx.run_until_parked();
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Update { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert_eq!(params.consent.as_deref(), Some("consent-2"));
+            assert_eq!(params.sha256, None, "a folder is not pinned by hash");
+            let _ = reply.send(Ok(installed()));
+        }
+        _ => panic!("the Update button sends extensions.update"),
+    }
+    cx.run_until_parked();
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![updated_folder_package()]),
+            catalogue: Ok(Vec::new()),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: None
+        }),
+        "the refreshed list no longer offers the update"
+    );
+}
+
+#[gpui::test]
+fn a_refused_update_opens_the_item_page_with_the_refusal(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![folder_package()], Vec::new());
+    let reply = next_update_check(&mut rig);
+    let _ = reply.send(Ok(ExtensionReview {
+        version: "2.0.0".to_owned(),
+        sha256: "fresh".to_owned(),
+        ..review(false)
+    }));
+    cx.run_until_parked();
+    assert_eq!(
+        id,
+        MarketplaceItemId(1000),
+        "the first package is item 1000"
+    );
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Updates, cx)
+    });
+    click(cx, "button:marketplace-card-1000-update");
+    cx.run_until_parked();
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Update { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.consent_mismatch".to_owned(),
+                message: "the review changed".to_owned(),
+            }));
+        }
+        _ => panic!("the Update button sends extensions.update"),
+    }
+    cx.run_until_parked();
+    assert!(
+        shown(cx, "marketplace-connection-alert"),
+        "the refusal is shown on the item page"
+    );
+}

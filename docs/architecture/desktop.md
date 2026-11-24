@@ -214,6 +214,11 @@ Linux only. No automated run opens a visible window.
   that asks for one starts the call; the image is decoded off the UI thread and kept per package, version and path
   (`model/marketplace/item_images.rs`, `shell/marketplace/item_images.rs`). A new version fetches again. A failed
   call or an image that does not decode leaves the icon, and it is not asked for again.
+- Update checks (`shell/marketplace/extension_updates.rs`): each installed folder or archive package is inspected once
+  per read of the lists, never per draw. A review whose sha256 differs from the installed one lists the package on
+  Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
+  sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
+  not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 
