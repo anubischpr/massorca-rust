@@ -71,6 +71,7 @@ function lastKnownAge(agents: AgentWatchState | undefined, nowMs: number): strin
   return agents?.lastContactMs === undefined ? undefined : formatAge(nowMs - agents.lastContactMs);
 }
 
-function retrySeconds(retryInMs: bigint): number {
+/** The whole seconds a retry waits, never under one. */
+export function retrySeconds(retryInMs: bigint): number {
   return Math.max(1, Math.round(Number(retryInMs) / 1000));
 }
