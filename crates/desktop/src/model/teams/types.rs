@@ -1,7 +1,7 @@
 //! The plain data of Bot Teams: teams and what each one holds, as the pages show it (screens 4).
 
 use crate::model::shell::{Agent, HostReach};
-use massorca_protocol::methods::teams::TeamCharacter;
+use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 macro_rules! ids {
     ($($(#[$doc:meta])* $name:ident),* $(,)?) => {
@@ -293,6 +293,8 @@ pub struct Team {
     pub reach: HostReach,
     pub bots: Vec<Bot>,
     pub lead: Option<BotId>,
+    /// The permission mode the team's bots run in (decision 0072, amendment "team access").
+    pub access: TeamAccess,
     /// Whether Workspaces is on in this team (D-AG-13, off by default).
     pub workspaces: bool,
     /// The team's own Board (D-WS-30).

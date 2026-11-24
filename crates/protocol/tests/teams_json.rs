@@ -221,6 +221,7 @@ fn project(source: Option<(&str, &str, ProjectKind)>) -> TeamProject {
         source_project,
         source_project_name,
         source_kind,
+        code_source: None,
     }
 }
 
@@ -280,6 +281,7 @@ fn unset_source_project_params_are_left_out_and_an_empty_one_is_kept_for_clearin
         goal: None,
         brief: None,
         source_project: None,
+        code_source: None,
     };
     assert_eq!(
         serde_json::to_value(&add).unwrap(),

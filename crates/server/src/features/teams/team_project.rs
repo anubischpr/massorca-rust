@@ -1,11 +1,11 @@
 //! `team.project_list`, `team.project_add`, `team.project_update` and `team.project_rm` (capability `teams/1`, decision 0072).
 
-use massorca_core_store::{Store, TeamProjectRow, new_id, now_ms};
+use massorca_core_store::{Store, TeamProjectRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::projects::Project as WorkspaceProject;
 use massorca_protocol::methods::teams::{
-    self, TeamProject, TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams,
+    self, CodeSource, TeamProject, TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams,
     TeamProjectUpdateParams, TeamRef,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -17,7 +17,7 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-use super::{blocking, non_blank, optional_text, selectors, store_error};
+use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
@@ -112,6 +112,7 @@ fn add_project(
     params: TeamProjectAddParams,
 ) -> Result<TeamProject, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
+    let code_source = code_source_name(&team, params.code_source)?;
     let row = TeamProjectRow {
         id: new_id(),
         team_id: team.id.clone(),
@@ -120,6 +121,7 @@ fn add_project(
         brief: params.brief.unwrap_or_default(),
         created_at: now_ms(),
         source_project_id: source_project_id(workspaces, params.source_project)?,
+        code_source,
     };
     store.insert_team_project(&row).map_err(store_error)?;
     Ok(project_view(&row, &workspace_projects(workspaces)?))
@@ -143,6 +145,9 @@ fn update_project(
     }
     if let Some(source) = params.source_project {
         row.source_project_id = source_project_id(workspaces, Some(source))?;
+    }
+    if params.code_source.is_some() {
+        row.code_source = code_source_name(&team, params.code_source)?;
     }
     if !store.update_team_project(&row).map_err(store_error)? {
         return Err(ErrorBody::new(
@@ -170,6 +175,36 @@ fn remove_project(
     }
     let tasks = linked.into_iter().map(|task| task.id).collect();
     Ok((project_view(&row, &linked_projects), tasks))
+}
+
+/// The store name of a recorded code source. As in pv96, only a team with Workspaces on records one.
+fn code_source_name(
+    team: &TeamRow,
+    source: Option<CodeSource>,
+) -> Result<Option<String>, ErrorBody> {
+    let name = match source {
+        None => return Ok(None),
+        Some(CodeSource::ExistingRepository) => CODE_SOURCE_EXISTING,
+        Some(CodeSource::NewFolderWithGit) => CODE_SOURCE_NEW_FOLDER,
+        Some(CodeSource::Unknown) => return Err(invalid("the code source is not a known kind")),
+    };
+    if !team.workspaces {
+        return Err(invalid(
+            "a code source needs Workspaces in this team; turn it on with: massorca team update TEAM --workspaces true",
+        ));
+    }
+    Ok(Some(name.to_owned()))
+}
+
+const CODE_SOURCE_EXISTING: &str = "existing_repository";
+const CODE_SOURCE_NEW_FOLDER: &str = "new_folder_with_git";
+
+fn code_source_of(name: &str) -> CodeSource {
+    match name {
+        CODE_SOURCE_EXISTING => CodeSource::ExistingRepository,
+        CODE_SOURCE_NEW_FOLDER => CodeSource::NewFolderWithGit,
+        _ => CodeSource::Unknown,
+    }
 }
 
 /// The Workspaces project `selector` names by id, exact name or path; a blank selector links none.
@@ -203,5 +238,6 @@ fn project_view(row: &TeamProjectRow, linked: &[WorkspaceProject]) -> TeamProjec
         source_project: row.source_project_id.clone(),
         source_project_name: source.map(|project| project.name.clone()),
         source_kind: source.map(|project| project.kind),
+        code_source: row.code_source.as_deref().map(code_source_of),
     }
 }

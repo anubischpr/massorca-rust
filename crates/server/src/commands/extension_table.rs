@@ -45,6 +45,19 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             ),
         ),
         command(
+            "extension.update",
+            "Update an installed extension to its source's current package",
+            "extensions.update",
+            args(
+                &["id"],
+                json!({
+                    "id": { "type": "string" },
+                    "consent": { "type": "string" },
+                    "sha256": { "type": "string" }
+                }),
+            ),
+        ),
+        command(
             "extension.enable",
             "Enable an installed extension",
             "extensions.set_enabled",
