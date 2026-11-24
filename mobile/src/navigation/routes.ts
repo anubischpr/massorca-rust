@@ -7,7 +7,8 @@ export type RootStackParamList = {
   ConfirmPairing: { readonly offer: string };
   ProtocolGate: { readonly host: string };
   Workspaces: { readonly host: string };
-  Terminal: undefined;
+  /** `workspace` is the workspace the terminal belongs to, for its agent state. */
+  Terminal: { readonly host: string; readonly terminal: string; readonly workspace?: string };
   Changes: undefined;
   ConnectionLog: { readonly host: string };
 };

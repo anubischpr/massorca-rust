@@ -2,6 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CONNECTION_LOG_TITLE } from '../copy/connection';
+import { TERMINAL_TITLE } from '../copy/terminal';
 import { PROJECTS_TITLE } from '../copy/workspaces';
 import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
 import { ConfirmPairingScreen } from '../screens/confirm-pairing-screen';
@@ -10,6 +11,7 @@ import { HomeScreen } from '../screens/home-screen';
 import { PairScreen } from '../screens/pair-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { ProtocolGateScreen } from '../screens/protocol-gate-screen';
+import { TerminalScreen } from '../screens/terminal-screen';
 import { WorkspacesScreen } from '../screens/workspaces-screen';
 import type { RootStackParamList } from './routes';
 
@@ -25,8 +27,15 @@ export function AppNavigator() {
         <Stack.Screen name="ConfirmPairing" component={ConfirmPairingScreen} options={{ title: CONFIRM_TITLE }} />
         <Stack.Screen name="ProtocolGate" component={ProtocolGateScreen} options={{ title: 'Protocol check' }} />
         <Stack.Screen name="Workspaces" component={WorkspacesScreen} options={{ title: PROJECTS_TITLE }} />
-        <Stack.Screen name="Terminal" options={{ title: 'Terminal' }}>
-          {() => <PlaceholderScreen title="Terminal" />}
+        <Stack.Screen name="Terminal" options={{ title: TERMINAL_TITLE }}>
+          {({ route, navigation }) => (
+            <TerminalScreen
+              host={route.params.host}
+              terminal={route.params.terminal}
+              workspace={route.params.workspace}
+              onOpenDetails={() => navigation.navigate('ConnectionLog', { host: route.params.host })}
+            />
+          )}
         </Stack.Screen>
         <Stack.Screen name="Changes" options={{ title: 'Changes' }}>
           {() => <PlaceholderScreen title="Changes" />}
