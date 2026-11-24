@@ -2,17 +2,18 @@
 //! blocking pool; the attach stream lives in `terminal_attach`.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use massorca_core_agents::sign_in::SIGN_IN_SCOPE;
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
-    CreateSpec, ExitReason as CoreExitReason, ExitRecord, ShellChoice, TerminalError, TerminalInfo,
-    TerminalState as CoreTerminalState,
+    CreateSpec, ExitReason as CoreExitReason, ExitRecord, ExitWait, ShellChoice, TerminalError,
+    TerminalInfo, TerminalState as CoreTerminalState,
 };
 use massorca_protocol::methods::terminals::{
     self, DEFAULT_COLS, DEFAULT_ROWS, ExitReason, Terminal, TerminalCreateParams, TerminalExit,
     TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
-    TerminalResizeParams, TerminalState,
+    TerminalResizeParams, TerminalState, TerminalWait, TerminalWaitCondition, TerminalWaitParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -78,6 +79,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::TERMINALS,
             Permission::Workspace,
             close,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::TERMINAL_WAIT, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            terminals::WAIT,
+            capabilities::TERMINAL_WAIT,
+            Permission::Read,
+            wait,
         )?,
     ])
 }
@@ -212,6 +223,41 @@ async fn close(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBo
     Ok(terminal_of(info))
 }
 
+/// Waits for the terminal's exit for at most the time this call holds (see `wait_timeout`).
+async fn wait(ctx: RequestCtx, params: TerminalWaitParams) -> Result<TerminalWait, ErrorBody> {
+    let timeout = wait_timeout(params.timeout_ms);
+    let id = params.terminal;
+    let manager = ctx.state.terminals.clone();
+    let waited = id.clone();
+    match on_manager(move || manager.wait_for_exit(&waited, timeout)).await? {
+        ExitWait::Exited(info) => Ok(wait_of(id, params.condition, true, info)),
+        ExitWait::TimedOut(info) => Ok(wait_of(id, params.condition, false, info)),
+        ExitWait::Gone => Err(ErrorBody::new(
+            codes::TERMINAL_GONE,
+            format!("terminal {id} was closed while it was being waited on"),
+        )),
+        ExitWait::TooManyWaits => Err(ErrorBody::new(
+            codes::TERMINAL_LIMIT_REACHED,
+            "too many terminal waits are in progress; try again".to_owned(),
+        )),
+    }
+}
+
+fn wait_of(
+    id: String,
+    condition: TerminalWaitCondition,
+    satisfied: bool,
+    info: TerminalInfo,
+) -> TerminalWait {
+    TerminalWait {
+        terminal: id,
+        condition,
+        satisfied,
+        status: state_of(info.state),
+        exit: info.exit.map(exit_of),
+    }
+}
+
 /// `cwd` relative to the workspace root, or absolute as given (`Path::join` keeps an absolute path as is).
 fn resolve_cwd(workspace_path: &str, cwd: Option<&str>) -> PathBuf {
     let root = Path::new(workspace_path);
@@ -298,5 +344,29 @@ fn exit_of(record: ExitRecord) -> TerminalExit {
             CoreExitReason::ServiceStopped => ExitReason::ServiceStopped,
         },
         at_ms: record.at_ms,
+    }
+}
+
+/// The wait one call holds: the requested time, capped at the service's cap; without a request, the cap.
+fn wait_timeout(requested_ms: Option<u64>) -> Duration {
+    let cap = terminals::MAX_WAIT_MS;
+    Duration::from_millis(requested_ms.unwrap_or(cap).min(cap))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use massorca_protocol::methods::terminals::MAX_WAIT_MS;
+
+    use super::wait_timeout;
+
+    #[test]
+    fn a_wait_call_is_capped_at_the_service_cap_and_defaults_to_it() {
+        let cap = Duration::from_millis(MAX_WAIT_MS);
+        assert_eq!(wait_timeout(None), cap);
+        assert_eq!(wait_timeout(Some(u64::MAX)), cap);
+        assert_eq!(wait_timeout(Some(5_000)), Duration::from_secs(5));
+        assert_eq!(wait_timeout(Some(0)), Duration::ZERO);
     }
 }

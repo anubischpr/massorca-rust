@@ -42,6 +42,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::SECRETS,
             capabilities::SERVICE,
             capabilities::TEAMS,
+            capabilities::TERMINAL_WAIT,
             capabilities::TERMINALS,
             capabilities::WORKSPACES,
         ]

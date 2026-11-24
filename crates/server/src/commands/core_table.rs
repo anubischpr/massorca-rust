@@ -314,6 +314,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("terminal"),
         ),
         command(
+            "terminal.wait",
+            "Wait until a terminal's process exits, up to a timeout",
+            "terminal.wait",
+            json!({
+                "type": "object",
+                "required": ["terminal", "condition"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "condition": { "type": "string", "enum": ["exit"] },
+                    "timeout_ms": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
             "agent.kinds",
             "List agent kinds: package state (installed), whether a program is detected, and problems",
             "agent.kinds",

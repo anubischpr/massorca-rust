@@ -21,6 +21,7 @@ use massorca_protocol::methods::service::{self, ServiceInfo};
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalInputParams,
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
+    TerminalWait, TerminalWaitParams,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
@@ -193,6 +194,14 @@ impl Client {
     /// `terminal.close`: kills the terminal if it is live, then forgets it.
     pub async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError> {
         self.call(terminals::CLOSE, &terminal_ref(terminal)).await
+    }
+
+    /// `terminal.wait`: answers once the terminal exits, or when the service's bounded wait ends; see [`TerminalWait`].
+    pub async fn terminal_wait(
+        &self,
+        params: &TerminalWaitParams,
+    ) -> Result<TerminalWait, ClientError> {
+        self.call(terminals::WAIT, params).await
     }
 
     /// `agent.kinds`: every declared agent kind, its package state, whether a program is detected, and its problems.
