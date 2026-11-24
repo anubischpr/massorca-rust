@@ -20,9 +20,12 @@ A profile name is 1 to 32 characters: a lowercase letter or digit first, then lo
 letters, digits, `-` or `_`.
 
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
+Every log line is redacted before it is written: values under secret-looking keys (`password=`, `token=`,
+`secret=`, `api_key`, `Authorization: Bearer ...` and similar), URL passwords, and tokens with a known secret
+prefix (`sk-`, `ghp_`, a pairing offer) are written as `[redacted]`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
-`service stop`, `service restart`, `service unit`, `open`, `pair accept` and the `host` commands except
+`service stop`, `service restart`, `service unit`, `service log path`, `open`, `pair accept` and the `host` commands except
 `host memory` and `host ports` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
 `service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
 machine.
@@ -33,6 +36,7 @@ machine.
 |---|---|
 | `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
 | `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
+| `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities) and its host's git: `present <version>`, `missing`, `too_old <version> (requires 2.25.0)` or `unknown (<reason>)`. Starts the service when it is not running. A service older than the git field shows `not reported`; update that service. With `--json`, the same state is `git` (`state`, `version`, `required` or `reason`). |
 | `service stop` | Stops the service. Succeeds when it is not running. |
@@ -54,6 +58,8 @@ machine.
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
 | `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
+| `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
 | `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |

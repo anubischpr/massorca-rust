@@ -465,6 +465,13 @@ ALTER TABLE team_projects ADD COLUMN code_source TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // A workspace's comment: the short status line its owner sets with `workspace update --comment` (decision 0089).
+    Migration {
+        sql: r#"
+ALTER TABLE workspaces ADD COLUMN comment TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
