@@ -84,6 +84,10 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        ndk {
+            // The Rust library is built for these two ABIs only (mobile/ubrn.config.yaml).
+            abiFilters "arm64-v8a", "x86_64"
+        }
     }
     signingConfigs {
         debug {
@@ -103,6 +107,20 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+    // The CMake build links the Rust static library and the ubrn turbo-module glue (mobile/README.md).
+    buildFeatures {
+        prefab true
+    }
+    externalNativeBuild {
+        cmake {
+            path "../CMakeLists.txt"
+        }
+    }
+    sourceSets {
+        main {
+            java.srcDirs += ["../src/main/java"]
         }
     }
 }
