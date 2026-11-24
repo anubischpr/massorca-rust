@@ -97,7 +97,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "path": { "type": "string" },
                     "name": { "type": "string" },
                     "kind": { "enum": ["git", "folder"] },
-                    "workspaces_root": { "type": "string" }
+                    "workspaces_root": { "type": "string" },
+                    "icon": { "type": "object", "description": "A Lucide icon, an emoji or an image; unset takes the icon the repository's files hold" }
                 }
             }),
         ),
