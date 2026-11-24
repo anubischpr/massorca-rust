@@ -829,6 +829,66 @@ fn the_information_part_links_each_page_the_package_lists(cx: &mut TestAppContex
 }
 
 /// An installed package from a folder: not built in, so the update check inspects it.
+#[gpui::test]
+fn add_extension_reviews_a_folder_package_and_installs_it_only_after_the_press(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[]);
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Discover, cx)
+    });
+    click(cx, "button:marketplace-add-extension");
+    let folder = if cfg!(windows) {
+        "C:/Users/me/kit"
+    } else {
+        "/Users/me/kit"
+    };
+    rig.shell.update_in(cx, |shell, window, cx| {
+        let field = shell
+            .marketplace_add
+            .as_ref()
+            .expect("the add dialog is open")
+            .field()
+            .clone();
+        field.update(cx, |field, cx| field.set_text(folder, window, cx));
+    });
+    click(cx, "dialog-action");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, format!("dir:{folder}"));
+            reply
+        }
+        _ => panic!("the review asks the service what the folder's package does"),
+    };
+    let answer = review(false);
+    let _ = reply.send(Ok(answer.clone()));
+    cx.run_until_parked();
+    draw(cx);
+
+    let held = review_on_screen(&rig, cx).expect("the review is on screen");
+    assert_eq!(held.item, None, "a folder review is not a catalogue item's");
+    assert_eq!(held.review.as_ref(), Some(&answer));
+    assert!(
+        rig.script.next().is_none(),
+        "reading the review sends nothing else"
+    );
+
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { params, reply })) => {
+            assert_eq!(params.source, format!("dir:{folder}"));
+            assert_eq!(params.consent.as_deref(), Some(CONSENT));
+            let _ = reply.send(Ok(installed()));
+        }
+        _ => panic!("the press sends the install with the reviewed consent"),
+    }
+    cx.run_until_parked();
+    assert!(
+        review_on_screen(&rig, cx).is_none(),
+        "an install that worked closes the review"
+    );
+}
+
 fn folder_package() -> ExtensionItem {
     let mut item = installed_package(true);
     if let Some(installed) = item.installed.as_mut() {

@@ -17,6 +17,7 @@ fn package(version: &str, logo: Option<&str>, banner: Option<&str>) -> Extension
     item.listing.banner = banner.map(|image| Banner {
         image: Some(image.to_owned()),
         examples: Vec::new(),
+        colors: Vec::new(),
     });
     item
 }

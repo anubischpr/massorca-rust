@@ -2,13 +2,34 @@
 
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{Palette, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
+use crate::tokens::{Color, Palette, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
 use gpui::{
     AnyElement, App, Div, ElementId, Empty, HighlightStyle, InteractiveElement, IntoElement,
     ParentElement, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
     StyledText, Window, div, px,
 };
 use std::ops::Range;
+
+/// How much of the first listing colour tints a banner's background.
+pub const TINT_ALPHA: f32 = 0.14;
+
+/// A `#RRGGBB` colour as a listing writes it, or `None` when the text is not one.
+pub fn hex_colour(text: &str) -> Option<Color> {
+    let digits = text.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    Some(Color::rgba8(channel(0)?, channel(2)?, channel(4)?, 1.0))
+}
+
+/// The background of a tinted banner: the colour's hue at a low alpha, so the prompts stay readable in both themes.
+pub fn tint_fill(colour: Color) -> Color {
+    Color {
+        a: TINT_ALPHA,
+        ..colour
+    }
+}
 
 /// The sentence that closes the banner and names the tag.
 fn mention_line(tag: &str) -> String {
@@ -108,6 +129,8 @@ pub struct InvocationBanner {
     id: ElementId,
     tag: SharedString,
     examples: Vec<SharedString>,
+    /// The item's colours: the first tints the background, the second, if any, the border.
+    tint: Option<(Color, Option<Color>)>,
 }
 
 impl InvocationBanner {
@@ -117,6 +140,7 @@ impl InvocationBanner {
             id: id.into(),
             tag: tag.into(),
             examples: Vec::new(),
+            tint: None,
         }
     }
 
@@ -125,13 +149,25 @@ impl InvocationBanner {
         self.examples.push(prompt.into());
         self
     }
+
+    /// Tints the banner with the item's colours: the first softly behind the prompts, the second on the border.
+    pub fn tint(mut self, first: Color, accent: Option<Color>) -> Self {
+        self.tint = Some((first, accent));
+        self
+    }
 }
 
 impl RenderOnce for InvocationBanner {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = *cx.theme();
         match banner_element(self.id, &self.tag, &self.examples, &theme.palette) {
-            Some(shown) => shown.into_any_element(),
+            Some(shown) => match self.tint {
+                Some((first, accent)) => shown
+                    .bg(tint_fill(first))
+                    .border_color(accent.unwrap_or(first))
+                    .into_any_element(),
+                None => shown.into_any_element(),
+            },
             None => Empty.into_any_element(),
         }
     }
@@ -148,6 +184,22 @@ mod tests {
         assert_eq!(
             mention_line("@GitHub"),
             "Type @GitHub in any chat or room to ask it directly."
+        );
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_reads_hex_colours_and_tints_them_softly() {
+        let claude = Color::rgba8(0xD9, 0x77, 0x57, 1.0);
+        assert_eq!(hex_colour("#D97757"), Some(claude));
+        assert_eq!(hex_colour("D97757"), None);
+        assert_eq!(hex_colour("#D9775"), None);
+        assert_eq!(hex_colour("#GG7757"), None);
+        assert_eq!(
+            tint_fill(claude),
+            Color {
+                a: TINT_ALPHA,
+                ..claude
+            }
         );
     }
 

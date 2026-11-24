@@ -29,7 +29,7 @@ pub use host_target::HostTarget;
 pub use install_review::review_lines;
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
-    CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, information,
+    CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_tag, information,
     information_links, offers_cli_removal, settings_rows, state_chip, uninstall_body,
     uninstall_body_for,
 };

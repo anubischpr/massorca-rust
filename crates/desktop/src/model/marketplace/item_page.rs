@@ -66,6 +66,14 @@ pub fn absent_reason(item: &MarketplaceItem, part: Part) -> Option<&'static str>
     }
 }
 
+/// The tag a banner's prompts start with: the item's mention, such as "@claude", or else its name.
+pub fn banner_tag(mention: Option<&str>, name: &str) -> String {
+    match mention {
+        Some(mention) => format!("@{mention}"),
+        None => format!("@{name}"),
+    }
+}
+
 /// The state chip beside the name. An installed agent shows its active account, and "Connected"
 /// for a signed-in one; everything else shows the item's own state.
 pub fn state_chip(item: &MarketplaceItem, snapshot: &MarketplaceSnapshot) -> &'static str {
@@ -286,6 +294,12 @@ mod tests {
         );
         item.examples = vec!["@Notes".to_owned()];
         assert_eq!(absent_reason(&item, Part::Banner), None);
+    }
+
+    #[test]
+    fn the_banner_tag_is_the_mention_or_the_name() {
+        assert_eq!(banner_tag(Some("claude"), "Claude"), "@claude");
+        assert_eq!(banner_tag(None, "Notes"), "@Notes");
     }
 
     #[test]

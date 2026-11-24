@@ -5,16 +5,20 @@ use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
 use super::item::problem_banner;
 use super::item_images;
+use crate::model::agent_sessions::agent_of_kind;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
     no_match_text, problem_alert,
 };
 use crate::model::navigation::MarketplacePage;
+use crate::shell::rail;
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, Window, div,
     prelude::*, px,
 };
+use massorca_ui::components::agent_icon::AgentKind;
 use massorca_ui::components::badge::Badge;
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::extension_card::{ExtensionAction, ExtensionCard, ExtensionState};
 use massorca_ui::components::list_row::{ListRow, RowLeading};
@@ -216,6 +220,7 @@ pub(super) fn catalogue_view(
         .gap(px(SPACE_2))
         .child(div().w(px(SEARCH_WIDTH)).child(frame.search.clone()))
         .child(host_picker_row(frame, cx))
+        .child(add_extension(frame))
         .child(
             div()
                 .text_style(TYPE_BODY_SM)
@@ -255,6 +260,18 @@ pub(super) fn catalogue_view(
         .into_any_element()
 }
 
+/// The Add extension control: a package in a folder on This computer, reviewed before it installs.
+fn add_extension(frame: &MarketplaceFrame) -> AnyElement {
+    let shell = frame.shell.clone();
+    Button::new("marketplace-add-extension", "Add extension")
+        .variant(ButtonVariant::Secondary)
+        .leading_icon(IconName::Plus)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_add_extension(cx));
+        })
+        .into_any_element()
+}
+
 /// The state of a card's footer: the one action that fits the item's state.
 fn card_state(item: &MarketplaceItem) -> ExtensionState {
     match &item.state {
@@ -273,6 +290,13 @@ fn card_state(item: &MarketplaceItem) -> ExtensionState {
     }
 }
 
+/// The mark an agent's card draws: the one the sidebar and model picker draw for its kind. None when the desktop
+/// has no mark for the kind, and for an item that is not an agent.
+fn agent_mark(agent_kind: Option<&str>) -> Option<AgentKind> {
+    let mark = rail::agent_kind(agent_of_kind(agent_kind?));
+    (mark != AgentKind::Unknown).then_some(mark)
+}
+
 /// One item as a card. Its Switch changes the sample; every other press opens the item's page,
 /// where its actions live (Review and install is not available yet).
 fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> ExtensionCard {
@@ -285,13 +309,18 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     )
     .publisher(item.publisher.clone())
     .source("Marketplace")
+    .category(item.category.clone())
     .version(item.version.clone())
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
     .settings(item.has_settings);
-    if let Some(logo) = item_images::logo(frame, item, cx) {
-        card = card.logo(logo);
-    }
+    card = match agent_mark(item.agent_kind.as_deref()) {
+        Some(mark) => card.agent(mark),
+        None => match item_images::logo(frame, item, cx) {
+            Some(logo) => card.logo(logo),
+            None => card,
+        },
+    };
     for add in &item.adds {
         card = card.add(IconName::Plus, add.clone());
     }
@@ -302,4 +331,27 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
             _ => shell.open_marketplace(MarketplacePage::Item(id), cx),
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_agent_with_a_desktop_mark_draws_that_mark() {
+        assert_eq!(
+            agent_mark(Some("gentle-shell")),
+            Some(AgentKind::GentleShell)
+        );
+        assert_eq!(agent_mark(Some("claude")), Some(AgentKind::Claude));
+        assert_eq!(agent_mark(Some("gemini")), Some(AgentKind::Gemini));
+        assert_eq!(agent_mark(Some("opencode")), Some(AgentKind::OpenCode));
+        assert_eq!(agent_mark(Some("cursor")), Some(AgentKind::Cursor));
+    }
+
+    #[test]
+    fn a_kind_without_a_mark_and_a_non_agent_have_none() {
+        assert_eq!(agent_mark(Some("my-own-kind")), None);
+        assert_eq!(agent_mark(None), None);
+    }
 }
