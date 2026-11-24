@@ -31,3 +31,5 @@ pub const TEAMS: &str = "teams/1";
 pub const EXTENSIONS: &str = "extensions/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
+/// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
+pub const COMMANDS: &str = "commands/1";
