@@ -134,6 +134,15 @@ impl Workspaces {
             .swap_remove(0))
     }
 
+    /// The workspace whose path holds `path` (an absolute path), with git's lock and prune state, as `workspace.show`
+    /// answers it. Only the service's workspace records decide the match.
+    pub fn current_workspace(&self, path: &str) -> Result<Workspace, DomainError> {
+        let row = self.containing_workspace(path)?;
+        Ok(self
+            .workspaces_with_git_state(std::slice::from_ref(&row))?
+            .swap_remove(0))
+    }
+
     /// Holds the mutation lock. A poisoned lock is still usable: it guards no data.
     pub(crate) fn lock_mutations(&self) -> MutexGuard<'_, ()> {
         self.mutations

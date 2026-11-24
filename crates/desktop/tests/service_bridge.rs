@@ -161,6 +161,7 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         refresh_base: false,
         path: None,
         request_id: None,
+        no_setup: false,
     }
 }
 

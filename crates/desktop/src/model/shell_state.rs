@@ -357,6 +357,11 @@ impl ShellModel {
         self.regions.show(region, self.window_width);
     }
 
+    /// Opens the regions a previous run left open (SET-02); no overlay is restored.
+    pub fn restore_open_regions(&mut self, open: Vec<Region>) {
+        self.regions = RegionState::with_open(open);
+    }
+
     /// The terminal each workspace's Work panel has selected.
     pub fn terminal_selection(&self) -> &TerminalSelection {
         &self.terminal_selection

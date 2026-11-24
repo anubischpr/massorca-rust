@@ -500,6 +500,90 @@ fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
 }
 
 #[test]
+fn current_names_the_worktree_a_subdirectory_belongs_to() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "here"]);
+    let inside = PathBuf::from(created["path"].as_str().expect("path"))
+        .join("src")
+        .join("deep");
+    std::fs::create_dir_all(&inside).expect("create subdirectory");
+
+    let mut command = sandbox.command("default");
+    command.current_dir(&inside);
+    let current = execute(command.args(["--json", "workspace", "current"])).success();
+
+    let result = &single_document(&current)["result"];
+    assert_eq!(result["id"], created["id"]);
+    assert_eq!(result["name"], "here");
+    assert_eq!(result["kind"], "worktree");
+}
+
+#[test]
+fn current_takes_a_path_and_names_the_folder_workspace_that_holds_it() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(notes.join("sub")).expect("create folder");
+    let notes_text = path_text(&notes);
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+    let sub_text = path_text(&notes.join("sub"));
+
+    let found = sandbox.json_ok(
+        "default",
+        &["workspace", "current", "--path", sub_text.as_str()],
+    );
+    assert_eq!(found["name"], "main");
+    assert_eq!(found["kind"], "folder");
+}
+
+#[test]
+fn current_outside_every_workspace_exits_1_with_workspace_not_found() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    sandbox.json_ok("default", &["workspace", "create", "repo", "here"]);
+    let elsewhere = sandbox.home().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create directory");
+    let elsewhere_text = path_text(&elsewhere);
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "current", "--path", elsewhere_text.as_str()]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "workspace.not_found"
+    );
+}
+
+#[test]
+fn current_returns_the_same_workspace_as_show_in_json_and_text() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "same"]);
+    let path = path_text(Path::new(created["path"].as_str().expect("path")));
+    let shown = sandbox.json_ok("default", &["workspace", "show", "same"]);
+
+    let current = sandbox.json_ok(
+        "default",
+        &["workspace", "current", "--path", path.as_str()],
+    );
+    assert_eq!(current, shown);
+    sandbox
+        .run(
+            "default",
+            &["workspace", "current", "--path", path.as_str()],
+        )
+        .success()
+        .stdout(contains("branch: same"));
+}
+
+#[test]
 fn workspace_create_without_a_name_generates_one_for_the_branch_and_folder() {
     let sandbox = Sandbox::new();
     add_repo_project(&sandbox);

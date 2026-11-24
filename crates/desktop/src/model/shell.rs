@@ -52,6 +52,8 @@ pub struct SessionRow {
     pub own_worktree: bool,
     /// Whether the row offers to bring this child back: it has finished and has not been brought back yet.
     pub can_bring_back: bool,
+    /// The agent's latest `waiting` or `done` has not been marked seen (WS-33); never folded.
+    pub unread: bool,
     /// Child sessions, shown indented under the parent (A83 to A85).
     pub children: Vec<SessionRow>,
 }
