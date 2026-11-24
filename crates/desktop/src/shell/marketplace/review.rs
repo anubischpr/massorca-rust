@@ -48,6 +48,7 @@ impl Shell {
             source: source.clone(),
             review: None,
             run_installer: false,
+            details_open: false,
             sending: false,
             error: None,
         });
@@ -92,6 +93,13 @@ impl Shell {
     }
 
     /// The tick for running the vendor installer the review lists. It is the person's own choice, never a default.
+    pub(super) fn set_install_details(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.marketplace_review.as_mut() {
+            dialog.details_open = open;
+        }
+        cx.notify();
+    }
+
     pub(super) fn set_install_run_installer(&mut self, run: bool, cx: &mut Context<Self>) {
         if let Some(dialog) = self.marketplace_review.as_mut() {
             dialog.run_installer = run;

@@ -26,7 +26,9 @@ pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;
-pub use install_review::review_lines;
+pub use install_review::{
+    install_button_label, installer_runs, review_details, review_lines, shown_risk,
+};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, information,
