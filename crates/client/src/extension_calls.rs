@@ -4,6 +4,7 @@ use massorca_protocol::methods::extensions::{
     self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
     ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRef,
     ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionSetEnabledParams,
+    ExtensionUpdateParams,
 };
 
 use crate::client::Client;
@@ -56,6 +57,14 @@ impl Client {
         params: &ExtensionSetEnabledParams,
     ) -> Result<ExtensionEnabled, ClientError> {
         self.call(extensions::SET_ENABLED, params).await
+    }
+
+    /// `extensions.update`: brings an installed package up to date in place, after its new review was accepted.
+    pub async fn extension_update(
+        &self,
+        params: &ExtensionUpdateParams,
+    ) -> Result<ExtensionInstalled, ClientError> {
+        self.call(extensions::UPDATE, params).await
     }
 
     /// `extensions.remove`: removes a package. May run a vendor uninstaller.

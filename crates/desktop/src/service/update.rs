@@ -9,6 +9,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountSummary, AgentKind, AgentQueueList, AgentSession, QueuedPrompt,
 };
+use massorca_protocol::methods::config::{ConfigValue, DEFAULT_OWNER};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
@@ -59,6 +60,10 @@ pub enum StoreUpdate {
     Teams(TeamsRead),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
+    /// Every setting the service declares with its value, after a connect. Replaces what was held.
+    ConfigResync(Vec<ConfigValue>),
+    /// One setting the service changed or stored, read again by its owner and key.
+    ConfigChanged(ConfigValue),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
     /// What a probe or a call learned about one paired host's connection.
@@ -219,6 +224,8 @@ pub struct StoreState {
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
     /// while the service offers no queue.
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
+    /// The settings the service declares with their values, as the last read or change left them.
+    pub config: Vec<ConfigValue>,
 }
 
 impl Default for StoreState {
@@ -245,6 +252,7 @@ impl Default for StoreState {
             extensions: None,
             accounts: BTreeMap::new(),
             agent_queues: None,
+            config: Vec::new(),
         }
     }
 }
@@ -336,6 +344,12 @@ impl StoreState {
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
+            StoreUpdate::ConfigResync(values) => self.config = values,
+            StoreUpdate::ConfigChanged(value) => {
+                replace_by(&mut self.config, value, |held| {
+                    format!("{}/{}", held.owner, held.key)
+                });
+            }
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
                 if let Some(entry) = self
@@ -361,6 +375,13 @@ impl StoreState {
                 self.accounts.insert(kind, result);
             }
         }
+    }
+
+    /// The value the service reports for a setting of the core owner, once a read has listed it.
+    pub fn config_value(&self, key: &str) -> Option<&ConfigValue> {
+        self.config
+            .iter()
+            .find(|value| value.owner == DEFAULT_OWNER && value.key == key)
     }
 
     /// Keeps the newest read: an older answer that arrives late changes nothing.
@@ -642,6 +663,86 @@ mod tests {
         let ids: Vec<&str> = state.workspaces.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["w1", "w2"]);
         assert!(state.loaded);
+    }
+
+    fn setting(key: &str, value: &str) -> ConfigValue {
+        ConfigValue {
+            owner: DEFAULT_OWNER.into(),
+            key: key.into(),
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+
+    fn setting_text(state: &StoreState, key: &str) -> Option<String> {
+        state
+            .config_value(key)
+            .and_then(|value| value.value.as_str().map(str::to_owned))
+    }
+
+    #[test]
+    fn a_config_resync_replaces_the_values_the_store_held() {
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting("appearance.theme", "dark")]),
+            Instant::now(),
+        );
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting("appearance.theme", "light")]),
+            Instant::now(),
+        );
+        assert_eq!(state.config.len(), 1);
+        assert_eq!(
+            setting_text(&state, "appearance.theme").as_deref(),
+            Some("light")
+        );
+    }
+
+    #[test]
+    fn a_changed_setting_replaces_its_own_value_and_keeps_the_others() {
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::ConfigResync(vec![
+                setting("appearance.theme", "system"),
+                setting("workspaces.default_root", "C:/old"),
+            ]),
+            Instant::now(),
+        );
+        state.apply(
+            StoreUpdate::ConfigChanged(setting("appearance.theme", "light")),
+            Instant::now(),
+        );
+        assert_eq!(state.config.len(), 2);
+        assert_eq!(
+            setting_text(&state, "appearance.theme").as_deref(),
+            Some("light")
+        );
+        assert_eq!(
+            setting_text(&state, "workspaces.default_root").as_deref(),
+            Some("C:/old")
+        );
+    }
+
+    #[test]
+    fn a_changed_setting_the_store_has_not_listed_is_added() {
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::ConfigChanged(setting("appearance.theme", "dark")),
+            Instant::now(),
+        );
+        assert_eq!(
+            setting_text(&state, "appearance.theme").as_deref(),
+            Some("dark")
+        );
+    }
+
+    #[test]
+    fn a_setting_of_another_owner_is_not_the_core_setting() {
+        let mut state = StoreState::default();
+        let mut other = setting("appearance.theme", "light");
+        other.owner = "plugin".into();
+        state.apply(StoreUpdate::ConfigChanged(other), Instant::now());
+        assert!(state.config_value("appearance.theme").is_none());
     }
 
     #[test]

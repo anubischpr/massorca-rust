@@ -92,7 +92,7 @@ impl Extensions {
             .register(HookKind::Cleanup, owner.into(), Arc::new(cleanup))
     }
 
-    fn run_guards(&self, id: &str) -> Result<(), Error> {
+    pub(crate) fn run_guards(&self, id: &str) -> Result<(), Error> {
         for (owner, guard) in self.hooks.of(HookKind::Guard) {
             guard(id).map_err(|error| Error::Refused { owner, error })?;
         }

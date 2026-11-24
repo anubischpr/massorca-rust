@@ -5,6 +5,7 @@ use massorca_core_git::Git;
 use massorca_core_store::Store;
 use massorca_protocol::methods::workspaces::Workspace;
 
+use crate::branch_prefix::BranchPrefix;
 use crate::error::DomainError;
 use crate::layout::WorkspaceLayout;
 use crate::views;
@@ -15,6 +16,8 @@ pub struct Workspaces {
     pub(crate) store: Store,
     pub(crate) git: Git,
     pub(crate) default_root: PathBuf,
+    /// How new branches are prefixed; `none` unless a caller asks otherwise.
+    pub(crate) branch_prefix: BranchPrefix,
     /// The layout a project added through this handle gets under the default root.
     pub(crate) layout: WorkspaceLayout,
     /// Serialises every mutation, so a name, path or branch checked before git runs
@@ -29,6 +32,7 @@ impl Workspaces {
             store,
             git,
             default_root,
+            branch_prefix: BranchPrefix::None,
             layout: WorkspaceLayout::default(),
             mutations: Arc::new(Mutex::new(())),
         }
@@ -42,6 +46,20 @@ impl Workspaces {
             store: self.store.clone(),
             git: self.git.clone(),
             default_root,
+            branch_prefix: self.branch_prefix.clone(),
+            layout: self.layout,
+            mutations: Arc::clone(&self.mutations),
+        }
+    }
+
+    /// A handle over the same store, git and root that prefixes the branches it creates with
+    /// `branch_prefix`. It shares the mutation lock, as `with_default_root` does.
+    pub fn with_branch_prefix(&self, branch_prefix: BranchPrefix) -> Self {
+        Self {
+            store: self.store.clone(),
+            git: self.git.clone(),
+            default_root: self.default_root.clone(),
+            branch_prefix,
             layout: self.layout,
             mutations: Arc::clone(&self.mutations),
         }
@@ -55,6 +73,7 @@ impl Workspaces {
             git: self.git.clone(),
             default_root: self.default_root.clone(),
             layout,
+            branch_prefix: self.branch_prefix.clone(),
             mutations: Arc::clone(&self.mutations),
         }
     }

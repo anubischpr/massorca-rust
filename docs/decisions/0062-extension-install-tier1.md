@@ -29,6 +29,11 @@ step here that executes anything. Code (tier 2, Wasmtime) is out of scope.
 - `lock.json` is written atomically (temporary file, flush, rename). One
   service owns a profile, and the service serialises every change with one
   lock.
+- Before that write, every package unpack (an install, a built-in refresh or
+  an adoption) syncs each unpacked file and its folders to disk, and `pkgs/<id>`
+  and `pkgs/` after the rename. A crash after the
+  lockfile commit then never leaves it naming files that were lost. On Windows
+  only the files are synced: there is no folder handle to sync.
 
 ```json
 { "version": 1,
@@ -177,6 +182,42 @@ file as read; its install still needs the pin.
 - Events, published after the lockfile commit: `extension.installed`,
   `extension.enabled`, `extension.disabled`, `extension.removed`. Each has
   `id` equal to the package id.
+
+### Updates
+
+- `extensions.update { id, consent?, sha256?, agent_token? }` and
+  `massorca extension update <id>` bring an installed package up to date from
+  the source its lock entry names. The source is read and checked as an install
+  checks it: a folder or catalogue entry by its canonical hash, an archive by
+  its `sha256`, which is required (`extension.hash_required`). A source that
+  now holds another package id is refused with `extension.invalid_source`.
+- A package with the hash it has is refused with `extension.up_to_date`, and
+  nothing is written. A built-in is refreshed from the embedded package in the
+  same call. It needs no consent, as in refresh and adoption.
+- Any other changed package needs the `consent` fingerprint of its new review,
+  checked as an install checks it. The old consent is never reused: a new
+  version can widen the permissions. A stale fingerprint fails with
+  `extension.consent_mismatch`.
+- Kept from the old entry: `enabled`, `cli` (including `installed_by_package`),
+  `installed_at_ms`, `adopted` and unknown fields. Replaced: `version`, `sha256`,
+  `files_sha256`, `path`, `agent_kinds` and `consent`. A built-in keeps its
+  consent, as refresh does.
+- No vendor command runs. The CLI registrations stay as they were, so a kind
+  the new manifest adds gets no CLI from the update. A kind the new manifest
+  drops runs the remove guards first, and a refusal stops the update. This
+  build's service registers no guard of its own: the agent feature owns that
+  follow-up.
+- Atomicity follows install: the new folder is unpacked under the change lock
+  with the package marked busy, the lockfile is written last, the old folder is
+  deleted after that write, and a failed write removes the new folder. An old
+  folder still in use (Windows refuses to delete open files) stays until the
+  start sweep removes folders the lockfile does not name.
+- An agent's run is refused with `extension.needs_person`. An update changes the
+  code an installed package runs, so a person runs it, as with a vendor command.
+- Events: an update publishes `extension.installed` with its id, so readers reload
+  the package. No topic was added.
+- Old hosts: an older service answers `method.not_found`, which the CLI reports as
+  "too old to update extensions". The new request fields are optional.
 
 ### Agents
 

@@ -255,7 +255,7 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET outcome = NULL, error = NULL, error_code = NULL, session_id = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS ?2",
+            "UPDATE tasks SET outcome = NULL, error = NULL, error_code = NULL, session_id = NULL, start_failures = 0, updated_at = ?3 WHERE id = ?1 AND session_id IS ?2",
             params![id, expected_session, updated_at],
         )?;
         Ok(changed > 0)
@@ -330,14 +330,14 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, start_attempt = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL AND outcome IS NULL",
+            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, start_attempt = NULL, start_failures = 0, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL AND outcome IS NULL",
             params![id, session_id, updated_at],
         )?;
         Ok(changed > 0)
     }
 
-    /// Records why a start failed, with its protocol code, on a task that has no session. Returns false when the task is
-    /// gone or was linked.
+    /// Records why a start failed, with its protocol code, on a task that has no session, and counts the failure. Returns
+    /// false when the task is gone or was linked.
     pub fn set_task_start_error(
         &self,
         id: &str,
@@ -346,10 +346,24 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET error = ?2, error_code = ?3, updated_at = ?4 WHERE id = ?1 AND session_id IS NULL",
+            "UPDATE tasks SET error = ?2, error_code = ?3, start_failures = start_failures + 1, updated_at = ?4 WHERE id = ?1 AND session_id IS NULL",
             params![id, error, code, updated_at],
         )?;
         Ok(changed > 0)
+    }
+
+    /// How many starts of the task failed in a row since it was made, reopened or last started (AUTO-16). 0 for an unknown
+    /// task.
+    pub fn task_start_failures(&self, id: &str) -> Result<u32, StoreError> {
+        Ok(self
+            .lock()
+            .query_row(
+                "SELECT start_failures FROM tasks WHERE id = ?1",
+                [id],
+                |row| row.get::<_, u32>(0),
+            )
+            .optional()?
+            .unwrap_or(0))
     }
 
     /// The task linked to `session_id`, if one is.

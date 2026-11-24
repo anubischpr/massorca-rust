@@ -1,8 +1,8 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
 use massorca_protocol::methods::teams::{
-    Board, Bot, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday, Team,
-    TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
+    Board, Bot, CodeSource, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday,
+    Team, TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
 };
 
 /// `created team alpha (id)`, or the verb the command used.
@@ -72,14 +72,16 @@ pub fn bot_table(bots: &[Bot]) -> Vec<String> {
         .collect()
 }
 
-/// One project per line: name, goal, id, and the name of its linked Workspaces project or `-`.
+/// One project per line: name, goal, id, its recorded code source or `-`, and the name of its linked Workspaces project
+/// or `-`.
 pub fn project_table(projects: &[TeamProject]) -> Vec<String> {
     projects
         .iter()
         .map(|project| {
             let source = project.source_project_name.as_deref().unwrap_or("-");
+            let code = project.code_source.map_or("-", CodeSource::label);
             format!(
-                "{}\t{}\t{}\t{source}",
+                "{}\t{}\t{}\t{code}\t{source}",
                 project.name, project.goal, project.id
             )
         })
