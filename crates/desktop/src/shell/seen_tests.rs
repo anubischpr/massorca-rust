@@ -2,8 +2,11 @@
 
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+use massorca_ui::tokens::{TYPE_BODY, TYPE_BODY_STRONG};
 
 use super::service_tests::{Rig, click, rig};
+use super::sidebar_rows::tree_row;
+use crate::model::sidebar::{SidebarContent, TreeRow};
 use crate::service::fixtures::agent;
 use crate::service::{Command, StoreUpdate};
 
@@ -96,4 +99,34 @@ fn clicking_an_unread_session_row_opens_it_and_marks_it_seen(cx: &mut TestAppCon
     };
     assert_eq!(params.session, "u");
     assert!(rig.script.next().is_none(), "one call only");
+}
+
+#[gpui::test]
+fn an_unread_session_row_takes_a_strong_title_and_a_read_one_does_not(cx: &mut TestAppContext) {
+    let (rig, cx) = sessions(cx, true);
+    let styles = rig.shell.update(cx, |shell, cx| {
+        let (focus, weak) = (cx.focus_handle(), cx.entity().downgrade());
+        let SidebarContent::Workspaces { tree, .. } = shell.model.sidebar() else {
+            panic!("the workspaces are listed");
+        };
+        tree.iter()
+            .enumerate()
+            .filter_map(|(index, row)| match row {
+                TreeRow::Session { id, .. } => Some((
+                    id.clone(),
+                    tree_row(row, index, &focus, &weak).title_style(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    let style = |id: &str| {
+        styles
+            .iter()
+            .find(|(session, _)| session == id)
+            .map(|(_, style)| *style)
+    };
+    assert_eq!(style("u"), Some(TYPE_BODY_STRONG), "unread");
+    assert_eq!(style("s"), Some(TYPE_BODY), "seen");
+    assert_eq!(style("w"), Some(TYPE_BODY), "working");
 }

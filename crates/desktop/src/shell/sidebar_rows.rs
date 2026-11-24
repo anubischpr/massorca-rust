@@ -105,10 +105,10 @@ pub(super) fn tree_row(
                 *selected,
                 place.as_deref().map(|place| (place, *own_worktree)),
             );
-            // The design's unread mark is an accent dot; the row has no title-weight option and the ui crate is out of
-            // this change, so the title keeps its weight.
+            // An unread session shows an accent dot, and its title in body-strong (WS-33).
             let row = if *unread {
-                row.trailing(Badge::dot().tone(BadgeTone::Accent))
+                row.title_strong(true)
+                    .trailing(Badge::dot().tone(BadgeTone::Accent))
             } else {
                 row
             };
