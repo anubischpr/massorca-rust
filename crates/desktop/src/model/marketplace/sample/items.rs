@@ -1,6 +1,7 @@
 //! The placeholder catalogue of the sample Marketplace: two agents, five extensions and a skill.
 
-use super::super::types::{HostId, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId};
+use super::super::HostTarget;
+use super::super::types::{ItemKind, ItemState, MarketplaceItem, MarketplaceItemId};
 
 /// The sample catalogue in id order: two agents, five extensions and a skill (placeholder data).
 pub(super) fn sample_items() -> Vec<MarketplaceItem> {
@@ -27,7 +28,7 @@ pub(super) fn sample_items() -> Vec<MarketplaceItem> {
                 enabled: true,
                 update: None,
             },
-            host: HostId(2),
+            host: HostTarget::Paired("remote-host".to_owned()).id(),
             agent_kind: Some("codex".to_owned()),
             examples: strings(&[
                 "@Codex explain the last build log",
@@ -175,7 +176,7 @@ fn sample_item(
         description: String::new(),
         adds: Vec::new(),
         state: ItemState::NotInstalled,
-        host: HostId(1),
+        host: HostTarget::Local.id(),
         developer: publisher.to_owned(),
         category: category.to_owned(),
         permissions: None,

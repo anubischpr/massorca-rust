@@ -8,7 +8,10 @@ use crate::model::shell::{Agent, AgentState, HostReach};
 use crate::model::sidebar::{NavKind, NavRow, TreeRow};
 use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*};
 use massorca_ui::IconName;
-use massorca_ui::components::agent_status::AgentState as GlyphState;
+use massorca_ui::components::agent_status::{
+    AgentState as GlyphState, AgentStatus, AgentStatusSize,
+};
+use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
 use massorca_ui::components::sidebar_row::{
@@ -91,6 +94,7 @@ pub(super) fn tree_row(
             place,
             own_worktree,
             can_bring_back,
+            unread,
         } => {
             let row = session_row(
                 id,
@@ -101,6 +105,22 @@ pub(super) fn tree_row(
                 *selected,
                 place.as_deref().map(|place| (place, *own_worktree)),
             );
+            // An unread session shows an accent dot, and its title in body-strong (WS-33).
+            let row = if *unread {
+                row.title_strong(true)
+                    .trailing(Badge::dot().tone(BadgeTone::Accent))
+            } else {
+                row
+            };
+            // A click opens the session, and tells the service it was seen when it was unread (WS-33).
+            let (open_shell, open_id) = (shell.clone(), session_id.clone());
+            let row = row.on_click(move |_, _, cx| {
+                let id = open_id.clone();
+                let _ = open_shell.update(cx, |shell, cx| {
+                    shell.open_session(&id, cx);
+                    cx.notify();
+                });
+            });
             if *can_bring_back {
                 row.hover_action(bring_back_action(session_id, shell))
             } else {
@@ -110,16 +130,17 @@ pub(super) fn tree_row(
         TreeRow::ShowMore {
             workspace_id,
             count,
+            worst,
         } => {
             let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
-            fold_row(id, format!("Show {count} more")).on_click(move |_, _, cx| {
+            fold_row(id, format!("Show {count} more"), *worst).on_click(move |_, _, cx| {
                 let id = workspace_id.clone();
                 change(&shell, cx, move |shell| shell.sidebar_folds.unfold(&id));
             })
         }
         TreeRow::ShowLess { workspace_id } => {
             let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
-            fold_row(id, "Show less".to_owned()).on_click(move |_, _, cx| {
+            fold_row(id, "Show less".to_owned(), None).on_click(move |_, _, cx| {
                 let id = workspace_id.clone();
                 change(&shell, cx, move |shell| shell.sidebar_folds.fold(&id));
             })
@@ -128,7 +149,7 @@ pub(super) fn tree_row(
     item.focus_handle(focus.clone()).tab_stop(true)
 }
 
-/// One tree row as an element. A fold row carries a debug selector, so tests can click it.
+/// One tree row as an element. A fold row or a session carries a debug selector, so tests can click it.
 pub(super) fn tree_item(
     row: &TreeRow,
     index: usize,
@@ -136,7 +157,7 @@ pub(super) fn tree_item(
     shell: &WeakEntity<Shell>,
 ) -> AnyElement {
     let item = tree_row(row, index, focus, shell);
-    match fold_selector(row) {
+    match row_selector(row) {
         Some(selector) => div()
             .debug_selector(move || selector)
             .child(item)
@@ -145,18 +166,26 @@ pub(super) fn tree_item(
     }
 }
 
-/// The debug selector of a fold row, named by its workspace.
-fn fold_selector(row: &TreeRow) -> Option<String> {
+/// The debug selector of a row a test clicks: a fold row named by its workspace, a session by its id.
+fn row_selector(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::ShowMore { workspace_id, .. } => Some(format!("sidebar-show-more-{workspace_id}")),
         TreeRow::ShowLess { workspace_id } => Some(format!("sidebar-show-less-{workspace_id}")),
+        TreeRow::Session { id, .. } => Some(format!("sidebar-session-{id}")),
         _ => None,
     }
 }
 
 /// A fold row at session level in tertiary text: a control under the sessions, not one of them.
-fn fold_row(id: SharedString, label: String) -> SidebarRow {
-    SidebarRow::new(id, label).level(SESSION_LEVEL).dimmed(true)
+/// Its trailing glyph marks the worst state it hides, if any.
+fn fold_row(id: SharedString, label: String, worst: Option<AgentState>) -> SidebarRow {
+    let row = SidebarRow::new(id, label).level(SESSION_LEVEL).dimmed(true);
+    match worst {
+        Some(state) => {
+            row.trailing(AgentStatus::new(glyph_state(state)).size(AgentStatusSize::XSmall))
+        }
+        None => row,
+    }
 }
 
 /// The row action that opens the bring-back confirm for a finished child. It shows on hover or focus.

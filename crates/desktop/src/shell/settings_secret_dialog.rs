@@ -22,6 +22,7 @@ use super::settings::value_box;
 use crate::model::secret_form::{
     FormMode, FormStatus, SecretForm, refusal_sentence, scope_caption, scope_choices, scope_segment,
 };
+use crate::model::secret_requests::RequestRow;
 use crate::model::secret_vault::scope_title;
 use crate::service::Refusal;
 
@@ -42,6 +43,8 @@ pub(super) struct VaultDialog {
     pub(super) project_select: Option<Entity<SelectView>>,
     /// The project scopes in the select's order, so a choice maps to the scope it names.
     pub(super) project_scopes: Vec<String>,
+    /// Whether the scope is fixed: a rotation's is, and so is a request's, so no scope control can change it.
+    pub(super) scope_locked: bool,
     /// Keeps the select's choices reaching the dialog.
     _project_events: Option<Subscription>,
 }
@@ -87,6 +90,15 @@ fn project_name(title: &str) -> &str {
 impl Shell {
     /// Opens Add with the first project preselected, as the design has it.
     pub(super) fn open_add_secret(&mut self, cx: &mut Context<Self>) {
+        self.open_add(None, cx);
+    }
+
+    /// Opens Add for a request: its name and scope are set and locked. Nothing opens for a scope Add cannot store to.
+    pub(super) fn open_add_for_request(&mut self, request: &RequestRow, cx: &mut Context<Self>) {
+        self.open_add(Some(request), cx);
+    }
+
+    fn open_add(&mut self, request: Option<&RequestRow>, cx: &mut Context<Self>) {
         let scopes: Vec<(String, String)> = {
             let state = self.store.read(cx).state();
             scope_choices(&state.projects)
@@ -97,16 +109,30 @@ impl Shell {
                 })
                 .collect()
         };
-        let Some((first, _)) = scopes.first().cloned() else {
-            return;
+        let first = match request {
+            Some(request) => request.scope.clone(),
+            None => match scopes.first() {
+                Some((scope, _)) => scope.clone(),
+                None => return,
+            },
         };
+        if !scopes.iter().any(|(scope, _)| *scope == first) {
+            return;
+        }
         let name_field = cx.new(|cx| {
-            TextField::new(cx)
+            let field = TextField::new(cx)
                 .label("Variable name")
                 .helper("Letters, digits and underscores. Cannot start with a digit.")
                 .placeholder("OPENAI_API_KEY")
-                .mono()
+                .mono();
+            match request {
+                Some(request) => field.with_text(&request.name),
+                None => field,
+            }
         });
+        if request.is_some() {
+            name_field.update(cx, |field, cx| field.set_disabled(true, cx));
+        }
         let name_changes = cx.observe(&name_field, |_, _, cx| cx.notify());
         let (value_field, value_changes) = value_entry(cx);
         let projects: Vec<(String, String)> = scopes
@@ -124,7 +150,13 @@ impl Shell {
             let select = cx.new(|cx| {
                 SelectView::new(names, cx)
                     .label("Project")
-                    .selected(Some(0))
+                    .selected(Some(
+                        project_scopes
+                            .iter()
+                            .position(|scope| *scope == first)
+                            .unwrap_or(0),
+                    ))
+                    .disabled(request.is_some())
                     .layer(OverlayLayer::Dialog)
             });
             let events = cx.subscribe(&select, |shell, _, event: &SelectEvent, cx| match event {
@@ -141,6 +173,7 @@ impl Shell {
             scopes,
             project_select,
             project_scopes,
+            scope_locked: request.is_some(),
             _project_events: project_events,
         });
         cx.notify();
@@ -164,6 +197,7 @@ impl Shell {
             scopes: vec![(scope, title)],
             project_select: None,
             project_scopes: Vec::new(),
+            scope_locked: true,
             _project_events: None,
         });
         cx.notify();
@@ -171,7 +205,10 @@ impl Shell {
 
     /// Chooses the project an add stores to, by the row the project select chose.
     pub(super) fn choose_secret_project(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.vault_dialog.as_mut()
+        if let Some(dialog) = self
+            .vault_dialog
+            .as_mut()
+            .filter(|dialog| !dialog.scope_locked)
             && let Some(scope) = dialog.project_scopes.get(index).cloned()
         {
             dialog.form.scope = scope;
@@ -182,7 +219,11 @@ impl Shell {
     /// Chooses a segment of the scope control. Project keeps a project already chosen and takes the first one
     /// otherwise; Global stores to Global. The project select then shows the scope the form holds.
     pub(super) fn choose_secret_segment(&mut self, segment: usize, cx: &mut Context<Self>) {
-        let Some(dialog) = self.vault_dialog.as_mut() else {
+        let Some(dialog) = self
+            .vault_dialog
+            .as_mut()
+            .filter(|dialog| !dialog.scope_locked)
+        else {
             return;
         };
         match segment {
@@ -386,6 +427,7 @@ fn scope_field(dialog: &VaultDialog, shell: &WeakEntity<Shell>, theme: &Theme) -
             let shell = shell.clone();
             let control = SegmentedControl::new("settings-vault-scope", "Scope", segments)
                 .selected(scope_segment(&dialog.form.scope))
+                .disabled(dialog.scope_locked)
                 .on_change(move |index, _, cx| {
                     let _ = shell.update(cx, |shell, cx| shell.choose_secret_segment(index, cx));
                 });
@@ -459,4 +501,74 @@ fn value_field(
         )
         .child(paste)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{ClipboardItem, TestAppContext, VisualTestContext};
+
+    use crate::model::secret_requests::RequestRow;
+    use crate::service::fixtures::{project, workspace};
+    use crate::service::{Command, SecretCommand, StoreUpdate};
+    use crate::shell::settings_tests::{Rig, settings_rig};
+
+    fn scope_of_dialog(rig: &Rig, cx: &mut VisualTestContext) -> String {
+        rig.shell.read_with(cx, |shell, _| {
+            shell
+                .vault_dialog
+                .as_ref()
+                .map(|dialog| dialog.form.scope.clone())
+                .expect("the dialog is open")
+        })
+    }
+
+    #[gpui::test]
+    fn a_dialog_opened_from_a_request_keeps_the_scope_the_request_names(cx: &mut TestAppContext) {
+        let (mut rig, cx) = settings_rig(cx);
+        rig._updates
+            .send(StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha"), project("p2", "beta")],
+                workspaces: vec![workspace("w1", "p1", "fix-login", 1)],
+            })
+            .expect("the store listens");
+        cx.run_until_parked();
+        let request = RequestRow {
+            id: "r1".to_owned(),
+            name: "OPENAI_API_KEY".to_owned(),
+            scope: "project:p1".to_owned(),
+            scope_title: "Project alpha".to_owned(),
+            asker: "a command run on this computer".to_owned(),
+            reason: String::new(),
+            can_store: true,
+            links: Vec::new(),
+        };
+        rig.shell
+            .update(cx, |shell, cx| shell.open_add_for_request(&request, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.choose_secret_project(1, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.choose_secret_segment(2, cx));
+        assert_eq!(
+            scope_of_dialog(&rig, cx),
+            "project:p1",
+            "the scope controls cannot move the scope a request names"
+        );
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("request-value-1".to_owned()))
+        });
+        rig.shell
+            .update_in(cx, |shell, window, cx| shell.paste_secret_value(window, cx));
+        rig.shell
+            .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+        cx.run_until_parked();
+        let Some(Command::Secret(SecretCommand::Set {
+            params,
+            reply: _reply,
+        })) = rig.script.next()
+        else {
+            panic!("a secret.set was expected");
+        };
+        assert_eq!(params.scope, "project:p1", "the request's scope is sent");
+        assert_eq!(params.name, "OPENAI_API_KEY");
+    }
 }

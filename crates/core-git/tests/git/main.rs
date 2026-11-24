@@ -1,5 +1,6 @@
 //! Integration tests against real git repositories in temporary directories.
 
+mod availability;
 mod base;
 mod branches;
 mod commit;

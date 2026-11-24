@@ -11,6 +11,7 @@ mod extensions;
 mod git;
 mod hosts;
 mod launch;
+mod quit;
 mod refusal;
 mod secrets;
 mod teams;
@@ -28,17 +29,18 @@ pub(crate) use accounts::AccountCommand;
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
-pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
+pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
-pub use extensions::ExtensionsRead;
+pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
+pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;

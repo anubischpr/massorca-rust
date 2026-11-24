@@ -16,6 +16,7 @@ use crate::args::{
     Cli, Commands, HostCommand, PairCommand, ProfileCommand, ServerCommand, ServiceCommand,
     ServiceLogCommand,
 };
+use crate::cli_install;
 use crate::config;
 use crate::device;
 use crate::error::CliError;
@@ -122,6 +123,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         } => {
             globals.local_only("profile secure")?;
             profile_secure::run(&globals.profile()?, &args, output)
+        }
+        Commands::Cli { command } => {
+            globals.local_only("cli")?;
+            cli_install::run(command, output)
         }
         Commands::Pair { command } => pair_command(&globals, command, output),
         Commands::Device { command } => {

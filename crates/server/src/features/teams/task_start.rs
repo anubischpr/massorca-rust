@@ -318,6 +318,7 @@ fn task_worktree(
         refresh_base: false,
         path: None,
         request_id: Some(format!("task.worktree:{}:{attempt}", task.id)),
+        no_setup: false,
     })?;
     changes.workspace = Some(workspace.id.clone());
     Ok(workspace)
@@ -346,6 +347,7 @@ fn linked_folder(
                 refresh_base: false,
                 path: None,
                 request_id: Some(format!("team.linked_folder:{project}")),
+                no_setup: false,
             })?;
             changes.workspace = Some(workspace.id.clone());
             workspace
@@ -611,6 +613,7 @@ fn team_folder(
         refresh_base: false,
         path: Some(path_text(&folder)?),
         request_id: Some(format!("team.folder:{}", team.id)),
+        no_setup: false,
     })?;
     workspaces.share_writers(&workspace.id)?;
     store

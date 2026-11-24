@@ -8,6 +8,8 @@ pub const CREATE: &str = "workspace.create";
 pub const LIST: &str = "workspace.list";
 /// Params: [`WorkspaceRef`]. Result: [`Workspace`].
 pub const SHOW: &str = "workspace.show";
+/// Params: [`WorkspaceCurrentParams`]. Result: [`Workspace`].
+pub const CURRENT: &str = "workspace.current";
 /// Params: [`WorkspaceRemoveParams`]. Result: [`WorkspaceRemoved`].
 pub const REMOVE: &str = "workspace.remove";
 /// Params: [`WorkspaceUpdateParams`]. Result: [`Workspace`].
@@ -54,6 +56,9 @@ pub struct WorkspaceCreateParams {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Does not run the project's setup script in the new worktree (decision 0086).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_setup: bool,
 }
 
 /// Params of `workspace.list`.
@@ -93,6 +98,12 @@ pub struct UnregisteredWorktree {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRef {
     pub workspace: String,
+}
+
+/// Params of `workspace.current`: the workspace whose path holds `path`, which must be absolute on the service's host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCurrentParams {
+    pub path: String,
 }
 
 /// Params of `workspace.remove`.
@@ -183,6 +194,24 @@ pub struct Workspace {
     /// The owner's comment, set by `workspace.update`; absent when none is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Only in the reply of a create whose new worktree has a setup script: what became of it (decision 0086).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<WorkspaceSetup>,
+}
+
+/// What a create did with the project's setup script. A setup that cannot start never fails the create.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum WorkspaceSetup {
+    /// The script runs in the service terminal `terminal`, which every client can list and attach to.
+    Started { terminal: String },
+    /// The create asked for `no_setup`.
+    Skipped,
+    /// The script could not be started; the workspace exists without it.
+    Failed { reason: String },
+    /// An outcome from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What a create's `refresh_base` did. A failed fetch never fails the create: it starts from the local copy.

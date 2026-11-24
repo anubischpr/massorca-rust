@@ -368,6 +368,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             refresh_base: false,
             path: None,
             request_id: None,
+            no_setup: false,
         })
         .await
         .expect("the workspace is created")

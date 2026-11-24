@@ -136,6 +136,7 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "workspace.create",
     "workspace.list",
     "workspace.show",
+    "workspace.current",
     "workspace.rm",
     "workspace.update",
     "workspace.check",

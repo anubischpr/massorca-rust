@@ -328,6 +328,7 @@ mod tests {
         SecretsState {
             status: Some(Ok(status)),
             list: Some(Ok(entries)),
+            requests: None,
         }
     }
 
@@ -345,6 +346,7 @@ mod tests {
         let half = SecretsState {
             status: Some(Ok(status("ready", "none", 0))),
             list: None,
+            requests: None,
         };
         assert_eq!(VaultPage::from_state(&half, &[]), VaultPage::Reading);
     }
@@ -450,6 +452,7 @@ mod tests {
             list: Some(Err(Refusal::unavailable(
                 "The service cannot be reached right now.",
             ))),
+            requests: None,
         };
         assert_eq!(
             VaultPage::from_state(&refused, &[]),

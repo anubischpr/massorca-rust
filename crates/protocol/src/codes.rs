@@ -53,6 +53,8 @@ pub const BRANCH_CHECKED_OUT: &str = "branch.checked_out";
 pub const BRANCH_IN_USE: &str = "branch.in_use";
 pub const BASE_NOT_FOUND: &str = "base.not_found";
 pub const GIT_UNAVAILABLE: &str = "git.unavailable";
+/// The host's git is older than the 2.25 baseline, so the command was refused (ADR 0014).
+pub const GIT_TOO_OLD: &str = "git.too_old";
 pub const GIT_FAILED: &str = "git.failed";
 pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 /// A git method named a folder workspace, or a path git does not treat as a repository.
@@ -149,6 +151,8 @@ pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
 pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
 pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
 pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
+/// The terminal was closed while a `terminal.wait` was on it, so its exit is not known.
+pub const TERMINAL_GONE: &str = "terminal.gone";
 /// The vault key will not open; the ciphertext is kept (decision 0071).
 pub const SECRET_VAULT_LOCKED: &str = "secret.vault_locked";
 pub const SECRET_NOT_FOUND: &str = "secret.not_found";

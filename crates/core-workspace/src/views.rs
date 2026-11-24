@@ -47,6 +47,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         prunable: None,
         base_refresh: None,
         comment: row.comment.clone(),
+        setup: None,
     }
 }
 

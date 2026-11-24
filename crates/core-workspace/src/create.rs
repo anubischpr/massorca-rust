@@ -31,6 +31,14 @@ enum Naming {
 // Held under the mutation lock, so far below decision 0013's five-minute remote cap.
 const BASE_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A workspace from `create_workspace_once`.
+#[derive(Debug, Clone)]
+pub struct Created {
+    pub workspace: Workspace,
+    /// A repeated `request_id` returned the workspace an earlier call stored; this call changed nothing.
+    pub repeated: bool,
+}
+
 impl Workspaces {
     /// Creates a worktree (git project) or registers a folder (folder project). A repeated
     /// `request_id` returns the workspace the first call stored, whatever its other fields.
@@ -39,6 +47,7 @@ impl Workspaces {
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
         self.create(params, Naming::Typed)
+            .map(|created| created.workspace)
     }
 
     /// `create_workspace` under a generated name (ADR 0008); `params.name` is ignored.
@@ -47,20 +56,38 @@ impl Workspaces {
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
         self.create(params, Naming::Generated)
+            .map(|created| created.workspace)
+    }
+
+    /// Like `create_workspace`, and says whether this call made the workspace or a repeated `request_id` found it.
+    /// A blank name asks for a generated one.
+    pub fn create_workspace_once(
+        &self,
+        params: WorkspaceCreateParams,
+    ) -> Result<Created, DomainError> {
+        let naming = if params.name.trim().is_empty() {
+            Naming::Generated
+        } else {
+            Naming::Typed
+        };
+        self.create(params, naming)
     }
 
     fn create(
         &self,
         params: WorkspaceCreateParams,
         naming: Naming,
-    ) -> Result<Workspace, DomainError> {
+    ) -> Result<Created, DomainError> {
         let _guard = self.lock_mutations();
         if let Some(request_id) = params.request_id.as_deref() {
             if request_id.is_empty() {
                 return Err(invalid("request id must not be empty"));
             }
             if let Some(row) = self.store.find_workspace_by_request_id(request_id)? {
-                return Ok(views::workspace(&row));
+                return Ok(Created {
+                    workspace: views::workspace(&row),
+                    repeated: true,
+                });
             }
         }
         let project = self.resolve_project(&params.project)?;
@@ -82,10 +109,14 @@ impl Workspaces {
                 ),
             ));
         }
-        match project.kind {
+        let workspace = match project.kind {
             StoreKind::Git => self.create_worktree(&project, &params),
             StoreKind::Folder => self.create_folder(&project, &params),
-        }
+        }?;
+        Ok(Created {
+            workspace,
+            repeated: false,
+        })
     }
 
     /// A creature name that no workspace, branch or directory of `project` already takes.

@@ -512,3 +512,98 @@ fn bring_back_while_another_session_writes_in_the_parent_workspace_is_refused() 
     assert_eq!(head(&lead), before);
     assert!(!lead.join("result.txt").exists());
 }
+
+/// Sets `agents.delegation_depth` through `config set`, which refuses a value outside its range.
+fn set_delegation_depth(sandbox: &Sandbox, depth: u32) {
+    let text = depth.to_string();
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "agents.delegation_depth", text.as_str()],
+    );
+}
+
+#[test]
+fn a_grandchild_is_started_under_its_child_and_comes_back_to_it_before_the_root() {
+    let (sandbox, lead) = git_sandbox();
+    set_delegation_depth(&sandbox, 2);
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:child.txt");
+    let grandchild = id_of(&delegate(&sandbox, &child, "write:deep.txt", &[]));
+    let started = until(&sandbox, &grandchild, "done");
+
+    assert_eq!(started["parent_id"], child.as_str(), "{started}");
+    assert_eq!(
+        workspace(&sandbox, "lead-1-1")["id"],
+        started["workspace_id"]
+    );
+    let tree = sandbox.json_ok("default", &["agent", "tree", &grandchild]);
+    assert_eq!(tree["root"]["id"], parent.as_str(), "{tree}");
+    assert_eq!(tree["children"].as_array().map(Vec::len), Some(1), "{tree}");
+
+    let brought = sandbox.json_ok(
+        "default",
+        &["agent", "bring-back", &grandchild, "--no-prompt"],
+    );
+    assert_eq!(brought["merged"], true, "{brought}");
+    let child_workspace = PathBuf::from(workspace(&sandbox, "lead-1")["path"].as_str().unwrap());
+    assert!(child_workspace.join("deep.txt").is_file());
+    assert!(
+        !lead.join("deep.txt").exists(),
+        "the root must not see the grandchild yet"
+    );
+
+    let brought = sandbox.json_ok("default", &["agent", "bring-back", &child, "--no-prompt"]);
+    assert_eq!(brought["merged"], true, "{brought}");
+    assert!(lead.join("deep.txt").is_file());
+    assert!(lead.join("child.txt").is_file());
+}
+
+#[test]
+fn a_grandchild_cannot_delegate_past_the_configured_limit_and_the_refusal_names_it() {
+    let (sandbox, _lead) = git_sandbox();
+    set_delegation_depth(&sandbox, 2);
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = id_of(&delegate(&sandbox, &parent, "look", &[]));
+    let grandchild = id_of(&delegate(&sandbox, &child, "look", &[]));
+
+    let error = error_of(
+        &sandbox,
+        &[
+            "agent",
+            "delegate",
+            "--from",
+            &grandchild,
+            "--prompt",
+            "deeper",
+        ],
+    );
+
+    assert_eq!(error["code"], "agent.depth_exceeded", "{error}");
+    let message = error["message"].as_str().expect("a message");
+    assert!(message.contains("agents.delegation_depth"), "{error}");
+    assert!(message.contains('2'), "{error}");
+    assert_eq!(error["data"]["limit"], 2, "{error}");
+    assert_eq!(
+        error["data"]["setting"], "agents.delegation_depth",
+        "{error}"
+    );
+}
+
+#[test]
+fn stopping_the_root_stops_its_grandchild_as_well() {
+    let (sandbox, _lead) = git_sandbox();
+    set_delegation_depth(&sandbox, 2);
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = id_of(&delegate(&sandbox, &parent, "look", &[]));
+    let grandchild = id_of(&delegate(&sandbox, &child, "hold on", &[]));
+    until(&sandbox, &grandchild, "working");
+
+    sandbox.json_ok("default", &["agent", "stop", &parent, "--force"]);
+
+    for session in [&child, &grandchild] {
+        eventually(&format!("session {session} has exited"), || {
+            let shown = sandbox.json_ok("default", &["agent", "status", session]);
+            (shown["execution"]["state"] == "exited").then_some(())
+        });
+    }
+}

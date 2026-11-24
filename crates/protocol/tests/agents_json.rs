@@ -74,6 +74,7 @@ fn method_names_match_the_wire_table() {
         (agents::CREDENTIALS_REMOVE, "agent.credentials.remove"),
         (agents::ACCOUNTS_LIST, "agent.accounts.list"),
         (agents::ACCOUNTS_ADD, "agent.accounts.add"),
+        (agents::ACCOUNTS_SIGN_IN, "agent.accounts.sign_in"),
         (agents::ACCOUNTS_IMPORT, "agent.accounts.import"),
         (agents::ACCOUNTS_ACTIVATE, "agent.accounts.activate"),
         (agents::ACCOUNTS_REMOVE, "agent.accounts.remove"),

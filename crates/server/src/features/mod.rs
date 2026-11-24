@@ -20,6 +20,7 @@ mod teams;
 mod terminal_attach;
 mod terminals;
 mod workspace_domain;
+mod workspace_setup;
 mod workspaces;
 
 pub(crate) use config::default_workspace_root;

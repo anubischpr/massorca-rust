@@ -183,6 +183,7 @@ fn workspace_params(project: &str) -> WorkspaceCreateParams {
         refresh_base: false,
         path: None,
         request_id: None,
+        no_setup: false,
     }
 }
 

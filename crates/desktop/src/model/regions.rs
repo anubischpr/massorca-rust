@@ -107,6 +107,19 @@ impl RegionState {
         self.open.contains(&region)
     }
 
+    /// The regions open now, in the order they were opened.
+    pub fn open(&self) -> &[Region] {
+        &self.open
+    }
+
+    /// The state a start restores: these regions open, with no overlay.
+    pub fn with_open(open: Vec<Region>) -> Self {
+        Self {
+            open,
+            overlay: None,
+        }
+    }
+
     /// Opens or closes a region. Narrow: an open region toggles its overlay, and a
     /// closed one opens as the overlay (handoff 2.5).
     pub fn toggle(&mut self, region: Region, window_width: f32) {

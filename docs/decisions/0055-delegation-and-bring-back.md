@@ -35,7 +35,7 @@ worktree at once; parallel children always get their own worktree.
     children in Phase 4; a writing child is refused with
     `agent.delegate_needs_git`, because nothing could keep the two writers
     apart.
-- **Depth.** A child cannot delegate (depth limit 1, as the old default).
+- **Depth.** A child cannot delegate by default. The limit is `agents.delegation_depth`, default 1 (range 1 to 5), read on each call; see 0070 for the default and its source.
   The limit becomes a setting when someone needs deeper trees.
 - **The tree.** A child's `parent_id` links it to its parent.
   `agent.tree <session>` returns the root and its children with their

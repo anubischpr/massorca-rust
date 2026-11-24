@@ -16,6 +16,8 @@ mod paths;
 mod projects;
 mod remove;
 mod selectors;
+pub mod setup;
+pub mod setup_runner;
 mod unregistered;
 mod update;
 mod views;
@@ -23,6 +25,7 @@ mod workspaces;
 mod worktree_state;
 
 pub use branch_prefix::BranchPrefix;
+pub use create::Created;
 pub use error::DomainError;
 pub use layout::WorkspaceLayout;
 pub use projects::RemovedProject;

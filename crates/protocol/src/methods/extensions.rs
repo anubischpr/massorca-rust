@@ -275,6 +275,13 @@ pub struct Listing {
     pub banner: Option<Banner>,
     #[serde(default)]
     pub connections: Vec<Connection>,
+    /// Links the item page shows when present; each is an https URL. Added after `extensions/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

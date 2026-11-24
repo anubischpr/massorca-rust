@@ -332,6 +332,9 @@ fn lockfile_item(entry: &LockEntry, error: &Error) -> Item {
             mention: None,
             banner: None,
             connections: Vec::new(),
+            website: None,
+            privacy: None,
+            terms: None,
         },
         permissions: Vec::new(),
         risk: RiskView {

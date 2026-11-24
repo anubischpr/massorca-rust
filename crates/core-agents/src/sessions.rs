@@ -52,7 +52,10 @@ use crate::status::{self, HookRules};
 mod delegation;
 mod queue;
 
-pub use delegation::{MergeResult, RepoOps};
+pub use delegation::{
+    DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING,
+    MergeResult, RepoOps,
+};
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
@@ -1189,9 +1192,20 @@ impl Agents {
     }
 
     /// Ends the current run (graceful, or at once with `force`). The record stays, exited with reason `killed`.
-    /// A session whose run already ended is returned as it is.
+    /// The sessions delegated from it end too, the root first (0055): stopping a root stops its whole tree. A session
+    /// whose run already ended is left as it is.
     pub fn stop(&self, selector: &str, force: bool) -> Result<AgentSession, AgentError> {
-        let row = self.resolve(selector)?;
+        let root = self.resolve(selector)?;
+        for id in self.subtree(&root.id)? {
+            self.stop_run(&id, force)?;
+        }
+        let row = self.reload(&root.id)?;
+        self.view(row)
+    }
+
+    /// Ends the run of one session that has a live run, as [`Agents::stop`] does for each session in its tree.
+    fn stop_run(&self, id: &str, force: bool) -> Result<(), AgentError> {
+        let row = self.reload(id)?;
         // The person's stop pauses the queue before the run is killed, so a grace-period idle cannot deliver (decision 0084, D5).
         self.pause_queue_stopped(&row.id);
         if row.exit.is_none()
@@ -1211,8 +1225,7 @@ impl Agents {
                 Err(error) => return Err(error.into()),
             }
         }
-        let row = self.reload(&row.id)?;
-        self.view(row)
+        Ok(())
     }
 
     /// Deletes the record of a session whose run has ended, with its terminal and generated files.

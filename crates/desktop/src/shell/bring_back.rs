@@ -260,7 +260,7 @@ impl Shell {
     /// Closes the answer and opens the parent session the child came back to.
     fn open_bring_back_parent(&mut self, cx: &mut Context<Self>) {
         if let Some(parent) = self.bring_back.take().and_then(|confirm| confirm.parent) {
-            self.model.open_session(&parent);
+            self.open_session(&parent, cx);
         }
         cx.notify();
     }

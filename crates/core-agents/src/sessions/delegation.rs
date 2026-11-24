@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use massorca_core_store::now_ms;
+use massorca_core_store::{AgentSessionRow, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentSession,
@@ -16,7 +16,7 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceKind};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{AgentError, Agents, Change, lock, tokens_match};
 use crate::launch;
@@ -48,11 +48,56 @@ const MAX_CHILD_SUFFIX: u32 = 1000;
 const MAX_QUOTED_RESULT: usize = 4 * 1024;
 /// What the result of a writing child's delegation says (0055).
 const NOT_CARRIED_OVER: &str = "the child starts from the parent branch's last commit; uncommitted changes in the parent's worktree are not carried over";
+/// The setting that says how many levels deep agents may delegate (decision 0070).
+pub const DELEGATION_DEPTH_SETTING: &str = "agents.delegation_depth";
+/// The owner core settings are stored under.
+const DELEGATION_DEPTH_OWNER: &str = "core";
+/// The smallest and the largest limit the setting accepts (decision 0070).
+pub const DELEGATION_DEPTH_MIN: i64 = 1;
+pub const DELEGATION_DEPTH_MAX: i64 = 5;
+/// The limit when the setting is unset: a child may not delegate. pv96 ships the same default
+/// (`NESTED_WORKER_MAX_DEPTH_DEFAULT = 1`, commit d3c6311a531, `src/shared/nested-worker-depth.ts`).
+pub const DELEGATION_DEPTH_DEFAULT: i64 = 1;
+/// Most links walked up a delegation chain before the chain counts as broken.
+const MAX_CHAIN_WALK: i64 = 64;
+
+/// The limit a stored value gives. Unset gives the default. A whole number is clamped to the range, and a value
+/// outside it is logged. Anything that is not a whole number gives the default, also logged.
+pub fn delegation_depth_from_stored(stored: Option<&str>) -> i64 {
+    let Some(text) = stored else {
+        return DELEGATION_DEPTH_DEFAULT;
+    };
+    match serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| value.as_i64())
+    {
+        Some(depth) => {
+            let clamped = depth.clamp(DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_MAX);
+            if clamped != depth {
+                tracing::warn!(
+                    setting = DELEGATION_DEPTH_SETTING,
+                    stored = depth,
+                    used = clamped,
+                    "a stored delegation depth is outside its range; it is clamped to the range"
+                );
+            }
+            clamped
+        }
+        None => {
+            tracing::warn!(
+                setting = DELEGATION_DEPTH_SETTING,
+                "a stored delegation depth is not a whole number; the default applies"
+            );
+            DELEGATION_DEPTH_DEFAULT
+        }
+    }
+}
 
 impl Agents {
     /// Starts a child session of `params.parent` (0055). A writing child gets a new worktree workspace in the parent's
     /// project, based on the parent workspace's branch; a read-only child runs in the parent's workspace. A child
-    /// cannot delegate (`agent.depth_exceeded`), a writing child of a folder workspace is refused
+    /// goes no deeper than `agents.delegation_depth` (`agent.depth_exceeded` past it; the default of 1 means a child cannot
+    /// delegate), a writing child of a folder workspace is refused
     /// (`agent.delegate_needs_git`), and a token that does not match the parent's live run is refused
     /// (`agent.hook_refused`). A repeated `request_id` returns the first child.
     pub fn delegate(
@@ -80,14 +125,24 @@ impl Agents {
                 note: None,
             });
         }
-        if parent.parent_id.is_some() {
-            return Err(AgentError::new(
+        // The child would sit one level below the parent. The limit is read on every call, so a changed setting applies
+        // to the next delegation.
+        let limit = self.delegation_depth_limit()?;
+        let child_depth = self.delegation_depth_of(&parent)? + 1;
+        if child_depth > limit {
+            let mut error = AgentError::new(
                 codes::AGENT_DEPTH_EXCEEDED,
                 format!(
-                    "session {} is itself delegated, and a delegated session cannot delegate",
+                    "session {} cannot delegate: its child would be at depth {child_depth}, and {DELEGATION_DEPTH_SETTING} allows at most {limit}",
                     parent.id
                 ),
-            ));
+            );
+            error.data = Some(json!({
+                "limit": limit,
+                "setting": DELEGATION_DEPTH_SETTING,
+                "depth": child_depth,
+            }));
+            return Err(error);
         }
         let kind = params.kind.unwrap_or_else(|| parent.kind.clone());
         // Checked before a child workspace exists, so an unknown or missing kind, or a mode it does not declare, leaves
@@ -154,14 +209,18 @@ impl Agents {
         Ok(AgentDelegated { session, note })
     }
 
-    /// The delegation tree of a session (0055): its root (the session itself, or its parent) and the root's children,
-    /// oldest first.
+    /// The delegation tree of a session (0055): its root, the session at the top of its delegation chain, and the root's
+    /// children (its direct delegations), oldest first.
     pub fn tree(&self, selector: &str) -> Result<AgentTree, AgentError> {
-        let row = self.resolve(selector)?;
-        let root = match &row.parent_id {
-            Some(parent) => self.reload(parent)?,
-            None => row,
-        };
+        let mut root = self.resolve(selector)?;
+        let mut walked = 0;
+        while let Some(parent) = root.parent_id.clone() {
+            walked += 1;
+            if walked > MAX_CHAIN_WALK {
+                return Err(chain_too_long(&root.id));
+            }
+            root = self.reload(&parent)?;
+        }
         let children = self
             .store()
             .list_agent_children(&root.id)?
@@ -471,6 +530,7 @@ impl Agents {
                 refresh_base: false,
                 path: None,
                 request_id: request_key.clone(),
+                no_setup: false,
             })
         };
         if let Some(name) = name {
@@ -508,6 +568,43 @@ impl Agents {
         ))
     }
 
+    /// The delegation depth limit now stored under `agents.delegation_depth`, or the default when unset (decision 0070).
+    pub(crate) fn delegation_depth_limit(&self) -> Result<i64, AgentError> {
+        let stored = self
+            .store()
+            .get_setting(DELEGATION_DEPTH_OWNER, DELEGATION_DEPTH_SETTING)?;
+        Ok(delegation_depth_from_stored(stored.as_deref()))
+    }
+
+    /// How many delegations lie above `row`: 0 for a root, 1 for its child, and so on.
+    fn delegation_depth_of(&self, row: &AgentSessionRow) -> Result<i64, AgentError> {
+        let mut depth = 0;
+        let mut parent = row.parent_id.clone();
+        while let Some(id) = parent {
+            depth += 1;
+            if depth > MAX_CHAIN_WALK {
+                return Err(chain_too_long(&row.id));
+            }
+            parent = self
+                .store()
+                .get_agent_session(&id)?
+                .and_then(|link| link.parent_id);
+        }
+        Ok(depth)
+    }
+
+    /// `root` and every session delegated from it, directly or through others, parents before their children (0055).
+    pub(super) fn subtree(&self, root: &str) -> Result<Vec<String>, AgentError> {
+        let mut ids = vec![root.to_owned()];
+        let mut next = 0;
+        while next < ids.len() {
+            let children = self.store().list_agent_children(&ids[next])?;
+            ids.extend(children.into_iter().map(|child| child.id));
+            next += 1;
+        }
+        Ok(ids)
+    }
+
     /// Refuses a call that carries a token unless it is the token of `session`'s live run (0055).
     fn check_run_token(&self, session: &str, token: &str) -> Result<(), AgentError> {
         let matches = lock(&self.inner.status)
@@ -534,6 +631,14 @@ impl Drop for MergeClaim<'_> {
     fn drop(&mut self) {
         lock(self.merging).remove(&self.workspace_id);
     }
+}
+
+/// The refusal for a delegation chain that loops or is longer than [`MAX_CHAIN_WALK`].
+fn chain_too_long(session: &str) -> AgentError {
+    AgentError::new(
+        codes::INTERNAL,
+        format!("the delegation chain of session {session} is too long to check"),
+    )
 }
 
 fn merging_busy(workspace_id: &str) -> AgentError {
@@ -1019,6 +1124,7 @@ then report"
                 refresh_base: false,
                 path: None,
                 request_id: None,
+                no_setup: false,
             })
             .unwrap();
         let parent = session_row(&lead.id, None);
@@ -1053,5 +1159,158 @@ then report"
         assert_eq!(line, "line one  line two [31m red   é");
         assert!(check_prompt(&line).is_ok());
         assert_eq!(one_line("ééé", 5), "éé");
+    }
+
+    #[test]
+    fn the_stored_depth_is_the_default_when_unset_and_clamped_to_the_range_when_out_of_it() {
+        use super::{
+            DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN,
+            delegation_depth_from_stored,
+        };
+
+        assert_eq!(delegation_depth_from_stored(None), DELEGATION_DEPTH_DEFAULT);
+        assert_eq!(delegation_depth_from_stored(Some("2")), 2);
+        assert_eq!(
+            delegation_depth_from_stored(Some("5")),
+            DELEGATION_DEPTH_MAX
+        );
+        assert_eq!(
+            delegation_depth_from_stored(Some("9")),
+            DELEGATION_DEPTH_MAX
+        );
+        assert_eq!(
+            delegation_depth_from_stored(Some("0")),
+            DELEGATION_DEPTH_MIN
+        );
+        assert_eq!(
+            delegation_depth_from_stored(Some("-4")),
+            DELEGATION_DEPTH_MIN
+        );
+        // Not a whole number at all: the default applies, since there is no nearest value to clamp to.
+        assert_eq!(
+            delegation_depth_from_stored(Some("\"3\"")),
+            DELEGATION_DEPTH_DEFAULT
+        );
+        assert_eq!(
+            delegation_depth_from_stored(Some("2.5")),
+            DELEGATION_DEPTH_DEFAULT
+        );
+        assert_eq!(
+            delegation_depth_from_stored(Some("not json")),
+            DELEGATION_DEPTH_DEFAULT
+        );
+    }
+
+    #[test]
+    fn the_limit_is_read_from_the_store_on_every_call() {
+        use super::{DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_SETTING};
+
+        let (agents, _workspace_id, _profile) = service();
+        assert_eq!(
+            agents.delegation_depth_limit().unwrap(),
+            DELEGATION_DEPTH_DEFAULT
+        );
+        agents
+            .store()
+            .replace_setting("core", DELEGATION_DEPTH_SETTING, "2", &[])
+            .unwrap();
+        assert_eq!(agents.delegation_depth_limit().unwrap(), 2);
+        agents
+            .store()
+            .replace_setting("core", DELEGATION_DEPTH_SETTING, "9", &[])
+            .unwrap();
+        assert_eq!(agents.delegation_depth_limit().unwrap(), 5);
+    }
+
+    #[test]
+    fn a_grandchild_refusal_at_the_configured_limit_names_the_limit_and_the_setting() {
+        use super::DELEGATION_DEPTH_SETTING;
+
+        let (agents, workspace_id, _profile) = service();
+        let root = session_row(&workspace_id, None);
+        let child = session_row(&workspace_id, Some(&root.id));
+        let grandchild = session_row(&workspace_id, Some(&child.id));
+        for row in [&root, &child, &grandchild] {
+            agents.store().insert_agent_session(row).unwrap();
+        }
+        agents
+            .store()
+            .replace_setting("core", DELEGATION_DEPTH_SETTING, "2", &[])
+            .unwrap();
+
+        // The grandchild sits at depth 2; a great-grandchild would be at depth 3, past the limit of 2.
+        let error = agents
+            .delegate(
+                delegate_params(&grandchild.id, &new_id()),
+                SecretGrant::Provide,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, codes::AGENT_DEPTH_EXCEEDED);
+        assert!(
+            error.message.contains(DELEGATION_DEPTH_SETTING),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("at most 2"), "{}", error.message);
+        let data = error.data.expect("the limit is in the error data");
+        assert_eq!(data["limit"], 2);
+        assert_eq!(data["setting"], DELEGATION_DEPTH_SETTING);
+    }
+
+    fn brought_back_at(agents: &super::Agents, session: &str) -> Option<i64> {
+        agents
+            .store()
+            .get_agent_session(session)
+            .unwrap()
+            .and_then(|row| row.brought_back_at)
+    }
+
+    #[test]
+    fn each_level_brings_back_only_its_own_children_with_its_own_run_token() {
+        let (agents, workspace_id, _profile) = service();
+        let root = session_row(&workspace_id, None);
+        let child = session_row(&workspace_id, Some(&root.id));
+        let grandchild = session_row(&workspace_id, Some(&child.id));
+        for row in [&root, &child, &grandchild] {
+            agents.store().insert_agent_session(row).unwrap();
+        }
+        live_run(&agents, &root.id, "root-token");
+        live_run(&agents, &child.id, "child-token");
+        let params = |session: &str, token: &str| AgentBringBackParams {
+            child: session.to_owned(),
+            merge: false,
+            prompt: false,
+            token: Some(token.to_owned()),
+        };
+
+        // The grandchild's parent is the child, so the root's token is refused for it.
+        let refused = agents
+            .bring_back(&params(&grandchild.id, "root-token"), &NoGit)
+            .unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_HOOK_REFUSED);
+        // The store is read here: showing an exited session drops its live run, which the calls below still need.
+        assert!(brought_back_at(&agents, &grandchild.id).is_none());
+        // The child's parent is the root, so the child's token is refused for the child.
+        let refused = agents
+            .bring_back(&params(&child.id, "child-token"), &NoGit)
+            .unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_HOOK_REFUSED);
+        assert!(brought_back_at(&agents, &child.id).is_none());
+
+        agents
+            .bring_back(&params(&grandchild.id, "child-token"), &NoGit)
+            .unwrap();
+        agents
+            .bring_back(&params(&child.id, "root-token"), &NoGit)
+            .unwrap();
+        assert!(
+            agents
+                .show(&grandchild.id)
+                .unwrap()
+                .brought_back_at_ms
+                .is_some()
+        );
+        assert!(agents.show(&child.id).unwrap().brought_back_at_ms.is_some());
     }
 }

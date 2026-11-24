@@ -89,6 +89,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ProfileCommand,
     },
+    /// Puts `massorca` on this user's PATH, and takes it off again. Works on this computer only.
+    Cli {
+        #[command(subcommand)]
+        command: CliCommand,
+    },
     /// Makes pairing offers for other computers, and pairs this computer with a server.
     Pair {
         #[command(subcommand)]
@@ -169,6 +174,18 @@ pub enum ServiceCommand {
 pub enum ServiceLogCommand {
     /// Prints the logs folder and the newest service and desktop log files. Never starts the service.
     Path,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CliCommand {
+    /// Puts `massorca` on your PATH for this user only, without administrator rights: a link in `~/.local/bin` on
+    /// Unix, a command file in a folder added to your Windows user PATH. Running it again changes nothing.
+    Install,
+    /// Removes what `cli install` made: the link or command file, and its PATH entry once its folder is empty.
+    /// A file massorca did not make is left in place.
+    Uninstall,
+    /// Shows whether `massorca` is on your PATH and which binary it runs. Changes nothing.
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -294,6 +311,8 @@ pub enum WorkspaceCommand {
         /// Workspace id, name or path.
         workspace: String,
     },
+    /// Shows the workspace that contains the current directory, or the one that contains --path.
+    Current(WorkspaceCurrentArgs),
     /// Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
     Rm {
         /// Workspace id, name or path.
@@ -353,6 +372,9 @@ pub struct WorkspaceCreateArgs {
     /// Client request id: repeating it returns the first workspace instead of creating another.
     #[arg(long, value_name = "ID")]
     pub request_id: Option<String>,
+    /// Do not run the setup script of the new worktree's `orca.yaml`.
+    #[arg(long)]
+    pub no_setup: bool,
 }
 
 #[derive(Debug, Args)]
@@ -360,6 +382,13 @@ pub struct WorkspaceListArgs {
     /// Only the workspaces of this project (id, name or path).
     #[arg(long, value_name = "PROJECT")]
     pub project: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceCurrentArgs {
+    /// Directory to look up. Defaults to the current directory; required with --host.
+    #[arg(long, value_name = "DIR")]
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

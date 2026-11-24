@@ -42,6 +42,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             prunable: None,
             base_refresh: None,
             comment: None,
+            setup: None,
         }],
     }]
 }

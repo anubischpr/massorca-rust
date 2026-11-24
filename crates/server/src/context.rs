@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use massorca_core_agents::{Agents, Change};
 use massorca_core_extensions::Extensions;
+use massorca_core_git::Git;
 use massorca_core_store::Store;
 use massorca_core_terminal::TerminalManager;
 use massorca_core_vault::Vault;
@@ -42,6 +43,8 @@ pub struct AppState {
     pub registries: Registries,
     /// The projects and workspaces domain. Calls take a handle with the current default root.
     pub workspaces: Arc<Workspaces>,
+    /// The host's git for status replies; probed on the first request that needs it, never at start (#169).
+    pub git: Git,
     /// The profile's secret vault (decision 0071); calls run on the blocking pool.
     pub vault: Arc<Vault>,
     /// The service's terminals (decision 0033); they end with the service.
