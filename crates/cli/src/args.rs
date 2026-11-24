@@ -351,6 +351,9 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the worktree even when the project's archive script fails or times out.
+        #[arg(long)]
+        allow_failed_archive: bool,
     },
     /// Renames a workspace or sets its comment. A worktree's directory and branch keep their names.
     Update {

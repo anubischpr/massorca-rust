@@ -4,8 +4,8 @@ use massorca_protocol::methods::projects::{
     Project, ProjectIcon, ProjectIconSource, ProjectInspection, ProjectKind,
 };
 use massorca_protocol::methods::workspaces::{
-    UnregisteredWorktree, Workspace, WorkspaceCheck, WorkspaceKind, WorkspaceRemoved,
-    WorkspaceState,
+    UnregisteredWorktree, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceKind,
+    WorkspaceRemoved, WorkspaceState,
 };
 
 pub fn project_kind(kind: ProjectKind) -> &'static str {
@@ -218,6 +218,22 @@ pub fn removal_lines(removed: &WorkspaceRemoved) -> Vec<String> {
     }
     if removed.directory_kept {
         lines.push(format!("kept directory {}", workspace.path));
+    }
+    match &removed.archive {
+        None => {}
+        Some(WorkspaceArchive::Succeeded { terminal }) => {
+            lines.push(format!("archive script ran in terminal {terminal}"));
+        }
+        Some(WorkspaceArchive::Untrusted { reason, hash }) => {
+            lines.push(format!("archive skipped: {reason}"));
+            lines.push(format!("script hash: {hash}"));
+        }
+        Some(WorkspaceArchive::Failed { reason, .. }) => {
+            lines.push(format!("archive failed, removed anyway: {reason}"));
+        }
+        Some(WorkspaceArchive::Unknown) => {
+            lines.push("archive: an outcome this client does not know".to_owned());
+        }
     }
     lines
 }
