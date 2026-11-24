@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use massorca_protocol::methods::agents::AgentArchive;
 use massorca_protocol::methods::agents::{
     self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
     AgentBringBackParams, AgentDelegateParams, AgentHookParams, AgentKind, AgentKinds,
@@ -49,6 +50,8 @@ fn live_session() -> AgentSession {
         mode_confirmed: false,
         mode_source: None,
         pending_permission_mode: None,
+        retained: false,
+        released: false,
     }
 }
 
@@ -132,6 +135,8 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
         mode_confirmed: false,
         mode_source: None,
         pending_permission_mode: None,
+        retained: false,
+        released: false,
         ..live_session()
     };
     assert_wire(
@@ -708,5 +713,37 @@ fn mark_seen_takes_an_optional_activity_time_and_an_older_caller_sends_only_the_
             at_ms: Some(7),
         },
         &json!({ "session": "s-1", "at_ms": 7 }),
+    );
+}
+
+#[test]
+fn release_and_retain_flags_are_absent_until_set_and_an_archive_reads_back() {
+    let wire = serde_json::to_value(live_session()).unwrap();
+    assert!(
+        wire.get("retained").is_none() && wire.get("released").is_none(),
+        "{wire}"
+    );
+
+    let archived = AgentArchive {
+        session: "s1".to_owned(),
+        released: true,
+        text: Some("tail".to_owned()),
+        truncated: true,
+        withheld: false,
+    };
+    assert_wire(
+        &archived,
+        &json!({ "session": "s1", "released": true, "text": "tail", "truncated": true }),
+    );
+    let withheld = AgentArchive {
+        session: "s1".to_owned(),
+        released: true,
+        text: None,
+        truncated: false,
+        withheld: true,
+    };
+    assert_wire(
+        &withheld,
+        &json!({ "session": "s1", "released": true, "truncated": false, "withheld": true }),
     );
 }
