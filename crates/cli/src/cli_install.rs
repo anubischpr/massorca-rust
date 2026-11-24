@@ -1,6 +1,8 @@
 //! `massorca cli install|uninstall|status`: puts the `massorca` command on this user's PATH and nothing else (decision 0088).
 
 pub mod command_file;
+#[cfg(test)]
+pub mod fake_user_path;
 pub mod layout;
 pub mod path_entries;
 pub mod plan;
@@ -388,3 +390,6 @@ fn off_path_hint(platform: Platform) -> String {
         Platform::Windows => "Run `massorca cli install` to add it to your user PATH.".to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests;
