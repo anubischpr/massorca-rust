@@ -55,6 +55,7 @@ fn terminal(id: &str, state: TerminalState, exit: Option<TerminalExit>) -> Termi
         created_at_ms: 1,
         exit,
         holds_secrets: false,
+        git_credential_guard: false,
     }
 }
 
