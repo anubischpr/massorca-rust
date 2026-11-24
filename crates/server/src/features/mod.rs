@@ -21,6 +21,7 @@ pub(crate) mod skills;
 mod teams;
 mod terminal_attach;
 mod terminals;
+mod workspace_archive;
 mod workspace_domain;
 mod workspace_setup;
 mod workspaces;

@@ -1,7 +1,8 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
-//! A create runs the new worktree's setup script in a service terminal (decision 0086).
+//! A create runs the new worktree's setup script in a service terminal (decision 0086); a removal runs the project's
+//! archive script in the worktree first (decision 0092).
 
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use massorca_core_workspace::RemovalWaivers;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
-use crate::features::workspace_setup;
+use crate::features::{workspace_archive, workspace_setup};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -208,9 +209,22 @@ async fn remove(
         blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
     publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    // Before anything is stopped: the archive may save work from the running checkout.
+    let archive = match workspace_archive::run(&ctx, &begun, params.allow_failed_archive).await {
+        Ok(archive) => archive,
+        Err(refusal) => {
+            let id = begun.id.clone();
+            let cancel = Arc::clone(&domain);
+            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
+                publish(&ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
+            }
+            return Err(refusal);
+        }
+    };
     stop_runs(&ctx, &begun.id).await?;
     let id = begun.id.clone();
-    let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    removed.archive = archive;
     publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
 }
