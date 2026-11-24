@@ -232,6 +232,42 @@ fn a_start_that_fails_keeps_the_task_open_with_the_reason_and_can_be_retried() {
 }
 
 #[test]
+fn three_failed_starts_in_a_row_break_the_circuit_until_the_task_is_reopened() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "ghost", "no-such-agent");
+    let task = create_task(&sandbox, "Parse the headers", &["--bot", "ghost"]);
+
+    for _ in 0..2 {
+        let refused = error_of(&sandbox, &["task", "start", task.as_str()]);
+        assert_eq!(refused["code"], "agent.kind_not_found", "{refused}");
+    }
+    let third = error_of(&sandbox, &["task", "start", task.as_str()]);
+    assert_eq!(third["code"], "task.circuit_broken", "{third}");
+    let reason = third["message"].as_str().expect("a reason");
+    assert!(reason.starts_with("Circuit broken: "), "{reason}");
+    assert!(reason.contains("no-such-agent"), "{reason}");
+    let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(shown["error_code"], "task.circuit_broken", "{shown}");
+    assert_eq!(shown["error"], reason, "{shown}");
+
+    // A broken task is refused even once its cause is fixed, and no agent starts.
+    sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "ghost", "--agent", "fake"],
+    );
+    let refused = error_of(&sandbox, &["task", "start", task.as_str()]);
+    assert_eq!(refused["code"], "task.circuit_broken", "{refused}");
+    let sessions = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(sessions["sessions"], json!([]), "{sessions}");
+
+    // A reopen resets the breaker.
+    sandbox.json_ok("default", &["task", "reopen", task.as_str()]);
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"].as_str().expect("linked session");
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
 fn a_task_without_a_bot_is_refused_and_stays_unchanged() {
     let (sandbox, _root) = team_sandbox();
     let task = create_task(&sandbox, "Parse the headers", &[]);

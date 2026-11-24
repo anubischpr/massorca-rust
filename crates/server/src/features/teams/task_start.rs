@@ -37,6 +37,9 @@ const TEAMS_PROJECT_NAME: &str = "Bot teams";
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
+/// Failed starts in a row after which a task is refused until it is reopened (AUTO-16; pv96 trips at three).
+const CIRCUIT_BREAK_FAILURES: u32 = 3;
+
 /// Serialises task starts with the calls that read whether a task runs and then write: removal, done, reopen, a bot
 /// change, and an agent resume, which can revive a task's session. One gate for every team: starts are short.
 pub(crate) fn start_gate() -> MutexGuard<'static, ()> {
@@ -117,6 +120,15 @@ pub(super) fn start_task(
                 "task {} was already started; reopen it to start it again",
                 row.id
             ),
+        ));
+    }
+    // The circuit breaker (AUTO-16): after three failed starts in a row, only a reopen lets the task start again.
+    if store.task_start_failures(&row.id).map_err(store_error)? >= CIRCUIT_BREAK_FAILURES {
+        return Err(ErrorBody::new(
+            codes::TASK_CIRCUIT_BROKEN,
+            row.error.clone().unwrap_or_else(|| {
+                format!("Circuit broken: task {} failed to start too often", row.id)
+            }),
         ));
     }
     let team = selectors::team(store, &row.team_id)?;
@@ -489,6 +501,16 @@ fn record_failure(
     error: ErrorBody,
     changes: &mut Changes,
 ) -> Result<ErrorBody, ErrorBody> {
+    // The failure that trips the breaker is recorded as such, with the reason it failed, as pv96 words it.
+    let failures = store.task_start_failures(&row.id).map_err(store_error)?;
+    let error = if failures + 1 >= CIRCUIT_BREAK_FAILURES {
+        ErrorBody::new(
+            codes::TASK_CIRCUIT_BROKEN,
+            format!("Circuit broken: {}", error.message),
+        )
+    } else {
+        error
+    };
     if store
         .set_task_start_error(&row.id, &error.code, &error.message, now_ms())
         .map_err(store_error)?
