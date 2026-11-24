@@ -4,22 +4,9 @@
 use std::collections::BTreeSet;
 
 use clap::CommandFactory;
+use massorca_cli::agent_context::LOCAL_COMMANDS;
 use massorca_cli::args::Cli;
 use massorca_server::core_commands;
-
-/// Commands that run in the CLI itself: they read or write the client's own files, run SSH or Tailscale, or print
-/// text. They make no service request, and the server's descriptor test needs every descriptor to name a core method.
-const CLIENT_ONLY: [&str; 9] = [
-    "host.add-ssh",
-    "host.discover",
-    "host.list",
-    "host.remove",
-    "host.show",
-    "host.status",
-    "pair.accept",
-    "profile.secure",
-    "service.unit",
-];
 
 /// The dotted path of every leaf command (`service.info`); clap's generated `help` entries are skipped.
 fn command_paths(command: &clap::Command, prefix: &str, out: &mut Vec<String>) {
@@ -53,7 +40,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         paths.iter().any(|path| path == "service.run"),
         "the walk must see `service run`: {paths:?}"
     );
-    for client_only in CLIENT_ONLY {
+    for client_only in LOCAL_COMMANDS {
         assert!(
             paths.iter().any(|path| path == client_only),
             "`{client_only}` is not a CLI command"
@@ -64,7 +51,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         .into_iter()
         .map(|descriptor| descriptor.id)
         .collect();
-    for client_only in CLIENT_ONLY {
+    for client_only in LOCAL_COMMANDS {
         assert!(
             !ids.contains(client_only),
             "`{client_only}` makes no service request and must not have a descriptor"
@@ -73,13 +60,13 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
     let checked: BTreeSet<&str> = paths
         .iter()
         .map(String::as_str)
-        .filter(|path| *path != "service.run")
-        .filter(|path| !CLIENT_ONLY.contains(path))
+        .filter(|path| !LOCAL_COMMANDS.contains(path))
         .collect();
 
     assert_eq!(
         checked,
         BTreeSet::from([
+            "agent-context",
             "agent.accounts.activate",
             "agent.accounts.add",
             "agent.accounts.check",

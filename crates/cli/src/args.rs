@@ -107,6 +107,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: HostCommand,
     },
+    /// Lists every command with its method, permission and parameters, for agents.
+    AgentContext,
     /// Runs coding agents in workspaces and lists the agent kinds.
     Agent {
         #[command(subcommand)]

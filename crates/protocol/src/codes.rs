@@ -8,6 +8,8 @@ pub const PERMISSION_DENIED: &str = "permission.denied";
 pub const REQUEST_INVALID_PARAMS: &str = "request.invalid_params";
 pub const INTERNAL: &str = "internal";
 pub const SERVICE_SHUTTING_DOWN: &str = "service.shutting_down";
+/// CLI only: the service predates the command table, so it does not offer `commands/1`.
+pub const SERVICE_CAPABILITY_MISSING: &str = "service.capability_missing";
 pub const STREAM_NOT_FOUND: &str = "stream.not_found";
 /// A subscriber fell too far behind; its stream ends with this error rather than buffering without limit.
 pub const STREAM_OVERFLOW: &str = "stream.overflow";

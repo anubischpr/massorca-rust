@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod agent_accounts;
+pub mod agent_context;
 pub mod agent_credentials;
 pub mod agent_hook;
 pub mod agent_text;

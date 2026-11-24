@@ -10,6 +10,7 @@ use massorca_profile::Profile;
 use tokio::runtime::Builder;
 
 use crate::agent;
+use crate::agent_context;
 use crate::agent_hook;
 use crate::args::{
     Cli, Commands, HostCommand, PairCommand, ProfileCommand, ServerCommand, ServiceCommand,
@@ -146,6 +147,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))
+        }
+        Commands::AgentContext => {
+            let target = globals.target()?;
+            block_on(agent_context::execute(&target, autostart, output))
         }
         Commands::Agent {
             command: agent::AgentCommand::Hook(args),
