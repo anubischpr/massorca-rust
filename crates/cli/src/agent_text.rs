@@ -5,7 +5,7 @@ use massorca_protocol::methods::agents::{
     BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
 };
 
-use massorca_protocol::methods::agents::{AgentQueueList, QueueState, QueuedPrompt};
+use massorca_protocol::methods::agents::{AgentArchive, AgentQueueList, QueueState, QueuedPrompt};
 
 use crate::terminal;
 use crate::workspace_text;
@@ -108,6 +108,12 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     }
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
+    }
+    if session.retained {
+        lines.push("retained: yes".to_owned());
+    }
+    if session.released {
+        lines.push("released: yes".to_owned());
     }
     if let Some(mode) = &session.permission_mode {
         // A mode no launch argument carried is only requested until something confirms it (decision 0083).
@@ -213,7 +219,7 @@ pub fn sessions_lines(sessions: &[AgentSession]) -> Vec<String> {
             vec![
                 session.id.clone(),
                 session.kind.clone(),
-                execution_text(&session.execution),
+                execution_with_keeping(session),
                 activity_text(session.activity.as_ref()),
                 session.title.clone().unwrap_or_default(),
             ]
@@ -309,4 +315,41 @@ pub fn queue_lines(list: &AgentQueueList) -> Vec<String> {
         return vec![format!("no queued prompts for session {}", list.session)];
     }
     list.items.iter().flat_map(queued_lines).collect()
+}
+
+/// The execution of a session, with what keeps its terminal or output: `retained`, `released`, or both (decision 0090).
+fn execution_with_keeping(session: &AgentSession) -> String {
+    let mut text = execution_text(&session.execution);
+    for (flag, word) in [
+        (session.retained, "retained"),
+        (session.released, "released"),
+    ] {
+        if flag {
+            text.push_str(", ");
+            text.push_str(word);
+        }
+    }
+    text
+}
+
+/// The archived output of a released session, one line per line of its text (decision 0090), or why there is none.
+pub fn archive_lines(archive: &AgentArchive) -> Vec<String> {
+    if !archive.released {
+        return vec!["not released: the session has no archived output".to_owned()];
+    }
+    if archive.withheld {
+        return vec![
+            "withheld: the run holds vault secrets; its output is for host-admin callers"
+                .to_owned(),
+        ];
+    }
+    let mut lines = Vec::new();
+    if archive.truncated {
+        lines.push("(older output was cut to keep the newest 256 KiB)".to_owned());
+    }
+    match &archive.text {
+        Some(text) if !text.is_empty() => lines.extend(text.lines().map(str::to_owned)),
+        _ => lines.push("(no output)".to_owned()),
+    }
+    lines
 }

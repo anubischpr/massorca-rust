@@ -172,6 +172,9 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
 | `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
+| `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
+| `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
+| `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
@@ -374,6 +377,20 @@ pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `age
 mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
 `agent.queue.resume {session}` returns the queue as it is after the lift.
 
+## Release and retain (decision 0090)
+
+`agent release` archives the newest 256 KiB of a run's terminal text (scrollback and visible rows, without escape codes),
+then closes and frees the terminal and keeps the record, marked `released`. Only an exited run can be released; a live
+one is refused with `agent.busy`. The archive lives in `agent_session_archives` and is read with `agent.archive`. When the
+output cannot be read the terminal is kept and the release fails with `agent.archive_failed`. A release clears the retain.
+
+`agent retain` is a durable flag on the session (`retained`). It keeps the session's exited terminal out of the eviction
+that `max_exited` applies: the terminal manager counts only unpinned exited terminals and never forgets a pinned one. Every
+later run's terminal is pinned when it starts. It does not block a release.
+
+`agent forget` deletes the record, its terminal, its files and its archive. `agent resume` of a released session starts a
+new run and drops the archive of the run before. The reference and deviations are in `docs/decisions/0090-agent-release-and-retain.md`.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
@@ -462,6 +479,9 @@ massorca agent list [--workspace <ws>]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
 massorca agent forget <session>
+massorca agent release <session>
+massorca agent retain <session> [--off]
+massorca agent archive <session>
 massorca agent attach <session>
 massorca agent prompt <session> <text> [--force]
 massorca agent resume <session>
