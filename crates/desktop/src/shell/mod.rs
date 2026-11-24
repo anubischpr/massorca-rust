@@ -5,6 +5,7 @@ mod add_host;
 mod app_theme;
 mod bring_back;
 mod canvas;
+mod close_confirm;
 mod debug_focus;
 mod debug_page;
 mod delegate;
@@ -38,6 +39,7 @@ mod zones;
 use crate::data::DataSource;
 use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
+use crate::model::close_confirm::CloseRisk;
 use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
@@ -78,6 +80,8 @@ mod add_host_tests;
 mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
+#[cfg(test)]
+mod close_confirm_tests;
 #[cfg(test)]
 mod debug_focus_tests;
 #[cfg(test)]
@@ -215,6 +219,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
+    /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
+    close_confirm: Option<CloseRisk>,
     /// The delegate form under the open session, if any (X-CH-06).
     delegate: Option<delegate::DelegateForm>,
     /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
@@ -271,11 +277,11 @@ impl Shell {
         let width = f32::from(window.viewport_size().width);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        // A closing window clears a secret the dialog still holds, before the window goes.
+        // A close the OS asks for waits on the confirm while a session runs or waits for the person (PLAT-10).
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            let _ = weak.update(cx, |shell, cx| shell.close_secret_dialog(window, cx));
-            true
+            weak.update(cx, |shell, cx| shell.window_may_close(window, cx))
+                .unwrap_or(true)
         });
         let snapshot = store.read(cx).snapshot(Instant::now());
         let appearance_changes =
@@ -455,6 +461,7 @@ impl Shell {
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,
+            close_confirm: None,
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
@@ -849,6 +856,7 @@ impl Render for Shell {
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let bring_back_dialog = bring_back::dialog(self, &shell, cx);
         let delegate_dialog = delegate::dialog(self, &shell, cx);
+        let close_dialog = close_confirm::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -923,5 +931,6 @@ impl Render for Shell {
             .when_some(bring_back_dialog, |el, dialog| el.child(dialog))
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
+            .when_some(close_dialog, |el, dialog| el.child(dialog))
     }
 }
