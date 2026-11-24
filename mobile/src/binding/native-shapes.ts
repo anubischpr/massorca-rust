@@ -15,6 +15,7 @@ import type {
   LinkState,
   OfferSummary,
   ProtocolInfo,
+  TerminalEvent,
   WhoAmI,
   WorkspaceSummary,
 } from './types';
@@ -45,6 +46,27 @@ export type RustGitEvent =
   | { readonly tag: 'Item'; readonly inner: { readonly item: Rust.GitItem } }
   | { readonly tag: 'Link'; readonly inner: { readonly link: RustLinkState } };
 
+export interface RustTerminalView {
+  next(): Promise<RustTerminalEvent | undefined>;
+  input(bytes: ArrayBuffer): Promise<void>;
+  resize(cols: number, rows: number): Promise<void>;
+  close(): void;
+}
+
+/** The generated terminal events; a 64-bit exit code arrives as a bigint. */
+export type RustTerminalEvent =
+  | { readonly tag: 'Output'; readonly inner: { readonly offset: bigint; readonly bytes: ArrayBuffer } }
+  | {
+      readonly tag: 'Snapshot';
+      readonly inner: { readonly offset: bigint; readonly cols: number; readonly rows: number; readonly bytes: ArrayBuffer };
+    }
+  | { readonly tag: 'Resized'; readonly inner: { readonly cols: number; readonly rows: number } }
+  | {
+      readonly tag: 'Exited';
+      readonly inner: { readonly reason: string; readonly code?: bigint; readonly signal?: string };
+    }
+  | { readonly tag: 'Link'; readonly inner: { readonly link: RustLinkState } };
+
 export type RustFfiError =
   | { readonly tag: 'Unreachable'; readonly inner: { readonly message: string } }
   | {
@@ -72,6 +94,7 @@ export interface RustHost {
   gitStatus(workspace: string): Promise<Rust.GitStatusSummary>;
   watchGit(workspace: string): RustWatch<RustGitEvent>;
   watchAgents(workspace: string | undefined): RustWatch<RustAgentEvent>;
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<RustTerminalView>;
 }
 
 export interface RustMassOrca {
@@ -202,6 +225,32 @@ export function gitEvent(raw: RustGitEvent): GitEvent {
   switch (raw.tag) {
     case 'Item':
       return { tag: 'Item', item: gitItem(raw.inner.item) };
+    case 'Link':
+      return { tag: 'Link', link: linkState(raw.inner.link) };
+  }
+}
+
+export function terminalEvent(raw: RustTerminalEvent): TerminalEvent {
+  switch (raw.tag) {
+    case 'Output':
+      return { tag: 'Output', offset: raw.inner.offset, bytes: raw.inner.bytes };
+    case 'Snapshot':
+      return {
+        tag: 'Snapshot',
+        offset: raw.inner.offset,
+        cols: raw.inner.cols,
+        rows: raw.inner.rows,
+        bytes: raw.inner.bytes,
+      };
+    case 'Resized':
+      return { tag: 'Resized', cols: raw.inner.cols, rows: raw.inner.rows };
+    case 'Exited':
+      return {
+        tag: 'Exited',
+        reason: raw.inner.reason,
+        code: raw.inner.code === undefined ? undefined : Number(raw.inner.code),
+        signal: raw.inner.signal,
+      };
     case 'Link':
       return { tag: 'Link', link: linkState(raw.inner.link) };
   }

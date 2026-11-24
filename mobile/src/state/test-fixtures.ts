@@ -9,6 +9,7 @@ import {
   type Host,
   type HostSummary,
   type ProtocolInfo,
+  type TerminalView,
   type WhoAmI,
   type Watch,
   type WorkspaceSummary,
@@ -108,6 +109,10 @@ class StalledHost implements Host {
 
   watchAgents(workspaceId?: string): Watch<AgentEvent> {
     return this.inner.watchAgents(workspaceId);
+  }
+
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<TerminalView> {
+    return this.inner.attachTerminal(terminal, cols, rows);
   }
 }
 

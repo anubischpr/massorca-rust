@@ -11,12 +11,14 @@ import {
   hostSummary,
   offerSummary,
   protocolInfo,
+  terminalEvent,
   whoAmI,
   workspaceSummary,
   type RustAgentEvent,
   type RustGitEvent,
   type RustHost,
   type RustModule,
+  type RustTerminalView,
   type RustWatch,
 } from './native-shapes';
 import type {
@@ -28,6 +30,8 @@ import type {
   MassOrcaBinding,
   OfferSummary,
   ProtocolInfo,
+  TerminalEvent,
+  TerminalView,
   WhoAmI,
   Watch,
   WorkspaceSummary,
@@ -85,6 +89,40 @@ class NativeHost implements Host {
 
   watchAgents(workspace?: string): Watch<AgentEvent> {
     return guard(() => new NativeWatch<RustAgentEvent, AgentEvent>(this.host.watchAgents(workspace), agentEvent));
+  }
+
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<TerminalView> {
+    return guardAsync(async () => new NativeTerminalView(await this.host.attachTerminal(terminal, cols, rows)));
+  }
+}
+
+/** A generated terminal view as the app's view: `next` resolves to null once it is over, and failures are FfiException. */
+class NativeTerminalView implements TerminalView {
+  private readonly view: RustTerminalView;
+
+  constructor(view: RustTerminalView) {
+    this.view = view;
+  }
+
+  async next(): Promise<TerminalEvent | null> {
+    try {
+      const raw = await this.view.next();
+      return raw === undefined ? null : terminalEvent(raw);
+    } catch (error) {
+      throw toException(error);
+    }
+  }
+
+  input(bytes: ArrayBuffer): Promise<void> {
+    return guardAsync(() => this.view.input(bytes));
+  }
+
+  resize(cols: number, rows: number): Promise<void> {
+    return guardAsync(() => this.view.resize(cols, rows));
+  }
+
+  close(): void {
+    guard(() => this.view.close());
   }
 }
 

@@ -109,6 +109,36 @@ export interface Watch<E> {
   close(): void;
 }
 
+/** One step of a terminal view. Output comes in order, each run at the byte offset it starts at. */
+export type TerminalEvent =
+  | { readonly tag: 'Output'; readonly offset: bigint; readonly bytes: ArrayBuffer }
+  /** The screen as the host holds it, from `offset` on: it opens the view or replaces output the view missed. */
+  | {
+      readonly tag: 'Snapshot';
+      readonly offset: bigint;
+      readonly cols: number;
+      readonly rows: number;
+      readonly bytes: ArrayBuffer;
+    }
+  | { readonly tag: 'Resized'; readonly cols: number; readonly rows: number }
+  /** The process ended. The view ends after this event; `reason` is `exited`, `killed` or `service_stopped`. */
+  | {
+      readonly tag: 'Exited';
+      readonly reason: string;
+      readonly code: number | undefined;
+      readonly signal: string | undefined;
+    }
+  | { readonly tag: 'Link'; readonly link: LinkState };
+
+/** A live view of one terminal. `next` resolves to `null` once the view is over; `close` detaches. */
+export interface TerminalView {
+  next(): Promise<TerminalEvent | null>;
+  /** Types `bytes` into the terminal. Fails while the host is out of contact. */
+  input(bytes: ArrayBuffer): Promise<void>;
+  resize(cols: number, rows: number): Promise<void>;
+  close(): void;
+}
+
 /** One connection to a paired host. */
 export interface Host {
   name(): string;
@@ -118,6 +148,8 @@ export interface Host {
   gitStatus(workspace: string): Promise<GitStatusSummary>;
   watchGit(workspace: string): Watch<GitEvent>;
   watchAgents(workspace?: string): Watch<AgentEvent>;
+  /** Attaches to `terminal` at `cols` by `rows`: the first event is its screen. A refusal fails this call. */
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<TerminalView>;
 }
 
 /** The flat error of the binding. Every case carries a sentence the UI may show as is. */

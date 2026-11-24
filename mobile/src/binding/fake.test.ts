@@ -97,6 +97,57 @@ describe('FakeMassOrca', () => {
     expect(await watch.next()).toEqual({ tag: 'Link', link: { tag: 'Live' } });
     expect(await watch.next()).toBeNull();
   });
+
+  it('attaches a scripted terminal: it delivers the script, then stays open until it is closed', async () => {
+    const fake = new FakeMassOrca({ hosts: [home] });
+    fake.scriptTerminal([{ tag: 'Resized', cols: 100, rows: 30 }]);
+    const view = await (await fake.connect('home-pc')).attachTerminal('term-1', 80, 24);
+
+    expect(fake.attaches).toEqual([{ terminal: 'term-1', cols: 80, rows: 24 }]);
+    expect(await view.next()).toEqual({ tag: 'Resized', cols: 100, rows: 30 });
+
+    const pending = view.next();
+    fake.terminals[0]?.push({ tag: 'Link', link: { tag: 'Live' } });
+    expect(await pending).toEqual({ tag: 'Link', link: { tag: 'Live' } });
+
+    view.close();
+    expect(await view.next()).toBeNull();
+  });
+
+  it('ends a terminal view after its exit, as the host does', async () => {
+    const fake = new FakeMassOrca({ hosts: [home] });
+    fake.scriptTerminal([{ tag: 'Exited', reason: 'exited', code: 1, signal: undefined }]);
+    const view = await (await fake.connect('home-pc')).attachTerminal('term-1', 80, 24);
+
+    expect(await view.next()).toEqual({ tag: 'Exited', reason: 'exited', code: 1, signal: undefined });
+    fake.terminals[0]?.push({ tag: 'Resized', cols: 1, rows: 1 });
+    expect(await view.next()).toBeNull();
+  });
+
+  it('records the input and the resizes sent to a terminal view, and refuses them once it is closed', async () => {
+    const fake = new FakeMassOrca({ hosts: [home] });
+    const view = await (await fake.connect('home-pc')).attachTerminal('term-1', 80, 24);
+
+    await view.input(new TextEncoder().encode('ls').buffer);
+    await view.resize(120, 40);
+    expect(fake.terminals[0]?.resizes).toEqual([[120, 40]]);
+    expect(fake.terminals[0]?.inputs.map((bytes) => new TextDecoder().decode(bytes))).toEqual(['ls']);
+
+    view.close();
+    await expect(view.resize(80, 24)).rejects.toBeInstanceOf(FfiException);
+  });
+
+  it('fails a scripted attach with its error, and returns the git status it is set to', async () => {
+    const fake = new FakeMassOrca({ hosts: [home] });
+    const host = await fake.connect('home-pc');
+    fake.failNext('attachTerminal', 'unreachable', 'home-pc is off');
+    await expect(host.attachTerminal('term-1', 80, 24)).rejects.toMatchObject({ error: { tag: 'Unreachable' } });
+    expect(fake.attaches).toEqual([]);
+
+    const status = { branch: 'main', ahead: 1n, behind: undefined, operation: undefined, files: [], truncated: false };
+    fake.setGitStatus(status);
+    expect(await host.gitStatus('workspace-1')).toEqual(status);
+  });
 });
 
 describe('ffi error codes', () => {

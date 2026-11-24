@@ -1,8 +1,17 @@
 import type * as Rust from '../generated/massorca_client_ffi';
 
 import { createNativeBinding } from './native';
-import type { RustAgentEvent, RustGitEvent, RustHost, RustMassOrca, RustModule, RustWatch } from './native-shapes';
-import { FfiException, type AgentEvent, type GitEvent, type Host, type MassOrcaBinding } from './types';
+import type {
+  RustAgentEvent,
+  RustGitEvent,
+  RustHost,
+  RustMassOrca,
+  RustModule,
+  RustTerminalEvent,
+  RustTerminalView,
+  RustWatch,
+} from './native-shapes';
+import { FfiException, type AgentEvent, type GitEvent, type Host, type MassOrcaBinding, type TerminalEvent } from './types';
 
 const offerRecord: Rust.OfferSummary = {
   server: 'vps.example.ts.net',
@@ -129,6 +138,38 @@ class ScriptedWatch<E> implements RustWatch<E> {
   }
 }
 
+/** A terminal view that yields its script in order; an error in the script ends it, and so does closing it. */
+class ScriptedTerminal implements RustTerminalView {
+  closed = false;
+  readonly inputs: ArrayBuffer[] = [];
+  readonly sizes: [number, number][] = [];
+  private readonly script: (RustTerminalEvent | Error)[];
+
+  constructor(script: readonly (RustTerminalEvent | Error)[]) {
+    this.script = [...script];
+  }
+
+  async next(): Promise<RustTerminalEvent | undefined> {
+    if (this.closed) return undefined;
+    const step = this.script.shift();
+    if (step === undefined) return undefined;
+    if (step instanceof Error) throw step;
+    return step;
+  }
+
+  async input(bytes: ArrayBuffer): Promise<void> {
+    this.inputs.push(bytes);
+  }
+
+  async resize(cols: number, rows: number): Promise<void> {
+    this.sizes.push([cols, rows]);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
 class FakeHost implements RustHost {
   readonly workspaceArgs: (string | undefined)[] = [];
   readonly gitStatusArgs: string[] = [];
@@ -136,6 +177,9 @@ class FakeHost implements RustHost {
   readonly agentWatchArgs: (string | undefined)[] = [];
   readonly gitWatches: ScriptedWatch<RustGitEvent>[] = [];
   readonly agentWatches: ScriptedWatch<RustAgentEvent>[] = [];
+  readonly attachArgs: [string, number, number][] = [];
+  readonly terminalViews: ScriptedTerminal[] = [];
+  readonly opened: ScriptedTerminal[] = [];
   whoamiRecord: Rust.WhoAmI = { deviceId: 'device-1', deviceName: 'phone', scopes: ['sync'] };
   private readonly failures: Failures;
 
@@ -179,6 +223,14 @@ class FakeHost implements RustHost {
     this.failures.check('watchAgents');
     this.agentWatchArgs.push(workspace);
     return this.agentWatches.shift() ?? new ScriptedWatch<RustAgentEvent>([]);
+  }
+
+  async attachTerminal(terminal: string, cols: number, rows: number): Promise<RustTerminalView> {
+    this.failures.check('attachTerminal');
+    this.attachArgs.push([terminal, cols, rows]);
+    const view = this.terminalViews.shift() ?? new ScriptedTerminal([]);
+    this.opened.push(view);
+    return view;
   }
 }
 
@@ -421,5 +473,88 @@ describe('createNativeBinding', () => {
     await expect(binding.connect('missing')).rejects.toMatchObject({
       error: { tag: 'HostNotFound', message: 'no such host' },
     });
+  });
+});
+
+function bytesOf(text: string): ArrayBuffer {
+  return new TextEncoder().encode(text).buffer;
+}
+
+/** An event with its bytes read as text, so the expectations stay readable. */
+function readable(event: TerminalEvent): unknown {
+  if (event.tag === 'Output' || event.tag === 'Snapshot') {
+    return { ...event, bytes: new TextDecoder().decode(event.bytes) };
+  }
+  return event;
+}
+
+describe('terminal attach', () => {
+  it('attaches at the size it is given and turns each step into the app shape', async () => {
+    const { binding, client } = harness();
+    client.host.terminalViews.push(
+      new ScriptedTerminal([
+        { tag: 'Snapshot', inner: { offset: 0n, cols: 80, rows: 24, bytes: bytesOf('$ ') } },
+        { tag: 'Output', inner: { offset: 2n, bytes: bytesOf('ls\r\n') } },
+        { tag: 'Resized', inner: { cols: 100, rows: 30 } },
+        { tag: 'Link', inner: { link: { tag: 'Unverifiable', inner: { attempt: 1, retryInMs: 2000n, reason: 'gone' } } } },
+        { tag: 'Exited', inner: { reason: 'exited', code: 0n, signal: undefined } },
+      ]),
+    );
+    const host = await binding.connect('home-pc');
+
+    const view = await host.attachTerminal('term-1', 80, 24);
+    const events = await drain(() => view.next());
+
+    expect(client.host.attachArgs).toEqual([['term-1', 80, 24]]);
+    expect(events.map(readable)).toEqual([
+      { tag: 'Snapshot', offset: 0n, cols: 80, rows: 24, bytes: '$ ' },
+      { tag: 'Output', offset: 2n, bytes: 'ls\r\n' },
+      { tag: 'Resized', cols: 100, rows: 30 },
+      { tag: 'Link', link: { tag: 'Unverifiable', attempt: 1, retryInMs: 2000n, reason: 'gone' } },
+      { tag: 'Exited', reason: 'exited', code: 0, signal: undefined },
+    ]);
+  });
+
+  it('reads an exit by signal, with no exit code', async () => {
+    const { binding, client } = harness();
+    client.host.terminalViews.push(
+      new ScriptedTerminal([{ tag: 'Exited', inner: { reason: 'killed', code: undefined, signal: 'SIGKILL' } }]),
+    );
+    const view = await (await binding.connect('home-pc')).attachTerminal('term-1', 80, 24);
+
+    expect(await view.next()).toEqual({ tag: 'Exited', reason: 'killed', code: undefined, signal: 'SIGKILL' });
+  });
+
+  it('sends input and resizes to the view, and closing it detaches it', async () => {
+    const { binding, client } = harness();
+    const view = await (await binding.connect('home-pc')).attachTerminal('term-1', 80, 24);
+    const [terminal] = client.host.opened;
+
+    await view.input(bytesOf('a'));
+    await view.resize(100, 30);
+    view.close();
+
+    expect(terminal?.inputs.map((bytes) => new TextDecoder().decode(bytes))).toEqual(['a']);
+    expect(terminal?.sizes).toEqual([[100, 30]]);
+    expect(terminal?.closed).toBe(true);
+    expect(await view.next()).toBeNull();
+  });
+
+  it('reports a refused attach as the app error', async () => {
+    const { binding, failures } = harness();
+    failures.fail('attachTerminal', generated('Remote', { code: 'terminal.not_found', message: 'No such terminal.' }));
+    const host = await binding.connect('home-pc');
+
+    await expect(host.attachTerminal('gone', 80, 24)).rejects.toMatchObject({
+      error: { tag: 'Remote', code: 'terminal.not_found', message: 'No such terminal.' },
+    });
+  });
+
+  it('reports a failure of the view as an FfiException', async () => {
+    const { binding, client } = harness();
+    client.host.terminalViews.push(new ScriptedTerminal([generated('Unreachable', { message: 'gone' })]));
+    const view = await (await binding.connect('home-pc')).attachTerminal('term-1', 80, 24);
+
+    await expect(view.next()).rejects.toBeInstanceOf(FfiException);
   });
 });
