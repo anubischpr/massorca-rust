@@ -244,6 +244,13 @@ impl Extensions {
             return Err(Error::HashRequired);
         }
         let package = source::load(&source, sha256)?;
+        if package.manifest.id != id {
+            // The new entry takes its id from the manifest, so another id would replace or orphan the wrong entry.
+            return Err(Error::SourceIdChanged {
+                id: id.to_owned(),
+                found: package.manifest.id.clone(),
+            });
+        }
         if package.sha256.eq_ignore_ascii_case(&old.sha256) {
             return Err(Error::UpToDate(id.to_owned()));
         }

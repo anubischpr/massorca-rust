@@ -120,6 +120,31 @@ fn a_missing_or_stale_consent_is_refused_and_nothing_changes() {
 }
 
 #[test]
+fn a_source_that_now_holds_another_package_is_refused_and_nothing_changes() {
+    let s = setup(FakeHost::new());
+    let source = s.package_dir("kit", &kit_manifest("1.2.0"));
+    s.install(&source, false).expect("installs");
+    let mut manifest = kit_manifest("1.3.0");
+    manifest["id"] = json!("acme.other");
+    let other = s.package_dir("kit", &manifest);
+    let consent = s.service.inspect(&other).expect("inspect").consent;
+    let before = lock_bytes(&s);
+
+    let error = s
+        .service
+        .update("acme.kit", Some(&consent), None)
+        .expect_err("another id");
+
+    assert_eq!(error.code(), codes::INVALID_SOURCE);
+    assert_eq!(lock_bytes(&s), before);
+    assert_eq!(package_folders(&s), 1);
+    assert!(
+        !s.exists("pkgs/acme.other"),
+        "nothing is staged for the other id"
+    );
+}
+
+#[test]
 fn a_file_source_needs_its_sha256_to_update() {
     let s = setup(FakeHost::new());
     let path = s.home.path().join("kit.mxt");

@@ -156,7 +156,8 @@ file as read; its install still needs the pin.
   `massorca extension update <id>` bring an installed package up to date from
   the source its lock entry names. The source is read and checked as an install
   checks it: a folder or catalogue entry by its canonical hash, an archive by
-  its `sha256`, which is required (`extension.hash_required`).
+  its `sha256`, which is required (`extension.hash_required`). A source that
+  now holds another package id is refused with `extension.invalid_source`.
 - A package with the hash it has is refused with `extension.up_to_date`, and
   nothing is written. A built-in is refreshed from the embedded package in the
   same call. It needs no consent, as in refresh and adoption.
@@ -175,7 +176,9 @@ file as read; its install still needs the pin.
   follow-up.
 - Atomicity follows install: the new folder is unpacked under the change lock
   with the package marked busy, the lockfile is written last, the old folder is
-  deleted after that write, and a failed write removes the new folder.
+  deleted after that write, and a failed write removes the new folder. An old
+  folder still in use (Windows refuses to delete open files) stays until the
+  start sweep removes folders the lockfile does not name.
 - An agent's run is refused with `extension.needs_person`. An update changes the
   code an installed package runs, so a person runs it, as with a vendor command.
 - Events: an update publishes `extension.installed` with its id, so readers reload

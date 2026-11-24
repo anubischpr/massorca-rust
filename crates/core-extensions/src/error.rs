@@ -65,6 +65,8 @@ pub enum Error {
     AlreadyInstalled(String),
     #[error("extension {0} is already up to date")]
     UpToDate(String),
+    #[error("the source of {id} now holds {found}; remove {id} and install {found} instead")]
+    SourceIdChanged { id: String, found: String },
     #[error("agent kind {kind} is already installed by {installed_by}")]
     KindConflict { kind: String, installed_by: String },
     #[error("a package archive needs its SHA-256")]
@@ -123,6 +125,7 @@ impl Error {
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
             Self::UpToDate(_) => codes::UP_TO_DATE,
+            Self::SourceIdChanged { .. } => codes::INVALID_SOURCE,
             Self::Busy(_) => codes::BUSY,
             Self::VendorCommandRefused { .. } => codes::VENDOR_COMMAND_REFUSED,
             Self::KindConflict { .. } => codes::KIND_CONFLICT,
