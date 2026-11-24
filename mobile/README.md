@@ -22,9 +22,10 @@ npm run typecheck   # tsc, strict
 npm run lint        # ESLint (@react-native config)
 npm run tokens:check
 npm test            # Jest
+node scripts/generate-terminal-asset.ts --check   # the terminal page, see below
 ```
 
-CI runs these four in the job "mobile (typecheck, lint, test)" when a change touches `mobile/`.
+CI runs these in the job "mobile (typecheck, lint, test)" when a change touches `mobile/`.
 
 ## Design tokens
 
@@ -36,6 +37,14 @@ npm run tokens      # rewrites src/theme/tokens.generated.ts
 ```
 
 `npm run tokens:check` and the Jest test `src/theme/tokens.test.ts` fail when the committed file differs.
+
+## Terminal page
+
+`assets/terminal/page.html` is the page the terminal WebView loads (screen M-TM-01). The generator
+`scripts/generate-terminal-asset.ts` inlines xterm.js (`@xterm/xterm`), its CSS and `@xterm/addon-fit` into
+`android/app/src/main/assets/terminal/index.html`, so the terminal works without a network. Never edit the generated
+file. After changing the template or the packages, run `node scripts/generate-terminal-asset.ts`; the `--check` form
+runs in CI and in the Jest test `src/terminal/terminal-asset.test.ts`.
 
 ## Layout
 
@@ -50,6 +59,8 @@ npm run tokens      # rewrites src/theme/tokens.generated.ts
   - `watch-iterator.ts`: turns a pull-based watch into an async iterator.
 - `src/generated/`, `src/index.tsx`, `src/NativeMassorcaMobile.ts`: generated TypeScript, see below.
 - `src/navigation/`: the compact navigation stack (M-SH-01).
+- `src/terminal/`: the terminal's state (`terminal-session.ts`), its WebView bridge (`terminal-bridge.ts`) and the Ctrl
+  key (`control-key.ts`).
 - `src/screens/`: screens. Most are placeholders that show their title until their task lands.
 - `android/`: the Android project. `app/src/main/java/dev/massorca/app/keystore/` holds the Keystore module.
 

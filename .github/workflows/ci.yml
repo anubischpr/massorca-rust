@@ -456,4 +456,5 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run tokens:check
+      - run: node scripts/generate-terminal-asset.ts --check
       - run: npm test
