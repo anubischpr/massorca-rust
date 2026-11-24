@@ -6,9 +6,10 @@
 //! queue lock, never the reverse. Nothing that can block (PTY writes, resize, close) runs
 //! under a terminal lock.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::{self, Read};
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
@@ -21,7 +22,7 @@ use crate::attach::{
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
-use crate::screen::{FrozenScreen, Screen};
+use crate::screen::{FrozenScreen, SCROLLBACK_ROWS, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
 use massorca_host_stats::{MemorySample, ProcessTable};
 
@@ -269,6 +270,8 @@ struct Registry {
     requests: HashMap<String, String>,
     /// Exited terminals, oldest first.
     exited: VecDeque<String>,
+    /// Exited terminals kept from eviction (`pin`, decision 0090). They do not count toward `max_exited`.
+    pinned: HashSet<String>,
     /// Live terminals plus creates in progress.
     live: usize,
     next_seq: u64,
@@ -283,6 +286,7 @@ impl Registry {
             self.requests.remove(request);
         }
         self.exited.retain(|exited| exited != id);
+        self.pinned.remove(id);
         Some(terminal)
     }
 }
@@ -298,23 +302,53 @@ impl Inner {
 
     /// Called by the waiter once the shell is reaped, just before the exit is recorded.
     fn retire(&self, id: &str) {
-        let mut forgotten = Vec::new();
-        {
+        let forgotten = {
             let mut registry = lock(&self.registry);
             registry.live = registry.live.saturating_sub(1);
             if registry.terminals.contains_key(id) {
                 registry.exited.push_back(id.to_owned());
             }
-            while registry.exited.len() > self.config.max_exited {
-                let Some(oldest) = registry.exited.pop_front() else {
-                    break;
-                };
-                forgotten.extend(registry.forget(&oldest));
-            }
-        }
+            self.evict_excess(&mut registry)
+        };
         // Terminals drop outside the registry lock.
         drop(forgotten);
     }
+
+    /// Forgets the oldest unpinned exited terminals beyond `max_exited`; the caller drops them outside the lock.
+    fn evict_excess(&self, registry: &mut Registry) -> Vec<Arc<Terminal>> {
+        let evicted = excess_exited(
+            &mut registry.exited,
+            &registry.pinned,
+            self.config.max_exited,
+        );
+        evicted
+            .iter()
+            .filter_map(|id| registry.forget(id))
+            .collect()
+    }
+}
+
+/// Removes from `exited` the oldest terminals that are not pinned, while more than `max` unpinned ones remain, and
+/// returns them oldest first. A pinned terminal is never removed and does not count toward `max` (decision 0090).
+fn excess_exited(
+    exited: &mut VecDeque<String>,
+    pinned: &HashSet<String>,
+    max: usize,
+) -> Vec<String> {
+    let mut unpinned = exited.iter().filter(|id| !pinned.contains(*id)).count();
+    let mut evicted = Vec::new();
+    let mut index = 0;
+    while unpinned > max && index < exited.len() {
+        if pinned.contains(&exited[index]) {
+            index += 1;
+            continue;
+        }
+        if let Some(id) = exited.remove(index) {
+            evicted.push(id);
+        }
+        unpinned -= 1;
+    }
+    evicted
 }
 
 impl TerminalManager {
@@ -556,6 +590,29 @@ impl TerminalManager {
             self.inner.config.kill_grace,
             KILL_EXIT_MARGIN,
         ))
+    }
+
+    /// Keeps an exited terminal from eviction (`pinned`), or lets it be evicted again. Unpinning applies the `max_exited`
+    /// cap at once (decision 0090). Fails with `NotFound` when the terminal is gone.
+    pub fn pin(&self, id: &str, pinned: bool) -> Result<()> {
+        self.inner.find(id)?;
+        let forgotten = {
+            let mut registry = lock(&self.inner.registry);
+            if pinned {
+                registry.pinned.insert(id.to_owned());
+                Vec::new()
+            } else {
+                registry.pinned.remove(id);
+                self.inner.evict_excess(&mut registry)
+            }
+        };
+        drop(forgotten);
+        Ok(())
+    }
+
+    /// The plain text of a terminal's screen: its scrollback, oldest first, then its visible rows, without escape codes.
+    pub fn text(&self, id: &str) -> Result<String> {
+        Ok(self.inner.find(id)?.screen_text())
     }
 
     /// Kills the terminal if it is live, then forgets it.
@@ -990,6 +1047,15 @@ impl Terminal {
         matches!(lock(&self.core).status, Status::Exited(_))
     }
 
+    /// The plain text of the screen, rendered from a copy taken under the lock (see [`TerminalManager::text`]).
+    fn screen_text(&self) -> String {
+        let (cols, rows, frozen) = {
+            let core = lock(&self.core);
+            (core.size.cols, core.size.rows, core.screen.freeze())
+        };
+        plain_text(frozen, cols, rows)
+    }
+
     fn info(&self) -> TerminalInfo {
         self.info_locked(&lock(&self.core))
     }
@@ -1271,6 +1337,36 @@ fn wait_for_exit(
     terminal.record_exit(exit);
 }
 
+/// Renders a frozen screen as plain text. Its snapshot is replayed into a fresh emulator of the same size, which yields the
+/// scrollback, oldest first, and then the visible rows. Each line loses its trailing blanks, and so do the blank lines at
+/// the end.
+fn plain_text(frozen: FrozenScreen, cols: u16, rows: u16) -> String {
+    let (Some(rows_nz), Some(cols_nz)) = (NonZeroU16::new(rows), NonZeroU16::new(cols)) else {
+        return String::new();
+    };
+    let mut replay = vt100::Parser::new(rows_nz, cols_nz, SCROLLBACK_ROWS);
+    replay.process(&frozen.serialize());
+    let screen = replay.screen_mut();
+    let scrollback = screen.scrollback_len();
+    let mut lines: Vec<String> = Vec::with_capacity(scrollback + usize::from(rows));
+    for index in 0..scrollback + usize::from(rows) {
+        let (view_row, offset) = if index < scrollback {
+            // With the view at `len - index`, its first row is scrollback row `index`.
+            (0, scrollback - index)
+        } else {
+            (index - scrollback, 0)
+        };
+        screen.set_scrollback(offset);
+        let row = screen.rows(0, cols).nth(view_row).unwrap_or_default();
+        lines.push(row.trim_end().to_owned());
+    }
+    screen.set_scrollback(0);
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::TerminalManager;
@@ -1286,6 +1382,24 @@ mod tests {
         assert_eq!(cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), vec![1..7, 8..14]);
         // Arrow keys, a bare `R` and a report without a column are not answers.
         assert!(cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R").is_empty());
+    }
+
+    #[test]
+    fn pinned_exited_terminals_are_not_evicted_and_do_not_count_toward_the_cap() {
+        use super::excess_exited;
+        use std::collections::{HashSet, VecDeque};
+        let ids = |names: &[&str]| -> VecDeque<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let mut exited = ids(&["a", "b", "c", "d"]);
+        let pinned: HashSet<String> = HashSet::from(["a".to_owned()]);
+        assert_eq!(excess_exited(&mut exited, &pinned, 2), ["b"]);
+        assert_eq!(exited, ids(&["a", "c", "d"]));
+
+        let mut exited = ids(&["a", "b"]);
+        let pinned: HashSet<String> = HashSet::from(["a".to_owned()]);
+        assert!(excess_exited(&mut exited, &pinned, 1).is_empty());
+        assert_eq!(exited, ids(&["a", "b"]));
     }
 
     #[test]
