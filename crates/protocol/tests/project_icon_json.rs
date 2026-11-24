@@ -2,8 +2,10 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use massorca_protocol::capabilities;
 use massorca_protocol::methods::projects::{
-    Project, ProjectAddParams, ProjectIcon, ProjectIconSource, ProjectKind,
+    self, Project, ProjectAddParams, ProjectIcon, ProjectIconSource, ProjectKind,
+    ProjectUpdateParams,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -238,4 +240,37 @@ fn the_label_is_trimmed_and_capped_at_eighty_characters() {
         Ok(ProjectIcon::Image { label, .. }) => assert_eq!(label, Some("x".repeat(80))),
         other => panic!("the label is kept: {other:?}"),
     }
+}
+
+#[test]
+fn project_update_params_tell_an_absent_icon_from_a_null_one() {
+    assert_wire(
+        &ProjectUpdateParams {
+            project: "app".to_owned(),
+            icon: None,
+        },
+        &json!({ "project": "app" }),
+    );
+    assert_wire(
+        &ProjectUpdateParams {
+            project: "app".to_owned(),
+            icon: Some(None),
+        },
+        &json!({ "project": "app", "icon": null }),
+    );
+    assert_wire(
+        &ProjectUpdateParams {
+            project: "app".to_owned(),
+            icon: Some(Some(ProjectIcon::Emoji {
+                emoji: "🚀".to_owned(),
+            })),
+        },
+        &json!({ "project": "app", "icon": { "type": "emoji", "emoji": "🚀" } }),
+    );
+}
+
+#[test]
+fn the_update_method_and_its_capability_are_named_as_documented() {
+    assert_eq!(projects::UPDATE, "project.update");
+    assert_eq!(capabilities::PROJECT_UPDATE, "project-update/1");
 }

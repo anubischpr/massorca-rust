@@ -11,8 +11,9 @@ use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
-    ProjectList, ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
+    self, Project, ProjectAddParams, ProjectIcon, ProjectInspectParams, ProjectInspection,
+    ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
+    ProjectUpdateParams,
 };
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
@@ -582,4 +583,79 @@ async fn wait_until_exited(client: &massorca_client::Client, terminal: &str) {
         assert!(Instant::now() < deadline, "the terminal did not exit");
         sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn project_update_sets_keeps_and_clears_the_icon_and_publishes_project_changed() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("project.add");
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let icon = ProjectIcon::Emoji {
+        emoji: "🚀".to_owned(),
+    };
+    let update = |icon| ProjectUpdateParams {
+        project: project.id.clone(),
+        icon,
+    };
+
+    let set: Project = client
+        .call(projects::UPDATE, &update(Some(Some(icon.clone()))))
+        .await
+        .expect("project.update sets the icon");
+    assert_eq!(set.icon, Some(icon.clone()));
+    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes");
+    assert_eq!(
+        event,
+        ChangeEvent {
+            topic: TOPIC_PROJECT_CHANGED.to_owned(),
+            id: project.id.clone()
+        }
+    );
+
+    let kept: Project = client
+        .call(projects::UPDATE, &update(None))
+        .await
+        .expect("an absent icon keeps it");
+    assert_eq!(kept.icon, Some(icon));
+
+    let refused = client
+        .call::<_, Project>(
+            projects::UPDATE,
+            &update(Some(Some(ProjectIcon::Emoji {
+                emoji: "   ".to_owned(),
+            }))),
+        )
+        .await;
+    assert_eq!(
+        remote_code(&refused.expect_err("an empty emoji is refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
+
+    let cleared: Project = client
+        .call(projects::UPDATE, &update(Some(None)))
+        .await
+        .expect("a null icon clears it");
+    assert_eq!(cleared.icon, None);
+    let shown: Project = client
+        .call(
+            projects::SHOW,
+            &ProjectRef {
+                project: project.id.clone(),
+            },
+        )
+        .await
+        .expect("project.show");
+    assert_eq!(shown.icon, None);
+    stop(running).await;
 }

@@ -1,7 +1,7 @@
 //! Project methods: registered repositories and folders.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Params: [`ProjectAddParams`]. Result: [`Project`].
 pub const ADD: &str = "project.add";
@@ -15,6 +15,8 @@ pub const REMOVE: &str = "project.remove";
 pub const INSPECT: &str = "project.inspect";
 /// Params: [`ProjectSetBaseParams`]. Result: [`Project`].
 pub const SET_BASE: &str = "project.set_base";
+/// Params: [`ProjectUpdateParams`]. Result: [`Project`]. Capability `project-update/1`.
+pub const UPDATE: &str = "project.update";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +55,19 @@ pub struct ProjectSetBaseParams {
     /// Selected as `project.show` selects: id, then exact name, then path.
     pub project: String,
     pub base: Option<String>,
+}
+
+/// Params of `project.update`. An absent `icon` keeps the icon, `null` clears it and an icon sets it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectUpdateParams {
+    /// Selected as `project.show` selects: id, then exact name, then path.
+    pub project: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_icon"
+    )]
+    pub icon: Option<Option<ProjectIcon>>,
 }
 
 /// Params of `project.remove`. Selects by id, then exact name, then path.
@@ -230,6 +245,14 @@ impl ProjectIcon {
     pub fn from_stored(text: &str) -> Option<Self> {
         serde_json::from_str(text).ok()
     }
+}
+
+/// Reads `null` as a present, empty icon; an absent field is `default`, so it stays `None`.
+fn present_icon<'de, D>(deserializer: D) -> Result<Option<Option<ProjectIcon>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<ProjectIcon>::deserialize(deserializer).map(Some)
 }
 
 fn is_lucide_name(name: &str) -> bool {

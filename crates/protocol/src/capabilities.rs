@@ -2,6 +2,8 @@
 
 pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
+/// `project.update` (decision 0091): changing a project's icon.
+pub const PROJECT_UPDATE: &str = "project-update/1";
 pub const WORKSPACES: &str = "workspaces/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";

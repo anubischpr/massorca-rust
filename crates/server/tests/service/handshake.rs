@@ -40,6 +40,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::GIT,
             capabilities::HOST,
             capabilities::NETWORK,
+            capabilities::PROJECT_UPDATE,
             capabilities::PROJECTS,
             capabilities::SECRETS,
             capabilities::SERVICE,

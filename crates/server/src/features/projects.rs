@@ -1,4 +1,4 @@
-//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`) over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`), and `project.update` (capability `project-update/1`), over the workspace domain.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectList,
-    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
+    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams, ProjectUpdateParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
@@ -69,6 +69,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::PROJECTS,
             Permission::Workspace,
             set_base,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::PROJECT_UPDATE, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            projects::UPDATE,
+            capabilities::PROJECT_UPDATE,
+            Permission::Workspace,
+            update,
         )?,
     ])
 }
@@ -169,6 +179,13 @@ fn busy(workspace: &Workspace) -> ErrorBody {
 async fn set_base(ctx: RequestCtx, params: ProjectSetBaseParams) -> Result<Project, ErrorBody> {
     let domain = for_mutation(&ctx).await?;
     let project = blocking(move || domain.set_project_base(params)).await?;
+    publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
+    Ok(project)
+}
+
+async fn update(ctx: RequestCtx, params: ProjectUpdateParams) -> Result<Project, ErrorBody> {
+    let domain = for_mutation(&ctx).await?;
+    let project = blocking(move || domain.update_project(params)).await?;
     publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
     Ok(project)
 }

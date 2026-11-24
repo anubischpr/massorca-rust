@@ -142,6 +142,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.update",
+            "Change a project's icon",
+            "project.update",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "icon": {
+                        "type": ["object", "null"],
+                        "description": "A Lucide icon, an emoji or an image; null clears the icon and an absent field keeps it"
+                    }
+                }
+            }),
+        ),
+        command(
             "workspace.create",
             "Create a workspace",
             "workspace.create",
