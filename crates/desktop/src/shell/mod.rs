@@ -725,7 +725,9 @@ impl Render for Shell {
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
             let mode = self.start_mode(&page.id);
+            let kind_notice = self.kind_notice(&composer, cx);
             start_page::StartFrame {
+                kind_notice,
                 page,
                 composer,
                 shell: shell.clone(),

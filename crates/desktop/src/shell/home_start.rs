@@ -16,7 +16,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 use super::Shell;
-use super::start_page::{key_hints, starting_line};
+use super::start_page::{KindNotice, key_hints, kind_notice_row, refuse_send, starting_line};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, create_params, home_project,
@@ -34,6 +34,8 @@ pub(super) struct HomeFrame {
     /// The start in flight from this page, shown under the composer.
     pub starting: Option<String>,
     pub mode: StartMode,
+    /// Why the chosen agent cannot start, when it cannot.
+    pub kind_notice: Option<KindNotice>,
 }
 
 /// The project menu of this page: the shared rows, with "No project" off until the service can
@@ -90,6 +92,9 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
                     .child(TERMINAL_NOTE),
             )
         })
+        .when_some(frame.kind_notice.clone(), |column, notice| {
+            column.child(kind_notice_row(notice, frame.shell.clone(), &theme))
+        })
         .child(key_hints(&theme))
         .when_some(frame.starting.clone(), |column, status| {
             column.child(starting_line(status, &theme))
@@ -140,11 +145,12 @@ impl Shell {
             .filter(|pending| pending.workspace == HOME_START)
             .map(StartingSession::status);
         Some(HomeFrame {
-            composer,
             shell: cx.entity().downgrade(),
             project,
             starting,
             mode: self.start_mode(HOME_START),
+            kind_notice: self.kind_notice(&composer, cx),
+            composer,
         })
     }
 
@@ -181,8 +187,9 @@ impl Shell {
         .map(|project| project.id.clone()) else {
             return;
         };
-        let Some((kind, permission_mode)) = self.chosen_start(&composer, cx) else {
-            return;
+        let (kind, permission_mode) = match self.chosen_start(&composer, cx) {
+            Ok(chosen) => chosen,
+            Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
         let mode = self.start_mode(HOME_START);
         self.start_pending = Some(StartingSession {
