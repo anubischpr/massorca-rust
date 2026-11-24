@@ -527,3 +527,17 @@ failed `task.start` calls count.
   fixed, and the count does not grow. `massorca task reopen TASK` resets it.
 - A routine run makes a new task each time, so each run has its own count; the
   breaker never blocks a routine's later runs.
+
+## Amendment 2026-11-23: a team project's code source
+
+A team project records where its code is, as pv96 does (AUTO-33): "Existing
+repository" or "New folder with git" (`code_source`: `existing_repository` or
+`new_folder_with_git`; `massorca team project add|update --code-source`).
+
+- It is recorded only: nothing is cloned, created or initialised with git, as
+  in pv96. A task runs where `source_project` (the linked Workspaces project)
+  says, never where `code_source` does.
+- As in pv96, only a team with Workspaces on records one; otherwise the call is
+  refused with `request.invalid_params` and says how to turn Workspaces on.
+- `code_source` is an optional wire field (migration step 27);
+  an older host neither stores nor returns it.

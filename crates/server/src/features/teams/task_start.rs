@@ -1108,6 +1108,7 @@ mod tests {
             brief: "Keep the public API.".to_owned(),
             created_at: 1,
             source_project_id: None,
+            code_source: None,
         };
 
         let text = prompt(&team, &bot, &task, Some(&project), None);

@@ -458,6 +458,13 @@ ALTER TABLE tasks ADD COLUMN start_failures INTEGER NOT NULL DEFAULT 0;
 "#,
         foreign_keys_off: false,
     },
+    // A team project's code source as the owner recorded it (AUTO-33, pv96): recorded only, nothing is created.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN code_source TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

@@ -418,6 +418,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 goal: Some("Parse the config".to_owned()),
                 brief: None,
                 source_project: None,
+                code_source: None,
             },
         )
         .await
@@ -434,6 +435,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 goal: None,
                 brief: None,
                 source_project: None,
+                code_source: None,
             },
         )
         .await
@@ -450,6 +452,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 goal: None,
                 brief: Some("Keep it small.".to_owned()),
                 source_project: None,
+                code_source: None,
             },
         )
         .await
@@ -534,6 +537,7 @@ async fn unknown_teams_bots_and_projects_are_refused_with_typed_codes() {
                 goal: None,
                 brief: None,
                 source_project: None,
+                code_source: None,
             },
         )
         .await
@@ -576,6 +580,7 @@ async fn team_changes_publish_team_changed_with_the_team_id() {
                 goal: None,
                 brief: None,
                 source_project: None,
+                code_source: None,
             },
         )
         .await
@@ -651,6 +656,7 @@ async fn a_teams_bots_and_projects_are_listed_in_creation_order_and_only_its_own
                     goal: Some(format!("Ships the {name}")),
                     brief: None,
                     source_project: None,
+                    code_source: None,
                 },
             )
             .await
@@ -1021,6 +1027,7 @@ fn project_add(name: &str, source: Option<&str>) -> TeamProjectAddParams {
         goal: None,
         brief: None,
         source_project: source.map(str::to_owned),
+        code_source: None,
     }
 }
 
@@ -1033,6 +1040,7 @@ fn project_update_source(project: &str, source: Option<&str>) -> TeamProjectUpda
         goal: None,
         brief: None,
         source_project: source.map(str::to_owned),
+        code_source: None,
     }
 }
 

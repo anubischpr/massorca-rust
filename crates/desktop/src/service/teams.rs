@@ -189,6 +189,7 @@ pub(super) fn spawn_call(
                         goal: None,
                         brief: Some(brief),
                         source_project: None,
+                        code_source: None,
                     })
                     .await
             });

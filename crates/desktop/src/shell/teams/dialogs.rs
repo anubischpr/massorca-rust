@@ -1107,6 +1107,7 @@ mod tests {
             source_project: None,
             source_project_name: None,
             source_kind: None,
+            code_source: None,
         }
     }
 
