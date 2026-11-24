@@ -507,6 +507,8 @@ has two values, as in pv96, and there is no per-bot mode.
 - The desktop's New team dialog names the access, and the team card and the Board
   header show it with a one-step change. Not in this change: the Routines, Memory,
   Project and Files headers, which do not show it yet.
+- The team card's More menu edits the team, makes the one-step access change and
+  deletes the team; a delete the service refuses shows on the card.
 
 Decision 0083 is unchanged: a mode is still passed only when someone chose it.
 Here the owner chooses it once for the team.

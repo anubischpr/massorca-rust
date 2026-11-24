@@ -9,15 +9,17 @@ use crate::model::agent_kinds::{
 use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
 use crate::model::teams::{
-    HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamError, TeamId, TeamPage, check_name,
-    new_team_access_hint,
+    CHARACTER_CHOICES, HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamChange, TeamError,
+    TeamForm, TeamId, TeamPage, check_name, new_team_access_hint,
 };
 use crate::service::ServiceHandle;
 use gpui::{
     App, Context, Entity, Focusable, SharedString, Subscription, WeakEntity, Window, div,
     prelude::*, px,
 };
-use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams};
+use massorca_protocol::methods::teams::{
+    BotAddParams, TeamCharacter, TeamCreateParams, TeamUpdateParams,
+};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use massorca_ui::components::popover::OverlayLayer;
@@ -32,16 +34,51 @@ const NO_AGENT_KIND: &str = "No agent kind is installed on this service.";
 /// Why an Add bot form cannot be sent when every kind the service lists is unavailable on this host.
 const NO_AVAILABLE_KIND: &str = "No agent kind is available on this host.";
 
+/// The New team form, or the Edit team form of an existing team: the same fields, with a new team's lead and
+/// host or an existing team's shape.
 #[derive(Debug)]
-pub(in crate::shell) struct NewTeamDialog {
+pub(in crate::shell) struct TeamFormDialog {
     name: Entity<TextField>,
     purpose: Entity<TextField>,
-    lead: Entity<SelectView>,
-    host_select: Entity<SelectView>,
-    host: usize,
+    mode: TeamFormMode,
     workspaces: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// What a team form does: create a team on a host, or change the fields of a team that exists.
+#[derive(Debug)]
+pub(in crate::shell) enum TeamFormMode {
+    New {
+        lead: Entity<SelectView>,
+        host_select: Entity<SelectView>,
+        host: usize,
+    },
+    Edit {
+        team: TeamId,
+        shape: Entity<SelectView>,
+        character: TeamCharacter,
+    },
+}
+
+impl TeamFormDialog {
+    /// The values of an Edit team form and the team they change; `None` for a New team form.
+    fn edit_values(&self, cx: &App) -> Option<(TeamId, TeamForm)> {
+        match &self.mode {
+            TeamFormMode::New { .. } => None,
+            TeamFormMode::Edit {
+                team, character, ..
+            } => Some((
+                *team,
+                TeamForm {
+                    name: self.name.read(cx).text().to_owned(),
+                    purpose: self.purpose.read(cx).text().to_owned(),
+                    character: *character,
+                    workspaces: self.workspaces,
+                },
+            )),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,7 +117,8 @@ pub(in crate::shell) struct EditBriefDialog {
 /// The team dialog on screen, if any.
 #[derive(Debug)]
 pub(in crate::shell) enum TeamDialog {
-    NewTeam(NewTeamDialog),
+    /// The New team form, or the Edit team form.
+    Team(TeamFormDialog),
     AddBot(AddBotDialog),
     EditBrief(EditBriefDialog),
 }
@@ -88,6 +126,11 @@ pub(in crate::shell) enum TeamDialog {
 /// A confirm before a Bot Teams item is deleted (X-DLG-01, destructive where it loses data).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::shell) enum TeamConfirm {
+    /// A team goes with its bots, projects and tasks; a refusal of the service shows on its card.
+    RemoveTeam {
+        team: TeamId,
+        name: String,
+    },
     DeleteProject {
         team: TeamId,
         project: ProjectId,
@@ -157,12 +200,14 @@ impl Shell {
                 SelectEvent::Changed(index) => shell.set_new_team_host(*index, cx),
             },
         );
-        self.team_dialog = Some(TeamDialog::NewTeam(NewTeamDialog {
+        self.team_dialog = Some(TeamDialog::Team(TeamFormDialog {
             name,
             purpose,
-            lead,
-            host_select,
-            host: 0,
+            mode: TeamFormMode::New {
+                lead,
+                host_select,
+                host: 0,
+            },
             workspaces: false,
             error: None,
             _subscriptions: vec![name_events, purpose_events, host_events],
@@ -257,15 +302,32 @@ impl Shell {
     }
 
     pub(super) fn set_new_team_host(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(TeamDialog::NewTeam(dialog)) = &mut self.team_dialog {
-            dialog.host = index;
+        if let Some(TeamDialog::Team(TeamFormDialog {
+            mode: TeamFormMode::New { host, .. },
+            ..
+        })) = &mut self.team_dialog
+        {
+            *host = index;
         }
         cx.notify();
     }
 
-    pub(super) fn set_new_team_workspaces(&mut self, on: bool, cx: &mut Context<Self>) {
-        if let Some(TeamDialog::NewTeam(dialog)) = &mut self.team_dialog {
+    pub(super) fn set_team_workspaces(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Some(TeamDialog::Team(dialog)) = &mut self.team_dialog {
             dialog.workspaces = on;
+        }
+        cx.notify();
+    }
+
+    /// Chooses the shape at `index` on the Edit team form; an index the form does not offer keeps the shape.
+    pub(super) fn set_edit_team_shape(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(TeamDialog::Team(TeamFormDialog {
+            mode: TeamFormMode::Edit { character, .. },
+            ..
+        })) = &mut self.team_dialog
+            && let Some(&(shape, _)) = CHARACTER_CHOICES.get(index)
+        {
+            *character = shape;
         }
         cx.notify();
     }
@@ -287,8 +349,11 @@ impl Shell {
         };
         // With a service connected, the form goes to it; sample data changes locally, as before.
         let dialog = match (dialog, self.service.clone()) {
-            (TeamDialog::NewTeam(dialog), Some(service)) => {
-                return self.send_new_team(service, dialog, cx);
+            (TeamDialog::Team(dialog), Some(service)) => {
+                return match dialog.edit_values(cx) {
+                    Some((team, form)) => self.send_edit_team(service, dialog, team, &form, cx),
+                    None => self.send_new_team(service, dialog, cx),
+                };
             }
             (TeamDialog::AddBot(dialog), Some(service)) => {
                 return self.send_add_bot(service, dialog, cx);
@@ -299,21 +364,13 @@ impl Shell {
             (dialog, _) => dialog,
         };
         self.team_dialog = match dialog {
-            TeamDialog::NewTeam(mut dialog) => {
-                let result = self.model.teams_mut().create_team(NewTeam {
-                    name: dialog.name.read(cx).text().to_owned(),
-                    purpose: dialog.purpose.read(cx).text().to_owned(),
-                    host: dialog.host,
-                    workspaces: dialog.workspaces,
-                });
-                match result {
-                    Ok(_) => None,
-                    Err(error) => {
-                        dialog.error = Some(error.message().into());
-                        Some(TeamDialog::NewTeam(dialog))
-                    }
+            TeamDialog::Team(mut dialog) => match self.save_team_locally(&dialog, cx) {
+                Ok(()) => None,
+                Err(error) => {
+                    dialog.error = Some(error.message().into());
+                    Some(TeamDialog::Team(dialog))
                 }
-            }
+            },
             TeamDialog::EditBrief(mut dialog) => {
                 let brief = dialog.field.read(cx).text().to_owned();
                 match self
@@ -353,19 +410,93 @@ impl Shell {
         cx.notify();
     }
 
+    /// Creates the team of a New team form, or changes the team of an Edit team form, on sample data.
+    fn save_team_locally(&mut self, dialog: &TeamFormDialog, cx: &App) -> Result<(), TeamError> {
+        match &dialog.mode {
+            TeamFormMode::New { host, .. } => self
+                .model
+                .teams_mut()
+                .create_team(NewTeam {
+                    name: dialog.name.read(cx).text().to_owned(),
+                    purpose: dialog.purpose.read(cx).text().to_owned(),
+                    host: *host,
+                    workspaces: dialog.workspaces,
+                })
+                .map(|_| ()),
+            TeamFormMode::Edit { .. } => {
+                let Some((team, form)) = dialog.edit_values(cx) else {
+                    return Ok(());
+                };
+                let change = self.team_change(team, &form)?;
+                self.model.teams_mut().change_team(team, &change)
+            }
+        }
+    }
+
+    /// What an Edit team form changes on `team`, as the model holds the team now.
+    fn team_change(&self, team: TeamId, form: &TeamForm) -> Result<TeamChange, TeamError> {
+        let current = self.model.teams().team(team).ok_or(TeamError::Missing)?;
+        TeamChange::between(current, form)
+    }
+
+    /// Sends the Edit team form: `team.update` carries only the fields it changed, and a form that changed nothing
+    /// sends nothing. A refusal reopens the form with its message.
+    fn send_edit_team(
+        &mut self,
+        service: ServiceHandle,
+        dialog: TeamFormDialog,
+        team: TeamId,
+        form: &TeamForm,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let change = match self.team_change(team, form) {
+            Ok(change) => change,
+            Err(error) => {
+                let message = error.message().into();
+                return self.finish_team_dialog(TeamDialog::Team(dialog), Some(message), cx);
+            }
+        };
+        if change.is_empty() {
+            return cx.notify();
+        }
+        let Some(key) = self.team_key(team, cx) else {
+            let message = TeamError::Missing.message().into();
+            return self.finish_team_dialog(TeamDialog::Team(dialog), Some(message), cx);
+        };
+        let params = TeamUpdateParams {
+            team: key,
+            name: change.name,
+            purpose: change.purpose,
+            character: change.character,
+            access: None,
+            workspaces: change.workspaces,
+        };
+        let form = TeamDialog::Team(dialog);
+        cx.spawn(async move |this, cx| {
+            let answer = service.update_team(params).await;
+            this.update(cx, |shell, cx| {
+                let message = answer.err().map(|refusal| refusal.message().into());
+                shell.finish_team_dialog(form, message, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Sends the New team form. A name the form cannot use reopens it at once; the service's refusal reopens it
     /// with its message. An accepted team shows once the teams are read again.
     fn send_new_team(
         &mut self,
         service: ServiceHandle,
-        dialog: NewTeamDialog,
+        dialog: TeamFormDialog,
         cx: &mut Context<Self>,
     ) {
         cx.notify();
         let name = dialog.name.read(cx).text().to_owned();
         let purpose = dialog.purpose.read(cx).text().to_owned();
         let workspaces = dialog.workspaces;
-        let form = TeamDialog::NewTeam(dialog);
+        let form = TeamDialog::Team(dialog);
         let name = match check_name(&name) {
             Ok(name) => name,
             Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
@@ -503,6 +634,30 @@ impl Shell {
         .detach();
     }
 
+    /// Sends a team delete without `force`: a team with a running task is refused, and the service's words for the
+    /// refusal stay on the team's card.
+    fn send_delete_team(&mut self, service: ServiceHandle, team: TeamId, cx: &mut Context<Self>) {
+        cx.notify();
+        self.model.teams_mut().set_removal_notice(team, None);
+        let Some(key) = self.team_key(team, cx) else {
+            let missing = TeamError::Missing.message().to_owned();
+            return self
+                .model
+                .teams_mut()
+                .set_removal_notice(team, Some(missing));
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.remove_team(key).await;
+            this.update(cx, |shell, cx| {
+                let notice = answer.err().map(|refusal| refusal.message());
+                shell.model.teams_mut().set_removal_notice(team, notice);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Reopens a confirm the service refused, with its message, unless another confirm has opened meanwhile.
     fn finish_team_confirm(
         &mut self,
@@ -548,7 +703,7 @@ impl Shell {
             return cx.notify();
         }
         match &mut form {
-            TeamDialog::NewTeam(dialog) => dialog.error = Some(message),
+            TeamDialog::Team(dialog) => dialog.error = Some(message),
             TeamDialog::AddBot(dialog) => dialog.error = Some(message),
             TeamDialog::EditBrief(dialog) => dialog.error = Some(message),
         }
@@ -622,6 +777,53 @@ impl Shell {
         cx.notify();
     }
 
+    /// "Edit team" on a team card: the form opens with the team's name, purpose, shape and Workspaces flag.
+    pub(super) fn open_team_edit(
+        &mut self,
+        team: TeamId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) = self.model.teams().team(team).cloned() else {
+            return;
+        };
+        let (name, name_events) = watched_field("Name", "Team name", window, cx);
+        name.update(cx, |field, cx| field.set_text(&current.name, window, cx));
+        let (purpose, purpose_events) =
+            watched_field("Purpose", "What the team is for (optional)", window, cx);
+        purpose.update(cx, |field, cx| field.set_text(&current.purpose, window, cx));
+        let shape_index = CHARACTER_CHOICES
+            .iter()
+            .position(|(shape, _)| *shape == current.character)
+            .unwrap_or(0);
+        let shape = cx.new(|cx| {
+            SelectView::new(CHARACTER_CHOICES.iter().map(|(_, label)| *label), cx)
+                .label("Shape")
+                .selected(Some(shape_index))
+                .layer(OverlayLayer::Dialog)
+        });
+        let shape_events = cx.subscribe_in(
+            &shape,
+            window,
+            |shell, _, event: &SelectEvent, _, cx| match event {
+                SelectEvent::Changed(index) => shell.set_edit_team_shape(*index, cx),
+            },
+        );
+        self.team_dialog = Some(TeamDialog::Team(TeamFormDialog {
+            name,
+            purpose,
+            mode: TeamFormMode::Edit {
+                team,
+                shape,
+                character: current.character,
+            },
+            workspaces: current.workspaces,
+            error: None,
+            _subscriptions: vec![name_events, purpose_events, shape_events],
+        }));
+        cx.notify();
+    }
+
     /// Links a project's Board to a Workspaces project, or to none (4.4).
     pub(super) fn set_project_link(
         &mut self,
@@ -653,6 +855,17 @@ impl Shell {
             (confirm @ TeamConfirm::DeleteProject { .. }, Some(service)) => {
                 self.send_delete_project(service, confirm, cx);
             }
+            (TeamConfirm::RemoveTeam { team, .. }, Some(service)) => {
+                self.send_delete_team(service, team, cx);
+            }
+            (TeamConfirm::RemoveTeam { team, .. }, None) => {
+                if let Err(error) = self.model.teams_mut().remove_team(team) {
+                    let notice = error.message().to_owned();
+                    self.model
+                        .teams_mut()
+                        .set_removal_notice(team, Some(notice));
+                }
+            }
             (TeamConfirm::DeleteProject { team, project, .. }, None) => {
                 if self.model.teams_mut().delete_project(team, project).is_ok() {
                     self.model.open_team_page(TeamPage::Board(team));
@@ -666,7 +879,7 @@ impl Shell {
     }
 }
 
-/// The team dialog on screen: New team or Add bot.
+/// The team dialog on screen: the New or Edit team form, Add bot or Edit brief.
 pub(in crate::shell) fn team_dialog_view(
     dialog: &TeamDialog,
     _hosts: &[HostChoice],
@@ -674,20 +887,21 @@ pub(in crate::shell) fn team_dialog_view(
     cx: &App,
 ) -> Dialog {
     match dialog {
-        TeamDialog::NewTeam(form) => new_team_view(form, shell, cx),
+        TeamDialog::Team(form) => team_form_view(form, shell, cx),
         TeamDialog::AddBot(form) => add_bot_view(form, shell, cx),
         TeamDialog::EditBrief(form) => edit_brief_view(form, shell, cx),
     }
 }
 
-fn new_team_view(form: &NewTeamDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
+/// The New team or Edit team form on screen.
+fn team_form_view(form: &TeamFormDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
     let theme = *cx.theme();
     let workspaces = {
         let shell = shell.clone();
-        Switch::new("new-team-workspaces", form.workspaces)
+        Switch::new("team-form-workspaces", form.workspaces)
             .label("Turn on Workspaces in this team")
             .on_change(move |on, _, cx| {
-                let _ = shell.update(cx, |shell, cx| shell.set_new_team_workspaces(on, cx));
+                let _ = shell.update(cx, |shell, cx| shell.set_team_workspaces(on, cx));
             })
     };
     // Plain text wraps; the Switch's own helper line does not wrap inside a dialog.
@@ -695,35 +909,45 @@ fn new_team_view(form: &NewTeamDialog, shell: &WeakEntity<Shell>, cx: &App) -> D
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.secondary)
         .child("A Development team can use Workspaces depth. You can change this later.");
-    let body = div()
+    let mut body = div()
         .flex()
         .flex_col()
         .gap(px(SPACE_3))
         .child(form.name.clone())
-        .child(form.purpose.clone())
-        .child(form.lead.clone())
-        .child(form.host_select.clone())
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_1))
-                .child(workspaces)
-                .child(helper),
-        )
-        .child(
+        .child(form.purpose.clone());
+    body = match &form.mode {
+        TeamFormMode::New {
+            lead, host_select, ..
+        } => body.child(lead.clone()).child(host_select.clone()),
+        TeamFormMode::Edit { shape, .. } => body.child(shape.clone()),
+    };
+    body = body.child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1))
+            .child(workspaces)
+            .child(helper),
+    );
+    if matches!(form.mode, TeamFormMode::New { .. }) {
+        body = body.child(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(theme.palette.text.secondary)
                 .child(new_team_access_hint()),
         );
+    }
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
-    let mut dialog = Dialog::new("new-team", "New team")
+    let (id, title, action) = match &form.mode {
+        TeamFormMode::New { .. } => ("new-team", "New team", "Create team"),
+        TeamFormMode::Edit { .. } => ("edit-team", "Edit team", "Save"),
+    };
+    let mut dialog = Dialog::new(id, title)
         .open(true)
         .child(body)
         .field(form.name.read(cx).focus_handle(cx))
-        .action("Create team")
+        .action(action)
         .action_disabled(!can_submit)
         .on_action(move |_, cx| {
             let _ = on_action.update(cx, |shell, cx| shell.submit_team_dialog(cx));
@@ -807,7 +1031,7 @@ fn edit_brief_view(form: &EditBriefDialog, shell: &WeakEntity<Shell>, cx: &App) 
     dialog
 }
 
-/// The confirm on screen: a project's Board goes with it; a memory entry is forgotten.
+/// The confirm on screen: a team or a project goes with what it holds; a memory entry is forgotten.
 pub(in crate::shell) fn team_confirm_view(
     confirm: &TeamConfirm,
     shell: &WeakEntity<Shell>,
@@ -817,9 +1041,15 @@ pub(in crate::shell) fn team_confirm_view(
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
     let error = match confirm {
         TeamConfirm::DeleteProject { error, .. } => error.clone(),
-        TeamConfirm::DeleteMemory { .. } => None,
+        TeamConfirm::RemoveTeam { .. } | TeamConfirm::DeleteMemory { .. } => None,
     };
     let (dialog, body, action) = match confirm {
+        TeamConfirm::RemoveTeam { name, .. } => (
+            Dialog::new("delete-team", format!("Delete team {name}?"))
+                .variant(DialogVariant::Destructive),
+            "Its bots, projects and tasks are removed. This cannot be undone.",
+            "Delete team",
+        ),
         TeamConfirm::DeleteProject { name, .. } => (
             Dialog::new("delete-project", format!("Delete project {name}?"))
                 .variant(DialogVariant::Destructive),
@@ -890,7 +1120,7 @@ mod tests {
         shell.update_in(cx, |shell, window, cx| shell.open_new_team(window, cx));
         shell.update(cx, |shell, cx| shell.submit_team_dialog(cx));
         shell.read_with(cx, |shell, _| match &shell.team_dialog {
-            Some(TeamDialog::NewTeam(form)) => {
+            Some(TeamDialog::Team(form)) => {
                 assert_eq!(form.error.as_deref(), Some("Name is required."));
             }
             other => panic!("the New team form should stay open, found {other:?}"),
@@ -945,14 +1175,19 @@ mod tests {
         let (shell, cx) = shell(cx);
         shell.update_in(cx, |shell, window, cx| shell.open_new_team(window, cx));
         shell.read_with(cx, |shell, cx| match &shell.team_dialog {
-            Some(TeamDialog::NewTeam(form)) => {
-                let host = form
-                    .host_select
+            Some(TeamDialog::Team(TeamFormDialog {
+                mode:
+                    TeamFormMode::New {
+                        host, host_select, ..
+                    },
+                ..
+            })) => {
+                let selected = host_select
                     .read(cx)
                     .selected_label()
                     .map(ToString::to_string);
-                assert_eq!(host.as_deref(), Some("This PC"));
-                assert_eq!(form.host, 0);
+                assert_eq!(selected.as_deref(), Some("This PC"));
+                assert_eq!(*host, 0);
             }
             other => panic!("the New team form should open, found {other:?}"),
         });
@@ -1245,6 +1480,74 @@ mod tests {
                 shell.model().navigation().page,
                 Page::Team(TeamPage::Board(TeamId(1)))
             )
+        });
+    }
+
+    #[gpui::test]
+    fn a_team_saved_from_the_edit_form_sends_only_the_field_that_changed(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team("t1", "Desarrollo")]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        let name = rig
+            .shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::Team(form)) => form.name.clone(),
+                other => panic!("the Edit team form should open, found {other:?}"),
+            });
+        name.update_in(cx, |field, window, cx| {
+            field.set_text("Platform", window, cx)
+        });
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(params.team, "t1");
+        assert_eq!(params.name.as_deref(), Some("Platform"));
+        assert_eq!((params.purpose, params.workspaces), (None, None));
+    }
+
+    #[gpui::test]
+    fn a_team_removal_the_service_refuses_is_kept_on_its_card(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team("t1", "Desarrollo")]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update(cx, |shell, cx| {
+            let confirm = TeamConfirm::RemoveTeam {
+                team: TeamId(1),
+                name: "Desarrollo".into(),
+            };
+            shell.open_team_confirm(confirm, cx);
+        });
+        rig.shell
+            .update(cx, |shell, cx| shell.confirm_team_delete(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::RemoveTeam { reply, .. })) = rig.script.next() else {
+            panic!("the removal goes to the service");
+        };
+        let _ = reply.send(Err(Refusal::Failed {
+            code: "team.task_running".into(),
+            message: "A task is running.".into(),
+        }));
+        cx.run_until_parked();
+        rig.shell.read_with(cx, |shell, _| {
+            let notice = shell.model().teams().removal_notice(TeamId(1));
+            assert_eq!(notice, Some("A task is running."));
         });
     }
 }
