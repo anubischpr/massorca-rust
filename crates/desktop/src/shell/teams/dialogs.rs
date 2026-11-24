@@ -58,18 +58,24 @@ pub(in crate::shell) enum TeamFormMode {
         team: TeamId,
         shape: Entity<SelectView>,
         character: TeamCharacter,
+        /// The values the form opened with; the edit sends only what differs from them.
+        opened: TeamForm,
     },
 }
 
 impl TeamFormDialog {
-    /// The values of an Edit team form and the team they change; `None` for a New team form.
-    fn edit_values(&self, cx: &App) -> Option<(TeamId, TeamForm)> {
+    /// The team an Edit team form changes, the values it opened with and its values now; `None` for a New team form.
+    fn edit_values(&self, cx: &App) -> Option<(TeamId, TeamForm, TeamForm)> {
         match &self.mode {
             TeamFormMode::New { .. } => None,
             TeamFormMode::Edit {
-                team, character, ..
+                team,
+                character,
+                opened,
+                ..
             } => Some((
                 *team,
+                opened.clone(),
                 TeamForm {
                     name: self.name.read(cx).text().to_owned(),
                     purpose: self.purpose.read(cx).text().to_owned(),
@@ -351,7 +357,9 @@ impl Shell {
         let dialog = match (dialog, self.service.clone()) {
             (TeamDialog::Team(dialog), Some(service)) => {
                 return match dialog.edit_values(cx) {
-                    Some((team, form)) => self.send_edit_team(service, dialog, team, &form, cx),
+                    Some((team, opened, form)) => {
+                        self.send_edit_team(service, dialog, team, &opened, &form, cx)
+                    }
                     None => self.send_new_team(service, dialog, cx),
                 };
             }
@@ -424,19 +432,24 @@ impl Shell {
                 })
                 .map(|_| ()),
             TeamFormMode::Edit { .. } => {
-                let Some((team, form)) = dialog.edit_values(cx) else {
+                let Some((team, opened, form)) = dialog.edit_values(cx) else {
                     return Ok(());
                 };
-                let change = self.team_change(team, &form)?;
+                let change = self.team_change(team, &opened, &form)?;
                 self.model.teams_mut().change_team(team, &change)
             }
         }
     }
 
-    /// What an Edit team form changes on `team`, as the model holds the team now.
-    fn team_change(&self, team: TeamId, form: &TeamForm) -> Result<TeamChange, TeamError> {
-        let current = self.model.teams().team(team).ok_or(TeamError::Missing)?;
-        TeamChange::between(current, form)
+    /// What an Edit team form changes on `team`, which must still be there.
+    fn team_change(
+        &self,
+        team: TeamId,
+        opened: &TeamForm,
+        form: &TeamForm,
+    ) -> Result<TeamChange, TeamError> {
+        self.model.teams().team(team).ok_or(TeamError::Missing)?;
+        TeamChange::between(opened, form)
     }
 
     /// Sends the Edit team form: `team.update` carries only the fields it changed, and a form that changed nothing
@@ -446,11 +459,12 @@ impl Shell {
         service: ServiceHandle,
         dialog: TeamFormDialog,
         team: TeamId,
+        opened: &TeamForm,
         form: &TeamForm,
         cx: &mut Context<Self>,
     ) {
         cx.notify();
-        let change = match self.team_change(team, form) {
+        let change = match self.team_change(team, opened, form) {
             Ok(change) => change,
             Err(error) => {
                 let message = error.message().into();
@@ -816,6 +830,7 @@ impl Shell {
                 team,
                 shape,
                 character: current.character,
+                opened: TeamForm::of(&current),
             },
             workspaces: current.workspaces,
             error: None,

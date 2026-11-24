@@ -24,16 +24,29 @@ pub struct TeamChange {
     pub workspaces: Option<bool>,
 }
 
+impl TeamForm {
+    /// The form as it opens on `team`.
+    pub fn of(team: &Team) -> Self {
+        Self {
+            name: team.name.clone(),
+            purpose: team.purpose.clone(),
+            character: team.character,
+            workspaces: team.workspaces,
+        }
+    }
+}
+
 impl TeamChange {
-    /// The fields of `form` that differ from `team`; the name is trimmed and checked, the purpose compared trimmed.
-    pub fn between(team: &Team, form: &TeamForm) -> Result<Self, TeamError> {
+    /// The fields of `form` that differ from the form as it `opened`, so a change another client made meanwhile is
+    /// not sent back; the name is trimmed and checked, the purpose compared trimmed.
+    pub fn between(opened: &TeamForm, form: &TeamForm) -> Result<Self, TeamError> {
         let name = check_name(&form.name)?;
         let purpose = form.purpose.trim();
         Ok(Self {
-            name: (name != team.name).then_some(name),
-            purpose: (purpose != team.purpose).then(|| purpose.to_owned()),
-            character: (form.character != team.character).then_some(form.character),
-            workspaces: (form.workspaces != team.workspaces).then_some(form.workspaces),
+            name: (name != opened.name.trim()).then_some(name),
+            purpose: (purpose != opened.purpose.trim()).then(|| purpose.to_owned()),
+            character: (form.character != opened.character).then_some(form.character),
+            workspaces: (form.workspaces != opened.workspaces).then_some(form.workspaces),
         })
     }
 
@@ -66,14 +79,25 @@ mod tests {
             .expect("the sample team is there")
     }
 
-    /// The form a user sends without editing anything.
     fn form_of(team: &Team) -> TeamForm {
-        TeamForm {
-            name: team.name.clone(),
-            purpose: team.purpose.clone(),
-            character: team.character,
-            workspaces: team.workspaces,
-        }
+        TeamForm::of(team)
+    }
+
+    #[test]
+    fn a_rename_made_elsewhere_while_the_form_is_open_is_not_sent_back() {
+        let team = desarrollo();
+        let opened = form_of(&team);
+        let form = TeamForm {
+            workspaces: !team.workspaces,
+            ..opened.clone()
+        };
+        assert_eq!(
+            TeamChange::between(&opened, &form),
+            Ok(TeamChange {
+                workspaces: Some(!team.workspaces),
+                ..TeamChange::default()
+            })
+        );
     }
 
     #[test]
@@ -84,7 +108,7 @@ mod tests {
             ..form_of(&team)
         };
         assert_eq!(
-            TeamChange::between(&team, &form),
+            TeamChange::between(&form_of(&team), &form),
             Ok(TeamChange {
                 name: Some("Platform".to_owned()),
                 ..TeamChange::default()
@@ -100,7 +124,7 @@ mod tests {
             purpose: format!(" {} ", team.purpose),
             ..form_of(&team)
         };
-        let change = TeamChange::between(&team, &padded).expect("the form is valid");
+        let change = TeamChange::between(&form_of(&team), &padded).expect("the form is valid");
         assert!(change.is_empty(), "{change:?}");
     }
 
@@ -113,7 +137,7 @@ mod tests {
             ..form_of(&team)
         };
         assert_eq!(
-            TeamChange::between(&team, &form),
+            TeamChange::between(&form_of(&team), &form),
             Ok(TeamChange {
                 character: Some(TeamCharacter::Star),
                 workspaces: Some(!team.workspaces),
@@ -130,7 +154,7 @@ mod tests {
             ..form_of(&team)
         };
         assert_eq!(
-            TeamChange::between(&team, &form),
+            TeamChange::between(&form_of(&team), &form),
             Err(TeamError::NameRequired)
         );
     }
