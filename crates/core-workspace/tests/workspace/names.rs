@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use massorca_protocol::codes;
 
-use crate::fixture::{Fixture, create_params, expect_code};
+use crate::fixture::{Fixture, branch_exists, canonical, create_params, expect_code};
 
 #[test]
 fn names_within_the_rules_are_accepted() {
@@ -22,22 +24,28 @@ fn names_within_the_rules_are_accepted() {
 }
 
 #[test]
-fn names_outside_the_rules_are_refused_before_git_runs() {
+fn a_name_that_needs_cleaning_is_stored_cleaned_and_its_branch_and_folder_follow_it() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+
+    let ws = fx.create(&project.name, "Caf\u{e9} L\u{f6}we");
+
+    assert_eq!(ws.name, "Cafe-Lowe");
+    assert_eq!(ws.branch.as_deref(), Some("Cafe-Lowe"));
+    assert_eq!(
+        canonical(Path::new(&ws.path)),
+        canonical(&fx.path("defaults/repo/Cafe-Lowe"))
+    );
+    assert!(branch_exists(&fx.repo(), "Cafe-Lowe"));
+}
+
+#[test]
+fn names_with_nothing_to_keep_are_refused_before_git_runs() {
     let fx = Fixture::new();
     let project = fx.repo_project();
     let too_long = "x".repeat(65);
 
-    for name in [
-        "",
-        "-leading",
-        ".leading",
-        "has space",
-        "slash/inside",
-        "back\\slash",
-        "unicode\u{e9}",
-        "trailing.",
-        too_long.as_str(),
-    ] {
+    for name in ["", "   ", "***", too_long.as_str()] {
         expect_code(
             fx.workspaces
                 .create_workspace(create_params(&project.name, name)),

@@ -5,8 +5,10 @@
 //! Nothing here publishes events: the handler publishes `workspace.removing` between
 //! [`Workspaces::begin_remove`] and [`Workspaces::finish_remove`].
 
+mod branch_prefix;
 mod create;
 mod error;
+mod generated_names;
 mod layout;
 mod names;
 mod paths;
@@ -18,6 +20,7 @@ mod views;
 mod workspaces;
 mod worktree_state;
 
+pub use branch_prefix::BranchPrefix;
 pub use error::DomainError;
 pub use layout::WorkspaceLayout;
 pub use projects::RemovedProject;
