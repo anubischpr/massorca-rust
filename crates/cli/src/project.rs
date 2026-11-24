@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
-    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
+    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams, ProjectUpdateParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceListParams;
 
@@ -11,6 +11,7 @@ use crate::connect::connect;
 use crate::cwd_path::PathRules;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::project_icon;
 use crate::target::Target;
 use crate::workspace_text;
 
@@ -30,7 +31,11 @@ pub async fn execute(
             if params.kind.is_none() && project.kind == ProjectKind::Folder {
                 output.progress(&workspace_text::plain_folder_warning(&project.path));
             }
-            output.success(&project, &[workspace_text::project_line(&project, "added")]);
+            let mut lines = vec![workspace_text::project_line(&project, "added")];
+            if project.icon.is_some() {
+                lines.push(workspace_text::project_icon_line(&project));
+            }
+            output.success(&project, &lines);
         }
         ProjectCommand::List => {
             let list = client.project_list().await?;
@@ -89,6 +94,22 @@ pub async fn execute(
                 .await?;
             output.success(&updated, &[workspace_text::project_base_line(&updated)]);
         }
+        ProjectCommand::Update {
+            project,
+            icon,
+            clear_icon,
+        } => {
+            let project = paths.selector(&project)?;
+            let icon = match (icon, clear_icon) {
+                (Some(spec), _) => Some(Some(project_icon::parse(&spec, &paths)?)),
+                (None, true) => Some(None),
+                (None, false) => None,
+            };
+            let updated: Project = client
+                .call(projects::UPDATE, &ProjectUpdateParams { project, icon })
+                .await?;
+            output.success(&updated, &[workspace_text::project_icon_line(&updated)]);
+        }
     }
     Ok(())
 }
@@ -107,8 +128,13 @@ fn add_params(args: ProjectAddArgs, paths: PathRules) -> Result<ProjectAddParams
         .as_deref()
         .map(|path| paths.path(path))
         .transpose()?;
+    let icon = args
+        .icon
+        .as_deref()
+        .map(|spec| project_icon::parse(spec, &paths))
+        .transpose()?;
     Ok(ProjectAddParams {
-        icon: None,
+        icon,
         path: paths.path(&args.path)?,
         name: args.name,
         kind,
