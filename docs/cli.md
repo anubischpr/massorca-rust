@@ -46,9 +46,10 @@ machine.
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
 | `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
-| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
-| `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
+| `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
+| `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
@@ -59,6 +60,7 @@ machine.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
 | `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
@@ -395,5 +397,5 @@ In PowerShell, set the variable first: `$env:MASSORCA_DESKTOP_BACKGROUND = "1"`,
 ## Not yet available
 
 Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
-generated names, setup scripts, terminal and agent guards on removal, squash-merge detection) are
+generated names, terminal and agent guards on removal, squash-merge detection) are
 not available yet.

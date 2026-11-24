@@ -158,6 +158,7 @@ pub async fn add_project_and_workspace(
             refresh_base: false,
             path: None,
             request_id: None,
+            no_setup: false,
         })
         .await?;
     Ok(workspace)

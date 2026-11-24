@@ -58,6 +58,7 @@ impl GitService {
                     refresh_base: false,
                     path: None,
                     request_id: None,
+                    no_setup: false,
                 },
             )
             .await
@@ -103,6 +104,7 @@ impl GitService {
                     refresh_base: false,
                     path: None,
                     request_id: None,
+                    no_setup: false,
                 },
             )
             .await

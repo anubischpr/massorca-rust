@@ -15,6 +15,6 @@ pub type EnvValue = zeroize::Zeroizing<String>;
 
 pub use attach::{AttachItem, AttachMode, Attachment, QueryAnswers};
 pub use manager::{
-    CreateSpec, ExitReason, ExitRecord, ManagerConfig, ShellChoice, TerminalError, TerminalInfo,
-    TerminalManager, TerminalMembers, TerminalSample, TerminalState,
+    CreateSpec, ExitReason, ExitRecord, ExitWait, ManagerConfig, ShellChoice, TerminalError,
+    TerminalInfo, TerminalManager, TerminalMembers, TerminalSample, TerminalState,
 };

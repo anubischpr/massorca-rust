@@ -221,6 +221,16 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("workspace"),
         ),
         command(
+            "workspace.current",
+            "Show the workspace that contains a directory",
+            "workspace.current",
+            json!({
+                "type": "object",
+                "required": ["path"],
+                "properties": { "path": { "type": "string" } }
+            }),
+        ),
+        command(
             "workspace.rm",
             "Remove a workspace",
             "workspace.remove",
@@ -328,6 +338,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "Stop a terminal and forget it",
             "terminal.close",
             selector("terminal"),
+        ),
+        command(
+            "terminal.wait",
+            "Wait until a terminal's process exits, up to a timeout",
+            "terminal.wait",
+            json!({
+                "type": "object",
+                "required": ["terminal", "condition"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "condition": { "type": "string", "enum": ["exit"] },
+                    "timeout_ms": { "type": "integer" }
+                }
+            }),
         ),
         command(
             "agent.kinds",
