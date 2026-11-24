@@ -12,6 +12,7 @@ use tokio::runtime::Runtime;
 use crate::error::FfiError;
 use crate::offer;
 use crate::store::{HostStore, SealedHosts};
+use crate::watch::{Decode, Feed, LinkState, Reconnect, Watched};
 
 /// A paired host as the app lists it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -162,6 +163,8 @@ impl MassOrca {
             name: host_name,
             client,
             runtime: self.handle(),
+            hosts: self.hosts.clone(),
+            peer: self.peer.clone(),
         }))
     }
 }
@@ -200,6 +203,8 @@ pub struct Host {
     pub(crate) name: String,
     pub(crate) client: Client,
     pub(crate) runtime: tokio::runtime::Handle,
+    hosts: SealedHosts,
+    peer: PeerInfo,
 }
 
 impl fmt::Debug for Host {
@@ -243,5 +248,22 @@ impl Host {
             server_version: welcome.server.version.clone(),
             capabilities: welcome.capabilities.clone(),
         }
+    }
+}
+
+impl Host {
+    /// Follows `watched` on this host. The stream reconnects by itself and reports each loss (decision 0040).
+    pub(crate) fn follow<E: From<LinkState> + Send + 'static>(
+        &self,
+        watched: Watched,
+        decode: Decode<E>,
+    ) -> Feed<E> {
+        let reconnect = Reconnect::new(
+            self.hosts.clone(),
+            self.name.clone(),
+            self.peer.clone(),
+            watched,
+        );
+        Feed::start(&self.runtime, reconnect, decode)
     }
 }

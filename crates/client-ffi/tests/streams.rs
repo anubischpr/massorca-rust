@@ -1,5 +1,5 @@
-//! The binding's reads driven from Rust as the app drives them (decision 0080, task A4): the workspaces and the git
-//! status of a host.
+//! The binding's reads and streams driven from Rust as the app drives them (decision 0080, task A4): the workspaces, the
+//! git status, and the git watch.
 
 mod common;
 
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{app, offer, owner, start, stop, temp_home};
-use massorca_client_ffi::{Host, MassOrca};
+use massorca_client_ffi::{GitEvent, Host, MassOrca};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
@@ -199,5 +199,45 @@ fn git_status_reads_the_branch_and_the_changed_files_and_refuses_a_folder() {
     let folder = folder_workspace(&test, &home, "plain");
     let refusal = within(&test, host.git_status(folder.id)).expect_err("a folder has no git");
     assert_eq!(refusal.code(), codes::GIT_NOT_A_REPOSITORY, "{refusal:?}");
+    test.block_on(stop(running));
+}
+
+#[test]
+fn watch_git_delivers_its_first_item_and_ends_when_closed() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().unwrap();
+    let running = test.block_on(start(&home, 0));
+    let workspace = git_workspace(&test, &home);
+    let (_massorca, host) = connected(&test, &home);
+
+    let watch = host.watch_git(workspace.id.clone());
+    let first = within(&test, watch.next()).expect("the first item");
+    let item = match first {
+        Some(GitEvent::Item { item }) => item,
+        other => panic!("expected the first item, got {other:?}"),
+    };
+    assert!(item.ready, "{item:?}");
+    assert!(item.kinds.is_empty(), "{item:?}");
+
+    watch.close();
+    assert_eq!(within(&test, watch.next()).expect("closed"), None);
+    test.block_on(stop(running));
+}
+
+#[test]
+fn a_refused_watch_reports_the_refusal_once_and_then_ends() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().unwrap();
+    let running = test.block_on(start(&home, 0));
+    let folder = folder_workspace(&test, &home, "plain");
+    let (_massorca, host) = connected(&test, &home);
+
+    let watch = host.watch_git(folder.id);
+    let refusal = within(&test, watch.next()).expect_err("a folder has no git state");
+    assert_eq!(refusal.code(), codes::GIT_NOT_A_REPOSITORY, "{refusal:?}");
+    assert_eq!(
+        within(&test, watch.next()).expect("the watch is over"),
+        None
+    );
     test.block_on(stop(running));
 }
