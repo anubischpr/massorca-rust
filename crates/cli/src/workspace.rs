@@ -1,14 +1,16 @@
-//! `massorca workspace create|list|show|rm` (alias `ws`): creating and removing workspaces through the service.
+//! `massorca workspace create|list|show|current|rm` (alias `ws`): creating and removing workspaces through the service.
+
+use std::path::Path;
 
 use massorca_protocol::methods::workspaces::{
-    BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams,
+    BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceListParams,
+    WorkspaceRef, WorkspaceRemoveParams,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
 use crate::connect::connect;
 use crate::cwd_path::PathRules;
-use crate::error::CliError;
+use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::target::Target;
 use crate::workspace_text;
@@ -61,6 +63,13 @@ pub async fn execute(
             let shown: Workspace = client.workspace_show(&WorkspaceRef { workspace }).await?;
             output.success(&shown, &workspace_text::workspace_details(&shown));
         }
+        WorkspaceCommand::Current(args) => {
+            let path = current_path(args.path.as_deref(), paths)?;
+            let found: Workspace = client
+                .workspace_current(&WorkspaceCurrentParams { path })
+                .await?;
+            output.success(&found, &workspace_text::workspace_details(&found));
+        }
         WorkspaceCommand::Rm {
             workspace,
             force,
@@ -101,4 +110,27 @@ fn create_params(
         path,
         request_id: args.request_id,
     })
+}
+
+/// The directory `workspace current` looks up. A remote host cannot see this computer's current directory, so
+/// it needs `--path`, sent as typed.
+fn current_path(path: Option<&Path>, paths: PathRules) -> Result<String, CliError> {
+    match path {
+        Some(path) => paths.path(path),
+        None if paths.is_remote() => Err(CliError::new(
+            "usage.invalid_path",
+            "workspace current with --host needs --path; the current directory is on this computer",
+            exit::USAGE,
+        )),
+        None => {
+            let current = std::env::current_dir().map_err(|error| {
+                CliError::new(
+                    "usage.invalid_path",
+                    format!("cannot read the current directory: {error}"),
+                    exit::USAGE,
+                )
+            })?;
+            paths.path(&current)
+        }
+    }
 }

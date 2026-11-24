@@ -274,6 +274,8 @@ pub enum WorkspaceCommand {
         /// Workspace id, name or path.
         workspace: String,
     },
+    /// Shows the workspace that contains the current directory, or the one that contains --path.
+    Current(WorkspaceCurrentArgs),
     /// Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
     Rm {
         /// Workspace id, name or path.
@@ -322,6 +324,13 @@ pub struct WorkspaceListArgs {
     /// Only the workspaces of this project (id, name or path).
     #[arg(long, value_name = "PROJECT")]
     pub project: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceCurrentArgs {
+    /// Directory to look up. Defaults to the current directory; required with --host.
+    #[arg(long, value_name = "DIR")]
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
