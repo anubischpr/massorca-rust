@@ -119,6 +119,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     ),
     (codes::AGENT_MODE_UNKNOWN, "agent.mode_unknown"),
     (codes::AGENT_MODE_UNAVAILABLE, "agent.mode_unavailable"),
+    (codes::AGENT_OPTION_UNSUPPORTED, "agent.option_unsupported"),
     (codes::AGENT_QUEUE_UNAVAILABLE, "agent.queue_unavailable"),
     (codes::AGENT_QUEUE_FULL, "agent.queue_full"),
     (codes::AGENT_QUEUE_NOT_FOUND, "agent.queue_not_found"),
@@ -175,5 +176,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_SEEN, "agent-seen/1");
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::AGENT_RELEASE, "agent-release/1");
+    assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
+    assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

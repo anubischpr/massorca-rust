@@ -157,7 +157,7 @@ fn start_with_caller_env(sandbox: &Sandbox, env: BTreeMap<String, String>) -> St
         .expect("the client connects");
         let started = client
             .agent_start(&AgentStartParams {
-                workspace: "main".to_owned(),
+                workspace: Some("main".to_owned()),
                 kind: "fake".to_owned(),
                 prompt: None,
                 args: Vec::new(),
@@ -168,6 +168,8 @@ fn start_with_caller_env(sandbox: &Sandbox, env: BTreeMap<String, String>) -> St
                 rows: None,
                 request_id: None,
                 permission_mode: None,
+                model: None,
+                effort: None,
             })
             .await
             .expect("the agent starts");

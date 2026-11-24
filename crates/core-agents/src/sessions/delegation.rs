@@ -186,7 +186,7 @@ impl Agents {
         };
         let started = self.start_session(
             AgentStartParams {
-                workspace,
+                workspace: Some(workspace),
                 kind,
                 title: child_title(params.title.as_deref(), &params.prompt),
                 prompt: Some(params.prompt),
@@ -197,6 +197,8 @@ impl Agents {
                 rows: None,
                 request_id: params.request_id,
                 permission_mode: params.permission_mode,
+                model: None,
+                effort: None,
             },
             Some(&parent),
             grant,
@@ -992,7 +994,7 @@ then report"
         let start = agents
             .start(
                 AgentStartParams {
-                    workspace: workspace_id.clone(),
+                    workspace: Some(workspace_id.clone()),
                     kind: "any".to_owned(),
                     prompt: None,
                     args: Vec::new(),
@@ -1003,6 +1005,8 @@ then report"
                     rows: None,
                     request_id: None,
                     permission_mode: None,
+                    model: None,
+                    effort: None,
                 },
                 SecretGrant::Provide,
             )
@@ -1080,7 +1084,7 @@ then report"
         let failed = agents
             .start(
                 AgentStartParams {
-                    workspace: workspace_id.clone(),
+                    workspace: Some(workspace_id.clone()),
                     kind: "broken".to_owned(),
                     prompt: None,
                     args: Vec::new(),
@@ -1091,6 +1095,8 @@ then report"
                     rows: None,
                     request_id: None,
                     permission_mode: None,
+                    model: None,
+                    effort: None,
                 },
                 SecretGrant::Provide,
             )

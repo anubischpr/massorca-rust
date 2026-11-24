@@ -379,7 +379,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
 async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
     handle
         .agent_start(AgentStartParams {
-            workspace: workspace.to_owned(),
+            workspace: Some(workspace.to_owned()),
             kind: "fake".to_owned(),
             prompt: None,
             args: Vec::new(),
@@ -390,6 +390,8 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             rows: Some(30),
             request_id: None,
             permission_mode: None,
+            model: None,
+            effort: None,
         })
         .await
         .expect("the session starts")

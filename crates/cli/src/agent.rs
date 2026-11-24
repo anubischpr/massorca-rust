@@ -232,9 +232,10 @@ pub struct AgentHookArgs {
 pub struct AgentStartArgs {
     /// Agent kind, for example claude.
     pub kind: String,
-    /// Workspace id, name or path.
+    /// Workspace id, name or path. Without it the session has no project: it runs in the conversations folder, in a folder
+    /// of its own.
     #[arg(long, value_name = "WORKSPACE")]
-    pub workspace: String,
+    pub workspace: Option<String>,
     /// The first prompt, at most 8 KiB.
     #[arg(long, value_name = "TEXT")]
     pub prompt: Option<String>,
@@ -247,6 +248,12 @@ pub struct AgentStartArgs {
     /// The permission mode, one the kind lists in `agent kinds`; the kind's default otherwise. A bypass mode must be named.
     #[arg(long, value_name = "MODE")]
     pub mode: Option<String>,
+    /// The model, passed to the kind's model flag; a kind that declares no model flag refuses it.
+    #[arg(long, value_name = "MODEL")]
+    pub model: Option<String>,
+    /// The reasoning effort, passed to the kind's effort flag; a kind that declares no effort flag refuses it.
+    #[arg(long, value_name = "EFFORT")]
+    pub effort: Option<String>,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
@@ -356,6 +363,8 @@ pub async fn execute(
                     rows: None,
                     request_id: None,
                     permission_mode: args.mode,
+                    model: args.model,
+                    effort: args.effort,
                 })
                 .await?;
             output.success(&started, &agent_text::session_details(&started));
