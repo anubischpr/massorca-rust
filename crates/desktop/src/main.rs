@@ -14,7 +14,7 @@ use gpui::{
 use massorca_desktop::data::SampleDataSource;
 use massorca_desktop::launch_options::WindowLaunch;
 use massorca_desktop::model::teams::SampleTeamsSource;
-use massorca_desktop::service::LaunchOptions;
+use massorca_desktop::service::{LaunchOptions, close_link_on_quit};
 use massorca_desktop::shell::{self, Shell};
 use massorca_desktop::single_instance::{self, LaunchPlan};
 use massorca_desktop::store::ClientDataSource;
@@ -83,6 +83,9 @@ fn main() {
                     }
                 }
             };
+            if let Some(source) = &client {
+                close_link_on_quit(cx, source.closer());
+            }
             let window_size = size(px(1440.), px(900.));
             let bounds = Bounds::centered(None, window_size, cx);
             let open_regions = saved.open_regions.clone();
