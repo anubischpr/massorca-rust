@@ -6,7 +6,6 @@ mod harness;
 use std::path::{Path, PathBuf};
 
 use harness::{Sandbox, eventually, git_repo, single_document, with_json};
-use massorca_core_store::Store;
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -163,28 +162,20 @@ fn a_task_starts_its_bot_in_the_team_folder_with_the_task_as_its_prompt() {
     let again = error_of(&sandbox, &["task", "start", task.as_str()]);
     assert_eq!(again["code"], "task.started");
 
-    // The bot works on one task at a time: a second start is refused and the card stays Open with the reason.
+    // A bot working on one task starts another in its own concurrent session, in the same team folder.
     let second = create_task(&sandbox, "Write the docs", &["--bot", "mara"]);
-    let busy = error_of(&sandbox, &["task", "start", second.as_str()]);
-    assert_eq!(busy["code"], "bot.busy");
-    let board = sandbox.json_ok("default", &["team", "board", "alpha"]);
-    let card = board["columns"]
-        .as_array()
-        .expect("columns")
-        .iter()
-        .flat_map(|column| column["cards"].as_array().cloned().unwrap_or_default())
-        .find(|card| card["id"] == second.as_str())
-        .expect("the refused task is on the Board");
-    assert_eq!(card["error_code"], "bot.busy");
-    let waiting = sandbox.json_ok("default", &["task", "show", second.as_str()]);
-    assert_eq!(waiting["column"], "open");
-    assert_eq!(waiting["session_id"], Value::Null);
-    assert!(
-        waiting["error"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("mara")),
-        "{waiting}"
-    );
+    let concurrent = sandbox.json_ok("default", &["task", "start", second.as_str()]);
+    let concurrent_session = concurrent["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+    assert_ne!(concurrent_session, session);
+    assert_eq!(concurrent["column"], "running", "{concurrent}");
+    let concurrent_record =
+        sandbox.json_ok("default", &["agent", "status", concurrent_session.as_str()]);
+    assert_eq!(concurrent_record["workspace_id"], working["workspace_id"]);
+    let first = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(first["session_id"], session.as_str());
 
     // Another bot of the team runs at the same time in the same team folder: a team folder has several writers.
     add_bot(&sandbox, "ada", "fake");
@@ -197,7 +188,7 @@ fn a_task_starts_its_bot_in_the_team_folder_with_the_task_as_its_prompt() {
     let other_record = sandbox.json_ok("default", &["agent", "status", other_session.as_str()]);
     assert_eq!(other_record["workspace_id"], working["workspace_id"]);
 
-    for id in [&session, &other_session] {
+    for id in [&session, &concurrent_session, &other_session] {
         sandbox.json_ok("default", &["agent", "stop", id.as_str(), "--force"]);
     }
 }
@@ -349,58 +340,6 @@ fn a_bot_teams_path_taken_by_a_git_project_refuses_the_start() {
     assert_eq!(shown["column"], "open");
     assert_eq!(shown["session_id"], Value::Null);
     assert_eq!(shown["error_code"], "team.folder_taken");
-}
-
-#[test]
-fn a_run_a_failed_start_could_not_stop_keeps_its_bot_busy_until_it_ends() {
-    let (sandbox, _root) = team_sandbox();
-    add_bot(&sandbox, "mara", "fake");
-    let first = create_task(
-        &sandbox,
-        "Parse the headers",
-        &["--bot", "mara", "--body", "Start with hold, then stop."],
-    );
-    let started = sandbox.json_ok("default", &["task", "start", first.as_str()]);
-    let session = started["session_id"]
-        .as_str()
-        .expect("linked session")
-        .to_owned();
-
-    // Leave the run as a start that failed after its spawn and could not stop it: unlinked, attempt still pending.
-    let store =
-        Store::open(sandbox.profile_dir("default").join("store.sqlite3")).expect("the store opens");
-    let request = store
-        .get_agent_session(&session)
-        .expect("read the session")
-        .and_then(|row| row.request_id)
-        .expect("the run's request id");
-    let attempt = request
-        .rsplit(':')
-        .next()
-        .expect("the attempt id")
-        .to_owned();
-    assert!(
-        store
-            .reopen_task(&first, Some(session.as_str()), 2)
-            .expect("unlink")
-    );
-    store
-        .begin_task_start_attempt(&first, &attempt)
-        .expect("keep the attempt");
-
-    let second = create_task(&sandbox, "Write the docs", &["--bot", "mara"]);
-    let busy = error_of(&sandbox, &["task", "start", second.as_str()]);
-    assert_eq!(busy["code"], "bot.busy", "{busy}");
-
-    // Once the run is stopped, the bot is free again.
-    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
-    eventually("the stopped run exits", || {
-        let record = sandbox.json_ok("default", &["agent", "status", session.as_str()]);
-        (record["execution"]["state"] == "exited").then_some(())
-    });
-    let freed = sandbox.json_ok("default", &["task", "start", second.as_str()]);
-    let freed_session = freed["session_id"].as_str().expect("linked session");
-    sandbox.json_ok("default", &["agent", "stop", freed_session, "--force"]);
 }
 
 /// Answers the question the fake agent asks, then waits until its turn is done. Every task prompt asks: its "Task:" line

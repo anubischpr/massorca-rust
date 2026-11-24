@@ -28,7 +28,7 @@ use crate::registry::RegistrationHandle;
 
 use super::task::{removed, view_of};
 use super::task_outcome::latch_at_link;
-use super::task_state::{self, Session};
+use super::task_state;
 use super::{blocking, selectors, store_error};
 
 /// The folder project that holds every team's folder, under the workspaces default root.
@@ -151,9 +151,7 @@ pub(super) fn start_task(
             .map(drop)
             .map_err(ErrorBody::from)
     };
-    let place = match prepare(
-        store, agents, workspaces, &team, &bot, &row, &attempt, changes,
-    ) {
+    let place = match prepare(store, workspaces, &team, &row, &attempt, changes) {
         Ok(place) => place,
         Err(error) => {
             // Nothing was spawned, so the attempt is settled.
@@ -233,20 +231,16 @@ impl Place {
     }
 }
 
-/// A free bot and the workspace the task runs in: its own worktree of a linked git project, a linked folder, or the
-/// team's folder when the task's project links no source (or its source was removed).
-#[allow(clippy::too_many_arguments)]
+/// The workspace the task runs in: its own worktree of a linked git project, a linked folder, or the team's folder when
+/// the task's project links no source (or its source was removed).
 fn prepare(
     store: &Store,
-    agents: &Agents,
     workspaces: &Workspaces,
     team: &TeamRow,
-    bot: &BotRow,
     task: &TaskRow,
     attempt: &str,
     changes: &mut Changes,
 ) -> Result<Place, ErrorBody> {
-    refuse_busy_bot(store, agents, bot, task)?;
     if let Some(place) = linked_place(store, workspaces, task, attempt, changes)? {
         return Ok(place);
     }
@@ -466,7 +460,7 @@ fn unlinked(store: &Store, id: &str) -> ErrorBody {
 }
 
 /// Stops a session its task does not name and records `error`. The attempt is settled once the stop succeeded; a failed
-/// stop keeps it, so a retry names the same run and the bot stays busy while that run lives.
+/// stop keeps it, so a retry names the same run instead of starting a second one.
 fn abandon(
     store: &Store,
     stop: impl FnOnce(&str) -> Result<(), ErrorBody>,
@@ -518,48 +512,6 @@ fn record_failure(
         changes.task = Some(row.id.clone());
     }
     Ok(error)
-}
-
-/// A bot works on one task at a time: another of its tasks whose session still runs (or cannot be verified) makes it busy.
-fn refuse_busy_bot(
-    store: &Store,
-    agents: &Agents,
-    bot: &BotRow,
-    task: &TaskRow,
-) -> Result<(), ErrorBody> {
-    for other in store.list_tasks_of_bot(&bot.id).map_err(store_error)? {
-        if other.id == task.id {
-            continue;
-        }
-        let session = match other.session_id {
-            Some(_) => task_state::load(agents, &other)?,
-            None => pending_run(store, agents, &other)?,
-        };
-        if task_state::is_running(&session) {
-            return Err(ErrorBody::new(
-                codes::BOT_BUSY,
-                format!(
-                    "bot {} is working on task {}; start this one when it is done",
-                    bot.name, other.title
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// The run of a start attempt that was not settled: a session a failed start could not stop, until its stop is confirmed.
-fn pending_run(store: &Store, agents: &Agents, task: &TaskRow) -> Result<Session, ErrorBody> {
-    let Some(attempt) = store.task_start_attempt(&task.id).map_err(store_error)? else {
-        return Ok(Session::Unstarted);
-    };
-    match store
-        .find_agent_session_by_request_id(&request_id(&task.id, &attempt))
-        .map_err(store_error)?
-    {
-        Some(session) => task_state::load_id(agents, &session.id),
-        None => Ok(Session::Unstarted),
-    }
 }
 
 /// The team's folder workspace: `<workspaces root>/bot-teams/<team id>`, in the "Bot teams" folder project, shared by
@@ -998,7 +950,7 @@ mod tests {
         .expect("recorded");
 
         assert!(error.message.contains("could not be stopped"));
-        // The attempt stays, so the busy check finds the run and a retry names the same request.
+        // The attempt stays, so a retry names the same request and finds that run.
         assert_eq!(
             store.task_start_attempt(&task.id).expect("read").as_deref(),
             Some(attempt.as_str())

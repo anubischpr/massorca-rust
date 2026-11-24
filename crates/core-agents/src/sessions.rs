@@ -489,6 +489,9 @@ impl Agents {
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
+        // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
+        // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
+        mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -518,6 +521,7 @@ impl Agents {
                 live.remove(&session_id);
                 remove_dir(&run_dir);
             })?;
+        crash_point("agent-start-spawned");
 
         let row = AgentSessionRow {
             id: session_id.clone(),
@@ -546,6 +550,7 @@ impl Agents {
             remove_dir(&run_dir);
             return Err(error.into());
         }
+        clear_starting(&run_dir);
         let mut session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         session.secrets_withheld = withheld(grant);
@@ -655,6 +660,8 @@ impl Agents {
             caller_env: &no_env,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // As in `start`: recorded before the program starts, settled once the row names the new terminal.
+        mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -683,6 +690,7 @@ impl Agents {
                 live.remove(&row.id);
                 remove_dir(&run_dir);
             })?;
+        crash_point("agent-resume-spawned");
         let restarted = self.store().restart_agent_session(
             &row.id,
             &terminal_id,
@@ -702,6 +710,7 @@ impl Agents {
                 format!("no agent session {}", row.id),
             ));
         }
+        clear_starting(&run_dir);
         let fresh = self.reload(&row.id)?;
         let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
@@ -1209,6 +1218,7 @@ impl Agents {
     /// (0051). Called once at service start, before any run exists. Returns how many sessions changed.
     /// A run that was `working` or `waiting` then is `done` with outcome `interrupted` (0052).
     pub fn mark_stale_on_startup(&self) -> Result<u64, AgentError> {
+        self.settle_interrupted_starts()?;
         let at = now_ms();
         for row in self.store().list_agent_sessions(None)? {
             if row.exit.is_none()
@@ -1225,6 +1235,36 @@ impl Agents {
         // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
         self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
+    }
+
+    /// Settles the starts the previous service recorded and never settled (docs/architecture/agents.md, "Crash-safe
+    /// start"). A marked run directory with no session row is a start that died before its row existed: its program
+    /// ended with that service (0051), so the directory, which may hold the run's hook token and launch files, is
+    /// deleted and a retry of the same request starts afresh. A marked directory whose row exists is a start or resume
+    /// that died after it was recorded; the row is marked stale like any other, so only the mark is removed.
+    fn settle_interrupted_starts(&self) -> Result<(), AgentError> {
+        let runs = paths::agents_dir(self.profile_dir()).join("runs");
+        let entries = match std::fs::read_dir(&runs) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.join(STARTING_MARK).is_file() {
+                continue;
+            }
+            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if self.store().get_agent_session(&id)?.is_some() {
+                clear_starting(&dir);
+            } else {
+                tracing::warn!(session = %id, "a start the previous service did not finish is cleaned up");
+                remove_dir(&dir);
+            }
+        }
+        Ok(())
     }
 
     /// The declaration and program a start uses: declared, enabled (decision 0059), valid and installed. A delegated
@@ -1562,6 +1602,31 @@ fn write_files(files: &[(PathBuf, String)]) -> std::io::Result<()> {
 
 fn remove_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The file in a run's directory that records a start or resume in progress: written before its program starts,
+/// removed once the session's row records the run (docs/architecture/agents.md, "Crash-safe start").
+const STARTING_MARK: &str = "starting";
+
+fn mark_starting(run_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(run_dir)?;
+    std::fs::write(run_dir.join(STARTING_MARK), b"")
+}
+
+fn clear_starting(run_dir: &Path) {
+    let _ = std::fs::remove_file(run_dir.join(STARTING_MARK));
+}
+
+/// Test-only: names a point where the service exits at once, as a crash there would. Inert unless set, which only the
+/// CLI tests do.
+const CRASH_AT_ENV: &str = "MASSORCA_TEST_CRASH_AT";
+
+/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would.
+fn crash_point(point: &str) {
+    if std::env::var_os(CRASH_AT_ENV).is_some_and(|value| value == point) {
+        tracing::error!(point, "exiting at a test crash point");
+        std::process::exit(70);
+    }
 }
 
 fn running(state: TerminalState) -> Execution {
