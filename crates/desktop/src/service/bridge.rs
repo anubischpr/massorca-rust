@@ -25,8 +25,8 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
     TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -813,8 +813,8 @@ impl Link {
     async fn on_event(&self, client: &Client, event: ChangeEvent) -> Outcome {
         let ChangeEvent { topic, id } = event;
         let refetched = match topic.as_str() {
-            TOPIC_SECRET_CHANGED => {
-                // The event names a scope and a name; the store takes the whole list again, names only.
+            TOPIC_SECRET_CHANGED | TOPIC_SECRET_REQUESTED | TOPIC_SECRET_REQUEST_CHANGED => {
+                // The event names a secret or a request; the store takes the vault again, names and requests only.
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }

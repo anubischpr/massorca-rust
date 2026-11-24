@@ -15,7 +15,7 @@ use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -134,6 +134,8 @@ pub enum SecretsUpdate {
     Status(Result<SecretStatus, Refusal>),
     /// Every name in every scope, owned and linked, or why they could not be read.
     List(Result<Vec<SecretEntry>, Refusal>),
+    /// The requests still pending, or why they could not be read. Names, reasons and times only.
+    Requests(Result<Vec<SecretRequest>, Refusal>),
 }
 
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
@@ -181,6 +183,7 @@ pub struct WorkspaceGit {
 pub struct SecretsState {
     pub status: Option<Result<SecretStatus, Refusal>>,
     pub list: Option<Result<Vec<SecretEntry>, Refusal>>,
+    pub requests: Option<Result<Vec<SecretRequest>, Refusal>>,
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
@@ -376,6 +379,9 @@ impl StoreState {
             }
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
+            }
+            StoreUpdate::Secrets(SecretsUpdate::Requests(result)) => {
+                self.secrets.requests = Some(result);
             }
             StoreUpdate::Accounts { kind, result } => {
                 self.accounts.insert(kind, result);
