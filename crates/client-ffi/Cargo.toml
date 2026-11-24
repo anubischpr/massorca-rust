@@ -23,6 +23,7 @@ uniffi.workspace = true
 
 [dev-dependencies]
 massorca-client.workspace = true
+massorca-process.workspace = true
 massorca-profile.workspace = true
 massorca-server.workspace = true
 tempfile.workspace = true

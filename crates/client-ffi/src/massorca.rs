@@ -183,7 +183,7 @@ impl MassOrca {
 }
 
 /// Runs `work` on the binding's runtime and waits for it from whatever executor the app polls with.
-async fn run_on<T: Send + 'static>(
+pub(crate) async fn run_on<T: Send + 'static>(
     runtime: &tokio::runtime::Handle,
     work: impl Future<Output = Result<T, FfiError>> + Send + 'static,
 ) -> Result<T, FfiError> {
@@ -197,9 +197,9 @@ async fn run_on<T: Send + 'static>(
 /// One connection to a paired host. Dropping it closes the connection.
 #[derive(uniffi::Object)]
 pub struct Host {
-    name: String,
-    client: Client,
-    runtime: tokio::runtime::Handle,
+    pub(crate) name: String,
+    pub(crate) client: Client,
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl fmt::Debug for Host {

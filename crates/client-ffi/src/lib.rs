@@ -4,11 +4,16 @@
 uniffi::setup_scaffolding!();
 
 mod error;
+mod git_status;
 mod massorca;
 mod offer;
 mod store;
+mod wire;
+mod workspaces;
 
 pub use error::FfiError;
+pub use git_status::{GitFileStatus, GitStatusSummary};
 pub use massorca::{Host, HostSummary, MassOrca, ProtocolInfo, WhoAmI};
 pub use offer::{OfferSummary, parse_offer};
 pub use store::{HostStore, SealedHosts, StorageError};
+pub use workspaces::WorkspaceSummary;

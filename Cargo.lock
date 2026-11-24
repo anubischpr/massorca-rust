@@ -3641,6 +3641,7 @@ dependencies = [
  "base64 0.22.1",
  "massorca-client",
  "massorca-net",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
