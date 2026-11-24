@@ -10,7 +10,10 @@ use massorca_server::core_commands;
 /// Commands that run in the CLI itself: they read or write the client's own files, run SSH or Tailscale, start the
 /// desktop app, or print text. They make no service request, and the server's descriptor test needs every descriptor to
 /// name a core method.
-const CLIENT_ONLY: [&str; 10] = [
+const CLIENT_ONLY: [&str; 13] = [
+    "cli.install",
+    "cli.status",
+    "cli.uninstall",
     "host.add-ssh",
     "host.discover",
     "host.list",

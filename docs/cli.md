@@ -38,6 +38,9 @@ machine.
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
 | `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
+| `cli install` | Puts `massorca` on your PATH for this user only: a link in `~/.local/bin` on Unix, or a command file in a folder added to your Windows user PATH. Running it again changes nothing. Refused with `--host`. See [The command on PATH](#the-command-on-path). |
+| `cli uninstall` | Removes the link or command file that `cli install` made, and its PATH entry once its folder is empty. Leaves any file massorca did not make. Refused with `--host`. |
+| `cli status` | Shows whether `massorca` is on your PATH and which binary it runs. Changes nothing. Refused with `--host`. |
 | `config get <KEY> [--owner OWNER]` | Shows one setting and whether it still has its default value. |
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
@@ -348,6 +351,36 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 | 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
 | 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable` (`host ports`: `ports.unverifiable`), with the original code in `data.cause`; identity mismatches and refusals keep their code. |
+
+## The command on PATH
+
+`massorca cli install` puts `massorca` on your PATH for this user only (decision 0088). It needs no administrator
+rights, edits no system setting and never edits a shell profile.
+
+- Unix (macOS, Linux): a link at `~/.local/bin/massorca` to the binary that ran the install. If `~/.local/bin` is not
+  on your `PATH`, `cli status` says so; add it to your shell profile yourself.
+- Windows: a command file `massorca.cmd` in `%LOCALAPPDATA%\Programs\MassOrca\bin`, which runs the binary with every
+  argument. That folder is appended to your user `Path` (`HKCU\Environment`), and running programs are told about the
+  change. Open a new terminal to use it.
+
+Install is idempotent and points an existing command at the running binary. It refuses to overwrite a file it did not
+make (`cli.command_conflict`, exit 1). If Windows does not let massorca read the user PATH, install stops before it
+changes anything (`cli.user_path_unreadable`). Uninstall removes only the link or command file that massorca made, and
+removes the folder's PATH entry only when nothing else is in that folder.
+
+`cli status` reports one `state`; its JSON result carries the same fields as the text:
+
+| `state` | Meaning |
+|---|---|
+| `installed` | The command runs this binary and its folder is on PATH. |
+| `not_on_path` | The command runs this binary, but its folder is not on PATH. |
+| `different_binary` | The command runs another binary. `cli install` points it at this one. |
+| `not_installed` | No command is installed. |
+| `conflict` | A file massorca did not make is at the command path. |
+
+The result also has `command`, `target`, `points_to`, `bin_dir`, `bin_dir_on_path` (`null` when the Windows user PATH
+could not be read) and `changed`. The command runs the binary that ran `cli install`: an update that moves that binary
+leaves the command on the old path (`different_binary`, or a broken link) until `cli install` runs again.
 
 ## Logs and files
 

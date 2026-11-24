@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::args::CliCommand;
 use crate::error::{CliError, exit};
+use crate::output::Output;
 use layout::{Layout, Platform};
 use plan::{InstallStep, Observed, State, UninstallStep};
 use user_path::{PathValue, UserPath};
@@ -242,6 +244,18 @@ pub fn lines(operation: Operation, report: &Report, platform: Platform) -> Vec<S
         lines.push("Open a new terminal to use massorca.".to_owned());
     }
     lines
+}
+
+/// Runs one `cli` subcommand in this process's environment and prints its outcome.
+pub fn run(command: CliCommand, output: Output) -> Result<(), CliError> {
+    let environment = Environment::from_process()?;
+    let (operation, report) = match command {
+        CliCommand::Install => (Operation::Install, install(&environment)?),
+        CliCommand::Uninstall => (Operation::Uninstall, uninstall(&environment)?),
+        CliCommand::Status => (Operation::Status, status(&environment)?),
+    };
+    output.success(&report, &lines(operation, &report, Platform::current()));
+    Ok(())
 }
 
 /// The state of the command as it is now, and whether this run changed anything.
