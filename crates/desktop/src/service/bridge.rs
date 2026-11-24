@@ -87,6 +87,17 @@ pub(crate) enum Command {
     Team(TeamCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
+    /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
+    HostRead {
+        host: String,
+        request: u64,
+    },
+    /// A Marketplace call on a paired host, answered on its oneshot; a write's host lists follow as a store update.
+    HostExtension {
+        host: String,
+        request: u64,
+        command: ExtensionCommand,
+    },
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
@@ -608,6 +619,29 @@ impl Link {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
+            Command::HostRead { host, request } => {
+                extensions::spawn_host_read(
+                    self.profile.clone(),
+                    host,
+                    request,
+                    self.updates.clone(),
+                );
+                None
+            }
+            Command::HostExtension {
+                host,
+                request,
+                command,
+            } => {
+                extensions::spawn_host_call(
+                    self.profile.clone(),
+                    host,
+                    request,
+                    command,
+                    self.updates.clone(),
+                );
+                None
+            }
             other => Some(other),
         }
     }
@@ -1099,6 +1133,8 @@ fn refuse_while_down(command: Command) {
         }
         Command::Team(command) => teams::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
+        Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
+        Command::HostRead { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }

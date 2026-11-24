@@ -2,11 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use super::types::MarketplaceItem;
+use super::types::{HostId, MarketplaceItem};
 
-/// One listed image: the package, the version it is listed at and the package path that names it.
+/// One listed image: the host the package is on, the package, the version it is listed at and the path that names it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ImageKey {
+    /// The host the package is on; its listed images are fetched from that host.
+    pub host: HostId,
     pub package: String,
     pub version: String,
     pub path: String,
@@ -29,6 +31,7 @@ impl MarketplaceItem {
 
     fn image_key(&self, package: &str, path: &str) -> ImageKey {
         ImageKey {
+            host: self.host.clone(),
             package: package.to_owned(),
             version: self.version.clone(),
             path: path.to_owned(),
@@ -89,6 +92,7 @@ mod tests {
 
     fn key(version: &str) -> ImageKey {
         ImageKey {
+            host: HostId("local".to_owned()),
             package: "acme.notes".to_owned(),
             version: version.to_owned(),
             path: "logo.png".to_owned(),

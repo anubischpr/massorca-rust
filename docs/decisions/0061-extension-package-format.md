@@ -79,6 +79,8 @@ replaced by `listing.logo`.
 - `logo`: a package path to an `.svg` or `.png`.
 - `category`: `extensions`, `agents`, `skills`, `services` or `themes`. When absent it is derived (see below).
 - `developer`: `{ name, url? }`. `url` must be https.
+- `website`, `privacy`, `terms`: optional links to the publisher's website, privacy policy and terms of service. Each
+  must be https, as `developer.url` is. The item page's Information part shows each one the package names.
 - `mention`: no `@`, no whitespace, at most 32 characters.
 - `banner`: `{ image?, examples }`, with one to six examples. A `mention` example's `text` must equal `@` + `mention`.
   A `command` example's `text` must equal a declared command's `keys` or `id`, compared literally. A `usage` example is a

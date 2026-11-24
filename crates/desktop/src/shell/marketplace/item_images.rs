@@ -9,7 +9,7 @@ use gpui::{App, Global, Image, ImageFormat, ImageSource, WeakEntity};
 use massorca_protocol::methods::extensions::ExtensionAssetParams;
 
 use super::MarketplaceFrame;
-use crate::model::marketplace::{ImageKey, ImageSlots, MarketplaceItem};
+use crate::model::marketplace::{HostTarget, ImageKey, ImageSlots, MarketplaceItem};
 use crate::service::ServiceHandle;
 use crate::shell::Shell;
 
@@ -60,7 +60,11 @@ fn fetch(service: ServiceHandle, key: ImageKey, shell: WeakEntity<Shell>, cx: &m
             id: key.package.clone(),
             path: key.path.clone(),
         };
-        let image = match service.extension_asset(params).await {
+        let answer = match HostTarget::from_key(&key.host.0) {
+            Some(HostTarget::Paired(host)) => service.host_extension_asset(host, params).await,
+            _ => service.extension_asset(params).await,
+        };
+        let image = match answer {
             Ok(asset) => {
                 let data = asset.data;
                 cx.background_executor()

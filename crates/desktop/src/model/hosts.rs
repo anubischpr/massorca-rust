@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::model::marketplace::{Host, HostId, HostState as MarketHostState};
+use crate::model::marketplace::{Host, HostState as MarketHostState, HostTarget};
 use crate::model::service_view::LOCAL_HOST;
 use crate::service::{HostEntry, HostLink, StoreState};
 
@@ -77,37 +77,45 @@ pub fn host_rows(entries: &[HostEntry], now: Instant) -> Vec<(String, HostState)
         .collect()
 }
 
-/// The hosts the Marketplace lists while a service answers: This PC first, then each paired host.
-pub fn marketplace_hosts(state: &StoreState, now: Instant) -> Vec<Host> {
+/// The hosts the Marketplace lists while a service answers: This PC first, then each connected paired host.
+pub fn marketplace_hosts(state: &StoreState) -> Vec<Host> {
     let this_pc = if state.connection.is_connected() {
         MarketHostState::Connected
     } else {
         MarketHostState::Unreachable
     };
     let mut hosts = vec![Host {
-        id: HostId(1),
+        id: HostTarget::Local.id(),
         name: LOCAL_HOST.to_owned(),
         state: this_pc,
     }];
-    for (index, entry) in state.hosts.iter().enumerate() {
-        let link = host_state(entry, now);
-        let state = match link.tone {
-            HostTone::Connected => MarketHostState::Connected,
-            HostTone::Unreachable => MarketHostState::Unreachable,
-            _ => MarketHostState::Other(link.word),
-        };
-        hosts.push(Host {
-            id: HostId(u32::try_from(index + 2).unwrap_or(u32::MAX)),
-            name: entry.record.name.clone(),
-            state,
-        });
-    }
+    hosts.extend(connected_hosts(state).map(|entry| Host {
+        id: HostTarget::Paired(entry.record.name.clone()).id(),
+        name: entry.record.name.clone(),
+        state: MarketHostState::Connected,
+    }));
     hosts
+}
+
+/// The targets the Marketplace can be aimed at while a service answers: This computer, then each connected paired host.
+pub fn offered_targets(state: &StoreState) -> Vec<HostTarget> {
+    std::iter::once(HostTarget::Local)
+        .chain(connected_hosts(state).map(|entry| HostTarget::Paired(entry.record.name.clone())))
+        .collect()
+}
+
+/// The paired hosts whose last check reached them; only these are offered to the Marketplace.
+fn connected_hosts(state: &StoreState) -> impl Iterator<Item = &HostEntry> {
+    state
+        .hosts
+        .iter()
+        .filter(|entry| matches!(entry.link, HostLink::Connected { .. }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::marketplace::HostId;
     use massorca_client::HostRecord;
 
     fn entry(link: HostLink, last_connected: Option<Instant>) -> HostEntry {
@@ -239,34 +247,72 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_marketplace_lists_this_pc_then_each_paired_host_with_its_state() {
-        use crate::model::marketplace::HostState as MarketState;
+    fn connected_host(name: &str) -> HostEntry {
+        let mut host = entry(
+            HostLink::Connected {
+                server: "vps-server".into(),
+                version: "0.1.0".into(),
+            },
+            None,
+        );
+        host.record.name = name.into();
+        host
+    }
+
+    fn state_with(hosts: Vec<HostEntry>) -> StoreState {
         use crate::service::ConnectionState;
-        let mut checking = entry(HostLink::Checking, None);
-        checking.record.name = "nas".into();
-        let state = StoreState {
+        StoreState {
             connection: ConnectionState::Connected {
                 server: "massorca".into(),
                 version: "0.1.0".into(),
             },
-            hosts: vec![
-                entry(
-                    HostLink::Connected {
-                        server: "vps-server".into(),
-                        version: "0.1.0".into(),
-                    },
-                    None,
-                ),
-                checking,
-            ],
+            hosts,
             ..StoreState::default()
-        };
-        let hosts = marketplace_hosts(&state, Instant::now());
+        }
+    }
+
+    fn id_of(hosts: &[Host], name: &str) -> HostId {
+        hosts
+            .iter()
+            .find(|host| host.name == name)
+            .expect("the host is listed")
+            .id
+            .clone()
+    }
+
+    #[test]
+    fn the_marketplace_lists_this_pc_then_each_connected_paired_host() {
+        use crate::model::marketplace::HostState as MarketState;
+        let mut checking = entry(HostLink::Checking, None);
+        checking.record.name = "nas".into();
+        let state = state_with(vec![connected_host("vps"), checking]);
+        let hosts = marketplace_hosts(&state);
         let names: Vec<&str> = hosts.iter().map(|host| host.name.as_str()).collect();
-        assert_eq!(names, ["This PC", "vps", "nas"]);
+        assert_eq!(names, ["This PC", "vps"]);
         assert_eq!(hosts[0].state, MarketState::Connected);
         assert_eq!(hosts[1].state, MarketState::Connected);
-        assert_eq!(hosts[2].state.word(), "Checking");
+    }
+
+    #[test]
+    fn a_paired_host_keeps_its_key_when_another_host_sorts_before_it() {
+        let vps = HostTarget::Paired("vps".to_owned()).id();
+        let alone = marketplace_hosts(&state_with(vec![connected_host("vps")]));
+        let sorted_after = marketplace_hosts(&state_with(vec![
+            connected_host("aaa"),
+            connected_host("vps"),
+        ]));
+        assert_eq!(id_of(&alone, "vps"), vps);
+        assert_eq!(id_of(&sorted_after, "vps"), vps);
+    }
+
+    #[test]
+    fn only_connected_hosts_are_offered_and_this_computer_comes_first() {
+        let mut gone = entry(HostLink::Unreachable("timed out".into()), None);
+        gone.record.name = "gone".into();
+        let state = state_with(vec![connected_host("vps"), gone]);
+        assert_eq!(
+            offered_targets(&state),
+            vec![HostTarget::Local, HostTarget::Paired("vps".to_owned())]
+        );
     }
 }

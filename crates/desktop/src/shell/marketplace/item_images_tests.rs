@@ -194,3 +194,69 @@ fn an_item_page_draws_its_banner_image_once_the_service_sends_it(cx: &mut TestAp
         "the banner image is drawn"
     );
 }
+
+/// Opens the item page of the catalogue's "Notes" package.
+fn open_notes_page(rig: &Rig, cx: &mut VisualTestContext) {
+    let id = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .model()
+                .marketplace()
+                .items
+                .iter()
+                .find(|item| item.name == "Notes")
+                .map(|item| item.id)
+        })
+        .expect("the package is listed");
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Item(id), cx)
+    });
+}
+
+#[gpui::test]
+fn an_item_page_header_draws_its_logo_once_the_service_sends_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[]);
+    catalogue(&rig, cx, 1, vec![package("1.0.0", Some("logo.png"), None)]);
+    open_notes_page(&rig, cx);
+    draw(cx);
+    cx.run_until_parked();
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Asset { params, reply })) => {
+            assert_eq!(params.path, "logo.png");
+            reply
+        }
+        _ => panic!("the item page asks the service for its logo"),
+    };
+    let _ = reply.send(Ok(asset("logo.png", &png())));
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("marketplace-header-logo").is_some(),
+        "the logo replaces the kind icon in the header"
+    );
+}
+
+#[gpui::test]
+fn a_failed_header_logo_leaves_the_kind_icon(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[]);
+    catalogue(&rig, cx, 1, vec![package("1.0.0", Some("logo.png"), None)]);
+    open_notes_page(&rig, cx);
+    draw(cx);
+    cx.run_until_parked();
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Asset { reply, .. })) => reply,
+        _ => panic!("the item page asks the service for its logo"),
+    };
+    let _ = reply.send(Err(Refusal::unavailable("the service is busy")));
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("marketplace-header-logo").is_none(),
+        "no logo is drawn"
+    );
+    assert!(
+        cx.debug_bounds("marketplace-header-icon").is_some(),
+        "the kind icon stays"
+    );
+}

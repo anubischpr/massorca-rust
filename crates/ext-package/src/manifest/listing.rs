@@ -29,6 +29,10 @@ pub struct Listing {
     pub banner: Option<Banner>,
     #[serde(default)]
     pub connections: Vec<Connection>,
+    /// Links the item page shows when present; each must be https, as `developer.url` is.
+    pub website: Option<String>,
+    pub privacy: Option<String>,
+    pub terms: Option<String>,
 }
 
 /// The Marketplace categories.
@@ -159,6 +163,18 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
         if let Some(url) = developer.url.as_deref().filter(|url| !is_https_url(url)) {
             problems.add(
                 "/listing/developer/url",
+                format!("`{url}` must be an https URL"),
+            );
+        }
+    }
+    for (field, url) in [
+        ("website", &listing.website),
+        ("privacy", &listing.privacy),
+        ("terms", &listing.terms),
+    ] {
+        if let Some(url) = url.as_deref().filter(|url| !is_https_url(url)) {
+            problems.add(
+                format!("/listing/{field}"),
                 format!("`{url}` must be an https URL"),
             );
         }
