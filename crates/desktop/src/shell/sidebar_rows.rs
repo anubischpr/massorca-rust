@@ -5,7 +5,7 @@ use super::Shell;
 use super::change;
 use super::rail::agent_kind;
 use crate::model::shell::{Agent, AgentState, HostReach};
-use crate::model::sidebar::{NavKind, NavRow, TreeRow};
+use crate::model::sidebar::{NavKind, NavRow, TreeRow, project_label};
 use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*};
 use massorca_ui::IconName;
 use massorca_ui::components::agent_status::{
@@ -53,7 +53,9 @@ pub(super) fn tree_row(
 ) -> SidebarRow {
     let id = SharedString::from(format!("tree-row-{index}"));
     let item = match row {
-        TreeRow::Project { name } => SidebarRow::project(id, IconName::Folder, name.clone()),
+        TreeRow::Project { name, emoji } => {
+            SidebarRow::project(id, IconName::Folder, project_label(name, emoji.as_deref()))
+        }
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
         TreeRow::RemoteHost { name, state } => remote_host_row(id, name, state),
         TreeRow::Workspace {

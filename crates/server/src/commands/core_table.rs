@@ -97,7 +97,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "path": { "type": "string" },
                     "name": { "type": "string" },
                     "kind": { "enum": ["git", "folder"] },
-                    "workspaces_root": { "type": "string" }
+                    "workspaces_root": { "type": "string" },
+                    "icon": { "type": "object", "description": "A Lucide icon, an emoji or an image; unset takes the icon the repository's files hold" }
                 }
             }),
         ),
@@ -138,6 +139,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "project": { "type": "string" },
                     "base": { "type": ["string", "null"] }
+                }
+            }),
+        ),
+        command(
+            "project.update",
+            "Change a project's icon",
+            "project.update",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "icon": {
+                        "type": ["object", "null"],
+                        "description": "A Lucide icon, an emoji or an image; null clears the icon and an absent field keeps it"
+                    }
                 }
             }),
         ),

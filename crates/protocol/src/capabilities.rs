@@ -2,6 +2,8 @@
 
 pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
+/// `project.update` (decision 0091): changing a project's icon.
+pub const PROJECT_UPDATE: &str = "project-update/1";
 pub const WORKSPACES: &str = "workspaces/1";
 /// The containing-workspace lookup (`workspace.current`), offered apart so a client knows the service answers it.
 pub const WORKSPACE_CURRENT: &str = "workspace-current/1";

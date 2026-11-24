@@ -24,6 +24,7 @@ fn sample_project() -> projects::Project {
         workspaces_root: "/repos/app-workspaces".to_owned(),
         added_at_ms: 1_767_225_600_000_i64,
         base_ref: None,
+        icon: None,
     }
 }
 
@@ -212,6 +213,7 @@ fn project_add_params_omit_unset_options() {
             name: None,
             kind: None,
             workspaces_root: None,
+            icon: None,
         },
         &json!({ "path": "/repos/app" }),
     );
@@ -225,6 +227,7 @@ fn project_add_params_carry_set_options() {
             name: Some("app".to_owned()),
             kind: Some(projects::ProjectKind::Folder),
             workspaces_root: Some("/work".to_owned()),
+            icon: None,
         },
         &json!({
             "path": "/repos/app",

@@ -42,6 +42,7 @@ fn folder_project(name: &str) -> ProjectRow {
         name: name.to_owned(),
         workspaces_root: format!("/work/{name}-workspaces"),
         base_ref: None,
+        icon: None,
         added_at: now_ms(),
     }
 }

@@ -349,6 +349,7 @@ async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_i
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
+            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
             kind: None,

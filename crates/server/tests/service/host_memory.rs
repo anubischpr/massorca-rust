@@ -38,6 +38,7 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
         .call(
             projects::ADD,
             &ProjectAddParams {
+                icon: None,
                 path: utf8(&folder),
                 name: Some("plain".to_owned()),
                 kind: Some(ProjectKind::Folder),

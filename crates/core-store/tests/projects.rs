@@ -119,3 +119,21 @@ fn deleting_a_project_with_workspaces_is_restricted() {
     assert!(store.delete_workspace(&workspace.id).unwrap());
     assert!(store.delete_project(&project.id).unwrap());
 }
+
+#[test]
+fn a_project_icon_round_trips_and_can_be_set_and_cleared() {
+    let store = store();
+    let mut row = project_row("alpha", "key-alpha");
+    row.icon = Some(r#"{"type":"emoji","emoji":"🚀"}"#.to_owned());
+    store.insert_project(&row).unwrap();
+    assert_eq!(store.get_project(&row.id).unwrap(), Some(row.clone()));
+
+    let lucide = r#"{"type":"lucide","name":"Rocket"}"#;
+    assert!(store.set_project_icon(&row.id, Some(lucide)).unwrap());
+    let found = store.find_project_by_name("alpha").unwrap().unwrap();
+    assert_eq!(found.icon.as_deref(), Some(lucide));
+
+    assert!(store.set_project_icon(&row.id, None).unwrap());
+    assert_eq!(store.get_project(&row.id).unwrap().unwrap().icon, None);
+    assert!(!store.set_project_icon("missing", None).unwrap());
+}

@@ -143,6 +143,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "project.rm",
             "project.set-base",
             "project.show",
+            "project.update",
             "secret.decline",
             "secret.link",
             "secret.list",

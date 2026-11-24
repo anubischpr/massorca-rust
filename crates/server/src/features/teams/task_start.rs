@@ -595,6 +595,7 @@ fn team_folder(
         Some(project) => project,
         None => {
             let project = workspaces.add_project(ProjectAddParams {
+                icon: None,
                 path: path_text(&root)?,
                 name: Some(TEAMS_PROJECT_NAME.to_owned()),
                 kind: Some(ProjectKind::Folder),
@@ -866,6 +867,7 @@ mod tests {
             name: new_id(),
             workspaces_root: "/work/root".to_owned(),
             base_ref: None,
+            icon: None,
             added_at: 1,
         };
         store.insert_project(&project).expect("project");

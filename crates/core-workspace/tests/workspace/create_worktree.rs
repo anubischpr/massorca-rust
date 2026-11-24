@@ -354,6 +354,7 @@ fn a_project_whose_workspaces_root_is_relative_is_refused_before_git_runs() {
             workspaces_root: "relative/workspaces".to_owned(),
             added_at: massorca_core_store::now_ms(),
             base_ref: None,
+            icon: None,
         })
         .expect("insert a project with a relative root");
 

@@ -118,7 +118,7 @@ const EXTENSION_METHODS: [(&str, Permission); 9] = [
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 30] = [
+const CLI_COMMAND_IDS: &[&str] = &[
     "service.info",
     "service.status",
     "service.stop",
@@ -133,6 +133,7 @@ const CLI_COMMAND_IDS: [&str; 30] = [
     "project.inspect",
     "project.rm",
     "project.set-base",
+    "project.update",
     "workspace.create",
     "workspace.list",
     "workspace.show",
@@ -373,7 +374,7 @@ fn command_ids_are_the_cli_paths_and_unique() {
     let commands = core_commands();
     let ids: HashSet<&str> = commands.iter().map(|command| command.id.as_str()).collect();
     assert_eq!(ids.len(), commands.len(), "command ids are unique");
-    for expected in CLI_COMMAND_IDS {
+    for &expected in CLI_COMMAND_IDS {
         assert!(
             ids.contains(&expected),
             "no command for `massorca {}`",

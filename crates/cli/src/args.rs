@@ -269,6 +269,22 @@ pub enum ProjectCommand {
         #[arg(long, conflicts_with = "base")]
         clear: bool,
     },
+    /// Changes a project's icon: `--icon` sets it, `--clear-icon` removes it so the project shows the default one.
+    Update {
+        /// Project id, name or path.
+        project: String,
+        /// The icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`.
+        #[arg(
+            long,
+            value_name = "ICON",
+            conflicts_with = "clear_icon",
+            required_unless_present = "clear_icon"
+        )]
+        icon: Option<String>,
+        /// Removes the icon, so the project shows the default one.
+        #[arg(long)]
+        clear_icon: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -287,6 +303,9 @@ pub struct ProjectAddArgs {
     /// Directory that holds this project's workspaces. Defaults to a folder named after the project under the workspaces default root, or to the default root itself when workspaces.layout is flat.
     #[arg(long, value_name = "DIR")]
     pub workspaces_root: Option<PathBuf>,
+    /// The icon the project shows: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`. Unset, the icon the repository's files hold is used, if any.
+    #[arg(long, value_name = "ICON")]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

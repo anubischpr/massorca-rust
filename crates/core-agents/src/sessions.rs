@@ -1847,6 +1847,7 @@ pub(crate) mod tests {
             workspaces_root: "/work/app-workspaces".to_owned(),
             added_at: now_ms(),
             base_ref: None,
+            icon: None,
         };
         store.insert_project(&project).unwrap();
         let workspace = WorkspaceRow {

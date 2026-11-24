@@ -12,6 +12,7 @@ use super::shell::{
 };
 use super::teams::{TeamsState, live_teams};
 use crate::service::{ConnectionState, StoreState};
+use massorca_protocol::methods::projects::ProjectIcon;
 
 /// The one host a local service stands for in the tree (A10).
 pub const LOCAL_HOST: &str = "This PC";
@@ -42,6 +43,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                 .collect();
             ProjectGroup {
                 name: project.name.clone(),
+                emoji: project.icon.as_ref().and_then(emoji_of),
                 hosts: vec![HostGroup {
                     name: LOCAL_HOST.to_owned(),
                     reach,
@@ -181,6 +183,14 @@ pub fn teams_view(state: &StoreState) -> TeamsState {
             live_teams(&state.team_ids, LOCAL_HOST, records, &state.agent_kinds)
         }
         _ => TeamsState::unavailable(),
+    }
+}
+
+/// The emoji an icon is; the other icon kinds are not drawn yet.
+fn emoji_of(icon: &ProjectIcon) -> Option<String> {
+    match icon {
+        ProjectIcon::Emoji { emoji } => Some(emoji.clone()),
+        ProjectIcon::Lucide { .. } | ProjectIcon::Image { .. } => None,
     }
 }
 
