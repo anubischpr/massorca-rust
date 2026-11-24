@@ -53,8 +53,7 @@ pub struct ProjectRow {
     pub icon: Option<String>,
 }
 
-const SELECT_PROJECTS: &str =
-    "SELECT id, kind, path, path_key, name, workspaces_root, added_at, base_ref, icon FROM projects";
+const SELECT_PROJECTS: &str = "SELECT id, kind, path, path_key, name, workspaces_root, added_at, base_ref, icon FROM projects";
 
 fn project_from_row(row: &Row<'_>) -> rusqlite::Result<ProjectRow> {
     Ok(ProjectRow {

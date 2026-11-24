@@ -519,8 +519,12 @@ fn patch_of_a_submodule_shows_its_pointer_in_text_and_json() {
     std::fs::write(library.join("lib.txt"), "two\n").expect("write");
     harness::git(&library, &["add", "lib.txt"]);
     harness::git(&library, &["commit", "-q", "-m", "lib two"]);
-    let second = harness::git(&library, &["rev-parse", "HEAD"]).trim().to_owned();
-    let first = harness::git(&library, &["rev-parse", "HEAD~1"]).trim().to_owned();
+    let second = harness::git(&library, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let first = harness::git(&library, &["rev-parse", "HEAD~1"])
+        .trim()
+        .to_owned();
     let library_text = library.to_string_lossy().into_owned();
     harness::git(
         &dir,
