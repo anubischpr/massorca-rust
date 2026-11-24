@@ -10,7 +10,7 @@ use massorca_core_agents::{
     Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
     ProviderError,
 };
-use massorca_core_extensions::Extensions;
+use massorca_core_extensions::{Extensions, HookError};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -176,6 +176,13 @@ impl Service {
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
         });
+        // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
+        let guarded = agents.clone();
+        let kind_guard = extensions.register_remove_guard("agents", move |package| {
+            guarded
+                .refuse_removing_package(package)
+                .map_err(|error| HookError::new(error.code, error.message))
+        });
         // No run survives the previous service (0051); nothing has started one yet in this service.
         let marker = agents.clone();
         tokio::task::spawn_blocking(move || marker.mark_stale_on_startup())
@@ -213,6 +220,7 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            _kind_guard: kind_guard,
             network: network_state,
             server: PeerInfo {
                 name: server_name,

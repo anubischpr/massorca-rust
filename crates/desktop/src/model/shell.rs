@@ -41,6 +41,8 @@ pub struct SessionRow {
     pub state: AgentState,
     /// Where a child session runs: "Current worktree", or the branch of its own worktree. None for a top session.
     pub place: Option<String>,
+    /// A child that runs in another worktree than its parent's; its row shows a branch icon (WS-35).
+    pub own_worktree: bool,
     /// Whether the row offers to bring this child back: it has finished and has not been brought back yet.
     pub can_bring_back: bool,
     /// Child sessions, shown indented under the parent (A83 to A85).

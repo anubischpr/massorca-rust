@@ -89,6 +89,7 @@ pub(super) fn tree_row(
             depth,
             selected,
             place,
+            own_worktree,
             can_bring_back,
         } => {
             let row = session_row(
@@ -98,7 +99,7 @@ pub(super) fn tree_row(
                 *state,
                 *depth,
                 *selected,
-                place.as_deref(),
+                place.as_deref().map(|place| (place, *own_worktree)),
             );
             if *can_bring_back {
                 row.hover_action(bring_back_action(session_id, shell))
@@ -165,13 +166,20 @@ fn session_row(
     state: AgentState,
     depth: usize,
     selected: bool,
-    place: Option<&str>,
+    place: Option<(&str, bool)>,
 ) -> SidebarRow {
     let mut row = SidebarRow::session(id, title.to_owned(), glyph_state(state), agent_kind(agent))
         .level(SESSION_LEVEL + depth)
         .selected(selected);
-    if let Some(place) = place {
-        row = row.secondary(place.to_owned());
+    // A child in its own worktree marks its branch with a branch icon (WS-35).
+    match place {
+        Some((place, true)) => {
+            row = row
+                .secondary(place.to_owned())
+                .secondary_icon(IconName::GitBranch)
+        }
+        Some((place, false)) => row = row.secondary(place.to_owned()),
+        None => {}
     }
     if depth == 0 {
         row

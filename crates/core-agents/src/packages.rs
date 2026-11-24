@@ -261,6 +261,47 @@ mod tests {
         row
     }
 
+    /// A package whose kind has a resumable session (exited, with a recorded end and a known ref) refuses its removal
+    /// with `agent.busy` naming the session; a session that cannot resume and another package's session do not block it.
+    #[test]
+    fn a_package_whose_kind_has_a_resumable_session_refuses_its_removal() {
+        let mut other = fake_package(PackageState::Enabled, MISSING_PROGRAM);
+        other.kind_id = "other".to_owned();
+        other.package_id = "ext.other".to_owned();
+        let (agents, base, _profile) = service(vec![
+            fake_package(PackageState::Enabled, MISSING_PROGRAM),
+            other,
+        ]);
+        assert!(
+            agents.refuse_removing_package("ext.fake").is_ok(),
+            "no session uses it"
+        );
+
+        let mut no_ref = exited_session(&agents, &base, "fake");
+        no_ref.agent_ref = None;
+        agents.store().delete_agent_session(&no_ref.id).unwrap();
+        agents.store().insert_agent_session(&no_ref).unwrap();
+        exited_session(&agents, &base, "other");
+        assert!(
+            agents.refuse_removing_package("ext.fake").is_ok(),
+            "a session with no ref cannot resume"
+        );
+
+        let used = exited_session(&agents, &base, "fake");
+        let error = agents
+            .refuse_removing_package("ext.fake")
+            .expect_err("a resumable session uses the kind");
+        assert_eq!(error.code, codes::AGENT_BUSY, "{}", error.message);
+        assert!(error.message.contains(&used.id), "{}", error.message);
+        assert!(error.message.contains("fake"), "{}", error.message);
+        assert!(!error.message.contains(&no_ref.id), "{}", error.message);
+        assert_eq!(
+            error.data,
+            Some(json!({ "package": "ext.fake", "kinds": ["fake"], "sessions": [used.id] }))
+        );
+        assert!(agents.refuse_removing_package("ext.unknown").is_ok());
+    }
+
     fn account(kind: &str, origin: &str) -> AgentAccountRow {
         AgentAccountRow {
             id: new_id(),
@@ -307,6 +348,44 @@ mod tests {
         assert_eq!(kinds[0].package.id.as_deref(), Some("ext.fake"));
         assert_eq!(kinds[0].package.version.as_deref(), Some("1.2.3"));
         assert!(kinds[0].detected);
+    }
+
+    /// A package whose state cannot be read (an unreadable lockfile) is refused with that read failure, not with advice
+    /// to install or enable it.
+    #[test]
+    fn a_kind_whose_package_state_cannot_be_read_is_refused_with_the_read_failure() {
+        let mut unknown = fake_package(PackageState::Unknown, MISSING_PROGRAM);
+        unknown.decl = Err(
+            "ext.fake: the extensions lockfile cannot be read (extension.invalid_lockfile)"
+                .to_owned(),
+        );
+        let (agents, base, profile) = service(vec![unknown]);
+        let workspace = existing_workspace(&agents, &base, profile.path());
+        let error = agents
+            .start(start_params(&workspace, "fake"), SecretGrant::Provide)
+            .expect_err("a kind in an unknown state never starts");
+        assert_eq!(
+            error.code,
+            codes::AGENT_KIND_NOT_ENABLED,
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("the extensions lockfile cannot be read"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("install or enable it"),
+            "{}",
+            error.message
+        );
+        let data = error.data.expect("data");
+        assert_eq!(data["state"], "unknown");
+        assert_eq!(data["kind"], "fake");
+        assert_eq!(data["package"], "ext.fake");
     }
 
     #[test]
