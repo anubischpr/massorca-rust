@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams,
+    WorkspaceRemoveParams, WorkspaceUpdateParams,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
@@ -76,6 +76,29 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&removed, &workspace_text::removal_lines(&removed));
+        }
+        WorkspaceCommand::Update {
+            workspace,
+            name,
+            comment,
+        } => {
+            let updated = client
+                .workspace_update(&WorkspaceUpdateParams {
+                    workspace: paths.selector(&workspace)?,
+                    name,
+                    comment,
+                })
+                .await?;
+            let line = workspace_text::workspace_line(&updated, "updated");
+            output.success(&updated, &[line]);
+        }
+        WorkspaceCommand::Check { workspace } => {
+            let check = client
+                .workspace_check(&WorkspaceRef {
+                    workspace: paths.selector(&workspace)?,
+                })
+                .await?;
+            output.success(&check, &[workspace_text::check_line(&check)]);
         }
     }
     Ok(())

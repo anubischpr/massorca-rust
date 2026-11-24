@@ -231,6 +231,26 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "workspace.update",
+            "Rename a workspace or set its comment",
+            "workspace.update",
+            json!({
+                "type": "object",
+                "required": ["workspace"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "comment": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "workspace.check",
+            "Check a workspace's folder and its git registration",
+            "workspace.check",
+            selector("workspace"),
+        ),
+        command(
             "terminal.create",
             "Start a terminal in a workspace",
             "terminal.create",

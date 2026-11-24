@@ -118,7 +118,7 @@ const EXTENSION_METHODS: [(&str, Permission); 9] = [
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 29] = [
+const CLI_COMMAND_IDS: [&str; 31] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -137,6 +137,8 @@ const CLI_COMMAND_IDS: [&str; 29] = [
     "workspace.list",
     "workspace.show",
     "workspace.rm",
+    "workspace.update",
+    "workspace.check",
     "secret.status",
     "secret.list",
     "secret.set",

@@ -50,6 +50,8 @@ machine.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
+| `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
 | `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
