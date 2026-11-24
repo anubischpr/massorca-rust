@@ -8,18 +8,15 @@ use massorca_protocol::methods::extensions::{ExtensionItem, ExtensionReview};
 
 use super::service_accounts::ServiceAccounts;
 
+use super::HostTarget;
 use super::extension_items::{
     ExtensionIds, extension_items, provides_agent, state_of as package_state, update_version,
 };
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
-    Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
-    MarketplaceSnapshot,
+    Host, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId, MarketplaceSnapshot,
 };
 use crate::service::Refusal;
-
-/// The host every agent item is on: the service the desktop is connected to.
-pub(super) const SERVICE_HOST: HostId = HostId(1);
 
 /// The Marketplace a connected service makes up. It is empty until a connect reads its lists.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -87,7 +84,7 @@ pub fn agent_snapshot(kinds: &[AgentKind]) -> MarketplaceSnapshot {
             .map(|(index, kind)| agent_item(index, kind))
             .collect(),
         hosts: vec![Host {
-            id: SERVICE_HOST,
+            id: HostTarget::Local.id(),
             name: "MassOrca service".to_owned(),
             state: HostState::Connected,
         }],
@@ -119,7 +116,7 @@ fn agent_item(index: usize, kind: &AgentKind) -> MarketplaceItem {
         ),
         adds: vec!["Agent in the model picker".to_owned()],
         state: state_of(kind),
-        host: SERVICE_HOST,
+        host: HostTarget::Local.id(),
         developer: publisher.to_owned(),
         category: "Agent".to_owned(),
         permissions: None,

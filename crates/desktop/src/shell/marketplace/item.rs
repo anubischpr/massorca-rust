@@ -163,7 +163,7 @@ fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
 fn host_selector(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
-    let label = frame.snapshot.host(item.host).map_or_else(
+    let label = frame.snapshot.host(&item.host).map_or_else(
         || "No host".to_owned(),
         |host| format!("{}, {}", host.name, host.state.word()),
     );

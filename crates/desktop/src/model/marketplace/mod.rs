@@ -6,6 +6,7 @@ mod agent_links;
 mod catalogue;
 mod extension_items;
 mod extension_refusals;
+mod host_target;
 mod install_review;
 mod item_images;
 mod item_page;
@@ -24,6 +25,7 @@ pub use agent_links::{AgentLink, installed_agent_links};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
+pub use host_target::HostTarget;
 pub use install_review::review_lines;
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{

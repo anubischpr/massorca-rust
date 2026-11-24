@@ -6,7 +6,7 @@ use massorca_protocol::methods::extensions::{
     ExtensionItem, ExtensionReview, ExtensionState, Permission, RiskLevel, SourceKind,
 };
 
-use super::service_source::SERVICE_HOST;
+use super::HostTarget;
 use super::types::{ItemKind, ItemState, MarketplaceItem, MarketplaceItemId};
 
 /// The first id an extension item takes. Agent kinds take the ids below it, one each.
@@ -98,7 +98,7 @@ fn item(
         description: entry.description.clone(),
         adds: Vec::new(),
         state: state_of(entry.state, update_version(entry, reviews)),
-        host: SERVICE_HOST,
+        host: HostTarget::Local.id(),
         developer,
         category: kind.singular().to_owned(),
         permissions: permissions_text(&entry.permissions),

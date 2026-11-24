@@ -302,8 +302,7 @@ impl Shell {
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
             if shell.service.is_some() {
-                let hosts =
-                    crate::model::hosts::marketplace_hosts(store.read(cx).state(), Instant::now());
+                let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
             }
             if let Some(teams) = store.read(cx).teams() {
@@ -345,7 +344,6 @@ impl Shell {
         if service.is_some() {
             model.set_marketplace_hosts(crate::model::hosts::marketplace_hosts(
                 store.read(cx).state(),
-                Instant::now(),
             ));
         }
         let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
