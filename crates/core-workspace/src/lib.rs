@@ -13,6 +13,7 @@ mod paths;
 mod projects;
 mod remove;
 mod selectors;
+pub mod setup;
 mod unregistered;
 mod views;
 mod workspaces;
