@@ -13,6 +13,7 @@ use gpui::{
 };
 use massorca_desktop::data::SampleDataSource;
 use massorca_desktop::launch_options::WindowLaunch;
+use massorca_desktop::local_log;
 use massorca_desktop::model::teams::SampleTeamsSource;
 use massorca_desktop::service::{LaunchOptions, close_link_on_quit};
 use massorca_desktop::shell::{self, Shell};
@@ -34,6 +35,14 @@ fn main() {
                 std::process::exit(2);
             }
         };
+    // Held until `main` returns, so the local log is flushed when the app quits.
+    let _local_log = match local_log::start_for_launch(&options) {
+        Ok(guard) => guard,
+        Err(message) => {
+            report(&message);
+            None
+        }
+    };
     let launch = WindowLaunch::from_env(|key| std::env::var(key).ok());
     // An automated launch is never handed off to the user's window, so it claims nothing.
     let profile = if launch.background {

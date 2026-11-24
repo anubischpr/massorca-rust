@@ -2,6 +2,8 @@
 
 pub mod data;
 pub mod launch_options;
+pub mod local_log;
+mod log_redaction;
 pub mod model;
 pub mod service;
 pub mod shell;
