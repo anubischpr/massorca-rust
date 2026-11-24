@@ -11,6 +11,8 @@ about modes, so the only way to choose one was to pass the vendor's flag after `
 
 Rulings from the owner (2026-11-23): bypass modes ("yolo mode") are offered like any other mode; they are never the
 default, are marked `bypass: true`, and are chosen explicitly per start or switch; they are not gated by device scope.
+A Bot Teams task start chooses through its team's access instead: `full` names the kind's bypass mode (decision 0072,
+amendment "team access").
 A switch that no hook confirms is reported as requested, not applied. On the default (2026-11-23, superseding the first
 version of D3 and D4 for it): "When the person has chosen no mode, MassOrca passes NO mode flag and the vendor CLI starts in
 its own default, exactly as if they ran it themselves; the declared `default_mode` is the id of that vendor default so the

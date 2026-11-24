@@ -468,3 +468,41 @@ new task opens another agent session for the same bot, and both run at once.
   domain's prompt queue (decision 0084), which waits while the agent is
   working. A task start is never queued.
 - Older clients still name `bot.busy` from an older host.
+
+## Amendment 2026-11-23: team access
+
+A team's access decides the permission mode its bots run in (decision 0083). It
+has two values, as in pv96, and there is no per-bot mode.
+
+- **`full`**: a task start names the first bypass mode (`bypass: true`) the
+  bot's kind declares that a start can apply: one with launch arguments, or a
+  live switch on a kind that reports idle. The agent then runs without asking
+  for permission. A kind with no such mode, such as one whose only bypass mode
+  is a live switch and that reports no status, runs in its vendor default
+  instead of failing the start. `massorca task start` says so on that start,
+  and the service log notes it for starts made elsewhere, such as routines.
+- **`default`**: no mode is passed, and the vendor CLI starts in its own
+  default, which may ask for permission.
+- **New teams are `full`**, as in pv96: an unattended bot that stops to ask is a
+  stuck task. Decision 0083 says a bypass mode is always named, so the create
+  path names it every time. `massorca team create` and `team update` to `full`
+  print "Full access: bots run without asking for permission", with the one
+  command that turns it off. `team create --access default` makes a team without
+  it.
+- **Only a host-admin caller sets `full`.** A caller below host-admin scope,
+  such as a standard paired device, makes `default` teams when it names no
+  access, and an explicit `full` on `team.create` or `team.update` is refused
+  with `permission.denied`. A full-access team's bots skip permission prompts,
+  and runs of routines a host-admin set up also hold vault secrets (decision
+  0071), so only a host-admin caller may combine the two.
+- **Existing teams become `default`** (migration step 24). They were made when
+  `full` changed nothing, so they must not gain bypass silently. `massorca team
+  update TEAM --access full` turns it on.
+- `team.create` without `access` still makes a `full` team, so an older client
+  that sends none gets the new default without the sentence. `default` is a new
+  wire value: an older client reads it as unknown.
+- Not in this change: the desktop New team dialog and the team card, which will
+  name the access and offer the change in a follow-up.
+
+Decision 0083 is unchanged: a mode is still passed only when someone chose it.
+Here the owner chooses it once for the team.

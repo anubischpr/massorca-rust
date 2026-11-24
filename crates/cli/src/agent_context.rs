@@ -18,13 +18,14 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// Commands that run on this computer alone, as dotted paths; they make no service request. `service run` hosts the
 /// service itself. The coverage test checks each path against the clap definition.
-pub const LOCAL_COMMANDS: [&str; 10] = [
+pub const LOCAL_COMMANDS: [&str; 11] = [
     "host.add-ssh",
     "host.discover",
     "host.list",
     "host.remove",
     "host.show",
     "host.status",
+    "open",
     "pair.accept",
     "profile.secure",
     "service.run",

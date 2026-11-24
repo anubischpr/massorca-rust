@@ -11,7 +11,9 @@ use massorca_protocol::codes;
 use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
-use massorca_protocol::methods::tasks::TaskUpdateParams;
+use massorca_client::Client;
+use massorca_protocol::methods::tasks::{Task, TaskUpdateParams};
+use massorca_protocol::methods::teams::{TeamAccess, TeamRef};
 
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
@@ -172,7 +174,9 @@ pub async fn execute(
                 .task_start(&TaskRef { task })
                 .await
                 .map_err(|error| too_old_to_start(error.into()))?;
-            output.success(&started, &[text::task_line(&started, "started")]);
+            let mut lines = vec![text::task_line(&started, "started")];
+            lines.extend(no_bypass_notice(&client, &started).await);
+            output.success(&started, &lines);
         }
         TaskCommand::Done { task } => {
             let done = client.task_done(&TaskRef { task }).await?;
@@ -188,6 +192,28 @@ pub async fn execute(
         }
     }
     Ok(())
+}
+
+/// A full-access team's bot whose agent declares no bypass mode runs in the agent's own default; the start says so.
+/// Best effort: a failed read only drops the sentence.
+async fn no_bypass_notice(client: &Client, task: &Task) -> Option<String> {
+    let session = task.session_id.as_deref()?;
+    let team = client
+        .team_show(&TeamRef {
+            team: task.team_id.clone(),
+        })
+        .await
+        .ok()?;
+    if team.access != TeamAccess::Full {
+        return None;
+    }
+    let run = client.agent_show(session).await.ok()?;
+    run.permission_mode.is_none().then(|| {
+        format!(
+            "Full access: the {} agent has no mode that skips permission prompts, so it runs in its own default mode",
+            run.kind
+        )
+    })
 }
 
 /// `task.start` came after the rest of `teams/1`, so an older host answers it as an unknown method.

@@ -60,6 +60,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Starts the MassOrca desktop app on this profile and returns at once.
+    Open,
     /// Reads, changes and resets settings. `config` is an older name for it.
     #[command(alias = "config")]
     Settings {
@@ -225,6 +227,11 @@ pub enum ProjectCommand {
     Show {
         /// Project id, name or path.
         project: String,
+    },
+    /// Shows what `project add` without a kind would register for a directory, without registering it.
+    Inspect {
+        /// Directory to inspect. A relative path is taken from the current directory.
+        path: PathBuf,
     },
     /// Unregisters a project. Refused while it has workspaces, unless their records are forgotten. Its files stay.
     Rm {
