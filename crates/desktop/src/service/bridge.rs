@@ -733,6 +733,9 @@ impl Link {
         self.emit(StoreUpdate::AgentImportDetectOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
         ));
+        self.emit(StoreUpdate::AgentOptionsOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {

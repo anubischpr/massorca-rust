@@ -570,10 +570,11 @@ impl Shell {
             return;
         };
         let mode = self.pending_bypass(session, cx);
+        let grid = self.session_grid();
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = service.agent_resume(&id, mode).await;
+            let answer = service.agent_resume(&id, mode, grid).await;
             let _ = shell.update(cx, |shell, cx| {
                 shell.finish_session_call(&id, "Could not resume the session", answer, cx);
             });
