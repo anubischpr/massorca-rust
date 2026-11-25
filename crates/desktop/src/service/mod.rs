@@ -25,6 +25,8 @@ mod update;
 mod workspace_create;
 
 #[cfg(test)]
+mod chat_tests;
+#[cfg(test)]
 mod git_tests;
 #[cfg(test)]
 mod secrets_tests;

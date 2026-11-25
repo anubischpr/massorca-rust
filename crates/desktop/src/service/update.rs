@@ -9,6 +9,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountSummary, AgentKind, AgentQueueList, AgentSession, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::{ChatEvent, ChatHistoryPage};
 use massorca_protocol::methods::config::{ConfigValue, DEFAULT_OWNER};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::extensions::ExtensionItem;
@@ -20,6 +21,7 @@ use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::agent_chat::KindChat;
+use crate::model::chat_transcript::ChatTranscript;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
@@ -111,6 +113,23 @@ pub enum StoreUpdate {
     Accounts {
         kind: String,
         result: Result<Vec<AccountSummary>, Refusal>,
+    },
+    /// One event of a followed chat session's stream (decision 0101, D4).
+    Chat {
+        session: String,
+        event: ChatEvent,
+    },
+    /// A page of older items the service sent for a followed chat session.
+    ChatHistory {
+        session: String,
+        page: ChatHistoryPage,
+    },
+    /// The session's transcript is no longer followed; the store drops what it held.
+    ChatClosed(String),
+    /// The service refused the session's stream (it is not a chat, or it is gone).
+    ChatRefused {
+        session: String,
+        refusal: Refusal,
     },
 }
 
@@ -280,6 +299,10 @@ pub struct StoreState {
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
+    /// The transcript of each followed chat session, by session id (decision 0101).
+    pub chat: BTreeMap<String, ChatTranscript>,
+    /// Why the service refused the stream of a chat session, by session id.
+    pub chat_refused: BTreeMap<String, Refusal>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
@@ -322,6 +345,8 @@ impl Default for StoreState {
             workspace_unique_name: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
+            chat: BTreeMap::new(),
+            chat_refused: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
         }
@@ -433,6 +458,22 @@ impl StoreState {
             }
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
+            StoreUpdate::Chat { session, event } => {
+                self.chat_refused.remove(&session);
+                self.chat.entry(session).or_default().apply(event);
+            }
+            StoreUpdate::ChatHistory { session, page } => {
+                if let Some(transcript) = self.chat.get_mut(&session) {
+                    transcript.prepend(page);
+                }
+            }
+            StoreUpdate::ChatClosed(session) => {
+                self.chat.remove(&session);
+                self.chat_refused.remove(&session);
+            }
+            StoreUpdate::ChatRefused { session, refusal } => {
+                self.chat_refused.insert(session, refusal);
+            }
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
