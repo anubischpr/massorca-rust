@@ -19,8 +19,9 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::extensions::{
     self, CliPlanState, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled,
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
-    ExtensionList, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionList, ExtensionLog, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved,
+    ExtensionReview, ExtensionRollbackParams, ExtensionRun, ExtensionSetEnabledParams,
+    ExtensionUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -56,6 +57,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             inspect,
         )?,
         methods.register(Owner::Core, extensions::ASSET, cap, Permission::Read, asset)?,
+        // Its own capability. The runs are readable, but their output is for a host administrator only.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_LOG, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::LOG,
+            capabilities::EXTENSIONS_LOG,
+            Permission::Read,
+            log,
+        )?,
         // These can run a program on the host, so they need host administration.
         methods.register(
             Owner::Core,
@@ -204,6 +216,24 @@ async fn update(
     .await?;
     publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
     wire(&entry)
+}
+
+/// The runs of a package, oldest first. Their output is hidden from a caller without host administration.
+async fn log(ctx: RequestCtx, params: ExtensionRef) -> Result<ExtensionLog, ErrorBody> {
+    let id = params.id.clone();
+    let records = on_extensions(&ctx, move |extensions| extensions.runs(&params.id)).await?;
+    let mut runs = wire_all(&records)?;
+    hide_run_output(&mut runs, may_see_host_paths(&ctx));
+    Ok(ExtensionLog { id, runs })
+}
+
+/// A run's output names the service host's commands and files, so only a host administrator gets it.
+fn hide_run_output(runs: &mut [ExtensionRun], may_see_output: bool) {
+    if !may_see_output {
+        for run in runs {
+            run.output.clear();
+        }
+    }
 }
 
 /// Restores the version an update replaced. It publishes `extension.installed`, so readers reload the package.
@@ -573,5 +603,42 @@ mod tests {
 
         assert_eq!(body.code, codes::AGENT_BUSY);
         assert!(body.message.contains("a session is live"));
+    }
+}
+
+#[cfg(test)]
+mod run_log_tests {
+    use massorca_protocol::methods::extensions::{
+        ExtensionRun, ExtensionRunAction, ExtensionRunOutcome,
+    };
+
+    use super::hide_run_output;
+
+    fn failed_install() -> ExtensionRun {
+        ExtensionRun {
+            at_ms: 1,
+            action: ExtensionRunAction::Install,
+            from_version: None,
+            to_version: Some("1.2.0".to_owned()),
+            outcome: ExtensionRunOutcome::Failed,
+            output: vec!["ran npm install -> 3".to_owned()],
+        }
+    }
+
+    /// Output lines name the service host's commands, so a caller without host administration sees the runs without them.
+    #[test]
+    fn a_caller_without_host_administration_gets_the_runs_without_output() {
+        let mut runs = vec![failed_install()];
+        hide_run_output(&mut runs, false);
+        assert!(runs[0].output.is_empty());
+        assert_eq!(runs[0].outcome, ExtensionRunOutcome::Failed);
+        assert_eq!(runs[0].to_version.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn a_host_administrator_gets_the_output_of_each_run() {
+        let mut runs = vec![failed_install()];
+        hide_run_output(&mut runs, true);
+        assert_eq!(runs[0].output, ["ran npm install -> 3"]);
     }
 }

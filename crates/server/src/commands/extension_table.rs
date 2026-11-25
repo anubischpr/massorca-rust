@@ -76,6 +76,12 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             ),
         ),
         command(
+            "extension.log",
+            "Show the recent install, update, rollback and remove runs of an extension",
+            "extensions.log",
+            args(&["id"], json!({ "id": { "type": "string" } })),
+        ),
+        command(
             "extension.enable",
             "Enable an installed extension",
             "extensions.set_enabled",

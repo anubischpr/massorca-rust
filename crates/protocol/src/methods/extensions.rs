@@ -27,6 +27,8 @@ pub const UPDATE: &str = "extensions.update";
 /// Params: [`ExtensionRollbackParams`]. Result: [`ExtensionInstalled`], the package as rolled back. Runs no vendor command.
 /// Refused with `extension.no_previous_version` when no version is kept. Capability `extensions-rollback/1`.
 pub const ROLLBACK: &str = "extensions.rollback";
+/// Params: [`ExtensionRef`]. Result: [`ExtensionLog`], the package's recent runs. Capability `extensions-log/1`.
+pub const LOG: &str = "extensions.log";
 
 /// Selector for `extensions.get`: a package id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +109,53 @@ pub struct ExtensionRollbackParams {
     /// (`extension.needs_person`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
+}
+
+/// Result of `extensions.log`: the package's runs, oldest first. Output lines are empty for a caller without host
+/// administration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionLog {
+    pub id: String,
+    pub runs: Vec<ExtensionRun>,
+}
+
+/// One run in a package's log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionRun {
+    pub at_ms: u64,
+    pub action: ExtensionRunAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_version: Option<String>,
+    pub outcome: ExtensionRunOutcome,
+    /// The tail of the vendor command output the run wrote, redacted and capped; empty when none ran.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output: Vec<String>,
+}
+
+/// What a run did to a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionRunAction {
+    Install,
+    Update,
+    Rollback,
+    Remove,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// How a run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionRunOutcome {
+    Ok,
+    Failed,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Params of `extensions.set_enabled`.

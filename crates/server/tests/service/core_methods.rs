@@ -118,8 +118,19 @@ const EXTENSION_METHODS: &[(&str, Permission)] = &[
     (extensions::UPDATE, Permission::HostAdmin),
 ];
 
-/// The extension methods that sit behind their own capability (`extensions-rollback/1`).
-const ROLLBACK_METHOD: (&str, Permission) = (extensions::ROLLBACK, Permission::HostAdmin);
+/// The extension methods behind their own capability, with that capability and permission.
+const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
+    (
+        extensions::ROLLBACK,
+        capabilities::EXTENSIONS_ROLLBACK,
+        Permission::HostAdmin,
+    ),
+    (
+        extensions::LOG,
+        capabilities::EXTENSIONS_LOG,
+        Permission::Read,
+    ),
+];
 
 /// The skill methods this build registers (capability `skills/1`).
 const SKILL_METHODS: [(&str, Permission); 1] = [(skills::DISCOVER, Permission::Read)];
@@ -302,18 +313,16 @@ async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
         assert_eq!(info.capability, capabilities::EXTENSIONS, "{method}");
         assert_eq!(info.permission, permission, "{method}");
     }
-    let (rollback, permission) = ROLLBACK_METHOD;
-    let info = methods
-        .methods()
-        .into_iter()
-        .find(|info| info.method == rollback)
-        .unwrap_or_else(|| panic!("{rollback} is registered"));
-    assert_eq!(
-        info.capability,
-        capabilities::EXTENSIONS_ROLLBACK,
-        "{rollback}"
-    );
-    assert_eq!(info.permission, permission, "{rollback}");
+    for &(method, capability, permission) in OWN_CAPABILITY_METHODS {
+        let info = methods
+            .methods()
+            .into_iter()
+            .find(|info| info.method == method)
+            .unwrap_or_else(|| panic!("{method} is registered"));
+        assert_eq!(info.owner, Owner::Core, "{method}");
+        assert_eq!(info.capability, capability, "{method}");
+        assert_eq!(info.permission, permission, "{method}");
+    }
     for (method, permission) in SKILL_METHODS {
         let info = methods
             .methods()

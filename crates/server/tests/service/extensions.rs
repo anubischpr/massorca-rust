@@ -13,8 +13,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionAssetParams, ExtensionInstallParams, ExtensionRemoveParams,
-    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
-    RiskLevel,
+    ExtensionRollbackParams, ExtensionRunAction, ExtensionRunOutcome, ExtensionSetEnabledParams,
+    ExtensionState, ExtensionUpdateParams, RiskLevel,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -615,5 +615,43 @@ async fn rollback_restores_the_version_an_update_replaced_and_refuses_what_it_ca
         .await
         .expect("rolls back");
     assert_eq!(rolled.version, "1.2.0");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn log_lists_the_runs_of_a_package_and_refuses_an_id_that_is_not_one() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let empty = client.extension_log("acme.kit").await.expect("the log");
+    assert!(empty.runs.is_empty(), "nothing has run yet");
+
+    let review = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_install(&ExtensionInstallParams {
+            source,
+            consent: Some(review.consent),
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("installs");
+
+    let log = client.extension_log("acme.kit").await.expect("the log");
+    assert_eq!(log.id, "acme.kit");
+    assert_eq!(log.runs.len(), 1);
+    assert_eq!(log.runs[0].action, ExtensionRunAction::Install);
+    assert_eq!(log.runs[0].outcome, ExtensionRunOutcome::Ok);
+    assert_eq!(log.runs[0].to_version.as_deref(), Some("1.2.0"));
+    let invalid = client
+        .extension_log("../acme.kit")
+        .await
+        .expect_err("not an id");
+    assert_eq!(remote_code(&invalid), codes::EXTENSION_NOT_FOUND);
     stop(running).await;
 }

@@ -88,3 +88,33 @@ fn rollback_params_omit_unset_optionals_and_decode_an_id_alone() {
 fn rollback_is_an_extension_method_with_its_wire_name() {
     assert_eq!(extensions::ROLLBACK, "extensions.rollback");
 }
+
+#[test]
+fn a_run_log_decodes_newer_values_as_unknown_and_omits_unset_output() {
+    let log: extensions::ExtensionLog = serde_json::from_value(json!({
+        "id": "acme.kit",
+        "runs": [
+            { "at_ms": 5, "action": "rollback", "from_version": "1.3.0", "to_version": "1.2.0", "outcome": "ok" },
+            { "at_ms": 6, "action": "prune", "outcome": "partly", "output": ["line"] }
+        ]
+    }))
+    .expect("decodes");
+
+    assert_eq!(log.runs[0].action, extensions::ExtensionRunAction::Rollback);
+    assert_eq!(log.runs[0].outcome, extensions::ExtensionRunOutcome::Ok);
+    assert!(log.runs[0].output.is_empty());
+    assert_eq!(log.runs[1].action, extensions::ExtensionRunAction::Unknown);
+    assert_eq!(
+        log.runs[1].outcome,
+        extensions::ExtensionRunOutcome::Unknown
+    );
+    assert_eq!(log.runs[1].output, ["line"]);
+    let value = serde_json::to_value(&log.runs[0]).expect("serializes");
+    assert!(value.get("output").is_none());
+    assert!(value.get("to_version").is_some());
+}
+
+#[test]
+fn the_run_log_is_an_extension_method_with_its_wire_name() {
+    assert_eq!(extensions::LOG, "extensions.log");
+}

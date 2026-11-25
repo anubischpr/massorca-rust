@@ -2,9 +2,9 @@
 
 use massorca_protocol::methods::extensions::{
     self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
-    ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRef,
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionRollbackParams,
-    ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionLog,
+    ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 
 use crate::client::Client;
@@ -73,6 +73,12 @@ impl Client {
         params: &ExtensionRollbackParams,
     ) -> Result<ExtensionInstalled, ClientError> {
         self.call(extensions::ROLLBACK, params).await
+    }
+
+    /// `extensions.log`: the recent runs of a package, oldest first.
+    pub async fn extension_log(&self, id: &str) -> Result<ExtensionLog, ClientError> {
+        let params = ExtensionRef { id: id.to_owned() };
+        self.call(extensions::LOG, &params).await
     }
 
     /// `extensions.remove`: removes a package. May run a vendor uninstaller.
