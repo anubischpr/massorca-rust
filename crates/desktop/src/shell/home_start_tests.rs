@@ -119,6 +119,38 @@ fn expect_start(script: &mut Script) -> StartCall {
 }
 
 #[gpui::test]
+fn a_new_workspace_shows_a_placeholder_row_until_its_session_replaces_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (_, reply) = expect_create(&mut rig.script);
+    let created = workspace("w9", "p1", "fix-the-login-bug", 9);
+    reply
+        .send(Ok(created.clone()))
+        .expect("the shell waits for the create");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-placeholder-w9").is_some(),
+        "the workspace shows its row while the agent starts"
+    );
+    let (_, reply) = expect_start(&mut rig.script);
+    let session = agent("s9", "w9", 9);
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell waits for the start");
+    rig.updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w9").is_none());
+    assert!(cx.debug_bounds("sidebar-session-s9").is_some());
+}
+
+#[gpui::test]
 fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
     draw(cx);

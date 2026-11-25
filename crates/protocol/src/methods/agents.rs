@@ -861,6 +861,41 @@ pub struct AgentSession {
     /// session view; absent from an older peer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<ResumeState>,
+    /// What children the session could delegate now (decision 0161). Set by the service on every session view; absent
+    /// from an older peer. Boxed to keep the record small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<Box<DelegationOptions>>,
+    /// Notes on the session in plain words (decision 0161): that a writing child of a plain folder shares its parent's
+    /// folder, and that the current run got no delegation instructions because its CLI does not take them. Empty
+    /// (absent) otherwise, and from an older peer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// The children a session could delegate now (decision 0161).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationOptions {
+    pub writing_child: WritingChild,
+    /// False only when no child is possible at all, as at the delegation depth limit.
+    pub read_only_child: bool,
+    /// Why a writing child is `unavailable`, in plain words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Where a writing child of a session would work (decision 0161).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WritingChild {
+    /// A new worktree of its own, on a branch from the parent workspace's branch.
+    OwnWorktree,
+    /// The parent's plain folder, shared with the parent's delegation tree.
+    SharedFolder,
+    /// No writing child is possible; `reason` says why.
+    Unavailable,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Whether a session can be resumed (decision 0160). `code` and `reason` say why not when `available` is false.

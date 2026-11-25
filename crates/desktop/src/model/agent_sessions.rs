@@ -106,15 +106,16 @@ fn title_of(session: &AgentSession, workspace: Option<&Workspace>) -> String {
     session
         .title
         .clone()
-        .or_else(|| {
-            workspace.map(|workspace| {
-                workspace
-                    .branch
-                    .clone()
-                    .unwrap_or_else(|| workspace.name.clone())
-            })
-        })
+        .or_else(|| workspace.map(workspace_title))
         .unwrap_or_else(|| UNTITLED.to_owned())
+}
+
+/// A workspace's name in a row until its agent sets a title: its branch, or the folder's name for a plain folder (A97).
+pub fn workspace_title(workspace: &Workspace) -> String {
+    workspace
+        .branch
+        .clone()
+        .unwrap_or_else(|| workspace.name.clone())
 }
 
 /// Where a child runs: its parent's worktree, or its own worktree by the branch it is on (DelegationTree).
