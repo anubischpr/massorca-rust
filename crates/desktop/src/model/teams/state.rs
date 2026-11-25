@@ -278,6 +278,7 @@ impl TeamsState {
             model: new.model,
             effort: new.effort,
             kind_unavailable: None,
+            skills: Vec::new(),
         });
         if team.lead.is_none() {
             team.lead = Some(id);

@@ -70,6 +70,7 @@ fn bot(id: BotId, name: &str, role: &str, kind: &str) -> Bot {
         model: None,
         effort: None,
         kind_unavailable: None,
+        skills: Vec::new(),
     }
 }
 

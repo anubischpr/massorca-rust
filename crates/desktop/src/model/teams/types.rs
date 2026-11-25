@@ -107,6 +107,8 @@ pub struct Bot {
     pub agent: Option<Agent>,
     /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.
     pub kind_unavailable: Option<&'static str>,
+    /// The skills the bot is given, by name, in the order chosen.
+    pub skills: Vec<String>,
 }
 
 /// A task on a Board. Its card shows the column's status word, the bot and the time.
