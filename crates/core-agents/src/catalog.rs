@@ -598,9 +598,33 @@ mod tests {
         let accounts = claude.accounts.as_ref().unwrap();
         assert_eq!(accounts.login, ["auth", "login"]);
         let check = accounts.check.as_ref().unwrap();
-        assert_eq!(check.args, ["auth", "status"]);
+        assert_eq!(check.args, ["auth", "status", "--json"]);
         assert_eq!(check.signed_in_exit, 0);
         assert_eq!(check.expired_pattern, None);
+        // The identity is the `email` and `orgName` of `auth status --json` (decision 0098), so a second import of the same login
+        // updates the account it already is.
+        let status = "{
+  \"loggedIn\": true,
+  \"email\": \"someone@example.test\",
+  \"orgName\": null
+}";
+        let found = crate::account_check::verdict(check, Some(0), status);
+        assert_eq!(found.state, wire::AccountState::SignedIn);
+        assert_eq!(found.identity.as_deref(), Some("someone@example.test"));
+        let without_email = crate::account_check::verdict(check, Some(0), "{\"loggedIn\": true}");
+        assert_eq!(without_email.identity, None);
+        // One email in two organisations is two logins, so the organisation is part of the identity.
+        let with_org = crate::account_check::verdict(
+            check,
+            Some(0),
+            "{\"loggedIn\": true, \"email\": \"someone@example.test\", \"orgName\": \"Acme\"}",
+        );
+        assert_eq!(
+            with_org.identity.as_deref(),
+            Some("someone@example.test / Acme")
+        );
+        let logged_out = crate::account_check::verdict(check, Some(0), "{\"loggedIn\": false}");
+        assert_eq!(logged_out.state, wire::AccountState::NeedsSignIn);
         assert_eq!(check.identity_pattern, None);
         assert_eq!(
             accounts.logout,

@@ -54,9 +54,10 @@ use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use std::collections::BTreeSet;
+
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -115,7 +116,7 @@ mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
-mod sidebar_fold_tests;
+mod sidebar_session_rows_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -268,8 +269,8 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
-    sidebar_folds: SidebarFolds,
+    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    collapsed_projects: BTreeSet<String>,
 }
 
 impl Shell {
@@ -554,7 +555,7 @@ impl Shell {
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
-            sidebar_folds: SidebarFolds::default(),
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -881,7 +882,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -907,7 +908,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         true,
                         self.rail.morph_generation(),

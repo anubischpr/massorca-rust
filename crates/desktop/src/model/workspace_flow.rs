@@ -265,6 +265,7 @@ pub enum WorkspaceMenuId {
     OpenFileManager,
     OpenTerminal,
     OpenEditor,
+    OpenFolder,
     Rename,
     EditWorkspace,
     SourceControl,
@@ -349,6 +350,24 @@ pub fn workspace_menu(workspace: &Workspace) -> Vec<WorkspaceMenuEntry> {
         },
         WorkspaceMenuEntry::Divider,
         item(WorkspaceMenuId::Delete, "Delete workspace", None),
+    ]
+}
+
+/// The menu of a session's row (A97): Copy path, Open folder and Reveal in Work panel. A row whose layer
+/// is not built yet is off with its reason.
+pub fn session_menu() -> Vec<WorkspaceMenuEntry> {
+    vec![
+        item(WorkspaceMenuId::CopyPath, "Copy path", None),
+        item(
+            WorkspaceMenuId::OpenFolder,
+            "Open folder",
+            Some(TOOLS_LATER),
+        ),
+        item(
+            WorkspaceMenuId::RevealInWorkPanel,
+            "Reveal in Work panel",
+            Some(WORK_PANEL_LATER),
+        ),
     ]
 }
 

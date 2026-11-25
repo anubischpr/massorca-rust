@@ -208,7 +208,8 @@ source ─► fetch ─► verify ─► review ─► install ─► enabled �
      therefore always goes back through review.
    - Otherwise it waits in Updates with the review listing the new
      permissions first.
-   - The previous version stays on disk for Roll back.
+   - The replaced version stays on disk, one back, for `extensions.rollback`
+     (decision 0100). The version before it is removed at the next update.
 7. **Disable.** Unregisters everything. Files and data are kept.
 8. **Remove.** Deletes the package, its storage
    (`<profile>/extensions/data/<id>/`) and its settings, after X-DLG-01.
@@ -375,10 +376,12 @@ CSP. Nothing above changes.
   - `extensions.inspect(source)`: verify and return the review data, install
     nothing;
   - `extensions.install(source, consent-fingerprint, scope)`;
-  - `extensions.update`, `extensions.rollback`;
+  - `extensions.update`;
+  - `extensions.rollback` (capability `extensions-rollback/1`, decision 0100);
   - `extensions.set-enabled`, `extensions.set-permission`;
   - `extensions.remove`;
-  - `extensions.logs` (a stream);
+  - `extensions.log` (capability `extensions-log/1`, decision 0100): the recent install, update, rollback and
+    remove runs of a package, as a snapshot;
   - `extensions.dev.reload`;
   - `marketplace.search`, `marketplace.sources.*`.
 - **Capability `skills/1` (SKL-01).** `skills.discover(refresh?, source_kinds?)`

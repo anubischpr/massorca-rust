@@ -35,7 +35,12 @@
   },
   "accounts": {
     "login": ["auth", "login"],
-    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "check": {
+      "args": ["auth", "status", "--json"],
+      "signed_in_exit": 0,
+      "identity_json": ["email", "orgName"],
+      "signed_in_json": "loggedIn"
+    },
     "logout": ["auth", "logout"],
     "strip_env": [
       "ANTHROPIC_API_KEY",

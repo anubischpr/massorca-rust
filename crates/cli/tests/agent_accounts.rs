@@ -1725,10 +1725,10 @@ fn a_re_sign_in_left_open_by_a_restart_leaves_the_account_as_it_was() {
     assert_eq!(accounts(&sandbox).len(), 1, "the account is kept");
 }
 
-/// A second import of a login already added (the same identity, compared without case) is refused: the first account
-/// stays, the second gets no account, and its copied files are deleted (ACC-03, as pv96 refuses a duplicate add).
+/// A second import of a login already added (the same identity, compared without case) updates the first account: it
+/// gets the new files, and no second account or home is left (ACC-03, decision 0098).
 #[test]
-fn an_import_of_a_login_already_added_is_refused_and_keeps_the_first() {
+fn an_import_of_a_login_already_added_updates_the_first() {
     let sandbox = Sandbox::new();
     declare_fake(&sandbox);
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
@@ -1742,12 +1742,11 @@ fn an_import_of_a_login_already_added_is_refused_and_keeps_the_first() {
         &[("token.json", r#"{"email":"FAKE@example.com"}"#)],
     );
 
-    let refused = import(&sandbox, &again, "again");
+    let updated = import(&sandbox, &again, "again");
 
-    assert_eq!(refused["result"], "failed", "{refused}");
-    assert!(refused["account"].is_null(), "{refused}");
-    let reason = refused["reason"].as_str().expect("a reason");
-    assert!(reason.contains(&first_id), "{reason}");
+    assert_eq!(updated["result"], "imported", "{updated}");
+    assert_eq!(updated["updated"], first_id.as_str(), "{updated}");
+    assert_eq!(updated["account"]["label"], "first", "{updated}");
     let listed = accounts(&sandbox);
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0]["id"], first_id.as_str());
@@ -1762,10 +1761,16 @@ fn an_import_of_a_login_already_added_is_refused_and_keeps_the_first() {
         .map(|entry| entry.file_name())
         .collect();
     assert_eq!(left, [std::ffi::OsString::from(&first_id)], "{left:?}");
+    assert_eq!(
+        fs::read_to_string(homes.join(&first_id).join("token.json")).expect("the token"),
+        r#"{"email":"FAKE@example.com"}"#,
+        "the first account has the new files"
+    );
 }
 
-/// A sign-in whose login turns out to be an account already added is discarded without the vendor sign-out, which
-/// would end the session the first account shares; the first account stays signed in (ACC-03).
+/// A sign-in whose login turns out to be an account already added updates that account and leaves no second one, without
+/// the vendor sign-out, which would end the session both share; the first account stays signed in (ACC-03, decision
+/// 0098).
 #[test]
 fn a_sign_in_of_a_login_already_added_is_discarded_without_signing_out() {
     let sandbox = Sandbox::new();
@@ -2118,4 +2123,191 @@ fn import_without_from_skips_an_oversized_optional_file_and_says_why() {
         !home.join("extra.json").exists(),
         "the oversized optional file is skipped"
     );
+}
+
+/// A token of the first login with other contents: the same identity, so a second import of it updates that account.
+const FAKE_TOKEN_RENEWED: &str = r#"{"fake":true,"refresh":"renewed-fake-value"}"#;
+
+#[test]
+fn importing_a_login_that_is_already_an_account_updates_that_account() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let user = fake_user_home(&sandbox);
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+    let (project, _) = project_with_main(&sandbox, "notes");
+
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let imported = import(&sandbox, &first, "first");
+    assert_eq!(imported["result"], "imported", "{imported}");
+    assert!(
+        imported.get("updated").is_none(),
+        "a new account: {imported}"
+    );
+    let id = imported["account"]["id"].as_str().unwrap().to_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "activate",
+            "fake",
+            &id,
+            "--project",
+            &project,
+        ],
+    );
+
+    // The agent's own files in the account's home: an update must keep them (decision 0098).
+    let first_home = account_home(&sandbox, &id);
+    fs::create_dir_all(first_home.join("projects")).unwrap();
+    fs::write(
+        first_home.join("projects").join("x.jsonl"),
+        "transcript
+",
+    )
+    .unwrap();
+
+    let renewed = source_with(&sandbox, "renewed", &[("token.json", FAKE_TOKEN_RENEWED)]);
+    let again = import(&sandbox, &renewed, "second");
+    assert_eq!(again["result"], "imported", "{again}");
+    assert_eq!(again["updated"], id.as_str(), "{again}");
+    assert_eq!(again["account"]["id"], id.as_str(), "{again}");
+    assert_eq!(
+        again["account"]["label"], "first",
+        "the label stays: {again}"
+    );
+
+    let listed = accounts(&sandbox);
+    assert_eq!(listed.len(), 1, "one account: {listed:?}");
+    assert_eq!(listed[0]["id"], id.as_str());
+    assert_eq!(listed[0]["state"], "signed_in");
+    assert_eq!(listed[0]["identity"], "fake@example.com");
+    assert_eq!(listed[0]["active"], true, "it stays active");
+    assert_eq!(
+        listed[0]["projects"],
+        json!([project]),
+        "its project keeps it"
+    );
+    let home = account_home(&sandbox, &id);
+    assert_eq!(
+        fs::read_to_string(home.join("token.json")).unwrap(),
+        FAKE_TOKEN_RENEWED,
+        "the account has the new files"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join("projects").join("x.jsonl")).unwrap(),
+        "transcript
+",
+        "the account's other files stay"
+    );
+    let left: Vec<String> = fs::read_dir(home.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, [id.as_str()], "no other home is left: {left:?}");
+
+    let text = sandbox
+        .run(
+            "default",
+            &[
+                "agent",
+                "accounts",
+                "import",
+                "fake",
+                "--from",
+                path_text(&first),
+            ],
+        )
+        .success();
+    let printed = stdout_text(&text);
+    assert!(
+        printed.contains(&format!("updated account {id}")),
+        "{printed}"
+    );
+    assert_eq!(accounts(&sandbox).len(), 1);
+}
+
+/// Declares kind `fake` whose check prints JSON (the fake agent's `whoami-json`), read with `identity_json` and
+/// `signed_in_json` as Claude's is (decision 0098).
+fn declare_json_kind(sandbox: &Sandbox) {
+    let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
+    fs::create_dir_all(&dir).expect("create the kinds directory");
+    let fake = json!({
+        "id": "fake",
+        "name": "Fake agent",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "prompt": { "mode": "argv" },
+        "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
+        "accounts": {
+            "login": ["login"],
+            "logout": ["logout"],
+            "check": {
+                "args": ["whoami-json"],
+                "signed_in_exit": 0,
+                "identity_json": ["email", "orgName"],
+                "signed_in_json": "loggedIn"
+            }
+        }
+    });
+    fs::write(dir.join("fake.json"), fake.to_string()).expect("write the fake kind");
+}
+
+#[test]
+fn a_json_check_tells_one_email_in_two_organisations_apart_and_reads_logged_out() {
+    let sandbox = Sandbox::new();
+    declare_json_kind(&sandbox);
+    let user = fake_user_home(&sandbox);
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let one = source_with(
+        &sandbox,
+        "one",
+        &[("token.json", r#"{"email":"same@example.com","org":"One"}"#)],
+    );
+    let two = source_with(
+        &sandbox,
+        "two",
+        &[("token.json", r#"{"email":"same@example.com","org":"Two"}"#)],
+    );
+    let first = import(&sandbox, &one, "one");
+    let second = import(&sandbox, &two, "two");
+    assert_eq!(
+        first["account"]["identity"], "same@example.com / One",
+        "{first}"
+    );
+    assert_eq!(
+        second["account"]["identity"], "same@example.com / Two",
+        "{second}"
+    );
+    assert!(
+        second.get("updated").is_none(),
+        "another organisation is another login: {second}"
+    );
+    assert_eq!(accounts(&sandbox).len(), 2);
+
+    let one_again = source_with(
+        &sandbox,
+        "one-again",
+        &[(
+            "token.json",
+            r#"{"email":"SAME@example.com","org":"One","refresh":"new"}"#,
+        )],
+    );
+    let updated = import(&sandbox, &one_again, "again");
+    assert_eq!(updated["updated"], first["account"]["id"], "{updated}");
+    assert_eq!(accounts(&sandbox).len(), 2);
+
+    let logged_out = source_with(
+        &sandbox,
+        "logged-out",
+        &[("token.json", r#"{"loggedOut":true}"#)],
+    );
+    let refused = import(&sandbox, &logged_out, "out");
+    assert_eq!(
+        refused["result"], "failed",
+        "a JSON status that is not logged in: {refused}"
+    );
+    assert_eq!(accounts(&sandbox).len(), 2);
 }
