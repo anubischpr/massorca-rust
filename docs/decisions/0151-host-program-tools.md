@@ -18,8 +18,14 @@ installer commands in the app; its executors and plans were read by name only.
   its id may not repeat an agent adapter id, and its commands must start with an allowlisted vendor program. Only the
   built-in catalogue may declare a vendor command, as for agents.
 - **Category.** The listing category `tools` is new; a package with host programs and no agent adapter derives it.
-- **Catalogue.** `massorca.git`, `massorca.gh` and `massorca.node` are built in. Windows uses `winget`, macOS uses
-  `brew`. Linux has no step: `apt` and `dnf` need administrator rights, which MassOrca never asks for.
+- **Catalogue.** `massorca.git`, `massorca.gh` and `massorca.node` are built in. Windows uses `winget --id <Id> -e`,
+  macOS uses `brew`. pv96's exact installer flags were not readable (its executors and plans were read by name only),
+  so these follow each vendor's documented command.
+- **Manual steps.** An install step may be marked `manual`: it needs administrator rights, so MassOrca never runs it.
+  The review returns a `manual` plan with the commands, and the Marketplace and the CLI show "Run this command
+  yourself" with the exact command and a Copy button. Only install steps may be manual, and an OS lists either one run
+  step or several manual ones. Linux gets its install path this way: `sudo apt-get install` or `sudo dnf install`. The
+  package registers, and the program is found once the person has run the command.
 - **Detection.** A host program is planned and listed through the service's program resolver, so the registry PATH
   merge of 0092 applies on Windows. Items carry `programs` beside `agents` (new optional field).
 - **Install.** The install review, consent fingerprint, vendor command, verify step and lockfile record are the ones
@@ -34,8 +40,11 @@ installer commands in the app; its executors and plans were read by name only.
   `extensions-programs/1`; the run needs host administration and is refused for an agent run.
 - **Desktop.** The Marketplace has a Tools category. Install uses the existing review dialog: one sentence, the
   technical lines under Show details, and the button Install or Add to MassOrca; a tool already on the host is added
-  with "MassOrca will add the <name> you already have installed on this computer." The bridge carries both update calls.
-  The item page shows no update action yet, because a menu shows only actions that work.
+  with "MassOrca will add the <name> you already have installed on this computer." Update shows on the tool's item page
+  and in the More menu of its card only when the service offers `extensions-programs/1`, the item is on This computer,
+  MassOrca installed the program and the package has an update command for this OS. It opens the same dialog: "MassOrca
+  will install the latest <name> on this computer.", the command and consent under Show details, and the button
+  Update. Update is not offered for paired hosts yet.
 - **CLI.** `massorca extension program-update <id> <program>` prints the command and stops without `--yes` or
   `--consent`. `extension doctor` and `extension show` list host programs.
 
@@ -47,6 +56,8 @@ installer commands in the app; its executors and plans were read by name only.
 
 ## Consequences
 
-- An older client lists a tool package as an extension, because it maps an unknown category that way.
+- An older client lists a tool package as an extension, because it maps an unknown category that way. That is
+  accepted: every wire change here is additive.
 - Tests run every vendor command against fakes; no session runs a real install, update or uninstall.
-- The Linux install path and the Git one-click adoption of pv96 remain open.
+- An installer that asks for elevation by itself, such as a machine-wide winget install, is not detected in advance.
+- The Git one-click adoption of pv96 remains open.
