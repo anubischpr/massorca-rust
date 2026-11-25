@@ -27,7 +27,7 @@ use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
     AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind,
+    PromptReceipt, ReceiptKind, ResumeState,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -47,6 +47,7 @@ use crate::provided_env::{
     EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
 };
 use crate::resolve::{SearchEnv, resolve_first};
+use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
 mod delegation;
@@ -247,6 +248,9 @@ pub struct AgentsConfig {
     /// The packages that provide kinds and their state (decision 0059); [`crate::BuiltInPackages`] until the extension
     /// runtime provides them.
     pub kind_packages: Arc<dyn KindPackages>,
+    /// The variables the vendor CLIs read, for the check that a session's saved conversation exists (decision 0160).
+    /// `None` checks only account homes in the profile.
+    pub vendor_env: Option<crate::VendorEnv>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -279,6 +283,8 @@ struct Inner {
     /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
     /// held.
     merging: Mutex<HashSet<String>>,
+    /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
+    found_transcripts: resume_state::FoundTranscripts,
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
@@ -360,6 +366,7 @@ impl Agents {
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
+                found_transcripts: resume_state::FoundTranscripts::default(),
                 sign_in_timeout: crate::sign_in::sign_in_timeout_from(
                     std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
                         .ok()
@@ -612,6 +619,11 @@ impl Agents {
         // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
+        resume_state::record_probe(&run_dir, &decl, None)
+            .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
+            .inspect_err(|_| remove_dir(&run_dir))?;
+        self.inner.found_transcripts.clear();
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -731,6 +743,32 @@ impl Agents {
             .clone()
             .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
         let (decl, program) = self.resumable_kind(&row)?;
+        // The CLI saved no conversation for the ref, or a resume already found none (decision 0160): refused before a run
+        // that would only fail.
+        let state = resume_state::resume_state(&ResumeInputs {
+            decl: Ok(&decl),
+            agent_ref: Some(&agent_ref),
+            exited: true,
+            profile_dir: self.profile_dir(),
+            session_id: &row.id,
+            vendor_env: self.inner.config.vendor_env.as_ref(),
+            found: Some(&self.inner.found_transcripts),
+        });
+        if let (false, Some(code)) = (state.available, state.code.as_deref())
+            && code == codes::AGENT_RESUME_NOT_FOUND
+        {
+            return Err(AgentError::new(
+                codes::AGENT_RESUME_NOT_FOUND,
+                format!(
+                    "session {} cannot resume: {}",
+                    row.id,
+                    state
+                        .reason
+                        .as_deref()
+                        .unwrap_or(resume_state::NOT_FOUND_REASON)
+                ),
+            ));
+        }
         let (mode, still_pending) = modes::plan_resume(
             &decl,
             permission_mode,
@@ -800,6 +838,11 @@ impl Agents {
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
+        // directory holds the earlier run's files, so it is kept on a failure here.
+        resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
+        resume_state::record_run_account(&run_dir, access.account.as_deref())?;
+        self.inner.found_transcripts.clear();
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -1301,10 +1344,16 @@ impl Agents {
             Some(selector) => Some(self.inner.config.workspaces.show_workspace(selector)?.id),
             None => None,
         };
+        // One catalog for the whole list: each row's resume state reads its kind from it (decision 0160).
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         self.store()
             .list_agent_sessions(workspace_id.as_deref())?
             .into_iter()
-            .map(|row| self.view(row))
+            .map(|row| {
+                let mut live = lock(&self.inner.status);
+                let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
+                self.view_in(&mut live, row, Some(&catalog))
+            })
             .collect()
     }
 
@@ -1690,7 +1739,17 @@ impl Agents {
     fn view_with(
         &self,
         live: &mut LiveRuns,
+        row: AgentSessionRow,
+    ) -> Result<AgentSession, AgentError> {
+        self.view_in(live, row, None)
+    }
+
+    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one.
+    fn view_in(
+        &self,
+        live: &mut LiveRuns,
         mut row: AgentSessionRow,
+        catalog: Option<&Catalog>,
     ) -> Result<AgentSession, AgentError> {
         let execution = match (&row.exit, &row.terminal_id) {
             (Some(exit), _) => {
@@ -1719,7 +1778,42 @@ impl Agents {
                 }
             }
         };
-        Ok(record(row, execution))
+        let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
+        Ok(record(row, execution, resume))
+    }
+
+    /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
+    /// for this view. The transcript is looked for only once the run has exited, and a found one is kept in memory
+    /// until a run starts or exits.
+    fn resume_of(
+        &self,
+        row: &AgentSessionRow,
+        exited: bool,
+        catalog: Option<&Catalog>,
+    ) -> ResumeState {
+        let loaded;
+        let catalog = match catalog {
+            Some(catalog) => catalog,
+            None => {
+                loaded = Catalog::load(self.kind_packages(), self.profile_dir());
+                &loaded
+            }
+        };
+        let decl = match catalog.find(&row.kind) {
+            None => Err(format!("kind {} is no longer declared", row.kind)),
+            Some(entry) => entry
+                .valid()
+                .ok_or_else(|| format!("kind {} is invalid", row.kind)),
+        };
+        resume_state::resume_state(&ResumeInputs {
+            decl,
+            agent_ref: row.agent_ref.as_deref(),
+            exited,
+            profile_dir: self.profile_dir(),
+            session_id: &row.id,
+            vendor_env: self.inner.config.vendor_env.as_ref(),
+            found: Some(&self.inner.found_transcripts),
+        })
     }
 
     /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once. The end is
@@ -1735,12 +1829,26 @@ impl Agents {
         let changed = self
             .store()
             .set_agent_session_exit(&row.id, terminal, &exit)?;
-        if changed {
+        let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
+        if let Some(catalog) = &catalog {
             live.remove(&row.id);
+            self.inner.found_transcripts.clear();
             // The exit rule reads the activity and result as they are now, under the status lock.
             if let Some(fresh) = self.store().get_agent_session(&row.id)? {
                 *row = fresh;
             }
+            // A resumed run that failed early because its CLI found no conversation leaves the session unable to
+            // resume (decision 0160). A resume clears the activity, so one here means the run reported.
+            let facts = resume_state::ExitFacts {
+                failed: exit.code.is_some_and(|code| code != 0),
+                reported: row.activity.is_some(),
+            };
+            resume_state::classify_exit(
+                &paths::run_dir(self.profile_dir(), &row.id),
+                catalog.find(&row.kind).and_then(|entry| entry.valid()),
+                facts,
+                || self.inner.config.terminals.text(terminal).ok(),
+            );
             if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
                 self.store().set_agent_session_status(
                     &row.id,
@@ -1753,10 +1861,12 @@ impl Agents {
         }
         let execution = exited(&exit);
         row.exit = Some(exit);
-        if changed {
+        if let Some(catalog) = &catalog {
+            let resume = self.resume_of(row, true, Some(catalog));
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
+                resume,
             ))));
         }
         Ok(execution)
@@ -1764,7 +1874,7 @@ impl Agents {
 }
 
 /// The wire record of a row with its execution.
-fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
+fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> AgentSession {
     AgentSession {
         id: row.id,
         kind: row.kind,
@@ -1787,6 +1897,7 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         released: row.released_at.is_some(),
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
+        resume: Some(resume),
     }
 }
 
@@ -2123,6 +2234,7 @@ pub(crate) mod tests {
             conversations_default: std::env::temp_dir().join("MassOrca").join("Conversations"),
             env_provider: None,
             kind_packages: packages,
+            vendor_env: None,
         });
         (agents, workspace.id, profile)
     }

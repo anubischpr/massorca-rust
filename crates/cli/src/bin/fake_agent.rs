@@ -4,7 +4,8 @@
 //! stdin, and reports its activity through `massorca agent hook` when `MASSORCA_BIN`
 //! names that program. It prints whether a credential file exists, never its contents, and whether the
 //! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values. It prints the permission mode it was started in
-//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it.
+//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it. It
+//! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160).
 
 use std::env;
 use std::ffi::OsString;
@@ -26,6 +27,12 @@ const CREDENTIAL_HOME_ENV: &str = "FAKE_AGENT_HOME";
 const CREDENTIAL_FILE: &str = "token.json";
 /// Comma-separated variable names whose state (`set`, `empty` or `unset`) is printed at start, never their values.
 const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
+/// Comma-separated `NAME=VALUE` pairs: start prints `env NAME foreign` when the variable holds VALUE, else `env NAME own`
+/// (decision 0160), so a test can see that an inherited value did not reach the run. Never a value.
+const PROBE_FOREIGN_ENV: &str = "FAKE_AGENT_PROBE_FOREIGN";
+/// Set to `1`, a run started with `--resume <ID>` prints the vendor's "no conversation" line and exits 1, as a CLI whose
+/// saved conversation is gone (decision 0160).
+const RESUME_MISSING_ENV: &str = "FAKE_AGENT_RESUME_MISSING";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
@@ -77,6 +84,12 @@ fn main() -> ExitCode {
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
+    if let Some(id) = &arguments.resume
+        && env::var_os(RESUME_MISSING_ENV).is_some_and(|value| value == "1")
+    {
+        say(&format!("No conversation found with session ID: {id}"));
+        return ExitCode::from(1);
+    }
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
@@ -237,6 +250,13 @@ impl Agent {
         }
         for name in probed_env() {
             say(&format!("env {name} {}", env_state(&name)));
+        }
+        for (name, foreign) in probed_foreign() {
+            let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
+            say(&format!(
+                "env {name} {}",
+                if held { "foreign" } else { "own" }
+            ));
         }
         self.hook("start", None);
     }
@@ -499,6 +519,17 @@ fn probed_env() -> Vec<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
+        .collect()
+}
+
+/// The `NAME=VALUE` pairs of [`PROBE_FOREIGN_ENV`].
+fn probed_foreign() -> Vec<(String, String)> {
+    env::var(PROBE_FOREIGN_ENV)
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| (name.trim().to_owned(), value.to_owned()))
+        .filter(|(name, _)| !name.is_empty())
         .collect()
 }
 

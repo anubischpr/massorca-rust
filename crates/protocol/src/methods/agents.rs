@@ -857,6 +857,43 @@ pub struct AgentSession {
     /// record stays. Absent when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub released: bool,
+    /// Whether `agent.resume` could start a new run of the session now (decision 0160). Set by the service on every
+    /// session view; absent from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<ResumeState>,
+}
+
+/// Whether a session can be resumed (decision 0160). `code` and `reason` say why not when `available` is false.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeState {
+    pub available: bool,
+    /// `agent.resume_unavailable` or `agent.resume_not_found`, the code `agent.resume` would refuse with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl ResumeState {
+    /// A session `agent.resume` would start a run of.
+    #[must_use]
+    pub fn available() -> Self {
+        Self {
+            available: true,
+            code: None,
+            reason: None,
+        }
+    }
+
+    /// A session `agent.resume` refuses with `code`, saying `reason`.
+    #[must_use]
+    pub fn refused(code: &str, reason: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            code: Some(code.to_owned()),
+            reason: Some(reason.into()),
+        }
+    }
 }
 
 /// Where a session's mode came from (decision 0083).
