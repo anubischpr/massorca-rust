@@ -4,7 +4,6 @@
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
@@ -538,7 +537,7 @@ fn an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list() {
     if std::env::var_os(FAKE_CLI_CHILD).is_none() {
         let bin = tempfile::TempDir::new().expect("a bin folder");
         write_fake_cli(bin.path());
-        let status = Command::new(std::env::current_exe().expect("this test binary"))
+        let status = massorca_process::command(std::env::current_exe().expect("this test binary"))
             .args([
                 "--exact",
                 "an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list",
