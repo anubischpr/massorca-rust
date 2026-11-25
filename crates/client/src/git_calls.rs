@@ -17,6 +17,7 @@ use massorca_protocol::methods::git::remote::{
     self, GitAborted, GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams,
     GitPushed,
 };
+use massorca_protocol::methods::git::remotes::{self, GitRemotes, GitRemotesParams};
 use massorca_protocol::methods::git::status::{self, GitStatus, GitStatusParams};
 
 use crate::client::Client;
@@ -27,6 +28,11 @@ impl Client {
     /// `git.status`: the changed files of a workspace and its branch state.
     pub async fn git_status(&self, params: &GitStatusParams) -> Result<GitStatus, ClientError> {
         self.call(status::STATUS, params).await
+    }
+
+    /// `git.remotes`: the hosting identity of each network remote of a workspace or project.
+    pub async fn git_remotes(&self, params: &GitRemotesParams) -> Result<GitRemotes, ClientError> {
+        self.call(remotes::REMOTES, params).await
     }
 
     /// `git.diff`: the files a comparison changes, with line counts and no patch text.

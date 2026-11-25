@@ -13,6 +13,18 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             workspace_args(json!({ "limit": { "type": "integer", "minimum": 1 } })),
         ),
         command(
+            "git.remotes",
+            "List the hosting provider, owner and repository of each network remote",
+            "git.remotes",
+            json!({
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "git.diff",
             "List the files a comparison changes",
             "git.diff",

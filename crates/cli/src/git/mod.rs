@@ -6,6 +6,7 @@ mod diff;
 mod index;
 mod log;
 mod remote;
+mod remotes;
 mod status;
 mod watch;
 
@@ -35,6 +36,8 @@ pub enum GitCommand {
     Pull(remote::PullArgs),
     /// Pushes the branch to its upstream, creating it on the remote if needed. Never forces.
     Push(remote::PushArgs),
+    /// Lists the hosting provider, owner and repository of each network remote, and a fork's upstream.
+    Remotes(remotes::RemotesArgs),
     /// Aborts the merge, rebase, cherry-pick or revert in progress.
     Abort(WorkspaceArg),
     /// Prints what changes in a workspace (working tree, index, HEAD, refs) until interrupted.
@@ -89,6 +92,7 @@ pub async fn execute(
         GitCommand::Fetch(args) => remote::run_fetch(&client, args, output).await,
         GitCommand::Pull(args) => remote::run_pull(&client, args, output).await,
         GitCommand::Push(args) => remote::run_push(&client, args, output).await,
+        GitCommand::Remotes(args) => remotes::run(&client, args, output).await,
         GitCommand::Abort(workspace) => remote::run_abort(&client, workspace, output).await,
         GitCommand::Watch(args) => watch::run(target, &client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
