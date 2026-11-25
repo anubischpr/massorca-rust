@@ -1,0 +1,490 @@
+//! `team.room_list` and `team.room_post` (capability `team-room/1`, decision 0102): a team's Conference room. A
+//! person's line becomes a task for one bot, which starts at once; the bot answers in the room, and posts again when the
+//! task ends (see `task_outcome`).
+
+use massorca_core_agents::{Agents, SecretGrant};
+use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRow, new_id, now_ms};
+use massorca_core_workspace::Workspaces;
+use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_ROOM_CHANGED};
+use massorca_protocol::methods::tasks::{TaskCreateParams, TaskOrigin};
+use massorca_protocol::methods::team_room::{
+    self, RoomAuthor, TeamRoomList, TeamRoomListParams, TeamRoomMessage, TeamRoomPostParams,
+    TeamRoomPosted,
+};
+use massorca_protocol::{ErrorBody, capabilities, codes};
+
+use crate::context::{Registries, RequestCtx};
+use crate::error::ServiceError;
+use crate::features::agents::secret_grant;
+use crate::features::workspace_domain::{for_mutation, publish};
+use crate::owner::Owner;
+use crate::permission::Permission;
+use crate::registry::RegistrationHandle;
+
+use super::task::{create_task, view_of};
+use super::task_start::{Changes, publish_changes, start_task};
+use super::{blocking, invalid, non_blank, selectors, store_error, task_state};
+
+/// The longest room line, in Unicode scalar values.
+const MAX_TEXT_CHARS: usize = 4000;
+/// The longest task title a line makes, in Unicode scalar values.
+const MAX_TITLE_CHARS: usize = 80;
+/// Lines `team.room_list` returns without a limit: the newest that many.
+const DEFAULT_LIMIT: usize = 200;
+/// What a person's line answers when the team has no bot to take it.
+pub(super) const NO_BOTS: &str = "Add a bot to this team first.";
+
+pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
+    let methods = &registries.methods;
+    Ok(vec![
+        registries
+            .capabilities
+            .register(capabilities::TEAM_ROOM, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            team_room::ROOM_LIST,
+            capabilities::TEAM_ROOM,
+            Permission::Read,
+            list,
+        )?,
+        // A person's line starts an agent, as `task.start` does.
+        methods.register(
+            Owner::Core,
+            team_room::ROOM_POST,
+            capabilities::TEAM_ROOM,
+            Permission::Workspace,
+            post,
+        )?,
+    ])
+}
+
+async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomList, ErrorBody> {
+    blocking(&ctx, move |store, agents| {
+        let team = selectors::team(store, &params.team)?;
+        let limit = params.limit.map_or(DEFAULT_LIMIT, |limit| {
+            usize::try_from(limit).unwrap_or(usize::MAX)
+        });
+        let rows = store
+            .list_team_room(&team.id, Some(limit))
+            .map_err(store_error)?;
+        Ok(TeamRoomList {
+            messages: views(store, agents, &team, &rows)?,
+        })
+    })
+    .await
+}
+
+/// What starting a person's task needs: the workspaces root and the caller's vault grant.
+struct Start {
+    workspaces: Workspaces,
+    grant: SecretGrant,
+}
+
+/// Who posts a line: a person, a bot a person names, or the agent run of a bot's own task.
+enum Poster {
+    Person {
+        to: Option<String>,
+        start: Start,
+    },
+    Bot(String),
+    Agent {
+        session: String,
+        bot: Option<String>,
+    },
+}
+
+async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPosted, ErrorBody> {
+    let poster = match (params.agent_token.as_deref(), params.session.clone()) {
+        // An agent run proves its session with its run token, and then posts only as its own task's bot.
+        (Some(token), Some(session)) if ctx.state.agents.run_token_matches(&session, token) => {
+            Poster::Agent {
+                session,
+                bot: params.bot.clone(),
+            }
+        }
+        (Some(_), _) => {
+            return Err(ErrorBody::new(
+                codes::PERMISSION_DENIED,
+                "the agent token does not match a live run of that session",
+            ));
+        }
+        (None, _) => match params.bot.clone() {
+            Some(bot) => Poster::Bot(bot),
+            // Only a person's line starts a task, so only it needs the workspaces root and the vault grant.
+            None => Poster::Person {
+                to: params.to.clone(),
+                start: Start {
+                    workspaces: for_mutation(&ctx).await?,
+                    grant: secret_grant(&ctx),
+                },
+            },
+        },
+    };
+    let (team_id, changes, messages) = blocking(&ctx, move |store, agents| {
+        let mut changes = Changes::default();
+        let team = selectors::team(store, &params.team)?;
+        let text = room_text(&params.text)?;
+        let rows = match poster {
+            Poster::Bot(bot) => {
+                let bot = selectors::bot(store, &team, &bot)?;
+                vec![insert_line(store, &team, Some(&bot), text, None)?]
+            }
+            Poster::Agent { session, bot } => {
+                vec![agent_line(store, &team, &session, bot.as_deref(), text)?]
+            }
+            Poster::Person { to, start } => person_line(
+                store,
+                agents,
+                start,
+                &team,
+                to.as_deref(),
+                text,
+                &mut changes,
+            )?,
+        };
+        let messages = views(store, agents, &team, &rows)?;
+        Ok((team.id, changes, messages))
+    })
+    .await?;
+    publish_changes(&ctx.state, &changes);
+    for task in messages.iter().filter_map(|line| line.task.as_ref()) {
+        publish(&ctx, TOPIC_TASK_CHANGED, &task.id);
+    }
+    publish(&ctx, TOPIC_TEAM_ROOM_CHANGED, &team_id);
+    Ok(TeamRoomPosted { messages })
+}
+
+/// A line from the agent run of `session`: it posts as the bot of the team's task that run works on, and naming any
+/// other bot is refused.
+fn agent_line(
+    store: &Store,
+    team: &TeamRow,
+    session: &str,
+    named: Option<&str>,
+    text: String,
+) -> Result<TeamRoomMessageRow, ErrorBody> {
+    let not_a_bot = || {
+        ErrorBody::new(
+            codes::PERMISSION_DENIED,
+            format!("this agent run works on no task of team {}", team.name),
+        )
+    };
+    let task = store
+        .find_task_by_session(session)
+        .map_err(store_error)?
+        .filter(|task| task.team_id == team.id)
+        .ok_or_else(not_a_bot)?;
+    let own = task
+        .bot_id
+        .as_deref()
+        .map(|bot| selectors::bot(store, team, bot))
+        .transpose()?
+        .ok_or_else(not_a_bot)?;
+    if let Some(named) = named
+        && selectors::bot(store, team, named)?.id != own.id
+    {
+        return Err(ErrorBody::new(
+            codes::PERMISSION_DENIED,
+            format!("an agent run posts only as its own bot, {}", own.name),
+        ));
+    }
+    insert_line(store, team, Some(&own), text, Some(task.id))
+}
+
+/// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the first bot), starts
+/// the task and stores the bot's answer. A team without bots refuses the line and stores nothing.
+fn person_line(
+    store: &Store,
+    agents: &Agents,
+    start: Start,
+    team: &TeamRow,
+    to: Option<&str>,
+    text: String,
+    changes: &mut Changes,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let bots = store.list_bots(&team.id).map_err(store_error)?;
+    let to = to.map(|to| selectors::bot(store, team, to)).transpose()?;
+    let Some(bot) = addressed_bot(&bots, &text, to.as_ref()) else {
+        return Err(ErrorBody::new(codes::TASK_NO_BOT, NO_BOTS));
+    };
+    let title = task_title(&text);
+    let task = create_task(
+        store,
+        TaskCreateParams {
+            team: team.id.clone(),
+            title: title.clone(),
+            body: Some(text),
+            bot: Some(bot.id.clone()),
+            project: None,
+            origin: Some(TaskOrigin::Room),
+        },
+    )?;
+    // Stored once the task is, so a refused task leaves no line without an answer.
+    let person = insert_line(store, team, None, task.body.clone(), None)?;
+    let answer = match start_task(
+        store,
+        agents,
+        &start.workspaces,
+        &task.id,
+        start.grant,
+        changes,
+    ) {
+        Ok(_) => format!("Added to the Board: {title}"),
+        Err(error) => format!("Added to the Board. It did not start: {}", error.message),
+    };
+    let bot_line = insert_line(store, team, Some(bot), answer, Some(task.id))?;
+    Ok(vec![person, bot_line])
+}
+
+/// The bot a line names with `@name` at the start of a word (the longest name wins), else `to`, else the lead, else the
+/// first bot.
+pub(super) fn addressed_bot<'a>(
+    bots: &'a [BotRow],
+    text: &str,
+    to: Option<&'a BotRow>,
+) -> Option<&'a BotRow> {
+    let lower = text.to_lowercase();
+    let mentioned = bots
+        .iter()
+        .filter(|bot| {
+            let mention = format!("@{}", bot.name.to_lowercase());
+            lower.match_indices(&mention).any(|(at, _)| {
+                let before = lower[..at].chars().next_back();
+                let after = lower[at + mention.len()..].chars().next();
+                before.is_none_or(|previous| !previous.is_alphanumeric())
+                    && after.is_none_or(|next| !next.is_alphanumeric())
+            })
+        })
+        .max_by_key(|bot| bot.name.chars().count());
+    mentioned
+        .or(to)
+        .or_else(|| bots.iter().find(|bot| bot.lead))
+        .or_else(|| bots.first())
+}
+
+/// The task title a line makes: its first non-blank line, cut to 80 characters.
+pub(super) fn task_title(text: &str) -> String {
+    let first = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if first.chars().count() <= MAX_TITLE_CHARS {
+        return first.to_owned();
+    }
+    let cut: String = first.chars().take(MAX_TITLE_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn room_text(text: &str) -> Result<String, ErrorBody> {
+    let text = non_blank(text, "the room line")?;
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(invalid(format!(
+            "a room line holds at most {MAX_TEXT_CHARS} characters"
+        )));
+    }
+    Ok(text)
+}
+
+/// Stores one line of `team`'s room, by a person when `bot` is `None`.
+pub(super) fn insert_line(
+    store: &Store,
+    team: &TeamRow,
+    bot: Option<&BotRow>,
+    text: String,
+    task_id: Option<String>,
+) -> Result<TeamRoomMessageRow, ErrorBody> {
+    let row = TeamRoomMessageRow {
+        id: new_id(),
+        team_id: team.id.clone(),
+        author: if bot.is_some() { "bot" } else { "person" }.to_owned(),
+        bot_id: bot.map(|bot| bot.id.clone()),
+        text,
+        task_id,
+        created_at: now_ms(),
+    };
+    store.insert_team_room_message(&row).map_err(store_error)?;
+    Ok(row)
+}
+
+/// The lines as the room shows them: each bot's name and each task as the Board shows it now.
+fn views(
+    store: &Store,
+    agents: &Agents,
+    team: &TeamRow,
+    rows: &[TeamRoomMessageRow],
+) -> Result<Vec<TeamRoomMessage>, ErrorBody> {
+    let bots = store.list_bots(&team.id).map_err(store_error)?;
+    rows.iter()
+        .map(|row| {
+            let task = match row.task_id.as_deref() {
+                Some(id) => match store.get_task(id).map_err(store_error)? {
+                    Some(task) => Some(view_of(&task, &task_state::load(agents, &task)?)),
+                    None => None,
+                },
+                None => None,
+            };
+            Ok(TeamRoomMessage {
+                id: row.id.clone(),
+                team_id: row.team_id.clone(),
+                author: match row.author.as_str() {
+                    "person" => RoomAuthor::Person,
+                    "bot" => RoomAuthor::Bot,
+                    _ => RoomAuthor::Unknown,
+                },
+                bot_id: row.bot_id.clone(),
+                bot_name: row.bot_id.as_deref().and_then(|id| {
+                    bots.iter()
+                        .find(|bot| bot.id == id)
+                        .map(|bot| bot.name.clone())
+                }),
+                text: row.text.clone(),
+                task,
+                created_at_ms: row.created_at,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bot(name: &str, lead: bool) -> BotRow {
+        BotRow {
+            id: name.to_lowercase(),
+            team_id: "t".to_owned(),
+            name: name.to_owned(),
+            job: String::new(),
+            kind: "claude".to_owned(),
+            model: None,
+            effort: None,
+            lead,
+            created_at: 1,
+        }
+    }
+
+    #[test]
+    fn a_mention_picks_its_bot_else_the_lead_else_the_first() {
+        let bots = [
+            bot("Mara", false),
+            bot("Bruno", true),
+            bot("Bruno Jr", false),
+        ];
+        let pick = |text: &str| addressed_bot(&bots, text, None).map(|bot| bot.name.clone());
+        assert_eq!(pick("@mara add sign-in").as_deref(), Some("Mara"));
+        assert_eq!(pick("(@mara) add sign-in").as_deref(), Some("Mara"));
+        assert_eq!(pick("ask @Bruno Jr, please").as_deref(), Some("Bruno Jr"));
+        assert_eq!(
+            pick("mail me@mara.dev").as_deref(),
+            Some("Bruno"),
+            "not a mention in the middle of a word"
+        );
+        assert_eq!(pick("add sign-in").as_deref(), Some("Bruno"), "the lead");
+        assert_eq!(
+            addressed_bot(&bots[..1], "add sign-in", None).map(|bot| bot.name.as_str()),
+            Some("Mara")
+        );
+        assert_eq!(
+            addressed_bot(&bots, "add sign-in", Some(&bots[0])).map(|bot| bot.name.as_str()),
+            Some("Mara"),
+            "the receiver the composer picked, ahead of the lead"
+        );
+        assert_eq!(
+            addressed_bot(&bots, "@bruno add sign-in", Some(&bots[0])).map(|bot| bot.name.as_str()),
+            Some("Bruno"),
+            "a mention wins over the receiver"
+        );
+        assert!(addressed_bot(&[], "add sign-in", None).is_none());
+    }
+
+    #[test]
+    fn a_title_is_the_first_line_cut_to_eighty_characters() {
+        assert_eq!(
+            task_title("\n  Add magic link sign-in\nwith email"),
+            "Add magic link sign-in"
+        );
+        let title = task_title(&"x".repeat(100));
+        assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
+        assert!(title.ends_with('…'));
+    }
+
+    /// A store with team `alpha`, bots Mara and Bruno, and a room task of Bruno's run by `session-1`.
+    fn store_with_room_task() -> (Store, TeamRow, String) {
+        use massorca_core_store::{TaskOrigin as StoredOrigin, TaskRow};
+        let store = Store::open_in_memory().expect("in-memory store opens");
+        let team = TeamRow {
+            id: new_id(),
+            name: "alpha".to_owned(),
+            purpose: String::new(),
+            character: "triangle".to_owned(),
+            access: "default".to_owned(),
+            workspaces: false,
+            created_at: 1,
+        };
+        store.insert_team(&team).expect("team");
+        for (name, created) in [("Mara", 1), ("Bruno", 2)] {
+            let mut row = bot(name, false);
+            row.team_id = team.id.clone();
+            row.created_at = created;
+            store.insert_bot(&row).expect("bot");
+        }
+        let task = TaskRow {
+            id: new_id(),
+            team_id: team.id.clone(),
+            project_id: None,
+            bot_id: Some("bruno".to_owned()),
+            title: "parse".to_owned(),
+            body: String::new(),
+            origin: StoredOrigin::Room,
+            session_id: Some("session-1".to_owned()),
+            outcome: None,
+            error: None,
+            error_code: None,
+            workspace_id: None,
+            branch: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        store.insert_task(&task).expect("task");
+        (store, team, task.id)
+    }
+
+    #[test]
+    fn an_agent_run_posts_only_as_the_bot_of_its_own_task() {
+        let (store, team, task) = store_with_room_task();
+        let line = agent_line(&store, &team, "session-1", None, "On it".to_owned()).unwrap();
+        assert_eq!(line.bot_id.as_deref(), Some("bruno"));
+        assert_eq!(line.task_id.as_deref(), Some(task.as_str()));
+        assert!(
+            agent_line(
+                &store,
+                &team,
+                "session-1",
+                Some("Bruno"),
+                "Still on it".to_owned()
+            )
+            .is_ok()
+        );
+
+        let refused = agent_line(
+            &store,
+            &team,
+            "session-1",
+            Some("Mara"),
+            "I am Mara".to_owned(),
+        )
+        .expect_err("another bot is refused");
+        assert_eq!(refused.code, codes::PERMISSION_DENIED);
+        let unknown = agent_line(&store, &team, "session-9", None, "hi".to_owned())
+            .expect_err("a run with no task of the team is refused");
+        assert_eq!(unknown.code, codes::PERMISSION_DENIED);
+        let texts: Vec<String> = store
+            .list_team_room(&team.id, None)
+            .unwrap()
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(texts, ["On it", "Still on it"]);
+    }
+}
