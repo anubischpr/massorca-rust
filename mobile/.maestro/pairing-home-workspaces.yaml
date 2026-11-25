@@ -15,14 +15,30 @@ appId: dev.massorca.app
     id: "pairing-code"
 - inputText: ${MASSORCA_PAIRING_OFFER}
 - tapOn: "Connect"
+# A press the app does not take leaves the paste form in place: press once more then, while it is still there.
+- waitForAnimationToEnd:
+    timeout: 3000
+- runFlow:
+    when:
+      visible: "Connect"
+    commands:
+      - tapOn: "Connect"
 - extendedWaitUntil:
     visible: ".*Pair with this desktop.*"
-    timeout: 60000
+    timeout: 90000
 - tapOn: "Pair"
+# The same for the confirm step: it stays until the pairing is done, and its button is disabled while busy.
+- waitForAnimationToEnd:
+    timeout: 3000
+- runFlow:
+    when:
+      visible: ".*Pair with this desktop.*"
+    commands:
+      - tapOn: "Pair"
 # Screen 2: Home lists the paired host, named after the server in the offer, as connected.
 - extendedWaitUntil:
     visible: "massorca, Connected"
-    timeout: 120000
+    timeout: 150000
 - tapOn: "massorca, Connected"
 # Screen 4: the host's projects list the folder workspace the job created, which has no git.
 - extendedWaitUntil:

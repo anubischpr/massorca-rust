@@ -362,6 +362,7 @@ jobs:
           target: google_apis
           arch: x86_64
           emulator-boot-timeout: 900
+          cores: 4
           disable-spellchecker: true
           script: bash scripts/ci/run-emulator-flow.sh
       - name: Stop the service
