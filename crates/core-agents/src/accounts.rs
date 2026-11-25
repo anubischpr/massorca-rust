@@ -27,6 +27,7 @@ use crate::kind::{KindDecl, valid_id};
 use crate::paths;
 use crate::sessions::{AgentError, Agents, Change};
 use crate::sign_in::{SignInEnd, SignInOutcome, sign_in_outcome};
+use crate::state_file;
 
 /// The label of an account when the person gives none.
 pub(crate) const DEFAULT_LABEL: &str = "account";
@@ -119,6 +120,29 @@ fn undecided(account: &str) -> AgentError {
     )
 }
 
+/// Repairs the state file of an account home before a launch (decision 0099), under the homes gate. A state file that
+/// cannot be repaired refuses the launch, as the check reports the account as needing a sign-in: the CLI would open its
+/// first-run setup instead.
+fn repair_state(decl: &KindDecl, home: &Path) -> Result<(), AgentError> {
+    let Some(rule) = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| credentials.state.as_ref())
+    else {
+        return Ok(());
+    };
+    state_file::ensure(home, rule).map(|_| ()).map_err(|reason| {
+        AgentError::new(
+            codes::AGENT_CREDENTIALS_INVALID,
+            format!(
+                "the state file {} of the account of agent kind {} cannot be used ({reason}); delete it, or remove the                  account and add it again",
+                home.join(&rule.file).display(),
+                decl.id
+            ),
+        )
+    })
+}
+
 fn already_has_home(kind: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_CREDENTIALS_EXIST,
@@ -192,26 +216,27 @@ impl Agents {
             Some(folder) => ImportFrom::Folder(Path::new(folder)),
             None => ImportFrom::Detected,
         };
-        let (account, _, mark) = match self.import_new_account(kind, from, &label, ORIGIN_IMPORT) {
-            Ok(added) => added,
-            Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
-                return Err(error);
-            }
-            Err(error) if all_missing(&error) => {
-                return Ok(AccountsImported {
-                    result: ImportResult::NotFound,
-                    account: None,
-                    reason: Some(error.message),
-                });
-            }
-            Err(error) => {
-                return Ok(AccountsImported {
-                    result: ImportResult::Failed,
-                    account: None,
-                    reason: Some(error.message),
-                });
-            }
-        };
+        let (account, imported, mark) =
+            match self.import_new_account(kind, from, &label, ORIGIN_IMPORT) {
+                Ok(added) => added,
+                Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
+                    return Err(error);
+                }
+                Err(error) if all_missing(&error) => {
+                    return Ok(AccountsImported {
+                        result: ImportResult::NotFound,
+                        account: None,
+                        reason: Some(error.message),
+                    });
+                }
+                Err(error) => {
+                    return Ok(AccountsImported {
+                        result: ImportResult::Failed,
+                        account: None,
+                        reason: Some(error.message),
+                    });
+                }
+            };
         let verdict = self.check_imported(kind, &account);
         let files = credentials::account_files_present(
             self.profile_dir(),
@@ -249,10 +274,16 @@ impl Agents {
             &row,
             self.store().get_active_agent_account(kind)?.as_deref(),
         )?;
+        // A state file built without its source says so (decision 0099); the import still succeeded.
+        let notes: Vec<String> = imported
+            .files
+            .into_iter()
+            .filter_map(|file| file.reason)
+            .collect();
         Ok(AccountsImported {
             result: ImportResult::Imported,
             account: Some(summary),
-            reason: None,
+            reason: (!notes.is_empty()).then(|| notes.join("; ")),
         })
     }
 
@@ -746,9 +777,10 @@ impl Agents {
     pub(crate) fn resolve_home(
         &self,
         gate: &MutexGuard<'_, ()>,
-        kind: &str,
+        decl: &KindDecl,
         project: &str,
     ) -> Result<AccountUse, AgentError> {
+        let kind = decl.id.as_str();
         self.migrate_legacy(gate, kind)?;
         let chosen = match self.store().get_agent_account_choice(kind, project)? {
             Some(account) => Some(account),
@@ -777,6 +809,7 @@ impl Agents {
                     ),
                 )
             })?;
+        repair_state(decl, &home)?;
         Ok(AccountUse {
             home: Some(home),
             account: Some(account),
@@ -1099,9 +1132,21 @@ impl Agents {
         let credential_decl = decl.credentials.as_ref()?;
         let home = {
             let _gate = credentials::lock_homes();
-            credentials::usable_account_home(self.profile_dir(), &decl.id, account)
+            let home = credentials::usable_account_home(self.profile_dir(), &decl.id, account)
                 .ok()
-                .flatten()?
+                .flatten()?;
+            // The check sees the home the session will: its state file repaired first (decision 0099). One that cannot
+            // be repaired would open the CLI's first-run setup, so the account needs a new sign-in or import.
+            if let Some(rule) = &credential_decl.state
+                && let Err(reason) = state_file::ensure(&home, rule)
+            {
+                tracing::warn!(kind = %decl.id, file = %rule.file, %reason, "the account's state file cannot be repaired");
+                return Some(Verdict {
+                    state: AccountState::NeedsSignIn,
+                    identity: None,
+                });
+            }
+            home
         };
         let run = run_program(
             program,

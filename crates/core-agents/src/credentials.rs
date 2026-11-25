@@ -7,7 +7,8 @@
 //! The files come from one folder the person names, or each from where the kind's CLI keeps it (decision 0097). A
 //! declared file listed in `credentials.optional` is skipped when it is missing; every other declared file is required.
 //! A missing required file, or any file that is a link, a directory or anything but a regular file, fails the import
-//! with `agent.credentials_invalid`, naming each one and why; nothing is copied then.
+//! with `agent.credentials_invalid`, naming each one and why; nothing is copied then. A kind's state file is built from
+//! its source's kept keys instead of copied (decision 0099, [`crate::state_file`]).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -27,6 +28,7 @@ use crate::packages::KindPackages;
 use crate::paths;
 use crate::sessions::AgentError;
 use crate::sources;
+use crate::state_file;
 
 /// Largest credential file import copies.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -173,9 +175,35 @@ fn import_at(
         return Err(exists(&name));
     }
 
+    let state = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| credentials.state.as_ref());
     let mut contents = Vec::with_capacity(files.len());
+    let mut notes = Vec::new();
     let mut problems = Vec::new();
+    let mut found_any = false;
     for file in files {
+        // The state file is built, never copied raw: only its kept keys and its set keys (decision 0099).
+        if let Some(rule) = state.filter(|rule| rule.file == file.name) {
+            match state_file::import_source(rule, file.path.as_deref(), file.required) {
+                state_file::Imported::Built { bytes, found, note } => {
+                    found_any |= found;
+                    if let Some(note) = &note {
+                        tracing::info!(kind = %decl.id, file = %file.name, "built the state file without its source");
+                        notes.push((file.name.as_str(), note.clone()));
+                    }
+                    contents.push((file.name.as_str(), bytes));
+                }
+                state_file::Imported::Refused(reason) if reason == MISSING => {
+                    problems.push(missing_entry(file));
+                }
+                state_file::Imported::Refused(reason) => {
+                    problems.push(source_problem(file, &reason))
+                }
+            }
+            continue;
+        }
         let Some(path) = &file.path else {
             if file.required {
                 problems.push(missing_entry(file));
@@ -183,18 +211,19 @@ fn import_at(
             continue;
         };
         match read_source(path) {
-            Ok(bytes) => contents.push((file.name.as_str(), bytes)),
+            Ok(bytes) => {
+                found_any = true;
+                contents.push((file.name.as_str(), bytes));
+            }
             // An optional file the import cannot use (missing, a link, too large...) is skipped; it is never read
             // further. A required one refuses the import.
             Err(reason) if !file.required => {
-                tracing::info!(kind = %decl.id, file = %file.name, reason, "skipped an optional credential file");
+                tracing::info!(kind = %decl.id, file = %file.name, %reason, "skipped an optional credential file");
             }
-            Err(reason) => problems.push(
-                json!({ "name": file.name, "reason": reason, "path": path.display().to_string() }),
-            ),
+            Err(reason) => problems.push(source_problem(file, &reason)),
         }
     }
-    if problems.is_empty() && contents.is_empty() {
+    if problems.is_empty() && !found_any {
         // Every declared file is optional and none is there: there is nothing to import.
         problems = files.iter().map(missing_entry).collect();
     }
@@ -226,6 +255,10 @@ fn import_at(
         .map(|(name, bytes)| ImportedFile {
             name: (*name).to_owned(),
             bytes: bytes.len() as u64,
+            reason: notes
+                .iter()
+                .find(|(noted, _)| noted == name)
+                .map(|(_, note)| note.clone()),
         })
         .collect();
     tracing::info!(
@@ -723,37 +756,62 @@ fn clear_leftovers(homes: &Path, kind: &str) {
 
 /// Reads one declared source file: a regular file, opened without following a link, at most [`MAX_FILE_BYTES`] as
 /// read from the open handle. The error is the reason given to the person, never anything of the content.
-fn read_source(path: &Path) -> Result<Vec<u8>, &'static str> {
+fn read_source(path: &Path) -> Result<Vec<u8>, String> {
+    read_capped(path, MAX_FILE_BYTES)
+}
+
+/// [`read_source`] with its own cap: the state file's source may be larger (decision 0099).
+pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
     let before = match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING),
-        Err(_) => return Err("unreadable"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING.to_owned()),
+        Err(_) => return Err(UNREADABLE.to_owned()),
         Ok(meta) => meta,
     };
     not_regular(&before)?;
-    let file = open_no_follow(path).map_err(|_| "unreadable")?;
-    let after = file.metadata().map_err(|_| "unreadable")?;
+    let file = open_no_follow(path).map_err(|_| UNREADABLE.to_owned())?;
+    let after = file.metadata().map_err(|_| UNREADABLE.to_owned())?;
     not_regular(&after)?;
     if !same_file(&before, &after) {
-        return Err("replaced while it was read");
+        return Err("replaced while it was read".to_owned());
     }
-    if after.len() > MAX_FILE_BYTES {
-        return Err(TOO_LARGE);
+    if after.len() > cap {
+        return Err(too_large(cap));
     }
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
+    file.take(cap + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "unreadable")?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(TOO_LARGE);
+        .map_err(|_| UNREADABLE.to_owned())?;
+    if bytes.len() as u64 > cap {
+        return Err(too_large(cap));
     }
     Ok(bytes)
 }
 
-const TOO_LARGE: &str = "larger than 1 MiB";
+/// The reason of a file over `cap`: `larger than 1 MiB`, `larger than 16 MiB`, or a byte count.
+pub(crate) fn too_large(cap: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if cap.is_multiple_of(MIB) {
+        format!("larger than {} MiB", cap / MIB)
+    } else {
+        format!("larger than {cap} bytes")
+    }
+}
+
+const UNREADABLE: &str = "unreadable";
 /// The reason of a file that is not there.
 pub(crate) const MISSING: &str = "missing";
 /// Where a file with no declared location was looked for.
 const NO_LOCATION: &str = "the kind declares no location for it; import from a folder";
+
+/// The refusal entry of a file that is there but cannot be used: its name, why, and where it is.
+fn source_problem(file: &SourceFile, reason: &str) -> Value {
+    let path = file
+        .path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    json!({ "name": file.name, "reason": reason, "path": path })
+}
 
 /// The refusal entry of a file that is not there: its name and where it was looked for.
 fn missing_entry(file: &SourceFile) -> Value {
@@ -765,32 +823,33 @@ fn missing_entry(file: &SourceFile) -> Value {
     }
 }
 
-/// Whether an import would accept the file at `path`, judged from its metadata alone, without opening it; the reason
-/// when it would not (`missing`, `a link`, `a directory`, `larger than 1 MiB`...).
-pub(crate) fn judge(path: &Path) -> Result<(), &'static str> {
+/// Whether an import would accept the file at `path`, at most `cap` bytes, judged from its metadata alone, without
+/// opening it; the reason when it would not (`missing`, `a link`, `a directory`, `larger than 1 MiB`...).
+pub(crate) fn judge(path: &Path, cap: u64) -> Result<(), String> {
     let meta = match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING),
-        Err(_) => return Err("unreadable"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING.to_owned()),
+        Err(_) => return Err(UNREADABLE.to_owned()),
         Ok(meta) => meta,
     };
     not_regular(&meta)?;
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(TOO_LARGE);
+    if meta.len() > cap {
+        return Err(too_large(cap));
     }
     Ok(())
 }
 
 /// Why an entry is not a regular file, if it is not.
-fn not_regular(meta: &fs::Metadata) -> Result<(), &'static str> {
-    if is_link(meta) {
-        Err("a link")
+pub(crate) fn not_regular(meta: &fs::Metadata) -> Result<(), String> {
+    let reason = if is_link(meta) {
+        "a link"
     } else if meta.is_dir() {
-        Err("a directory")
+        "a directory"
     } else if !meta.is_file() {
-        Err("not a regular file")
+        "not a regular file"
     } else {
-        Ok(())
-    }
+        return Ok(());
+    };
+    Err(reason.to_owned())
 }
 
 /// A symbolic link, or on Windows any reparse point (junctions included).
@@ -890,7 +949,7 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// A new file (`create_new` never opens through a link), `0600` on Unix, written and flushed to disk.
-fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -1219,6 +1278,88 @@ mod tests {
         let error = fixture.import(false).unwrap_err();
         assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
         assert_eq!(error.data.unwrap()["files"][0]["reason"], "missing");
+        assert!(!fixture.home().exists());
+    }
+
+    /// A fixture with a required `token.json` and a state file `state.json`, optional unless `required`.
+    fn with_state(required: bool) -> Fixture {
+        let fixture = Fixture::new(&[]);
+        let optional: &[&str] = if required { &[] } else { &["state.json"] };
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.json", "state.json"],
+            "optional": optional,
+            "state": { "file": "state.json", "keep": ["account", "theme"],
+                       "set": { "onboarded": true }, "max_source_bytes": 4096 }
+        }));
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture
+    }
+
+    fn home_state_file(fixture: &Fixture) -> Value {
+        serde_json::from_slice(&fs::read(fixture.home().join("state.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_state_file_is_built_from_its_kept_keys_and_set_keys_never_copied_raw() {
+        let fixture = with_state(false);
+        fixture.source_file(
+            "state.json",
+            json!({ "account": "fake", "projects": { "fake": [1] }, "onboarded": false })
+                .to_string()
+                .as_bytes(),
+        );
+        let imported = fixture.import(false).unwrap();
+        assert_eq!(
+            home_state_file(&fixture),
+            json!({ "account": "fake", "onboarded": true })
+        );
+        assert!(imported.files.iter().all(|file| file.reason.is_none()));
+
+        let missing = with_state(false);
+        let imported = missing.import(false).unwrap();
+        assert_eq!(home_state_file(&missing), json!({ "onboarded": true }));
+        assert!(imported.files.iter().all(|file| file.reason.is_none()));
+    }
+
+    #[test]
+    fn an_unusable_optional_state_source_is_imported_with_the_set_keys_and_a_reason() {
+        for (content, reason) in [
+            (b"[]".to_vec(), "not a JSON object"),
+            (vec![b' '; 5000], "larger than 4096 bytes"),
+        ] {
+            let fixture = with_state(false);
+            fixture.source_file("state.json", &content);
+            let imported = fixture.import(false).unwrap();
+            assert_eq!(home_state_file(&fixture), json!({ "onboarded": true }));
+            let state = imported
+                .files
+                .iter()
+                .find(|file| file.name == "state.json")
+                .unwrap();
+            let said = state.reason.as_deref().expect("the import says why");
+            assert!(said.contains(reason), "{said}");
+
+            let required = with_state(true);
+            required.source_file("state.json", &content);
+            let error = required.import(false).unwrap_err();
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+            assert_eq!(error.data.unwrap()["files"][0]["reason"], reason);
+            assert!(!required.home().exists());
+        }
+    }
+
+    #[test]
+    fn a_state_file_alone_built_from_nothing_is_nothing_to_import() {
+        let fixture = Fixture::new(&[]);
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["state.json"],
+            "optional": ["state.json"],
+            "state": { "file": "state.json", "set": { "onboarded": true } }
+        }));
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
         assert!(!fixture.home().exists());
     }
 

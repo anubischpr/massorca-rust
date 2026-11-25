@@ -588,7 +588,7 @@ impl Agents {
         let new_ref = uuid::Uuid::new_v4().to_string();
         // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -764,7 +764,7 @@ impl Agents {
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();

@@ -158,13 +158,14 @@ pub fn detect(
                 .find(|source| &source.file == name)
                 .and_then(|source| resolve(source, platform, home, env));
             let path = located.as_ref().map(|located| located.dir.join(name));
-            let judged = path.as_deref().map(credentials::judge);
+            let cap = credentials.source_cap(name);
+            let judged = path.as_deref().map(|path| credentials::judge(path, cap));
             DetectedFile {
                 name: name.clone(),
                 required: credentials.required(name),
                 found: matches!(judged, Some(Ok(()))),
                 reason: match judged {
-                    Some(Err(reason)) if reason != credentials::MISSING => Some(reason.to_owned()),
+                    Some(Err(reason)) if reason != credentials::MISSING => Some(reason),
                     _ => None,
                 },
                 env: located.and_then(|located| located.env),
@@ -304,6 +305,7 @@ mod tests {
                 source("token.fake", Some("FAKE_VENDOR_DIR"), dir_a),
                 source("extra.fake", Some("FAKE_VENDOR_DIR"), dir_b),
             ],
+            state: None,
         }
     }
 
@@ -448,6 +450,38 @@ mod tests {
         let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
         assert!(!files[0].found);
         assert!(!candidate("fake", &files).ready);
+    }
+
+    #[test]
+    fn a_state_file_is_found_up_to_its_own_cap_not_the_one_mib_of_other_files() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".fake")).unwrap();
+        fs::write(home.path().join(".fake").join("token.fake"), "fake").unwrap();
+        let two_mib = 2 * 1024 * 1024;
+        fs::write(home.path().join("extra.fake"), vec![b' '; two_mib]).unwrap();
+        let mut credentials = fake_credentials("{home}/.fake", "{home}");
+        assert_eq!(
+            detect(&credentials, Platform::Linux, Some(home.path()), &no_env)[1].reason,
+            Some("larger than 1 MiB".to_owned()),
+            "without a state rule the file is held to 1 MiB"
+        );
+
+        credentials.state = Some(crate::kind::StateDecl {
+            file: "extra.fake".to_owned(),
+            keep: vec!["theme".to_owned()],
+            set: BTreeMap::new(),
+            max_source_bytes: 3 * 1024 * 1024,
+        });
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert!(files[1].found && files[1].reason.is_none(), "{files:?}");
+
+        credentials.state.as_mut().unwrap().max_source_bytes = 1024 * 1024 + 1;
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert!(!files[1].found);
+        assert_eq!(
+            files[1].reason.as_deref(),
+            Some("larger than 1048577 bytes")
+        );
     }
 
     #[test]

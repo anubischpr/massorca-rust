@@ -668,6 +668,9 @@ pub struct CredentialsImportParams {
 pub struct ImportedFile {
     pub name: String,
     pub bytes: u64,
+    /// Why a state file was built without its source (decision 0099), for example `the source is not a JSON object`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Result of `agent.credentials.import`.
@@ -1001,7 +1004,8 @@ pub struct ImportCandidate {
 pub struct CandidateFile {
     pub name: String,
     pub required: bool,
-    /// The import would accept it: a regular file, not a link, at most 1 MiB, judged from its metadata alone.
+    /// The import would accept it: a regular file, not a link, at most 1 MiB (a state file: its rule's cap, decision
+    /// 0099), judged from its metadata alone.
     pub found: bool,
     /// Where it was looked for. Omitted below `workspace` scope, and when the kind declares no location for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
