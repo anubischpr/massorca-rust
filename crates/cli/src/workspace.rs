@@ -153,6 +153,7 @@ fn create_params(
         request_id: args.request_id,
         no_setup: args.no_setup,
         unique_name: args.unique,
+        name_generated: args.name_generated,
     })
 }
 

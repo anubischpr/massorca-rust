@@ -71,6 +71,7 @@ impl Workspaces {
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         };
         self.create_folder(&project, &params, false)
     }

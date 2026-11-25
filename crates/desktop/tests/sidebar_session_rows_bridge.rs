@@ -123,6 +123,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created")
@@ -199,6 +200,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the second workspace is created");

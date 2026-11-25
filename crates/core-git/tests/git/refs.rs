@@ -289,6 +289,15 @@ fn a_branch_has_an_upstream_only_once_one_is_set_and_resolves() {
 }
 
 #[test]
+fn an_upstream_check_git_cannot_answer_is_an_error_not_a_no() {
+    let fixture = Fixture::new();
+    let outside = fixture.sibling("not-a-repo");
+    std::fs::create_dir_all(&outside).expect("make dir");
+
+    assert!(git().branch_has_upstream(&outside, "main").is_err());
+}
+
+#[test]
 fn the_checked_out_branch_is_none_on_a_detached_head() {
     let fixture = Fixture::new();
     let repo = fixture.repo();

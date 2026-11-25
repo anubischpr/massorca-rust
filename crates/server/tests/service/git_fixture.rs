@@ -61,6 +61,7 @@ impl GitService {
                     request_id: None,
                     no_setup: false,
                     unique_name: false,
+                    name_generated: false,
                 },
             )
             .await
@@ -109,6 +110,7 @@ impl GitService {
                     request_id: None,
                     no_setup: false,
                     unique_name: false,
+                    name_generated: false,
                 },
             )
             .await

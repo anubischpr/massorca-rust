@@ -146,6 +146,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created");

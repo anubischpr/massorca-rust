@@ -71,6 +71,7 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
                     unique_name: false,
                     path: None,
                     request_id: None,
+                    name_generated: false,
                 },
             )
             .await
@@ -114,6 +115,7 @@ fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
                     unique_name: false,
                     path: None,
                     request_id: None,
+                    name_generated: false,
                 },
             )
             .await

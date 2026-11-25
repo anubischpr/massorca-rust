@@ -12,7 +12,7 @@ use crate::branch_prefix;
 use crate::create::{invalid, refused_write};
 use crate::error::DomainError;
 use crate::names;
-use crate::unique_names::Folders;
+use crate::unique_names::Search;
 use crate::views;
 use crate::workspaces::Workspaces;
 
@@ -47,46 +47,59 @@ impl Workspaces {
                 format!("workspace {:?} is being removed", row.name),
             ));
         }
-        if row.name == base {
+        let project = self.project_of(&row)?;
+        // The branch checks run before the no-op below, so a stale `expected_branch` is still refused.
+        let current = match row.kind {
+            WorkspaceKind::Folder => None,
+            WorkspaceKind::Worktree => {
+                Some(self.checked_branch(&project, &row, params.expected_branch.as_deref())?)
+            }
+        };
+        let name = self.free_name(&project, &base, Search::Rename(&row))?;
+        if name == row.name {
             return Ok(views::workspace(&row));
         }
-        let project = self.project_of(&row)?;
-        let name = self.free_name(&project, &base, Folders::Ignored)?;
-        let branch = match row.kind {
-            WorkspaceKind::Folder => None,
-            WorkspaceKind::Worktree => Some(self.rename_branch(
-                &project,
-                &row,
-                &name,
-                params.expected_branch.as_deref(),
-            )?),
+        let moved = match current {
+            Some(current) => {
+                let segment = self
+                    .branch_prefix
+                    .segment(&self.git, Path::new(&project.path))?;
+                let new = branch_prefix::branch_name(segment.as_deref(), &name);
+                if new == current {
+                    None
+                } else {
+                    self.move_branch(&row, &current, &new)?;
+                    Some((current, new))
+                }
+            }
+            None => None,
         };
-        if let Err(error) = self.store.rename_workspace(
-            &row.id,
-            &name,
-            branch.as_ref().map(|(_, new)| new.as_str()),
-        ) {
+        let branch = moved
+            .as_ref()
+            .map(|(_, new)| new.clone())
+            .or_else(|| row.branch.clone());
+        if let Err(error) = self
+            .store
+            .rename_workspace(&row.id, &name, branch.as_deref())
+        {
             let error = refused_write(error);
-            return Err(match &branch {
+            return Err(match &moved {
                 Some((old, new)) => self.rename_branch_back(&row, old, new, error),
                 None => error,
             });
         }
         row.name = name;
-        if let Some((_, new)) = branch {
-            row.branch = Some(new);
-        }
+        row.branch = branch;
         Ok(views::workspace(&row))
     }
 
-    /// Checks the worktree's branch and renames it for `name`. Returns the old and the new branch.
-    fn rename_branch(
+    /// The worktree's checked-out branch, once it is the recorded one, the expected one, and on no remote.
+    fn checked_branch(
         &self,
         project: &ProjectRow,
         row: &WorkspaceRow,
-        name: &str,
         expected: Option<&str>,
-    ) -> Result<(String, String), DomainError> {
+    ) -> Result<String, DomainError> {
         let dir = Path::new(&row.path);
         let Some(current) = self.git.current_branch(dir)? else {
             return Err(DomainError::new(
@@ -105,21 +118,39 @@ impl Workspaces {
                 ),
             ));
         }
-        let repo = Path::new(&project.path);
         if self.git.branch_has_upstream(dir, &current)?
-            || self.git.remote_branch_exists(repo, &current)?
+            || self
+                .git
+                .remote_branch_exists(Path::new(&project.path), &current)?
         {
             return Err(DomainError::new(
                 codes::WORKSPACE_BRANCH_PUBLISHED,
                 format!("branch {current:?} is on a remote; renaming it would split it"),
             ));
         }
-        let segment = self.branch_prefix.segment(&self.git, repo)?;
-        let new = branch_prefix::branch_name(segment.as_deref(), name);
+        Ok(current)
+    }
+
+    /// Renames the branch `from` to `to` in the worktree. A case-only change goes through a temporary name, because a
+    /// case-insensitive filesystem sees the new loose ref as the old one.
+    fn move_branch(&self, row: &WorkspaceRow, from: &str, to: &str) -> Result<(), DomainError> {
+        let dir = Path::new(&row.path);
+        if !from.eq_ignore_ascii_case(to) {
+            self.git
+                .branch_rename(dir, from, to)
+                .map_err(branch_refusal)?;
+            return Ok(());
+        }
+        let temporary = format!("{from}-massorca-rename");
         self.git
-            .branch_rename(dir, &current, &new)
+            .branch_rename(dir, from, &temporary)
             .map_err(branch_refusal)?;
-        Ok((current, new))
+        if let Err(error) = self.git.branch_rename(dir, &temporary, to) {
+            // Best effort: the first step is undone so the row's branch still names it.
+            let _undone = self.git.branch_rename(dir, &temporary, from);
+            return Err(branch_refusal(error));
+        }
+        Ok(())
     }
 
     /// Undoes a branch rename whose row write failed; a failed undo is named in the error.
@@ -130,8 +161,8 @@ impl Workspaces {
         new: &str,
         error: DomainError,
     ) -> DomainError {
-        match self.git.branch_rename(Path::new(&row.path), new, old) {
-            Ok(_) => error,
+        match self.move_branch(row, new, old) {
+            Ok(()) => error,
             Err(undo) => DomainError::new(
                 error.code(),
                 format!(

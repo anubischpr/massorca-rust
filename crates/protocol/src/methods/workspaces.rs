@@ -65,6 +65,10 @@ pub struct WorkspaceCreateParams {
     /// carries the name used. Only for a service-derived branch and folder (`workspace-unique-name/1`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unique_name: bool,
+    /// The client derived `name` itself (from a prompt, say), so `workspace.rename` may replace it later. Ignored with
+    /// `branch` or `existing_branch`, whose branch is the person's (`workspace-rename/1`, decision 0111).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_generated: bool,
 }
 
 /// Params of `workspace.list`.

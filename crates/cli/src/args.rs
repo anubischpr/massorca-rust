@@ -417,6 +417,10 @@ pub struct WorkspaceCreateArgs {
     /// Not with `--branch`, `--existing-branch` or `--path`.
     #[arg(long)]
     pub unique: bool,
+    /// Marks NAME as derived by a script, not typed, so `workspace rename --from-generated` may replace it. Ignored with
+    /// `--branch` or `--existing-branch`. For scripts and tests.
+    #[arg(long)]
+    pub name_generated: bool,
 }
 
 #[derive(Debug, Args)]

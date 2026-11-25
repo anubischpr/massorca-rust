@@ -400,6 +400,7 @@ async fn terminal_in_folder(home: &Path) -> String {
                 unique_name: false,
                 path: None,
                 request_id: None,
+                name_generated: false,
             },
         )
         .await

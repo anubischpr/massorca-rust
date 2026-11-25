@@ -319,7 +319,7 @@ fn a_team_made_before_access_ran_bypass_modes_becomes_default_access() {
 }
 
 #[test]
-fn a_workspace_from_before_the_generated_name_step_is_not_renamable() {
+fn a_workspace_from_before_the_generated_name_step_is_not_marked_generated() {
     let dir = tempfile::tempdir().unwrap();
     let path = store_path(&dir);
     // Found by content: later steps are appended after it.

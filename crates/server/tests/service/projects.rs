@@ -501,6 +501,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
                 request_id: None,
                 no_setup: false,
                 unique_name: false,
+                name_generated: false,
             },
         )
         .await

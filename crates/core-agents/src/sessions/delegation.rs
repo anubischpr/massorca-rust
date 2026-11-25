@@ -554,6 +554,7 @@ impl Agents {
                 request_id: request_key.clone(),
                 no_setup: false,
                 unique_name: false,
+                name_generated: false,
             })
         };
         if let Some(name) = name {
@@ -1238,6 +1239,7 @@ then report"
                 request_id: None,
                 no_setup: false,
                 unique_name: false,
+                name_generated: false,
             })
             .unwrap();
         let parent = session_row(&lead.id, None);

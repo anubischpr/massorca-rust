@@ -872,4 +872,34 @@ fn rename_from_generated_renames_a_generated_workspace_and_its_branch_and_refuse
     sandbox
         .run("default", &["workspace", "rename", "typed", "x"])
         .code(2);
+
+    let unique = sandbox.json_ok(
+        "default",
+        &["workspace", "create", "repo", "derived", "--unique"],
+    );
+    assert!(
+        unique.get("name_generated").is_none(),
+        "--unique alone is the person's name"
+    );
+    let derived = sandbox.json_ok(
+        "default",
+        &[
+            "workspace",
+            "create",
+            "repo",
+            "derived",
+            "--unique",
+            "--name-generated",
+        ],
+    );
+    assert_eq!(derived["name"], "derived-2");
+    assert_eq!(derived["name_generated"], true);
+    let on_branch = sandbox.json_ok(
+        "default",
+        &["workspace", "create", "repo", "--branch", "feat/login"],
+    );
+    assert!(
+        on_branch.get("name_generated").is_none(),
+        "a named branch is the person's"
+    );
 }

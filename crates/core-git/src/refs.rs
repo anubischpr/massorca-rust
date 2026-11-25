@@ -63,24 +63,27 @@ impl Git {
             .collect())
     }
 
-    /// Whether `branch` has an upstream that resolves (`<branch>@{upstream}`), as a push with `-u` leaves it.
+    /// Whether the local branch `branch` has an upstream configured, as a push with `-u` leaves it. A git failure is
+    /// an error, never a no, so a caller that refuses published branches fails closed.
     pub fn branch_has_upstream(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
         if branch.starts_with('-') {
             return Ok(false);
         }
-        let upstream = format!("{branch}@{{upstream}}");
+        let reference = format!("refs/heads/{branch}");
         let captured = self.run(
             Some(repo),
             [
-                "rev-parse",
-                "--abbrev-ref",
-                "--verify",
-                "--quiet",
-                upstream.as_str(),
+                "for-each-ref",
+                "--format=%(refname)%00%(upstream)",
+                reference.as_str(),
             ],
         )?;
-        // Git exits 1 or 128 when no upstream is set or it does not resolve.
-        Ok(captured.succeeded())
+        captured.require_success()?;
+        // A pattern also matches refs below it, so only the exact ref counts.
+        Ok(captured.text()?.lines().any(|line| {
+            line.split_once('\0')
+                .is_some_and(|(name, upstream)| name == reference && !upstream.is_empty())
+        }))
     }
 
     /// Whether `rev` resolves to a commit in `repo`.

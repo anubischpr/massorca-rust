@@ -357,6 +357,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
@@ -383,6 +384,7 @@ fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
             request_id: None,
             no_setup: false,
             unique_name: false,
+            name_generated: false,
         },
         &json!({
             "project": "app",
@@ -905,6 +907,15 @@ fn workspace_rename_params_have_the_documented_shape() {
             "from_generated": true,
             "expected_branch": "otter"
         }),
+    );
+    let create: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).unwrap();
+    assert!(!create.name_generated);
+    assert!(
+        serde_json::to_value(&create)
+            .unwrap()
+            .get("name_generated")
+            .is_none()
     );
     let decoded: workspaces::WorkspaceRenameParams =
         serde_json::from_value(json!({ "workspace": "otter", "name": "x" })).unwrap();

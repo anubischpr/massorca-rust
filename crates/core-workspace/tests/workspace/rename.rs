@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use massorca_core_store::WorkspaceState;
 use massorca_core_workspace::BranchPrefix;
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceRenameParams};
@@ -238,9 +239,10 @@ fn a_failed_row_write_renames_the_branch_back() {
     let branch = ws.branch.clone().expect("a branch");
     fx.fail_workspace_updates();
 
-    let result = fx.workspaces.rename_workspace(rename(&ws.id, "fix-login"));
-
-    assert!(result.is_err(), "{result:?}");
+    expect_code(
+        fx.workspaces.rename_workspace(rename(&ws.id, "fix-login")),
+        codes::INTERNAL,
+    );
     assert!(branch_exists(&fx.repo(), &branch));
     assert!(!branch_exists(&fx.repo(), "fix-login"));
     assert_eq!(fx.workspaces.show_workspace(&ws.id).unwrap().name, ws.name);
@@ -261,4 +263,104 @@ fn a_folder_workspace_changes_its_name_only() {
     assert_eq!(renamed.branch, None);
     assert_eq!(renamed.path, ws.path);
     assert!(renamed.name_generated);
+}
+
+#[test]
+fn renaming_to_its_own_name_changes_nothing_and_gets_no_suffix() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = generated(&fx, &project.name);
+
+    let same = fx
+        .workspaces
+        .rename_workspace(rename(&ws.id, &ws.name))
+        .expect("a rename to its own name");
+
+    assert_eq!(same.name, ws.name);
+    assert_eq!(same.branch, ws.branch);
+}
+
+#[test]
+fn a_stale_expected_branch_is_refused_even_when_the_name_is_unchanged() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = generated(&fx, &project.name);
+
+    expect_code(
+        fx.workspaces.rename_workspace(WorkspaceRenameParams {
+            expected_branch: Some("something-else".to_owned()),
+            ..rename(&ws.id, &ws.name)
+        }),
+        codes::WORKSPACE_BRANCH_CHANGED,
+    );
+}
+
+#[test]
+fn a_case_only_change_renames_the_name_and_branch_without_a_suffix() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = generated(&fx, &project.name);
+    let first = fx
+        .workspaces
+        .rename_workspace(rename(&ws.id, "otter"))
+        .expect("first rename");
+    assert_eq!(first.name, "otter");
+
+    let renamed = fx
+        .workspaces
+        .rename_workspace(rename(&ws.id, "Otter"))
+        .expect("case-only rename");
+
+    assert_eq!(renamed.name, "Otter");
+    assert_eq!(renamed.branch.as_deref(), Some("Otter"));
+    assert_eq!(
+        run_git(Path::new(&ws.path), &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "Otter"
+    );
+}
+
+#[test]
+fn a_workspace_being_removed_is_refused() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = generated(&fx, &project.name);
+    fx.store
+        .set_workspace_state(&ws.id, WorkspaceState::Removing)
+        .expect("mark removing");
+
+    expect_code(
+        fx.workspaces.rename_workspace(rename(&ws.id, "fix-login")),
+        codes::WORKSPACE_BUSY,
+    );
+}
+
+#[test]
+fn another_workspace_of_another_case_moves_the_name_on() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    fx.create(&project.name, "Fix-Login");
+    let ws = generated(&fx, &project.name);
+
+    let renamed = fx
+        .workspaces
+        .rename_workspace(rename(&ws.id, "fix-login"))
+        .expect("rename");
+
+    assert_eq!(renamed.name, "fix-login-2");
+}
+
+#[test]
+fn a_branch_without_a_workspace_moves_the_name_on() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    run_git(&fx.repo(), &["branch", "fix-login"]);
+    let ws = generated(&fx, &project.name);
+
+    let renamed = fx
+        .workspaces
+        .rename_workspace(rename(&ws.id, "fix-login"))
+        .expect("rename");
+
+    assert_eq!(renamed.name, "fix-login-2");
+    assert_eq!(renamed.branch.as_deref(), Some("fix-login-2"));
 }

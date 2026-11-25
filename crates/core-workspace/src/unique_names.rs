@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use massorca_core_store::{ProjectKind as StoreKind, ProjectRow};
+use massorca_core_store::{ProjectKind as StoreKind, ProjectRow, WorkspaceRow};
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 
@@ -36,19 +36,28 @@ impl Workspaces {
             ));
         }
         let base = names::clean_workspace_name(&params.name)?;
-        self.free_name(project, &base, Folders::Checked)
+        self.free_name(project, &base, Search::Create)
     }
 
     /// The first of `base`, `base-2` .. `base-100` that no workspace or branch (local or remote-tracking) of `project`
-    /// takes, nor a folder when `folders` says so. Called under the mutation lock.
+    /// takes, nor a folder on a create. A rename skips the workspace's own name and local branch. Called under the
+    /// mutation lock.
     pub(crate) fn free_name(
         &self,
         project: &ProjectRow,
         base: &str,
-        folders: Folders,
+        search: Search<'_>,
     ) -> Result<String, DomainError> {
+        let own = match search {
+            Search::Create => None,
+            Search::Rename(row) => Some(row),
+        };
         let rows = self.store.list_workspaces(Some(&project.id))?;
-        let taken_names: HashSet<String> = rows.iter().map(|row| row.name.to_lowercase()).collect();
+        let taken_names: HashSet<String> = rows
+            .iter()
+            .filter(|row| own.is_none_or(|own| own.id != row.id))
+            .map(|row| row.name.to_lowercase())
+            .collect();
         let free = match project.kind {
             // A folder workspace's folder is the project's or a given one, never derived from the name.
             StoreKind::Folder => {
@@ -57,10 +66,12 @@ impl Workspaces {
             StoreKind::Git => {
                 let repo = Path::new(&project.path);
                 let segment = self.branch_prefix.segment(&self.git, repo)?;
+                let own_branch = own.and_then(|row| row.branch.as_deref());
                 let mut branches: HashSet<String> = self
                     .git
                     .branches(repo)?
                     .into_iter()
+                    .filter(|branch| own_branch != Some(branch.name.as_str()))
                     .map(|branch| branch.name.to_lowercase())
                     .collect();
                 branches.extend(
@@ -69,14 +80,14 @@ impl Workspaces {
                         .into_iter()
                         .map(|branch| branch.to_lowercase()),
                 );
-                let claimed: HashSet<String> = match folders {
-                    Folders::Checked => self
+                let claimed: HashSet<String> = match search {
+                    Search::Create => self
                         .store
                         .list_workspaces(None)?
                         .into_iter()
                         .map(|row| row.path_key)
                         .collect(),
-                    Folders::Ignored => HashSet::new(),
+                    Search::Rename(_) => HashSet::new(),
                 };
                 let root = paths::absolute(&project.workspaces_root)?;
                 first_free_name(base, |name| {
@@ -87,7 +98,7 @@ impl Workspaces {
                     };
                     taken_names.contains(&name.to_lowercase())
                         || branches.contains(&branch.to_lowercase())
-                        || (matches!(folders, Folders::Checked) && folder_taken())
+                        || (matches!(search, Search::Create) && folder_taken())
                 })
             }
         };
@@ -100,11 +111,12 @@ impl Workspaces {
     }
 }
 
-/// Whether a candidate's folder under the workspaces root counts: a create makes it, a rename never moves it.
+/// What a free name is for: a create also checks the folder it makes; a rename never moves the folder and skips the
+/// workspace's own name and branch, so a case-only change gets no suffix.
 #[derive(Clone, Copy)]
-pub(crate) enum Folders {
-    Checked,
-    Ignored,
+pub(crate) enum Search<'a> {
+    Create,
+    Rename(&'a WorkspaceRow),
 }
 
 /// `base`, then `base-2` .. `base-100`: the first that `is_taken` does not refuse. A suffixed name cuts the base, and

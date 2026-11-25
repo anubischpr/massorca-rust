@@ -91,8 +91,10 @@ impl Workspaces {
             }
         }
         let project = self.resolve_project(&params.project)?;
-        // The desktop asks for a unique name only for one it derived, so that name is the service's to rename.
-        let name_generated = matches!(naming, Naming::Generated) || params.unique_name;
+        // A named or existing branch is the person's, whoever chose the workspace name.
+        let name_generated = (matches!(naming, Naming::Generated) || params.name_generated)
+            && params.branch.is_none()
+            && !params.existing_branch;
         let name = match naming {
             Naming::Typed if params.unique_name => self.unique_name(&project, &params)?,
             Naming::Typed => names::clean_workspace_name(&params.name)?,
