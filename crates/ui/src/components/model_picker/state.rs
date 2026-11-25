@@ -250,6 +250,12 @@ impl PickerState {
         self.expanded = true;
     }
 
+    /// Folds an agent's list back to its featured rows, keeping the highlight on a shown row.
+    pub fn collapse(&mut self) {
+        self.expanded = false;
+        self.highlight = self.highlight.min(Self::FEATURED_ROWS - 1);
+    }
+
     /// Chooses a model. The reasoning level carries over when the model offers a level with
     /// the same name; otherwise the model's default. Fast stays only when the model offers it.
     pub fn select_model(&mut self, row: RowRef) -> bool {
@@ -392,6 +398,16 @@ mod tests {
         assert_eq!(names(&state).len(), PickerState::FEATURED_ROWS);
         state.expand();
         assert_eq!(names(&state).len(), 6);
+    }
+
+    #[test]
+    fn show_fewer_folds_the_list_back_and_keeps_the_highlight_on_a_shown_row() {
+        let mut state = sample();
+        state.expand();
+        state.move_highlight(5);
+        state.collapse();
+        assert_eq!(names(&state).len(), PickerState::FEATURED_ROWS);
+        assert_eq!(state.highlight(), PickerState::FEATURED_ROWS - 1);
     }
 
     #[test]

@@ -428,4 +428,106 @@ mod tests {
         );
         assert!(picker.read_with(cx, |picker, _| picker.is_open()));
     }
+
+    /// Redraws the window so the popover's bounds reflect the last change.
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    /// Clicks the centre of a drawn element and lets the change settle.
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let at = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn rows_of(picker: &Entity<ModelPicker>, cx: &VisualTestContext) -> usize {
+        picker.read_with(cx, |picker, _| picker.state().rows().len())
+    }
+
+    #[gpui::test]
+    fn the_rail_switches_the_list_to_its_agent(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        click(cx, "rail-codex");
+        assert_eq!(
+            picker.read_with(cx, |picker, _| picker.state().view()),
+            PickerView::Agent(1)
+        );
+        assert_eq!(rows_of(&picker, cx), 1, "Codex offers one model");
+    }
+
+    #[gpui::test]
+    fn the_favourites_rail_lists_the_starred_models(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        picker.update(cx, |picker, _| picker.state.toggle_favourite("gpt"));
+        open_and_draw(&picker, cx);
+        click(cx, "rail-favourites");
+        assert_eq!(rows_of(&picker, cx), 1);
+    }
+
+    #[gpui::test]
+    fn show_more_reveals_the_rest_and_show_fewer_folds_them_again(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        assert_eq!(rows_of(&picker, cx), PickerState::FEATURED_ROWS);
+        click(cx, "model-picker-show-more");
+        draw(cx);
+        assert_eq!(rows_of(&picker, cx), 6);
+        click(cx, "model-picker-show-more");
+        draw(cx);
+        assert_eq!(rows_of(&picker, cx), PickerState::FEATURED_ROWS);
+    }
+
+    #[gpui::test]
+    fn a_star_toggles_a_favourite_without_choosing_its_row(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        picker.update(cx, |picker, _| picker.state.move_highlight(1));
+        draw(cx);
+        click(cx, "model-star-1");
+        assert!(picker.read_with(cx, |picker, _| picker.state().is_favourite("sonnet")));
+        assert_eq!(
+            picker.read_with(cx, |picker, _| picker.state().choice().model.to_string()),
+            "opus",
+            "starring does not choose the row"
+        );
+        draw(cx);
+        click(cx, "model-star-1");
+        assert!(!picker.read_with(cx, |picker, _| picker.state().is_favourite("sonnet")));
+    }
+
+    #[gpui::test]
+    fn an_effort_row_chooses_the_level_and_closes_the_popover(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        click(cx, "effort-2");
+        assert_eq!(
+            choices.borrow().last().and_then(|choice| choice.effort),
+            Some(2)
+        );
+        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    #[gpui::test]
+    fn the_speed_segments_choose_standard_or_fast(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        click(cx, "segment-1");
+        assert!(choices.borrow().last().is_some_and(|choice| choice.fast));
+        draw(cx);
+        click(cx, "segment-0");
+        assert!(choices.borrow().last().is_some_and(|choice| !choice.fast));
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "speed keeps the popover open"
+        );
+    }
 }

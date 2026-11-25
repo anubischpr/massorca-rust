@@ -22,8 +22,7 @@ use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_MODEL_PICKER_MODEL_COLUMN, LAYOUT_MODEL_PICKER_PROVIDER_COLUMN,
     LAYOUT_MODEL_PICKER_REASONING_COLUMN, Palette, RADIUS_MD, SIZE_CONTROL_COMFORTABLE,
-    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_STRONG, TYPE_CAPTION,
-    TYPE_LABEL,
+    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_LABEL,
 };
 
 /// What one model row shows.
@@ -132,8 +131,10 @@ impl ModelPicker {
     ) -> Stateful<Div> {
         let name: SharedString = name.into();
         let tooltip = name.clone();
+        let selector = format!("rail-{}", name.to_lowercase());
         div()
             .id(id)
+            .debug_selector(move || selector.clone())
             .role(Role::Tab)
             .aria_label(name)
             .aria_selected(active)
@@ -176,7 +177,6 @@ impl ModelPicker {
             .aria_label("Models")
             .flex()
             .flex_col()
-            .gap(px(2.))
             .p(px(SPACE_1))
             .flex_1()
             .min_h_0()
@@ -202,9 +202,10 @@ impl ModelPicker {
             };
             list = list.child(self.model_row(item, cx));
         }
-        let more_available = matches!(self.state.view(), PickerView::Agent(agent)
-            if !self.state.expanded()
-                && self.state.agents().get(agent).is_some_and(|option| option.models.len() > PickerState::FEATURED_ROWS));
+        // A search reads every agent, so "Show more" waits until the search is cleared.
+        let more_available = self.state.query().is_empty()
+            && matches!(self.state.view(), PickerView::Agent(agent)
+                if self.state.agents().get(agent).is_some_and(|option| option.models.len() > PickerState::FEATURED_ROWS));
         let mut column = div()
             .flex()
             .flex_col()
@@ -216,9 +217,11 @@ impl ModelPicker {
             .child(self.search_row(&p))
             .child(list);
         if more_available {
+            let expanded = self.state.expanded();
             column = column.child(
                 div()
                     .id("model-picker-show-more")
+                    .debug_selector(|| "model-picker-show-more".to_owned())
                     .mx(px(SPACE_2))
                     .mb(px(SPACE_1))
                     .px(px(SPACE_2))
@@ -230,11 +233,15 @@ impl ModelPicker {
                     .text_color(p.text.secondary)
                     .cursor_pointer()
                     .hover(move |s| s.bg(p.fill.hover_overlay))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.state.expand();
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if expanded {
+                            this.state.collapse();
+                        } else {
+                            this.state.expand();
+                        }
                         cx.notify();
                     }))
-                    .child("Show more"),
+                    .child(if expanded { "Show fewer" } else { "Show more" }),
             );
         }
         column
@@ -262,14 +269,14 @@ impl ModelPicker {
             .into_any_element()
     }
 
+    /// The search field under the accent underline the artboard draws beneath it.
     fn search_row(&self, p: &crate::tokens::Palette) -> Div {
         div()
             .flex()
             .items_center()
             .px(px(SPACE_2))
-            .py(px(SPACE_1))
-            .border_b_1()
-            .border_color(p.border.subtle)
+            .border_b_2()
+            .border_color(p.border.focus)
             .child(self.search.clone())
     }
 
@@ -298,6 +305,7 @@ impl ModelPicker {
         let picker = cx.entity();
         let star = div()
             .id(star_id)
+            .debug_selector(move || format!("model-star-{position}"))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 IconButton::new(("model-star-button", position), IconName::Star, star_name)
@@ -310,8 +318,9 @@ impl ModelPicker {
                         });
                     }),
             );
+        // The star shows on the highlighted row and on hover; a favourite keeps it visible.
         let star = div()
-            .when(!favourite, |star_wrap| {
+            .when(!favourite && !highlighted, |star_wrap| {
                 star_wrap
                     .invisible()
                     .group_hover(star_group.clone(), |s| s.visible())
@@ -369,7 +378,6 @@ impl ModelPicker {
             .flex_none()
             .w(px(LAYOUT_MODEL_PICKER_REASONING_COLUMN))
             .p(px(SPACE_1))
-            .gap(px(2.))
             .child(
                 div()
                     .flex()
@@ -377,7 +385,7 @@ impl ModelPicker {
                     .justify_between()
                     .gap(px(SPACE_2))
                     .px(px(SPACE_2))
-                    .py(px(SPACE_1))
+                    .h(px(SIZE_CONTROL_DEFAULT))
                     .border_b_1()
                     .border_color(p.border.subtle)
                     .child(
@@ -411,6 +419,7 @@ impl ModelPicker {
                     column = column.child(
                         div()
                             .id(("effort", index))
+                            .debug_selector(move || format!("effort-{index}"))
                             .role(Role::RadioButton)
                             .aria_label(level.clone())
                             .aria_selected(active)
@@ -454,7 +463,7 @@ impl ModelPicker {
             .items_center()
             .flex_none()
             .h(px(SIZE_CONTROL_DEFAULT + SPACE_2 * 2.))
-            .px(px(SPACE_3))
+            .px(px(SPACE_2))
             .border_t_1()
             .border_color(p.border.subtle)
             .child(
@@ -467,7 +476,7 @@ impl ModelPicker {
                     ],
                 )
                 .style(SegmentedStyle::Sunken)
-                .size(SegmentedSize::Compact)
+                .size(SegmentedSize::Default)
                 .selected(usize::from(fast))
                 .on_change(move |index, _, cx| {
                     picker.update(cx, |picker, cx| picker.set_speed(index == 1, cx));
