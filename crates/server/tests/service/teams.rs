@@ -11,9 +11,9 @@ use massorca_protocol::methods::projects::{
 };
 use massorca_protocol::methods::tasks::{self, Task, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, MemorySource, Team,
-    TeamAccess, TeamCharacter, TeamCreateParams, TeamList, TeamMemoryAddParams, TeamMemoryLine,
-    TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, CodeSource, MemorySource,
+    Team, TeamAccess, TeamCharacter, TeamCreateParams, TeamList, TeamMemoryAddParams,
+    TeamMemoryLine, TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
     TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
     TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
@@ -22,6 +22,14 @@ use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
 use super::git_fixture::git;
+
+/// A team with Workspaces on, which may connect its projects to code.
+fn workspaces_team(name: &str) -> TeamCreateParams {
+    TeamCreateParams {
+        workspaces: Some(true),
+        ..create_params(name)
+    }
+}
 
 fn create_params(name: &str) -> TeamCreateParams {
     TeamCreateParams {
@@ -1069,7 +1077,7 @@ async fn a_team_project_links_a_git_or_a_folder_workspaces_project_as_its_source
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     client
-        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .call::<_, Team>(teams::CREATE, &workspaces_team("alpha"))
         .await
         .expect("alpha");
     let repo_project = register_project(&client, &repo, None).await;
@@ -1124,7 +1132,7 @@ async fn updating_the_source_moves_it_and_an_empty_one_clears_it() {
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     client
-        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .call::<_, Team>(teams::CREATE, &workspaces_team("alpha"))
         .await
         .expect("alpha");
     let repo_project = register_project(&client, &repo, None).await;
@@ -1193,7 +1201,7 @@ async fn removing_the_workspaces_project_clears_the_link_and_keeps_the_team_proj
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     client
-        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .call::<_, Team>(teams::CREATE, &workspaces_team("alpha"))
         .await
         .expect("alpha");
     let folder_project = register_project(&client, &folder, Some(ProjectKind::Folder)).await;
@@ -1321,5 +1329,104 @@ async fn a_bot_keeps_its_skills_in_order_and_an_update_replaces_or_clears_them()
         .await
         .expect("an empty list clears the skills");
     assert!(cleared.skills.is_empty());
+    stop(running).await;
+}
+
+fn workspaces_switch(on: bool) -> TeamUpdateParams {
+    TeamUpdateParams {
+        team: "alpha".to_owned(),
+        name: None,
+        purpose: None,
+        character: None,
+        access: None,
+        workspaces: Some(on),
+    }
+}
+
+#[tokio::test]
+async fn a_team_with_workspaces_off_cannot_connect_a_project_to_code_but_may_unlink_and_edit_it() {
+    let home = temp_home();
+    let folder = home.path().join("notes");
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha, Workspaces off");
+    let folder_project = register_project(&client, &folder, Some(ProjectKind::Folder)).await;
+
+    let linked_on_add = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_ADD,
+            &project_add("parser", Some(&folder_project.id)),
+        )
+        .await
+        .expect_err("a link needs Workspaces");
+    assert_eq!(remote_code(&linked_on_add), codes::TEAM_WORKSPACES_OFF);
+    let source_on_add = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_ADD,
+            &TeamProjectAddParams {
+                code_source: Some(CodeSource::ExistingRepository),
+                ..project_add("parser", None)
+            },
+        )
+        .await
+        .expect_err("a code source needs Workspaces");
+    assert_eq!(remote_code(&source_on_add), codes::TEAM_WORKSPACES_OFF);
+
+    client
+        .call::<_, TeamProject>(teams::PROJECT_ADD, &project_add("parser", None))
+        .await
+        .expect("a project without code");
+    let linked_on_update = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some(&folder_project.id)),
+        )
+        .await
+        .expect_err("a link needs Workspaces on update too");
+    assert_eq!(remote_code(&linked_on_update), codes::TEAM_WORKSPACES_OFF);
+
+    client
+        .call::<_, Team>(teams::UPDATE, &workspaces_switch(true))
+        .await
+        .expect("Workspaces on");
+    let linked: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some(&folder_project.id)),
+        )
+        .await
+        .expect("linked once Workspaces is on");
+    assert_eq!(
+        linked.source_project.as_deref(),
+        Some(folder_project.id.as_str())
+    );
+
+    client
+        .call::<_, Team>(teams::UPDATE, &workspaces_switch(false))
+        .await
+        .expect("Workspaces off again");
+    let renamed: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &TeamProjectUpdateParams {
+                goal: Some("Parse it".to_owned()),
+                ..project_update_source("parser", None)
+            },
+        )
+        .await
+        .expect("edits other than code stay open");
+    assert_eq!(renamed.goal, "Parse it");
+    let unlinked: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some("")),
+        )
+        .await
+        .expect("clearing a link stays open");
+    assert_eq!(unlinked.source_project, None);
     stop(running).await;
 }

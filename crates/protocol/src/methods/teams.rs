@@ -288,10 +288,11 @@ pub struct TeamProjectAddParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
-    /// A Workspaces project (id, exact name or path) the code comes from. Unset or blank links none.
+    /// A Workspaces project (id, exact name or path) the code comes from; the team must have Workspaces on, or the call
+    /// fails with `team.workspaces_off`. Unset or blank links none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
-    /// Where the code is, recorded only; the team must have Workspaces on. Unset records none.
+    /// Where the code is, recorded only; the team must have Workspaces on (`team.workspaces_off`). Unset records none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_source: Option<CodeSource>,
 }
@@ -307,10 +308,11 @@ pub struct TeamProjectUpdateParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
-    /// The Workspaces project (id, exact name or path) the code comes from. An empty value clears the link.
+    /// The Workspaces project (id, exact name or path) the code comes from; linking needs the team's Workspaces on
+    /// (`team.workspaces_off`). An empty value clears the link, which a team with Workspaces off may still do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
-    /// Where the code is, recorded only; the team must have Workspaces on.
+    /// Where the code is, recorded only; the team must have Workspaces on (`team.workspaces_off`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_source: Option<CodeSource>,
 }

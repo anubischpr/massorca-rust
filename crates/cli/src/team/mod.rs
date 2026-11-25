@@ -213,7 +213,7 @@ pub struct TeamProjectAddArgs {
     /// What the project is for.
     #[arg(long, value_name = "TEXT")]
     pub goal: Option<String>,
-    /// The Workspaces project (id, name or path) the code comes from.
+    /// The Workspaces project (id, name or path) the code comes from. Needs Workspaces in the team.
     #[arg(long, value_name = "PROJECT")]
     pub source: Option<String>,
     /// Where the code is, recorded only (nothing is cloned or created). Needs Workspaces in the team.
@@ -348,7 +348,8 @@ pub struct TeamProjectUpdateArgs {
     /// New Brief of the project. An empty value clears it.
     #[arg(long, value_name = "TEXT")]
     pub brief: Option<String>,
-    /// The Workspaces project (id, name or path) the code comes from. An empty value clears it.
+    /// The Workspaces project (id, name or path) the code comes from; linking needs Workspaces in the team. An empty
+    /// value clears it.
     #[arg(long, value_name = "PROJECT")]
     pub source: Option<String>,
     /// Where the code is, recorded only (nothing is cloned or created). Needs Workspaces in the team.

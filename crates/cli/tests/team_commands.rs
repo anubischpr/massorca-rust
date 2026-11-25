@@ -661,6 +661,10 @@ fn a_team_project_takes_a_workspaces_source_on_add_and_update_and_names_it_in_th
     sandbox
         .run("default", &["team", "create", "alpha"])
         .success();
+    sandbox.json_ok(
+        "default",
+        &["team", "update", "alpha", "--workspaces", "true"],
+    );
     let folder = sandbox.json_ok("default", &["project", "add", notes_text, "--folder"]);
     let folder_id = folder["id"].as_str().expect("project id").to_owned();
 
@@ -760,7 +764,7 @@ fn a_team_project_records_its_code_source_only_when_the_team_has_workspaces() {
         .code(1);
     let document = single_document(&refused);
     assert_eq!(
-        document["error"]["code"], "request.invalid_params",
+        document["error"]["code"], "team.workspaces_off",
         "{document}"
     );
 
@@ -934,4 +938,32 @@ fn a_bot_takes_skills_on_add_and_update_and_shows_them_in_text() {
         &["team", "bot", "update", "alpha", "mara", "--skills", ""],
     );
     assert!(cleared.get("skills").is_none(), "{cleared}");
+}
+
+#[test]
+fn a_team_with_workspaces_off_is_refused_a_project_link_with_the_reason() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_str().expect("utf-8 path");
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox.json_ok("default", &["project", "add", notes_text, "--folder"]);
+
+    let refused = sandbox
+        .run(
+            "default",
+            &[
+                "team", "project", "add", "alpha", "parser", "--source", "notes",
+            ],
+        )
+        .failure()
+        .code(1);
+    let reason = stderr_text(&refused);
+    assert!(reason.contains("team.workspaces_off"), "{reason}");
+    assert!(reason.contains("--workspaces true"), "{reason}");
+
+    let plain = sandbox.json_ok("default", &["team", "project", "add", "alpha", "parser"]);
+    assert!(plain["source_project"].is_null());
 }

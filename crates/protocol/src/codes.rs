@@ -233,6 +233,8 @@ pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
 /// `task.start` found the Bot teams folder already added as a project that is not a folder project.
 pub const TEAM_FOLDER_TAKEN: &str = "team.folder_taken";
 pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+/// The team has Workspaces off, so its projects cannot be connected to code (decision 0120).
+pub const TEAM_WORKSPACES_OFF: &str = "team.workspaces_off";
 /// The team has no memory line with this id.
 pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
