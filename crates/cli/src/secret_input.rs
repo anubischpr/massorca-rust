@@ -14,14 +14,7 @@ const DRAIN_QUIET: Duration = Duration::from_millis(50);
 
 /// The value for `name` in `scope`; refuses an empty one so nothing reaches the service.
 pub fn read_value(scope: &str, name: &str) -> Result<String, CliError> {
-    let stdin = io::stdin();
-    let value = if stdin.is_terminal() {
-        prompt_hidden(&format!("Value for {name} in {scope}: "))?
-    } else {
-        let mut text = String::new();
-        stdin.lock().read_to_string(&mut text)?;
-        strip_one_newline(text)
-    };
+    let value = read_hidden_or_stdin(&format!("Value for {name} in {scope}: "))?;
     if value.is_empty() {
         return Err(CliError::new(
             "secret.empty_value",
@@ -30,6 +23,17 @@ pub fn read_value(scope: &str, name: &str) -> Result<String, CliError> {
         ));
     }
     Ok(value)
+}
+
+/// All of stdin when it is not a terminal, else one line from a prompt that does not echo. May be empty.
+pub fn read_hidden_or_stdin(prompt: &str) -> Result<String, CliError> {
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        return prompt_hidden(prompt);
+    }
+    let mut text = String::new();
+    stdin.lock().read_to_string(&mut text)?;
+    Ok(strip_one_newline(text))
 }
 
 /// Drops one trailing `\n` or `\r\n`, the one `echo` and here-strings add; anything else is part of the value.

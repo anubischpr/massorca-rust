@@ -53,6 +53,7 @@ use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
@@ -120,6 +121,11 @@ pub(crate) enum Command {
         refresh: bool,
     },
     Secret(SecretCommand),
+    /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
+    HostedServices {
+        host: Option<String>,
+        command: ServicesCommand,
+    },
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
     SetConfig {
@@ -654,6 +660,13 @@ impl Link {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
+            Command::HostedServices {
+                host: Some(host),
+                command,
+            } => {
+                hosted_services::spawn_host(self.profile.clone(), host, command);
+                None
+            }
             Command::HostRead { host, request } => {
                 extensions::spawn_host_read(
                     self.profile.clone(),
@@ -857,6 +870,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::HostedServices { command, .. }) => {
+                                hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
@@ -1186,6 +1202,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Secret(_)
+        | Command::HostedServices { .. }
         | Command::Account(_)
         | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -1269,6 +1286,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::HostedServices { command, .. } => {
+            hosted_services::refuse_while_down(command, refusal);
+        }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
