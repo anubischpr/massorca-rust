@@ -21,7 +21,7 @@ need its own key, backups and redaction.
 - **Write-only over RPC.** Capability `services/1`:
   - `marketplace.service.status` `{ service? }` (Read): id, name, state (`connected`, `not-connected`, `unknown`),
     source (`stored`, `external`, `none`), and the account email, base URL, update time, `glab` presence and detail when
-    known. Never a token.
+    known. Never a token. The base URL and account reach only a host administrator.
   - `marketplace.service.connect` `{ service, token, base_url?, email? }` and `marketplace.service.disconnect`
     `{ service }` need HostAdmin, the class `secret.set` uses, because both write a credential.
   - The connect params decode with the vault's redacted errors, and their `Debug` prints `[redacted]`.
@@ -29,7 +29,9 @@ need its own key, backups and redaction.
   host owns the connection, as it owns its vault.
 - **GitLab.** `glab` keeps its own sign-in, as in pv96. Connect runs `glab auth login --hostname <host> --stdin` through
   `massorca_process`, with the token written to stdin and the output discarded, because it may repeat the host or the
-  token. A host with a port goes in `GITLAB_HOST` instead, since `--hostname` refuses one. Without a base URL the host
+  token. The host is passed as one argument, `--hostname=<host>`. A host with a port goes in `GITLAB_HOST` instead,
+  since `--hostname` refuses one. A base URL is `http` or `https`, a host of letters, digits, `.` and `-` (or IPv6 in
+  brackets), an optional port and a plain path; credentials, a query, a fragment and percent-escapes are refused. Without a base URL the host
   is `gitlab.com`. Status runs `glab auth status`, and a missing `glab` says so.
 - **GitLab disconnect is refused** (orchestrator ruling, 2026-11-24): "keep pv96's refusal. MassOrca never runs `glab
   auth logout`: that would sign the person out of glab for everything else on the machine." The refusal,

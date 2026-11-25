@@ -147,10 +147,14 @@ fn the_key_is_not_reset_while_a_service_is_stored() {
     let (vault, _) = vault(dir.path());
     let secret = token(TOKEN);
     connect(&vault, "gitea", &secret, None, None).expect("set");
-    assert!(matches!(
-        vault.reset_key(),
-        Err(VaultError::VaultNotEmpty { .. })
-    ));
+    let error = vault
+        .reset_key()
+        .expect_err("a service row is sealed by the key");
+    assert!(matches!(error, VaultError::VaultNotEmpty { .. }));
+    assert_eq!(
+        error.to_string(),
+        "the vault holds 1 service connection; disconnect it with `massorca marketplace services disconnect` before resetting its key"
+    );
 }
 
 #[test]

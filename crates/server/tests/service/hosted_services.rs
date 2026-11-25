@@ -12,6 +12,7 @@ use massorca_server::{RunningService, Service, VaultOptions};
 use serde_json::{Value, json};
 
 use super::common::{connect, service_config, stop, temp_home};
+use super::network::{client_side, offer, pair, start_listening_file_vault};
 
 const TOKEN: &str = "service-test-token-91c2";
 
@@ -131,5 +132,53 @@ async fn bad_input_and_status_only_rows_are_refused_without_the_token() {
         refused(&client, wire::DISCONNECT, json!({ "service": "linear" })).await,
         codes::SERVICE_UNAVAILABLE
     );
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_without_host_admin_cannot_write_and_sees_no_address_or_account() {
+    let home = temp_home();
+    let running = start_listening_file_vault(home.path()).await;
+    let owner = connect(home.path(), "server").await;
+    let stored: ServiceStatus = owner
+        .call(
+            wire::CONNECT,
+            &json!({ "service": "bitbucket", "token": TOKEN, "base_url": "https://bitbucket.example.com",
+                     "email": "me@example.com" }),
+        )
+        .await
+        .expect("the owner connects");
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (reader, _) = pair(&hosts, &standard_offer, "reader")
+        .await
+        .expect("paired");
+
+    for (method, params) in [
+        (wire::CONNECT, json!({ "service": "gitea", "token": TOKEN })),
+        (
+            wire::CONNECT,
+            json!({ "service": "bitbucket", "token": "other-token" }),
+        ),
+        (wire::DISCONNECT, json!({ "service": "bitbucket" })),
+    ] {
+        assert_eq!(
+            refused(&reader, method, params).await,
+            codes::PERMISSION_DENIED,
+            "{method}"
+        );
+    }
+    assert_eq!(status(&owner, "bitbucket").await, stored);
+    assert_eq!(
+        status(&owner, "gitea").await.state,
+        ServiceState::NotConnected
+    );
+
+    let seen = status(&reader, "bitbucket").await;
+    assert_eq!(
+        (seen.state, seen.source),
+        (ServiceState::Connected, ServiceSource::Stored)
+    );
+    assert_eq!((seen.base_url, seen.account), (None, None));
     stop(running).await;
 }

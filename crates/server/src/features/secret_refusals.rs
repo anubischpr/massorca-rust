@@ -64,9 +64,9 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
                 "other": other
             })),
         ),
-        VaultError::VaultNotEmpty { count } => (
+        VaultError::VaultNotEmpty { count, services } => (
             codes::SECRET_VAULT_NOT_EMPTY,
-            Some(json!({ "count": count })),
+            Some(json!({ "count": count, "services": services })),
         ),
         VaultError::RequestLimit(_) => (codes::SECRET_REQUEST_LIMIT, None),
         VaultError::Unreadable { scope, name } => {

@@ -88,8 +88,9 @@ pub enum VaultError {
         other_scope: String,
         other: String,
     },
-    #[error("the vault holds {count} secrets; remove them before resetting its key")]
-    VaultNotEmpty { count: u64 },
+    /// `count` is every sealed row; `services` of them are service connections.
+    #[error("{}", not_empty(*.count, *.services))]
+    VaultNotEmpty { count: u64, services: u64 },
     #[error("too many secret requests: {0}")]
     RequestLimit(&'static str),
     #[error("{name} in {scope} could not be opened; set it again with replace")]
@@ -111,6 +112,24 @@ pub enum VaultError {
 pub struct ScopedName {
     pub scope: String,
     pub name: String,
+}
+
+fn not_empty(count: u64, services: u64) -> String {
+    const DISCONNECT: &str = "disconnect it with `massorca marketplace services disconnect`";
+    match (count.saturating_sub(services), services) {
+        (secrets, 0) => {
+            format!("the vault holds {secrets} secrets; remove them before resetting its key")
+        }
+        (0, 1) => {
+            format!("the vault holds 1 service connection; {DISCONNECT} before resetting its key")
+        }
+        (0, services) => format!(
+            "the vault holds {services} service connections; disconnect them with `massorca marketplace services disconnect` before resetting its key"
+        ),
+        (secrets, services) => format!(
+            "the vault holds {secrets} secrets and {services} service connections; remove the secrets and disconnect the services with `massorca marketplace services disconnect` before resetting its key"
+        ),
+    }
 }
 
 fn names(list: &[ScopedName]) -> String {

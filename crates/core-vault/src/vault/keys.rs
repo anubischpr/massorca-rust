@@ -58,10 +58,15 @@ impl Vault {
     /// `VaultNotEmpty` while any secret exists; a key or store failure.
     pub fn reset_key(&self) -> Result<(), VaultError> {
         let mut guard = self.lock();
-        let count = self.store.list_secrets()?.len();
-        if count > 0 {
+        let rows = self.store.list_secrets()?;
+        if !rows.is_empty() {
+            let services = rows
+                .iter()
+                .filter(|row| is_service_scope(&row.scope))
+                .count();
             return Err(VaultError::VaultNotEmpty {
-                count: u64::try_from(count).unwrap_or(u64::MAX),
+                count: u64::try_from(rows.len()).unwrap_or(u64::MAX),
+                services: u64::try_from(services).unwrap_or(u64::MAX),
             });
         }
         *guard = None;

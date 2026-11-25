@@ -20,13 +20,14 @@ fn sandbox(bin: &Path) -> Sandbox {
     sandbox
 }
 
-/// A fake `glab` that appends its args and stdin next to itself, and exits 1 when `reject` exists there.
+/// A fake `glab` that appends its args and stdin next to itself. When `reject` exists there it repeats what it read on
+/// stdin to stderr, as a careless program might, and exits 1.
 fn fake_glab(bin: &Path) {
     if cfg!(windows) {
-        let script = "@echo off\r\necho %*>>\"%~dp0args.txt\"\r\n\"%SystemRoot%\\System32\\findstr.exe\" \"^\" >>\"%~dp0stdin.txt\"\r\nif exist \"%~dp0reject\" exit /b 1\r\nexit /b 0\r\n";
+        let script = "@echo off\r\necho %*>>\"%~dp0args.txt\"\r\n\"%SystemRoot%\\System32\\findstr.exe\" \"^\" >>\"%~dp0stdin.txt\"\r\nif exist \"%~dp0reject\" (type \"%~dp0stdin.txt\" 1>&2 & exit /b 1)\r\nexit /b 0\r\n";
         fs::write(bin.join("glab.cmd"), script).expect("the fake glab");
     } else {
-        let script = "#!/bin/sh\nd=${0%/*}\nprintf '%s\\n' \"$*\" >>\"$d/args.txt\"\nwhile IFS= read -r l || [ -n \"$l\" ]; do printf '%s\\n' \"$l\"; done >>\"$d/stdin.txt\"\n[ -e \"$d/reject\" ] && exit 1\nexit 0\n";
+        let script = "#!/bin/sh\nd=${0%/*}\nprintf '%s\\n' \"$*\" >>\"$d/args.txt\"\nwhile IFS= read -r l || [ -n \"$l\" ]; do printf '%s\\n' \"$l\"; done >>\"$d/stdin.txt\"\nif [ -e \"$d/reject\" ]; then while IFS= read -r l; do printf '%s\\n' \"$l\" >&2; done <\"$d/stdin.txt\"; exit 1; fi\nexit 0\n";
         let path = bin.join("glab");
         fs::write(&path, script).expect("the fake glab");
         #[cfg(unix)]
@@ -93,14 +94,17 @@ fn gitlab_connects_through_glab_with_the_token_on_stdin_only() {
         .success();
     assert_token_absent(&outcome);
 
-    let glab_args = fs::read_to_string(bin.path().join("args.txt")).expect("glab ran");
+    // A batch file sees `=` arguments quoted; the quotes are cmd's transport, not part of the argument.
+    let glab_args = fs::read_to_string(bin.path().join("args.txt"))
+        .expect("glab ran")
+        .replace('"', "");
     let glab_stdin = fs::read_to_string(bin.path().join("stdin.txt")).expect("glab read stdin");
     assert!(
         !glab_args.contains(TOKEN),
         "the token is in glab's args: {glab_args}"
     );
     assert!(
-        glab_args.contains("auth login --hostname gitlab.example.com --stdin"),
+        glab_args.contains("auth login --hostname=gitlab.example.com --stdin"),
         "{glab_args}"
     );
     assert!(
@@ -189,4 +193,34 @@ fn a_token_is_never_an_argument_and_an_empty_one_is_refused() {
         single_document(&empty)["error"]["code"],
         "marketplace.empty_token"
     );
+}
+
+#[test]
+fn a_glab_that_repeats_the_token_on_stderr_leaks_it_nowhere() {
+    let bin = TempDir::new().expect("a bin folder");
+    fake_glab(bin.path());
+    fs::write(bin.path().join("reject"), "").expect("marker");
+    let sandbox = sandbox(bin.path());
+    let refused = sandbox
+        .run_with_input(
+            "default",
+            &with_json(&["marketplace", "services", "connect", "gitlab"]),
+            format!(
+                "{TOKEN}
+"
+            )
+            .as_bytes(),
+        )
+        .code(1);
+    assert_token_absent(&refused);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "marketplace.service_rejected"
+    );
+    let stdin = fs::read_to_string(bin.path().join("stdin.txt")).expect("glab read stdin");
+    assert!(
+        stdin.contains(TOKEN),
+        "the fake glab got the token to repeat"
+    );
+    assert_token_absent_from_files(sandbox.home());
 }

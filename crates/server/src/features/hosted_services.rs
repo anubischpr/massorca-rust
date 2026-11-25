@@ -11,6 +11,7 @@ use massorca_protocol::methods::hosted_services::{
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
+use super::agent_redaction::is_host_admin;
 use super::glab_login::{self, GlabOutcome};
 use super::secret_params::Redacted;
 use super::secret_refusals::refusal;
@@ -94,9 +95,16 @@ async fn status(ctx: RequestCtx, params: ServiceStatusParams) -> Result<ServiceL
         Some(id) => vec![known(id)?],
         None => SERVICE_IDS.to_vec(),
     };
+    let admin = is_host_admin(&ctx);
     let mut services = Vec::with_capacity(ids.len());
     for id in ids {
-        services.push(status_of(&ctx, id).await);
+        let mut row = status_of(&ctx, id).await;
+        // The address and account name the host's setup; only a host administrator sees them.
+        if !admin {
+            row.base_url = None;
+            row.account = None;
+        }
+        services.push(row);
     }
     Ok(ServiceList { services })
 }
@@ -230,20 +238,63 @@ async fn disconnect(ctx: RequestCtx, params: ServiceName) -> Result<ServiceStatu
     Ok(status_of(&ctx, id).await)
 }
 
-/// An `http` or `https` address, and its host with any port. The refusal never repeats the text.
+/// An `http` or `https` address with a strict host, an optional port and a plain path, and its host with any port.
+/// Credentials, a query, a fragment and percent-escapes are refused. The refusal never repeats the text.
 fn parse_address(text: &str) -> Result<(String, String), ErrorBody> {
-    let refused = || invalid("`base_url` must be an http or https address");
-    let rest = text
-        .strip_prefix("https://")
-        .or_else(|| text.strip_prefix("http://"))
+    let refused =
+        || invalid("`base_url` must be an http or https address with a plain host and path");
+    let scheme = ["https://", "http://"]
+        .into_iter()
+        .find(|scheme| text.starts_with(scheme))
         .ok_or_else(refused)?;
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let clean = text.chars().count() <= MAX_URL_CHARS
-        && !text.chars().any(|c| c.is_whitespace() || c.is_control());
-    if host.is_empty() || host.contains('@') || !clean {
+    let rest = text[scheme.len()..].trim_end_matches('/');
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let plain_path = path.is_empty() || path.split('/').all(is_path_segment);
+    if text.chars().count() > MAX_URL_CHARS || !is_host_port(authority) || !plain_path {
         return Err(refused());
     }
-    Ok((text.trim_end_matches('/').to_owned(), host.to_owned()))
+    Ok((format!("{scheme}{rest}"), authority.to_owned()))
+}
+
+fn is_path_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
+}
+
+/// Letters, digits, `.` and `-` not starting with `-` or `.`, or an IPv6 address in brackets; then an optional port.
+fn is_host_port(authority: &str) -> bool {
+    let (host_ok, port) = if let Some(inner) = authority.strip_prefix('[') {
+        let Some((address, after)) = inner.split_once(']') else {
+            return false;
+        };
+        let ipv6 = !address.is_empty()
+            && address
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
+        if !after.is_empty() && !after.starts_with(':') {
+            return false;
+        }
+        (ipv6, after.strip_prefix(':'))
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        let name = !host.is_empty()
+            && !host.starts_with(['-', '.'])
+            && host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+        (name, port)
+    };
+    host_ok
+        && port.is_none_or(|port| {
+            port.len() <= 5
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u16>().is_ok_and(|port| port > 0)
+        })
 }
 
 fn invalid(message: &str) -> ErrorBody {
@@ -285,4 +336,58 @@ where
     })
     .await
     .unwrap_or(GlabOutcome::Failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_address;
+
+    #[test]
+    fn a_strict_host_with_an_optional_port_and_path_is_accepted() {
+        for (text, url, host) in [
+            (
+                "https://gitlab.example.com/",
+                "https://gitlab.example.com",
+                "gitlab.example.com",
+            ),
+            (
+                "https://gitlab.example.com:8443",
+                "https://gitlab.example.com:8443",
+                "gitlab.example.com:8443",
+            ),
+            (
+                "https://dev.azure.example.com/org-1/_apis",
+                "https://dev.azure.example.com/org-1/_apis",
+                "dev.azure.example.com",
+            ),
+            ("http://[::1]:3000", "http://[::1]:3000", "[::1]:3000"),
+        ] {
+            let parsed = parse_address(text).unwrap_or_else(|_| panic!("{text} is accepted"));
+            assert_eq!(parsed, (url.to_owned(), host.to_owned()), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_loose_host_or_anything_past_the_path_is_refused() {
+        for text in [
+            "https://-x",
+            "https://a\\b",
+            "https://h?private_token=t",
+            "https://h%0a",
+            ":443",
+            "https://:443",
+            "https://h#f",
+            "https://h/p?q",
+            "https://h\"x",
+            "https://h;x",
+            "https://h,x",
+            "https://user@h",
+            "https://h:",
+            "https://h:99999",
+            "https://[::1",
+            "ftp://h",
+        ] {
+            assert!(parse_address(text).is_err(), "{text} is refused");
+        }
+    }
 }

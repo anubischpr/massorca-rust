@@ -28,25 +28,29 @@ pub(crate) fn status(programs: &HostPrograms) -> GlabOutcome {
 /// Signs `glab` in to `host` (a host name, with a port for a self-hosted server) with `token` on its stdin.
 pub(crate) fn login(programs: &HostPrograms, token: &str, host: &str) -> GlabOutcome {
     let (args, env) = login_argv(host);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     outcome(programs.run_with_input(GLAB, &args, &env, token.as_bytes(), TIMEOUT))
 }
 
-/// `glab`'s `--hostname` refuses `host:port`, so a ported host goes in `GITLAB_HOST` instead (as pv96 does).
-fn login_argv(host: &str) -> (Vec<&str>, Vec<(&str, &str)>) {
+/// `glab`'s `--hostname` refuses `host:port`, so a ported host goes in `GITLAB_HOST` instead (as pv96 does). The host
+/// is joined to its flag, so it can never be read as a flag of its own.
+fn login_argv(host: &str) -> (Vec<String>, Vec<(&str, &str)>) {
     let ported = host
         .rsplit_once(':')
         .is_some_and(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
     if ported {
         (
-            vec!["auth", "login", "--stdin"],
+            words(&["auth", "login", "--stdin"]),
             vec![("GITLAB_HOST", host)],
         )
     } else {
-        (
-            vec!["auth", "login", "--hostname", host, "--stdin"],
-            Vec::new(),
-        )
+        let hostname = format!("--hostname={host}");
+        (words(&["auth", "login", &hostname, "--stdin"]), Vec::new())
     }
+}
+
+fn words(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| (*part).to_owned()).collect()
 }
 
 fn outcome(run: io::Result<massorca_core_extensions::host::Exit>) -> GlabOutcome {
@@ -105,8 +109,9 @@ mod tests {
         let args = fs::read_to_string(bin.path().join("args.txt")).expect("args");
         let stdin = fs::read_to_string(bin.path().join("stdin.txt")).expect("stdin");
         assert_eq!(
-            args.trim(),
-            "auth login --hostname gitlab.example.com --stdin"
+            // A batch file sees `=` arguments quoted; the quotes are cmd's transport, not part of the argument.
+            args.trim().replace('"', ""),
+            "auth login --hostname=gitlab.example.com --stdin"
         );
         assert_eq!(stdin.trim(), TOKEN);
     }
@@ -116,7 +121,7 @@ mod tests {
         assert_eq!(
             login_argv("gitlab.example.com:8443"),
             (
-                vec!["auth", "login", "--stdin"],
+                words(&["auth", "login", "--stdin"]),
                 vec![("GITLAB_HOST", "gitlab.example.com:8443")]
             )
         );
