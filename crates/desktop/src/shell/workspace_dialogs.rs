@@ -7,7 +7,10 @@ use std::path::Path;
 use super::Shell;
 use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_LABEL};
 use crate::model::regions::Region;
-use crate::model::session_menu::{SessionFacts, SessionMenuFacts, SessionMenuId, session_menu};
+use crate::model::session_delete::{SessionDeleteFlow, SessionDeleteStage};
+use crate::model::session_menu::{
+    SessionFacts, SessionMenuFacts, SessionMenuId, SessionMenuRow, session_menu,
+};
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry, WorkspaceMenuId,
@@ -19,6 +22,7 @@ use gpui::{
 };
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::TerminalState;
+use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
 use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
@@ -85,7 +89,7 @@ pub(super) enum MenuTarget {
     Session {
         session: Option<String>,
         workspace: String,
-        rows: Vec<SessionMenuId>,
+        rows: Vec<SessionMenuRow>,
     },
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
@@ -110,6 +114,7 @@ pub(super) struct WorkspaceDialogs {
     pub add_project: Option<AddProjectDialog>,
     pub remove: Option<RemoveFlow>,
     pub menu: Option<OpenMenu>,
+    pub delete_session: Option<SessionDeleteFlow>,
 }
 
 pub(super) fn icon_of(icon: ProjectIcon) -> IconName {
@@ -145,10 +150,14 @@ fn item_entry(id: WorkspaceMenuId, label: &'static str, off: Option<&'static str
     item.into()
 }
 
-/// The session menu's rows as the ui menu draws them: each action with its icon and words (A97).
-fn session_menu_entries(rows: &[SessionMenuId]) -> Vec<MenuEntry> {
+/// The session menu's rows as the ui menu draws them: each action with its icon and words, and the divider
+/// before Delete session (A97).
+fn session_menu_entries(rows: &[SessionMenuRow]) -> Vec<MenuEntry> {
     rows.iter()
-        .map(|id| MenuEntry::from(session_item(*id)))
+        .map(|row| match row {
+            SessionMenuRow::Item(id) => MenuEntry::from(session_item(*id)),
+            SessionMenuRow::Divider => MenuEntry::Separator,
+        })
         .collect()
 }
 
@@ -158,8 +167,14 @@ fn session_item(id: SessionMenuId) -> MenuItem {
         SessionMenuId::CopyPath => ("Copy path", IconName::Copy),
         SessionMenuId::OpenFolder => ("Open folder", IconName::Folder),
         SessionMenuId::RevealInWorkPanel => ("Reveal in Work panel", IconName::PanelRight),
+        SessionMenuId::Delete => ("Delete session…", IconName::Trash2),
     };
-    MenuItem::new(label).icon(icon)
+    let item = MenuItem::new(label).icon(icon);
+    if id == SessionMenuId::Delete {
+        item.destructive()
+    } else {
+        item
+    }
 }
 
 fn menu_icon(id: WorkspaceMenuId) -> IconName {
@@ -243,6 +258,7 @@ impl Shell {
             session_menu(SessionMenuFacts {
                 session: facts,
                 local,
+                delete_offered: state.agent_archive,
             })
         };
         self.open_menu(
@@ -336,6 +352,11 @@ impl Shell {
                 if let Some(terminal) = terminal {
                     self.model.show_region(Region::WorkPanel);
                     self.reveal_terminal(workspace, &terminal, cx);
+                }
+            }
+            SessionMenuId::Delete => {
+                if let Some(session) = session {
+                    self.open_delete_session(session, cx);
                 }
             }
         }
@@ -524,7 +545,7 @@ impl Shell {
                 workspace,
                 rows,
             } => {
-                if let Some(action) = rows.get(row).copied() {
+                if let Some(SessionMenuRow::Item(action)) = rows.get(row).copied() {
                     self.run_session_action(session.as_deref(), &workspace, action, cx);
                 }
             }
@@ -543,6 +564,83 @@ impl Shell {
     }
 
     /// Opens the remove flow for a workspace the store knows.
+    /// Opens the confirm that deletes a session the store knows (Delete session…, A97).
+    fn open_delete_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let flow = {
+            let state = self.store.read(cx).state();
+            let Some(agent) = state.agents.iter().find(|agent| agent.id == session) else {
+                return;
+            };
+            let Some(workspace) = state.workspace(&agent.workspace_id) else {
+                return;
+            };
+            let title = agent
+                .title
+                .clone()
+                .or_else(|| workspace.branch.clone())
+                .unwrap_or_else(|| workspace.name.clone());
+            SessionDeleteFlow::new(session, title, workspace.kind != WorkspaceKind::Folder)
+        };
+        if self.dialogs.delete_session.is_none() {
+            self.dialogs.delete_session = Some(flow);
+            cx.notify();
+        }
+    }
+
+    /// Closes the delete confirm unless a call is out.
+    pub(super) fn close_session_delete(&mut self, cx: &mut Context<Self>) {
+        if self
+            .dialogs
+            .delete_session
+            .as_ref()
+            .is_some_and(|flow| !flow.busy())
+        {
+            self.dialogs.delete_session = None;
+            cx.notify();
+        }
+    }
+
+    /// The worktree option of the delete confirm. The flow ignores it once the call is out.
+    pub(super) fn set_session_delete_remove_workspace(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Some(flow) = self.dialogs.delete_session.as_mut() {
+            flow.set_remove_workspace(on);
+            cx.notify();
+        }
+    }
+
+    /// The delete confirm's action: sends the forget its stage asks for. A plain refusal closes the confirm.
+    pub(super) fn confirm_session_delete(&mut self, cx: &mut Context<Self>) {
+        let (Some(handle), Some(flow)) =
+            (self.service.clone(), self.dialogs.delete_session.as_mut())
+        else {
+            return;
+        };
+        if !flow.confirm() {
+            if matches!(flow.stage(), SessionDeleteStage::Refused { .. }) {
+                self.close_session_delete(cx);
+            }
+            return;
+        }
+        let params = flow.params();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = handle.agent_forget(params).await.map(|_| ());
+            this.update(cx, |shell, cx| shell.finish_session_delete(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn finish_session_delete(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+        if let Some(flow) = self.dialogs.delete_session.as_mut()
+            && flow.answered(result)
+        {
+            // The row leaves the Sidebar once the service's forget reaches the store.
+            self.dialogs.delete_session = None;
+        }
+        cx.notify();
+    }
+
     pub(super) fn open_remove(&mut self, id: &str, cx: &mut Context<Self>) {
         let name = self
             .store

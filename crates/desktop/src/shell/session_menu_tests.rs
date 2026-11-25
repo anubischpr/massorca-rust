@@ -1,14 +1,23 @@
-//! A session row's menu (A97): the rows it offers, and what Stop, Copy path and Reveal in Work panel reach. The
-//! scripted service of the composer tests stands in for the service.
+//! A session row's menu (A97): the rows it offers, and what Stop, Copy path, Reveal in Work panel and Delete session…
+//! reach. The scripted service of the composer tests stands in for the service.
 
 use super::session_view_tests::{Rig, draw, session_rig, setup, stop_call};
 use super::workspace_dialogs::MenuTarget;
 use crate::model::regions::Region;
-use crate::model::session_menu::SessionMenuId;
+use crate::model::session_delete::SessionDeleteStage;
+use crate::model::session_menu::{SessionMenuId, SessionMenuRow};
+use crate::service::Script;
 use crate::service::fixtures::{agent, agent_kind};
+use crate::service::{Command, ForgetSessionParams, Refusal, StoreUpdate};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, PackageState};
 use massorca_protocol::methods::terminals::TerminalState;
+use tokio::sync::oneshot;
+
+type ForgetCall = (
+    ForgetSessionParams,
+    oneshot::Sender<Result<AgentSession, Refusal>>,
+);
 
 fn kinds() -> Vec<AgentKind> {
     vec![agent_kind("claude", "Claude Code", PackageState::Enabled)]
@@ -21,13 +30,28 @@ fn running_s1() -> AgentSession {
     session
 }
 
+/// Session s1 in w1 after its run has ended; its terminal stays.
+fn ended_s1() -> AgentSession {
+    let mut session = running_s1();
+    session.execution.state = TerminalState::Exited;
+    session
+}
+
+/// Tells the store that the service offers `agent-archive/1`, as a connect does.
+fn offer_archive(rig: &Rig, cx: &mut VisualTestContext) {
+    rig.updates
+        .send(StoreUpdate::AgentArchiveOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+}
+
 /// Opens the menu of the row of `session` (None for a workspace with no session) and returns the rows it offers.
 fn open_menu(
     rig: &Rig,
     cx: &mut VisualTestContext,
     session: Option<&str>,
     local: bool,
-) -> Vec<SessionMenuId> {
+) -> Vec<SessionMenuRow> {
     let session = session.map(str::to_owned);
     rig.shell.update_in(cx, |shell, window, cx| {
         shell.open_session_menu(session, "w1".to_owned(), local, window, cx);
@@ -41,6 +65,29 @@ fn open_menu(
     })
 }
 
+fn item(id: SessionMenuId) -> SessionMenuRow {
+    SessionMenuRow::Item(id)
+}
+
+fn forget_call(script: &mut Script) -> Option<ForgetCall> {
+    while let Some(command) = script.next() {
+        if let Command::AgentForget { params, reply } = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+fn delete_title(rig: &Rig, cx: &mut VisualTestContext) -> Option<String> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .dialogs
+            .delete_session
+            .as_ref()
+            .map(|flow| flow.copy().title)
+    })
+}
+
 #[gpui::test]
 fn a_running_session_offers_stop_copy_open_folder_and_reveal(cx: &mut TestAppContext) {
     setup(cx);
@@ -48,10 +95,10 @@ fn a_running_session_offers_stop_copy_open_folder_and_reveal(cx: &mut TestAppCon
     assert_eq!(
         open_menu(&rig, cx, Some("s1"), true),
         [
-            SessionMenuId::Stop,
-            SessionMenuId::CopyPath,
-            SessionMenuId::OpenFolder,
-            SessionMenuId::RevealInWorkPanel,
+            item(SessionMenuId::Stop),
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::OpenFolder),
+            item(SessionMenuId::RevealInWorkPanel),
         ]
     );
 }
@@ -59,15 +106,13 @@ fn a_running_session_offers_stop_copy_open_folder_and_reveal(cx: &mut TestAppCon
 #[gpui::test]
 fn an_ended_session_offers_no_stop(cx: &mut TestAppContext) {
     setup(cx);
-    let mut session = running_s1();
-    session.execution.state = TerminalState::Exited;
-    let (rig, cx) = session_rig(cx, kinds(), vec![session]);
+    let (rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
     assert_eq!(
         open_menu(&rig, cx, Some("s1"), true),
         [
-            SessionMenuId::CopyPath,
-            SessionMenuId::OpenFolder,
-            SessionMenuId::RevealInWorkPanel,
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::OpenFolder),
+            item(SessionMenuId::RevealInWorkPanel),
         ]
     );
 }
@@ -79,9 +124,9 @@ fn a_session_on_another_host_offers_no_open_folder(cx: &mut TestAppContext) {
     assert_eq!(
         open_menu(&rig, cx, Some("s1"), false),
         [
-            SessionMenuId::Stop,
-            SessionMenuId::CopyPath,
-            SessionMenuId::RevealInWorkPanel,
+            item(SessionMenuId::Stop),
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::RevealInWorkPanel),
         ]
     );
 }
@@ -92,7 +137,29 @@ fn a_workspace_without_a_session_offers_only_the_folder_rows(cx: &mut TestAppCon
     let (rig, cx) = session_rig(cx, kinds(), vec![]);
     assert_eq!(
         open_menu(&rig, cx, None, true),
-        [SessionMenuId::CopyPath, SessionMenuId::OpenFolder]
+        [
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::OpenFolder)
+        ]
+    );
+}
+
+#[gpui::test]
+fn an_ended_session_offers_delete_after_a_divider_once_the_service_offers_it(
+    cx: &mut TestAppContext,
+) {
+    setup(cx);
+    let (rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    assert_eq!(
+        open_menu(&rig, cx, Some("s1"), true),
+        [
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::OpenFolder),
+            item(SessionMenuId::RevealInWorkPanel),
+            SessionMenuRow::Divider,
+            item(SessionMenuId::Delete),
+        ]
     );
 }
 
@@ -135,4 +202,122 @@ fn reveal_shows_the_work_panel_with_the_session_terminal(cx: &mut TestAppContext
         assert!(shell.model.region_visible(Region::WorkPanel));
     });
     draw(cx);
+}
+
+#[gpui::test]
+fn delete_opens_the_confirm_and_sends_nothing_until_confirmed(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Delete, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        delete_title(&rig, cx).as_deref(),
+        Some("Delete session feat/fix-login?")
+    );
+    assert!(
+        forget_call(&mut rig.script).is_none(),
+        "nothing is sent before the confirm"
+    );
+}
+
+#[gpui::test]
+fn cancel_closes_the_confirm_and_sends_nothing(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Delete, cx);
+    });
+    rig.shell
+        .update(cx, |shell, cx| shell.close_session_delete(cx));
+    cx.run_until_parked();
+    assert_eq!(delete_title(&rig, cx), None);
+    assert!(forget_call(&mut rig.script).is_none());
+}
+
+#[gpui::test]
+fn confirm_sends_a_plain_forget_for_the_session(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Delete, cx);
+    });
+    rig.shell
+        .update(cx, |shell, cx| shell.confirm_session_delete(cx));
+    cx.run_until_parked();
+    let (params, reply) = forget_call(&mut rig.script).expect("a forget call");
+    assert_eq!(
+        params,
+        ForgetSessionParams {
+            session: "s1".to_owned(),
+            remove_workspace: false,
+            force: false,
+        }
+    );
+    reply.send(Ok(ended_s1())).expect("the shell listens");
+    cx.run_until_parked();
+    assert_eq!(
+        delete_title(&rig, cx),
+        None,
+        "the dialog closes once deleted"
+    );
+}
+
+#[gpui::test]
+fn the_worktree_option_sends_remove_workspace(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Delete, cx);
+    });
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_session_delete_remove_workspace(true, cx)
+    });
+    rig.shell
+        .update(cx, |shell, cx| shell.confirm_session_delete(cx));
+    cx.run_until_parked();
+    let (params, _reply) = forget_call(&mut rig.script).expect("a forget call");
+    assert!(params.remove_workspace);
+    assert!(!params.force);
+}
+
+#[gpui::test]
+fn a_dirty_worktree_asks_to_discard_and_then_retries_with_force(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Delete, cx);
+    });
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_session_delete_remove_workspace(true, cx)
+    });
+    rig.shell
+        .update(cx, |shell, cx| shell.confirm_session_delete(cx));
+    cx.run_until_parked();
+    let (_params, reply) = forget_call(&mut rig.script).expect("the first call");
+    reply.send(Err(Refusal::Dirty)).expect("the shell listens");
+    cx.run_until_parked();
+    let stage = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .dialogs
+            .delete_session
+            .as_ref()
+            .map(|flow| flow.stage().clone())
+    });
+    assert_eq!(stage, Some(SessionDeleteStage::Dirty));
+
+    rig.shell
+        .update(cx, |shell, cx| shell.confirm_session_delete(cx));
+    cx.run_until_parked();
+    let (params, reply) = forget_call(&mut rig.script).expect("the retry");
+    assert!(params.remove_workspace && params.force);
+    reply.send(Ok(ended_s1())).expect("the shell listens");
+    cx.run_until_parked();
+    assert_eq!(delete_title(&rig, cx), None);
 }
