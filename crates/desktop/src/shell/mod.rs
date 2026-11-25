@@ -113,6 +113,8 @@ mod path_field_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
+mod remote_terminal_tests;
+#[cfg(test)]
 mod seen_tests;
 #[cfg(test)]
 mod service_tests;
