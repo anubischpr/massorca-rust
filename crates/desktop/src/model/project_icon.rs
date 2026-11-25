@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use massorca_protocol::methods::projects::{ProjectIcon, ProjectUpdateParams};
+use massorca_protocol::methods::projects::{ProjectIcon, ProjectIconSource, ProjectUpdateParams};
 
 /// What a project's icon draws. A project with no icon draws the folder glyph.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -69,6 +69,19 @@ pub fn update_params(project: &str, icon: Option<ProjectIcon>) -> ProjectUpdateP
         project: project.to_owned(),
         icon: Some(icon),
     }
+}
+
+/// The start heading's project icon popover: the project it is open for, and the reason its last change was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectIconPopover {
+    pub project: String,
+    /// The reason the last change was refused, drawn under the grid until the next attempt.
+    pub refusal: Option<String>,
+}
+
+/// The icon an uploaded file makes: a PNG of at most 256 KiB, checked here before the service sees it.
+pub fn upload_icon(bytes: &[u8], label: Option<String>) -> Result<ProjectIcon, String> {
+    ProjectIcon::image_from_bytes(ProjectIconSource::Upload, bytes, label)
 }
 
 #[cfg(test)]
@@ -157,5 +170,34 @@ mod tests {
             set,
             serde_json::json!({"project": "oppm", "icon": {"type": "lucide", "name": "star"}})
         );
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+
+    fn png(len: usize) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(len, 0);
+        bytes
+    }
+
+    #[test]
+    fn a_png_of_up_to_256_kib_becomes_the_icon() {
+        let icon = upload_icon(&png(1024), Some("logo.png".into())).expect("a PNG is accepted");
+        assert!(matches!(icon, ProjectIcon::Image { .. }));
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_png_is_refused_with_the_reason() {
+        let reason = upload_icon(b"GIF89a....", None).expect_err("a GIF is refused");
+        assert!(reason.contains("PNG"), "{reason}");
+    }
+
+    #[test]
+    fn an_image_over_256_kib_is_refused_with_the_reason() {
+        let reason = upload_icon(&png(256 * 1024 + 1), None).expect_err("too large");
+        assert!(reason.contains("256 KiB"), "{reason}");
     }
 }

@@ -2,11 +2,12 @@
 //! "Project icon" popover with the bundled Lucide grid, "Upload image…" and "Reset to folder". The colour
 //! row and "Use GitHub avatar" are not drawn: the protocol carries no colour, and there is no GitHub connection.
 
+use std::fmt;
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Styled, Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, SharedString, Styled, Window, div, prelude::*, px,
 };
 
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
@@ -51,46 +52,110 @@ pub enum ProjectIconChoice {
 
 type Choose = Rc<dyn Fn(ProjectIconChoice, &mut Window, &mut App)>;
 
-/// The control: the button that toggles the popover, and the popover while it is open. `on_open_change`
-/// receives the open state a press or a dismissal asks for.
-pub fn project_icon_control(
-    id: impl Into<ElementId>,
-    mark: impl IntoElement,
+/// The project icon control: the 40 px button, and the popover while it is open. The owner sets its inputs each
+/// render; `on_open_change` receives the open state a press or a dismissal asks for, and `on_choose` the choice a
+/// cell, Upload or Reset asks for.
+#[derive(IntoElement)]
+pub struct ProjectIconControl {
+    id: ElementId,
+    mark: AnyElement,
     open: bool,
-    current: Option<&str>,
-    on_open_change: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_choose: impl Fn(ProjectIconChoice, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> impl IntoElement {
-    let theme = *cx.theme();
-    let on_open_change: OpenChange = Rc::new(on_open_change);
-    let choose: Choose = Rc::new(on_choose);
-    let toggle = on_open_change.clone();
-    let trigger = project_icon_button(mark, &theme)
-        .on_click(move |_: &ClickEvent, window, cx| toggle(!open, window, cx));
-    let body = div()
-        .flex()
-        .flex_col()
-        .gap(px(SPACE_2))
-        .child(
-            div()
-                .text_style(TYPE_CAPTION)
-                .text_color(theme.palette.text.tertiary)
-                .child("Tell apart projects that come from the same repository."),
-        )
-        .child(grid(current, choose.clone(), &theme))
-        .child(upload_row(choose.clone(), &theme))
-        .child(reset_row(choose, &theme));
-    Popover::new(id, trigger)
-        .open(open)
-        .variant(PopoverVariant::Form)
-        .width(PopoverWidth::Project)
-        .title("Project icon")
-        .child(body)
-        .on_dismiss(move |window, cx| on_open_change(false, window, cx))
+    current: Option<String>,
+    refusal: Option<SharedString>,
+    on_open_change: OpenChange,
+    on_choose: Choose,
+}
+
+impl fmt::Debug for ProjectIconControl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProjectIconControl")
+            .field("id", &self.id)
+            .field("open", &self.open)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProjectIconControl {
+    pub fn new(
+        id: impl Into<ElementId>,
+        mark: impl IntoElement,
+        open: bool,
+        on_open_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+        on_choose: impl Fn(ProjectIconChoice, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            mark: mark.into_any_element(),
+            open,
+            current: None,
+            refusal: None,
+            on_open_change: Rc::new(on_open_change),
+            on_choose: Rc::new(on_choose),
+        }
+    }
+
+    /// The bundled icon the project shows, whose cell is selected.
+    pub fn current(mut self, current: Option<&str>) -> Self {
+        self.current = current.map(str::to_owned);
+        self
+    }
+
+    /// The reason the last change was refused, drawn under the grid until the next attempt.
+    pub fn refusal(mut self, refusal: Option<SharedString>) -> Self {
+        self.refusal = refusal;
+        self
+    }
+}
+
+impl RenderOnce for ProjectIconControl {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let (toggle, dismiss) = (self.on_open_change.clone(), self.on_open_change);
+        let open = self.open;
+        let trigger = project_icon_button(self.mark, &theme)
+            .on_click(move |_: &ClickEvent, window, cx| toggle(!open, window, cx));
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.tertiary)
+                    .child("Tell apart projects that come from the same repository."),
+            )
+            .child(grid(
+                self.current.as_deref(),
+                self.on_choose.clone(),
+                &theme,
+            ));
+        if let Some(refusal) = self.refusal {
+            body = body.child(refusal_line(refusal, &theme));
+        }
+        body = body
+            .child(upload_row(self.on_choose.clone(), &theme))
+            .child(reset_row(self.on_choose, &theme));
+        Popover::new(self.id, trigger)
+            .open(open)
+            .variant(PopoverVariant::Form)
+            .width(PopoverWidth::Project)
+            .title("Project icon")
+            .child(body)
+            .on_dismiss(move |window, cx| dismiss(false, window, cx))
+    }
 }
 
 type OpenChange = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
+/// The reason a refused change gives, in the danger colour under the grid.
+fn refusal_line(refusal: SharedString, theme: &Theme) -> impl IntoElement {
+    div()
+        .id("project-icon-refusal")
+        .debug_selector(|| "project-icon-refusal".to_owned())
+        .text_style(TYPE_CAPTION)
+        .text_color(theme.palette.status.danger_fg)
+        .child(refusal)
+}
 
 /// The 40 px button that shows the project's current icon.
 fn project_icon_button(mark: impl IntoElement, theme: &Theme) -> gpui::Stateful<gpui::Div> {
@@ -214,9 +279,10 @@ mod tests {
         requests: Rc<Cell<u32>>,
     }
 
-    /// Draws the control with its open state held by the view, as the desktop holds it.
+    /// Draws the control with its open state and refusal held by the view, as the desktop holds them.
     struct Harness {
         open: bool,
+        refusal: Option<SharedString>,
         recorded: Recorded,
     }
 
@@ -225,11 +291,10 @@ mod tests {
             let view = cx.entity();
             let requests = self.recorded.requests.clone();
             let choices = self.recorded.choices.clone();
-            project_icon_control(
+            ProjectIconControl::new(
                 "project-icon",
                 div().size(px(20.0)),
                 self.open,
-                Some("folder"),
                 move |open, _, cx| {
                     requests.set(requests.get() + 1);
                     view.update(cx, |harness, cx| {
@@ -238,8 +303,9 @@ mod tests {
                     });
                 },
                 move |choice, _, _| choices.borrow_mut().push(choice),
-                cx,
             )
+            .current(Some("folder"))
+            .refusal(self.refusal.clone())
         }
     }
 
@@ -266,6 +332,7 @@ mod tests {
         let for_view = recorded.clone();
         let (view, cx) = cx.add_window_view(move |_, _| Harness {
             open,
+            refusal: None,
             recorded: for_view,
         });
         draw(cx);
@@ -311,5 +378,21 @@ mod tests {
             *recorded.choices.borrow(),
             vec![ProjectIconChoice::Reset, ProjectIconChoice::Upload]
         );
+    }
+
+    #[gpui::test]
+    fn a_refusal_shows_its_reason_under_the_grid_and_keeps_the_popover_open(
+        cx: &mut TestAppContext,
+    ) {
+        let (_recorded, view, cx) = control(cx, true);
+        assert!(cx.debug_bounds("project-icon-refusal").is_none());
+        view.update(cx, |harness, cx| {
+            harness.refusal =
+                Some("The icon was not set: the image is larger than 256 KiB.".into());
+            cx.notify();
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("project-icon-refusal").is_some());
+        assert!(cx.debug_bounds("project-icon-cell-star").is_some());
     }
 }

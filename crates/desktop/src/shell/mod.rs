@@ -210,8 +210,8 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
-    /// The project whose icon popover the start heading has open (decision 0091).
-    project_icon_open: Option<String>,
+    /// The start heading's project icon popover, while it is open (decision 0091).
+    project_icon: Option<crate::model::project_icon::ProjectIconPopover>,
     /// The start page with no workspace's choice: a project or "No project"; `None` stands for the first project.
     home_project: Option<ProjectChoice>,
     /// The Advanced section of the start page with no workspace: its fields and open state.
@@ -601,7 +601,7 @@ impl Shell {
             debug_page: None,
             start_composers: HashMap::new(),
             start_pending: None,
-            project_icon_open: None,
+            project_icon: None,
             home_project: None,
             home_details,
             path_picker: path_field::system_picker(),
@@ -856,7 +856,10 @@ impl Render for Shell {
         });
         let start = start.map(|page| {
             let composer = self.start_composer(&page.id, cx);
-            let icon_open = self.project_icon_open.as_deref() == Some(page.project_id.as_str());
+            let project_icon = self
+                .project_icon
+                .clone()
+                .filter(|popover| popover.project == page.project_id);
             let starting = self
                 .start_pending
                 .as_ref()
@@ -871,7 +874,7 @@ impl Render for Shell {
                 connected,
                 starting,
                 mode,
-                icon_open,
+                project_icon,
             }
         });
         let home = (self.model.canvas()

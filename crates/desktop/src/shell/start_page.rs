@@ -57,8 +57,8 @@ use massorca_protocol::methods::chat::RunType;
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
 pub(super) struct StartFrame {
-    /// Whether the heading's project icon popover is open (decision 0091).
-    pub icon_open: bool,
+    /// The heading's project icon popover, when it is open for this page's project (decision 0091).
+    pub project_icon: Option<crate::model::project_icon::ProjectIconPopover>,
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
@@ -132,29 +132,35 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
     let heading = {
         let (open_shell, choose_shell) = (frame.shell.clone(), frame.shell.clone());
         let (open_project, choose_project) = (page.project_id.clone(), page.project_id.clone());
-        let icon = massorca_ui::components::project_icon_popover::project_icon_control(
+        let refusal = frame
+            .project_icon
+            .as_ref()
+            .and_then(|popover| popover.refusal.clone());
+        let icon = massorca_ui::components::project_icon_popover::ProjectIconControl::new(
             "start-project-icon",
             super::project_mark::project_mark(&page.icon),
-            frame.icon_open,
-            match &page.icon {
-                crate::model::project_icon::ProjectGlyph::Lucide(name) => Some(name.as_str()),
-                _ => None,
-            },
+            frame.project_icon.is_some(),
             move |open, _, cx| {
                 let _ = open_shell.update(cx, |shell, cx| {
-                    shell.project_icon_open = open.then(|| open_project.clone());
+                    shell.project_icon =
+                        open.then(|| crate::model::project_icon::ProjectIconPopover {
+                            project: open_project.clone(),
+                            refusal: None,
+                        });
                     cx.notify();
                 });
             },
             move |choice, _, cx| {
                 let _ = choose_shell.update(cx, |shell, cx| {
-                    shell.project_icon_open = None;
                     shell.choose_project_icon(choose_project.clone(), choice, cx);
-                    cx.notify();
                 });
             },
-            cx,
-        );
+        )
+        .current(match &page.icon {
+            crate::model::project_icon::ProjectGlyph::Lucide(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .refusal(refusal.map(gpui::SharedString::from));
         div()
             .flex()
             .items_center()
