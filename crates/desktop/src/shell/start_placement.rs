@@ -75,7 +75,7 @@ pub(super) fn pill(
     let mut row = div()
         .id(id)
         .debug_selector(move || id.to_owned())
-        .role(Role::Button)
+        .when(enabled, |row| row.role(Role::Button))
         .aria_label(name)
         .track_focus(&focus)
         .focus_ring(theme)
