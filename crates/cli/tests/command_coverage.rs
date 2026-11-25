@@ -87,6 +87,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.kinds",
             "agent.list",
             "agent.mode",
+            "agent.models",
             "agent.prompt",
             "agent.queue.add",
             "agent.queue.edit",

@@ -12,7 +12,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 use std::thread;
@@ -100,6 +100,8 @@ fn main() -> ExitCode {
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
+        Some("models") => return models(),
+        Some("-p") => return claude_models(),
         Some("--help") => return help(),
         _ => {}
     }
@@ -465,6 +467,97 @@ const AMBIENT_IDENTITY: &str = "ambient@example.com";
 
 /// The check: prints `signed in as <identity>` and exits 0 when the token exists and is not expired; otherwise prints
 /// `expired` and exits 1. A token's `email` names its identity; the default identity is used otherwise.
+/// Set to a file, each listing appends a line to it, so a test can count the vendor calls (decision 0166).
+const LISTING_COUNT_ENV: &str = "FAKE_AGENT_MODELS_COUNT";
+/// Set to any value, a listing exits 3 without a model: a vendor CLI that fails.
+const LISTING_FAIL_ENV: &str = "FAKE_AGENT_MODELS_FAIL";
+/// Set to any value, a listing sleeps far past any test's time limit: a vendor CLI that hangs.
+const LISTING_HANG_ENV: &str = "FAKE_AGENT_MODELS_HANG";
+/// The token's field that names the account's models, as `id:label` strings.
+const LISTING_FIELD: &str = "listing";
+
+/// `models`: the account's listing as `id<TAB>label` lines, the shape of `agy models` (decision 0166).
+fn models() -> ExitCode {
+    count_listing();
+    if env::var_os(LISTING_HANG_ENV).is_some() {
+        thread::sleep(Duration::from_secs(120));
+    }
+    if env::var_os(LISTING_FAIL_ENV).is_some() {
+        return ExitCode::from(3);
+    }
+    let mut out = io::stdout().lock();
+    match listing_from_home() {
+        Some(models) => {
+            for (id, label) in models {
+                let _ = writeln!(out, "{id}\t{label}");
+            }
+        }
+        None => {
+            let _ = writeln!(out, "nothing a listing can read");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `-p` with stream-json input: the `list_models` control request is answered with the account's listing, the shape the
+/// Claude CLI answers with (decision 0166). Any other request prints nothing.
+fn claude_models() -> ExitCode {
+    count_listing();
+    let mut request = String::new();
+    let _ = io::stdin().read_to_string(&mut request);
+    if !request.contains("list_models") {
+        return ExitCode::SUCCESS;
+    }
+    let response = match listing_from_home() {
+        Some(models) => {
+            let rows: Vec<Value> = models
+                .iter()
+                .map(|(id, label)| {
+                    serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false })
+                })
+                .collect();
+            serde_json::json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "massorca-model-discovery",
+                    "response": { "models": rows }
+                }
+            })
+        }
+        None => serde_json::json!({
+            "type": "control_response",
+            "response": { "subtype": "error" }
+        }),
+    };
+    let _ = writeln!(io::stdout().lock(), "{response}");
+    ExitCode::SUCCESS
+}
+
+/// The listing the account's token names, as `(id, label)` pairs; `None` when there is no home, token or listing.
+fn listing_from_home() -> Option<Vec<(String, String)>> {
+    let home = PathBuf::from(env::var_os(CREDENTIAL_HOME_ENV)?);
+    let token: Value =
+        serde_json::from_str(&fs::read_to_string(home.join(CREDENTIAL_FILE)).ok()?).ok()?;
+    token[LISTING_FIELD]
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            let (id, label) = entry.as_str()?.split_once(':')?;
+            Some((id.to_owned(), label.to_owned()))
+        })
+        .collect()
+}
+
+/// Appends a line to the file `LISTING_COUNT_ENV` names, when it is set.
+fn count_listing() {
+    if let Some(path) = env::var_os(LISTING_COUNT_ENV)
+        && let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "listed");
+    }
+}
+
 fn whoami() -> ExitCode {
     if env::var_os(AMBIENT_TOKEN_ENV).is_some_and(|value| !value.is_empty()) {
         let _ = writeln!(io::stdout().lock(), "signed in as {AMBIENT_IDENTITY}");
