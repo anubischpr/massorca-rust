@@ -80,6 +80,7 @@ fn type_into(cx: &mut VisualTestContext, field: &Entity<TextField>, text: &str) 
 
 type CreateCall = (
     WorkspaceCreateParams,
+    bool,
     oneshot::Sender<Result<Workspace, Refusal>>,
 );
 type StartCall = (
@@ -96,7 +97,11 @@ enum Call {
 fn next_call(script: &mut Script) -> Option<Call> {
     while let Some(command) = script.next() {
         match command {
-            Command::Create { params, reply } => return Some(Call::Create((params, reply))),
+            Command::Create {
+                params,
+                unique_name,
+                reply,
+            } => return Some(Call::Create((params, unique_name, reply))),
             Command::AgentStart { params, reply } => return Some(Call::Start((params, reply))),
             _ => {}
         }
@@ -122,7 +127,7 @@ fn expect_start(script: &mut Script) -> StartCall {
 fn a_new_workspace_shows_a_placeholder_row_until_its_session_replaces_it(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (_, reply) = expect_create(&mut rig.script);
+    let (_, _, reply) = expect_create(&mut rig.script);
     let created = workspace("w9", "p1", "fix-the-login-bug", 9);
     reply
         .send(Ok(created.clone()))
@@ -231,7 +236,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
     assert_eq!(create.name, "fix-the-login-bug");
     assert!(
@@ -264,22 +269,120 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     assert_eq!(active.as_deref(), Some(session.id.as_str()));
 }
 
+/// A refusal of `workspace.create` because the name is taken.
+fn taken_name() -> Refusal {
+    Refusal::Failed {
+        code: massorca_protocol::codes::WORKSPACE_NAME_TAKEN.to_owned(),
+        message: "that name is taken".to_owned(),
+    }
+}
+
 #[gpui::test]
-fn the_branch_menu_starts_closed_and_opens_from_the_branch_pill(cx: &mut TestAppContext) {
-    let (rig, cx) = home_rig(cx);
-    draw(cx);
-    assert!(cx.debug_bounds("home-start-branch").is_some());
+fn with_the_unique_name_capability_a_derived_name_asks_for_a_free_one_and_is_not_retried(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceUniqueNameOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.name, "fix-the-login-bug");
+    assert!(unique, "a derived name asks the service for a free one");
+    reply
+        .send(Err(taken_name()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
     assert!(
-        cx.debug_bounds("home-start-branch-fields").is_none(),
-        "the fields start hidden"
+        next_call(&mut rig.script).is_none(),
+        "the service makes names unique itself, so the client does not retry"
     );
-    click(cx, "home-start-branch");
-    assert!(cx.debug_bounds("home-start-branch-fields").is_some());
-    rig.shell
-        .read_with(cx, |shell, _| assert!(shell.home_details.branch_menu));
-    click(cx, "home-start-branch");
-    rig.shell
-        .read_with(cx, |shell, _| assert!(!shell.home_details.branch_menu));
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_a_taken_derived_name_is_retried_with_a_suffix(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (first, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!((first.name.as_str(), unique), ("fix-the-login-bug", false));
+    reply
+        .send(Err(taken_name()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    let (second, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        (second.name.as_str(), unique),
+        ("fix-the-login-bug-2", false)
+    );
+    let created = workspace("w9", "p1", "fix-the-login-bug-2", 9);
+    reply
+        .send(Ok(created.clone()))
+        .expect("the shell waits for the create");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let (start, _reply) = expect_start(&mut rig.script);
+    assert_eq!(start.workspace.as_deref(), Some("w9"));
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_every_name_taken_shows_the_error_and_starts_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    for attempt in 1..=crate::model::home_start::FREE_NAME_TRIES {
+        let (create, unique, reply) = expect_create(&mut rig.script);
+        let expected = if attempt == 1 {
+            "fix-the-login-bug".to_owned()
+        } else {
+            format!("fix-the-login-bug-{attempt}")
+        };
+        assert_eq!((create.name, unique), (expected, false));
+        reply
+            .send(Err(taken_name()))
+            .expect("the shell waits for the create");
+        cx.run_until_parked();
+    }
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "every name is taken: no agent starts"
+    );
+    let shown = home_composer(&rig, cx).read_with(cx, |composer, _| {
+        composer.error_reason().map(|text| text.to_string())
+    });
+    assert!(
+        shown.is_some_and(|text| text.to_lowercase().contains("that name is taken")),
+        "the first refusal is shown once every name is taken"
+    );
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_a_refusal_that_is_not_a_taken_name_is_shown_at_once(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (_, _, reply) = expect_create(&mut rig.script);
+    reply
+        .send(Err(Refusal::Failed {
+            code: massorca_protocol::codes::WORKSPACE_NAME_INVALID.to_owned(),
+            message: "that name is not valid".to_owned(),
+        }))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "only a taken name is retried: the other refusal stops the send"
+    );
 }
 
 #[gpui::test]
@@ -303,78 +406,140 @@ fn the_placement_card_has_the_host_project_and_branch_pills_and_the_host_opens_n
     });
 }
 
-#[gpui::test]
-fn an_untouched_advanced_section_sends_the_plain_create_call(cx: &mut TestAppContext) {
-    let (mut rig, cx) = home_rig(cx);
-    type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
-    assert_eq!(create.name, "fix-the-login-bug");
-    assert_eq!(create.branch, None);
-    assert_eq!(create.base, None);
-    assert!(!create.existing_branch);
-    reply
-        .send(Err(Refusal::unavailable("The service is not connected.")))
-        .expect("the shell waits for the create");
+/// Takes the `git.branches` call the popover sends, answering with the workspace it named.
+fn expect_git_branches(
+    script: &mut Script,
+) -> (String, oneshot::Sender<Result<Vec<String>, Refusal>>) {
+    loop {
+        match script.next() {
+            Some(Command::GitBranches { workspace, reply }) => return (workspace, reply),
+            Some(_) => {}
+            None => panic!("a git.branches call was expected"),
+        }
+    }
 }
 
 #[gpui::test]
-fn the_advanced_fields_go_into_the_create_call(cx: &mut TestAppContext) {
-    let (mut rig, cx) = home_rig(cx);
-    click(cx, "home-start-branch");
-    let (name, branch, base) = rig.shell.read_with(cx, |shell, _| {
-        let details = &shell.home_details;
-        (
-            details.name.clone(),
-            details.branch.clone(),
-            details.base.clone(),
-        )
-    });
-    type_into(cx, &name, "login-fix");
-    type_into(cx, &branch, "feat/login");
-    type_into(cx, &base, "main");
-    type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
-    assert_eq!(create.name, "login-fix");
-    assert_eq!(create.branch.as_deref(), Some("feat/login"));
-    assert_eq!(create.base.as_deref(), Some("main"));
-    assert!(!create.existing_branch);
-    reply
-        .send(Err(Refusal::unavailable("The service is not connected.")))
-        .expect("the shell waits for the create");
-}
-
-#[gpui::test]
-fn reusing_a_branch_needs_its_name_before_send_creates_anything(cx: &mut TestAppContext) {
-    let (mut rig, cx) = home_rig(cx);
-    click(cx, "home-start-branch");
-    rig.shell
-        .update(cx, |shell, cx| shell.set_home_existing_branch(true, cx));
-    rig.shell
-        .read_with(cx, |shell, _| assert!(shell.home_details.existing_branch));
-    type_and_send(&rig, cx, "Fix the login bug");
+fn the_branch_popover_starts_closed_and_opens_with_the_new_worktree_switch(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = home_rig(cx);
     assert!(
-        rig.script.next().is_none(),
-        "nothing is created while the branch to reuse is unnamed"
+        cx.debug_bounds("home-start-branch-popover").is_none(),
+        "the popover starts closed"
     );
-    let composer = home_composer(&rig, cx);
-    let reason = composer.read_with(cx, |composer, _| {
-        composer.error_reason().map(|reason| reason.to_string())
-    });
-    assert_eq!(reason.as_deref(), Some("Name the branch to reuse."));
-    let branch = rig
-        .shell
-        .read_with(cx, |shell, _| shell.home_details.branch.clone());
-    type_into(cx, &branch, "feat/login");
-    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    click(cx, "home-start-branch");
+    draw(cx);
+    assert!(cx.debug_bounds("home-start-branch-popover").is_some());
+    assert!(
+        cx.debug_bounds("home-start-new-worktree").is_some(),
+        "the New worktree switch is in the popover"
+    );
+    rig.shell
+        .read_with(cx, |shell, _| assert!(shell.home_details.branch_menu));
+    click(cx, "home-start-branch");
+    draw(cx);
+    rig.shell
+        .read_with(cx, |shell, _| assert!(!shell.home_details.branch_menu));
+}
+
+#[gpui::test]
+fn the_branch_popover_lists_the_projects_branches_and_the_search_filters_them(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    // Branches belong to the repository, so a workspace of the project lists them.
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(workspace(
+            "w1",
+            "p1",
+            "alpha-work",
+            1,
+        )))
+        .expect("the store listens");
     cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    let (create, reply) = expect_create(&mut rig.script);
-    assert_eq!(create.branch.as_deref(), Some("feat/login"));
-    assert!(create.existing_branch);
+    click(cx, "home-start-branch");
+    draw(cx);
+    let (workspace_id, reply) = expect_git_branches(&mut rig.script);
+    assert_eq!(workspace_id, "w1");
     reply
-        .send(Err(Refusal::unavailable("The service is not connected.")))
-        .expect("the shell waits for the create");
+        .send(Ok(vec![
+            "main".to_owned(),
+            "feature/map".to_owned(),
+            "release".to_owned(),
+        ]))
+        .expect("the shell waits for the branches");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-row-2").is_some(),
+        "every branch the service lists is in the list"
+    );
+    let search = rig
+        .shell
+        .read_with(cx, |shell, _| shell.home_details.search.clone());
+    type_into(cx, &search, "rel");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-row-0").is_some(),
+        "the search keeps the matching branch"
+    );
+    assert!(
+        cx.debug_bounds("home-start-branch-row-1").is_none(),
+        "and drops the rest"
+    );
+}
+
+#[gpui::test]
+fn picking_a_branch_starts_the_new_worktree_from_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(workspace(
+            "w1",
+            "p1",
+            "alpha-work",
+            1,
+        )))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "home-start-branch");
+    draw(cx);
+    let (_, reply) = expect_git_branches(&mut rig.script);
+    reply
+        .send(Ok(vec!["main".to_owned(), "release".to_owned()]))
+        .expect("the shell waits for the branches");
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "home-start-branch-row-1");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-popover").is_none(),
+        "picking a branch closes the popover"
+    );
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        create.base.as_deref(),
+        Some("release"),
+        "the new worktree starts from the picked branch"
+    );
+    assert_eq!(create.branch, None);
+    assert!(!create.existing_branch);
+}
+
+#[gpui::test]
+fn an_untouched_popover_sends_the_plain_create_call(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        create.base, None,
+        "no base picked: the service starts from the project's base"
+    );
+    assert_eq!(create.branch, None);
+    assert!(!create.existing_branch);
 }
 
 #[gpui::test]
@@ -384,7 +549,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
     rig.shell
         .update(cx, |shell, cx| shell.start_from_home("", composer, cx));
     cx.run_until_parked();
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "", "a blank name asks the service for one");
     reply
         .send(Ok(workspace("w9", "p1", "coral-reef", 9)))
@@ -399,7 +564,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
 fn a_refused_create_shows_the_refusal_keeps_the_draft_and_starts_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "fix the login");
-    let (_, reply) = expect_create(&mut rig.script);
+    let (_, _, reply) = expect_create(&mut rig.script);
     let refusal = Refusal::NameProblem {
         message: "the name fix-the-login is taken".to_owned(),
     };
@@ -520,7 +685,7 @@ fn an_unsafe_data_folder_refusal_shows_a_banner_with_the_command_to_run(cx: &mut
     draw(cx);
     assert!(cx.debug_bounds("start-profile-banner").is_none());
     type_and_send(&rig, cx, "fix the login");
-    let (_, reply) = expect_create(&mut rig.script);
+    let (_, _, reply) = expect_create(&mut rig.script);
     reply
         .send(Err(unsafe_location()))
         .expect("the shell waits for the create");
@@ -683,7 +848,7 @@ fn no_project_without_the_capability_stays_off_and_send_creates_in_the_first_pro
         );
     });
     type_and_send(&rig, cx, "fix the login");
-    let (create, _) = expect_create(&mut rig.script);
+    let (create, _, _) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
 }
 
@@ -730,24 +895,32 @@ fn no_project_turns_the_branch_pill_off_and_its_menu_stays_shut(cx: &mut TestApp
     choose_no_project(cx);
     click(cx, "home-start-branch");
     draw(cx);
-    assert!(cx.debug_bounds("home-start-branch-fields").is_none());
+    assert!(cx.debug_bounds("home-start-branch-popover").is_none());
     assert!(cx.debug_bounds("home-start-project-link").is_none());
 }
 
 #[gpui::test]
-fn no_project_sends_even_while_the_branch_to_reuse_is_unnamed(cx: &mut TestAppContext) {
-    let (mut rig, cx) = home_rig(cx);
+fn the_branch_pill_off_with_no_project_says_why_on_hover(cx: &mut TestAppContext) {
+    use massorca_ui::tokens::DURATION_TOOLTIP_DELAY;
+    let (rig, cx) = home_rig(cx);
     rig.updates
         .send(StoreUpdate::AgentNoProjectOffered(true))
         .expect("the store listens");
     cx.run_until_parked();
-    rig.shell
-        .update(cx, |shell, cx| shell.set_home_existing_branch(true, cx));
     choose_no_project(cx);
-    type_and_send(&rig, cx, "Fix the login bug");
-    let (start, _reply) = expect_start(&mut rig.script);
-    assert_eq!(start.workspace, None);
-    assert_eq!(start.prompt.as_deref(), Some("Fix the login bug"));
+    draw(cx);
+    let center = cx
+        .debug_bounds("home-start-branch")
+        .expect("the branch pill is drawn")
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the disabled branch pill names its reason on hover"
+    );
 }
 
 #[gpui::test]

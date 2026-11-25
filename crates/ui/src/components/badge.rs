@@ -7,12 +7,13 @@
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
-    Color, Palette, RADIUS_FULL, RADIUS_SM, SIZE_BADGE_HEIGHT, SIZE_INDICATOR_DOT, SPACE_1,
-    TYPE_CAPTION, TYPE_LABEL, TextStyleToken,
+    Color, Palette, RADIUS_FULL, RADIUS_SM, SIZE_BADGE_HEIGHT, SIZE_INDICATOR_DOT, SIZE_TAG_HEIGHT,
+    SPACE_1, SPACE_HALF, TYPE_CAPTION, TYPE_LABEL, TextStyleToken,
 };
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Empty, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window,
-    div, px,
+    AnyElement, App, Empty, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    SharedString, Styled, Window, div, px,
 };
 
 /// Longest text a badge shows before its ellipsis (Badge.md, long content).
@@ -55,6 +56,8 @@ enum Content {
     Text(SharedString),
     Count(u32),
     Dot,
+    /// The bordered tag variant: a 20 px chip with an optional 12 px icon (ds-rulings, B9).
+    Tag(SharedString),
 }
 
 /// A small label, count or dot.
@@ -77,6 +80,12 @@ impl Badge {
     /// A count. Zero draws nothing: the badge is removed.
     pub fn count(count: u32) -> Self {
         Self::with(Content::Count(count))
+    }
+
+    /// A tag: a bordered 20 px chip, neutral, or accent with `tone(BadgeTone::Accent)`. `glyph` adds a 12 px icon
+    /// before the text.
+    pub fn tag(label: impl Into<SharedString>) -> Self {
+        Self::with(Content::Tag(label.into()))
     }
 
     /// A dot with no text, beside a labelled item.
@@ -237,6 +246,49 @@ fn chip(tone: BadgeTone, solid: bool, count: bool, disabled: bool, p: &Palette) 
     }
 }
 
+/// Background, border and text of a tag: neutral sits sunken with a subtle border; accent has no border.
+fn tag_chip(tone: BadgeTone, disabled: bool, p: &Palette) -> Chip {
+    match (disabled, tone) {
+        (true, _) => Chip {
+            bg: NONE,
+            border: p.border.subtle,
+            text: p.text.disabled,
+        },
+        (false, BadgeTone::Accent) => Chip {
+            bg: p.accent.subtle_raised,
+            border: NONE,
+            text: p.accent.fg,
+        },
+        (false, _) => Chip {
+            bg: p.surface.sunken,
+            border: p.border.subtle,
+            text: p.text.secondary,
+        },
+    }
+}
+
+fn tag(label: SharedString, colours: Chip, glyph: Option<IconName>) -> AnyElement {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(SPACE_1))
+        .h(px(SIZE_TAG_HEIGHT))
+        .px(px(SPACE_1 + SPACE_HALF))
+        .rounded(px(RADIUS_SM))
+        .border_1()
+        .border_color(colours.border)
+        .bg(colours.bg)
+        .text_style(TYPE_CAPTION)
+        .text_color(colours.text)
+        .debug_selector(|| "badge-tag".to_owned())
+        .when_some(glyph, |tag, name| {
+            tag.child(Icon::new(name).size(IconSize::XSmall).color(colours.text))
+        })
+        .child(div().min_w_0().truncate().child(label))
+        .into_any_element()
+}
+
 /// The solid colour of a dot in one tone.
 fn dot_colour(tone: BadgeTone, p: &Palette) -> Color {
     match (status(tone, p), tone) {
@@ -305,6 +357,7 @@ impl RenderOnce for Badge {
                     true,
                 ),
             },
+            Content::Tag(text) => tag(text, tag_chip(self.tone, self.disabled, p), self.glyph),
             Content::Text(text) => {
                 let style = if self.category {
                     TYPE_LABEL
@@ -398,6 +451,19 @@ mod tests {
         let disabled = chip(BadgeTone::Danger, true, false, true, p);
         assert_eq!(disabled.bg.a, 0.0);
         assert_eq!(disabled.text, p.text.disabled);
+    }
+
+    #[test]
+    fn a_neutral_tag_is_sunken_with_a_subtle_border_and_an_accent_tag_has_none() {
+        let p = Palette::DARK;
+        let neutral = tag_chip(BadgeTone::Neutral, false, &p);
+        assert_eq!(neutral.bg, p.surface.sunken);
+        assert_eq!(neutral.border, p.border.subtle);
+        assert_eq!(neutral.text, p.text.secondary);
+        let accent = tag_chip(BadgeTone::Accent, false, &p);
+        assert_eq!(accent.bg, p.accent.subtle_raised);
+        assert_eq!(accent.border.a, 0.0);
+        assert_eq!(accent.text, p.accent.fg);
     }
 
     #[test]

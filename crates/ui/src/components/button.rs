@@ -37,6 +37,10 @@ pub enum ButtonVariant {
     Secondary,
     Ghost,
     Danger,
+    /// The page or row trigger of a destructive action outside its confirm (ds-rulings, P5): danger text with no
+    /// fill or border at rest. It always opens the destructive Dialog, whose confirm is `Danger`; at most one per
+    /// view, placed last, never the main action.
+    DangerGhost,
 }
 
 /// Height, padding, icon and label style of a button.
@@ -99,7 +103,7 @@ fn paint(variant: ButtonVariant, surface: Surface, visual: Visual, theme: &Theme
                 border: p.border.disabled,
                 label: p.text.disabled,
             },
-            ButtonVariant::Ghost => Paint {
+            ButtonVariant::Ghost | ButtonVariant::DangerGhost => Paint {
                 fill: NONE,
                 border: NONE,
                 label: p.text.disabled,
@@ -160,6 +164,17 @@ fn paint(variant: ButtonVariant, surface: Surface, visual: Visual, theme: &Theme
             },
             border: NONE,
             label: p.status.danger_on,
+        },
+        ButtonVariant::DangerGhost => Paint {
+            fill: match visual {
+                Visual::Hover | Visual::Pressed => p.status.danger_bg,
+                _ => NONE,
+            },
+            border: match visual {
+                Visual::Pressed => p.status.danger_border,
+                _ => NONE,
+            },
+            label: p.status.danger_fg,
         },
     }
 }
@@ -506,6 +521,49 @@ mod tests {
     }
 
     #[test]
+    fn danger_ghost_is_danger_text_that_fills_on_hover_and_borders_when_pressed() {
+        let t = dark();
+        let s = &t.palette.status;
+        let rest = paint(
+            ButtonVariant::DangerGhost,
+            Surface::Canvas,
+            Visual::Rest,
+            &t,
+        );
+        assert_eq!(
+            (rest.fill, rest.border, rest.label),
+            (NONE, NONE, s.danger_fg)
+        );
+        let hover = paint(
+            ButtonVariant::DangerGhost,
+            Surface::Canvas,
+            Visual::Hover,
+            &t,
+        );
+        assert_eq!((hover.fill, hover.border), (s.danger_bg, NONE));
+        let pressed = paint(
+            ButtonVariant::DangerGhost,
+            Surface::Canvas,
+            Visual::Pressed,
+            &t,
+        );
+        assert_eq!(
+            (pressed.fill, pressed.border),
+            (s.danger_bg, s.danger_border)
+        );
+        let disabled = paint(
+            ButtonVariant::DangerGhost,
+            Surface::Canvas,
+            Visual::Disabled,
+            &t,
+        );
+        assert_eq!(
+            (disabled.fill, disabled.label),
+            (NONE, t.palette.text.disabled)
+        );
+    }
+
+    #[test]
     fn disabled_uses_disabled_tokens_for_every_variant() {
         let t = dark();
         for variant in [
@@ -513,6 +571,7 @@ mod tests {
             ButtonVariant::Secondary,
             ButtonVariant::Ghost,
             ButtonVariant::Danger,
+            ButtonVariant::DangerGhost,
         ] {
             let p = paint(variant, Surface::Canvas, Visual::Disabled, &t);
             assert_eq!(p.label, t.palette.text.disabled, "{variant:?}");

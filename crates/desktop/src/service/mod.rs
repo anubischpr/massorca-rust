@@ -18,9 +18,11 @@ mod quit;
 mod refusal;
 mod secrets;
 mod skills;
+mod team_room;
 mod teams;
 mod terminals;
 mod update;
+mod workspace_create;
 
 #[cfg(test)]
 mod git_tests;
@@ -54,6 +56,9 @@ pub use refusal::Refusal;
 pub(crate) use secrets::SecretCommand;
 pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
+pub(crate) use team_room::RoomCommand;
+pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
+#[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
@@ -63,6 +68,7 @@ pub use update::{
     GitUpdate, HostEntry, HostLink, SecretsState, SecretsUpdate, StoreState, StoreUpdate,
     WorkspaceGit,
 };
+pub use workspace_create::create_for_start;
 
 #[cfg(test)]
 pub(crate) use update::fixtures;
