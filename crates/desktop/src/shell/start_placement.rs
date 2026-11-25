@@ -4,7 +4,7 @@
 use gpui::prelude::*;
 use gpui::{App, Div, FocusHandle, Role, Stateful, Window, div, px};
 use massorca_ui::components::tooltip::TooltipTrigger;
-use massorca_ui::style::{FocusRing, Surface};
+use massorca_ui::style::FocusRing;
 use massorca_ui::tokens::{
     Color, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_LABEL,
 };
@@ -49,6 +49,11 @@ pub(super) fn pill_focus(id: &'static str, window: &mut Window, cx: &mut App) ->
         .tab_stop(true)
 }
 
+/// The fill an enabled pill takes on hover: the canvas hover token the artboard uses (D-AG-01).
+fn pill_hover(theme: &Theme) -> Color {
+    theme.palette.fill.hover_canvas
+}
+
 /// A placement pill: its icon, its label, an optional second label, and a chevron. It is a Tab stop with a focus ring,
 /// and Enter or Space clicks it. A pill that is not `enabled` takes no hover fill; the page attaches a click only where
 /// the pill acts.
@@ -61,7 +66,7 @@ pub(super) fn pill(
     theme: &Theme,
     focus: FocusHandle,
 ) -> Stateful<Div> {
-    let hover = Surface::Raised.fills(theme).hover;
+    let hover = pill_hover(theme);
     let text = pill_text(enabled, theme);
     let name = match &secondary {
         Some(secondary) => format!("{label} {secondary}"),
@@ -190,5 +195,12 @@ mod tests {
         );
         assert_eq!(pill_text(true, &theme).label, text.primary);
         assert_ne!(pill_text(true, &theme).label, text.disabled);
+    }
+
+    #[test]
+    fn a_pill_hovers_on_the_canvas_fill_token() {
+        let theme = Theme::new(Appearance::Dark);
+        assert_eq!(pill_hover(&theme), theme.palette.fill.hover_canvas);
+        assert_ne!(pill_hover(&theme), theme.palette.fill.hover_raised);
     }
 }
