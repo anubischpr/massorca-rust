@@ -24,6 +24,7 @@ pub(crate) mod skills;
 mod teams;
 mod terminal_attach;
 mod terminals;
+mod tools;
 mod workspace_domain;
 mod workspace_setup;
 mod workspaces;
@@ -57,6 +58,7 @@ pub(crate) fn register_core(
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
     handles.extend(host::register(registries)?);
+    handles.extend(tools::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
     handles.extend(devices::register(registries)?);
