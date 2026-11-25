@@ -28,6 +28,7 @@ pub mod codes {
     pub const BUSY: &str = "extension.busy";
     pub const VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
     pub const UP_TO_DATE: &str = "extension.up_to_date";
+    pub const NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -88,6 +89,8 @@ pub enum Error {
     AlreadyInstalled(String),
     #[error("extension {0} is already up to date")]
     UpToDate(String),
+    #[error("extension {0} has no previous version to roll back to")]
+    NoPreviousVersion(String),
     #[error("the source of {id} now holds {found}; remove {id} and install {found} instead")]
     SourceIdChanged { id: String, found: String },
     #[error("agent kind {kind} is already installed by {installed_by}")]
@@ -153,6 +156,7 @@ impl Error {
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
             Self::UpToDate(_) => codes::UP_TO_DATE,
+            Self::NoPreviousVersion(_) => codes::NO_PREVIOUS_VERSION,
             Self::SourceIdChanged { .. } => codes::INVALID_SOURCE,
             Self::Busy(_) => codes::BUSY,
             Self::VendorCommandRefused { .. } => codes::VENDOR_COMMAND_REFUSED,

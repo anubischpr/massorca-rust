@@ -65,3 +65,26 @@ fn a_listing_from_an_older_peer_has_no_links_and_sends_none() {
         "an absent link is not sent"
     );
 }
+
+#[test]
+fn rollback_params_omit_unset_optionals_and_decode_an_id_alone() {
+    let consented = extensions::ExtensionRollbackParams {
+        id: "acme.kit".to_owned(),
+        consent: Some("fingerprint".to_owned()),
+        agent_token: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&consented).expect("serializes"),
+        json!({ "id": "acme.kit", "consent": "fingerprint" })
+    );
+
+    let bare: extensions::ExtensionRollbackParams =
+        serde_json::from_value(json!({ "id": "acme.kit" })).expect("deserializes");
+    assert_eq!(bare.consent, None);
+    assert_eq!(bare.agent_token, None);
+}
+
+#[test]
+fn rollback_is_an_extension_method_with_its_wire_name() {
+    assert_eq!(extensions::ROLLBACK, "extensions.rollback");
+}

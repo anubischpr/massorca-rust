@@ -12,6 +12,7 @@ mod kind_packages;
 mod remove;
 mod reserved;
 mod review;
+mod rollback;
 mod service;
 mod skill_discovery;
 mod skill_files;

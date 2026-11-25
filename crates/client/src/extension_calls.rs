@@ -3,8 +3,8 @@
 use massorca_protocol::methods::extensions::{
     self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
     ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRef,
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionSetEnabledParams,
-    ExtensionUpdateParams,
+    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionRollbackParams,
+    ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 
 use crate::client::Client;
@@ -65,6 +65,14 @@ impl Client {
         params: &ExtensionUpdateParams,
     ) -> Result<ExtensionInstalled, ClientError> {
         self.call(extensions::UPDATE, params).await
+    }
+
+    /// `extensions.rollback`: restores the version an update replaced. Runs no vendor command.
+    pub async fn extension_rollback(
+        &self,
+        params: &ExtensionRollbackParams,
+    ) -> Result<ExtensionInstalled, ClientError> {
+        self.call(extensions::ROLLBACK, params).await
     }
 
     /// `extensions.remove`: removes a package. May run a vendor uninstaller.

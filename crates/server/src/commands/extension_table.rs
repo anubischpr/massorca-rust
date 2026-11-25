@@ -64,6 +64,18 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             ),
         ),
         command(
+            "extension.rollback",
+            "Roll an extension back to the version its last update replaced",
+            "extensions.rollback",
+            args(
+                &["id"],
+                json!({
+                    "id": { "type": "string" },
+                    "consent": { "type": "string" }
+                }),
+            ),
+        ),
+        command(
             "extension.enable",
             "Enable an installed extension",
             "extensions.set_enabled",

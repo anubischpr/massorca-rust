@@ -13,7 +13,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionAssetParams, ExtensionInstallParams, ExtensionRemoveParams,
-    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams, RiskLevel,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
+    RiskLevel,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -534,5 +535,85 @@ async fn update_refuses_an_agent_run_and_names_a_package_that_is_not_installed()
         .await
         .expect_err("nothing is installed");
     assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_INSTALLED);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn rollback_restores_the_version_an_update_replaced_and_refuses_what_it_cannot_restore() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let refused = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            agent_token: Some("a-run-token".to_owned()),
+        })
+        .await
+        .expect_err("an agent run may not roll back");
+    assert_eq!(remote_code(&refused), codes::EXTENSION_NEEDS_PERSON);
+    let missing = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("nothing is installed");
+    assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_INSTALLED);
+
+    let first = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_install(&ExtensionInstallParams {
+            source: source.clone(),
+            consent: Some(first.consent.clone()),
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("installs");
+    let nothing_kept = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(first.consent.clone()),
+            agent_token: None,
+        })
+        .await
+        .expect_err("no version is kept yet");
+    assert_eq!(
+        remote_code(&nothing_kept),
+        codes::EXTENSION_NO_PREVIOUS_VERSION
+    );
+
+    let manifest_path = package.path().join("extension.json");
+    let newer = std::fs::read_to_string(&manifest_path)
+        .expect("manifest")
+        .replace("\"1.2.0\"", "\"1.3.0\"");
+    std::fs::write(&manifest_path, newer).expect("manifest");
+    let second = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_update(&ExtensionUpdateParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(second.consent),
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("updates");
+
+    let rolled = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(first.consent),
+            agent_token: None,
+        })
+        .await
+        .expect("rolls back");
+    assert_eq!(rolled.version, "1.2.0");
     stop(running).await;
 }

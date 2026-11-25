@@ -524,7 +524,7 @@ impl Extensions {
     }
 
     /// An agent kind that another package is installing right now is taken, as an installed one would be.
-    fn check_installing_kinds(&self, id: &str, kinds: &[String]) -> Result<(), Error> {
+    pub(crate) fn check_installing_kinds(&self, id: &str, kinds: &[String]) -> Result<(), Error> {
         let installing = self
             .installing
             .lock()
@@ -547,7 +547,7 @@ impl Extensions {
 
     /// The agent kinds an installed package records. An entry from before kinds were recorded is read from its folder,
     /// best-effort: an update replaces a tampered folder anyway.
-    fn recorded_kinds(&self, entry: &LockEntry) -> Vec<String> {
+    pub(crate) fn recorded_kinds(&self, entry: &LockEntry) -> Vec<String> {
         if !entry.agent_kinds.is_empty() {
             return entry.agent_kinds.clone();
         }
@@ -555,7 +555,7 @@ impl Extensions {
             .map_or_else(|_| Vec::new(), |manifest| agent_kind_ids(&manifest))
     }
 
-    fn check_kind_conflicts(
+    pub(crate) fn check_kind_conflicts(
         &self,
         lockfile: &Lockfile,
         manifest: &Manifest,
@@ -837,7 +837,7 @@ fn kept_after_update(current: &LockEntry, rel: &str) -> Option<Box<KeptVersion>>
 }
 
 /// The agent kind ids a package declares, as its lock entry records them.
-fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
+pub(crate) fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
     manifest
         .contributes
         .agent_adapters
@@ -847,7 +847,7 @@ fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
 }
 
 /// The source an installed package was read from, as its lock entry names it.
-fn installed_source(entry: &LockEntry) -> Source {
+pub(crate) fn installed_source(entry: &LockEntry) -> Source {
     let reference = entry.source.reference.clone();
     match entry.source.kind {
         SourceKind::Catalogue => Source::Catalogue(reference),

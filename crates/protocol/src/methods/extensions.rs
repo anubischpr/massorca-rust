@@ -24,6 +24,9 @@ pub const REMOVE: &str = "extensions.remove";
 /// An installed package already in place is refused with `extension.up_to_date`. Added after `extensions/1`: an older
 /// host answers `method.not_found`.
 pub const UPDATE: &str = "extensions.update";
+/// Params: [`ExtensionRollbackParams`]. Result: [`ExtensionInstalled`], the package as rolled back. Runs no vendor command.
+/// Refused with `extension.no_previous_version` when no version is kept. Capability `extensions-rollback/1`.
+pub const ROLLBACK: &str = "extensions.rollback";
 
 /// Selector for `extensions.get`: a package id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +90,20 @@ pub struct ExtensionUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     /// The run token of the agent that sent this request, when an agent sent it. A request carrying one may not update
+    /// (`extension.needs_person`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+/// Params of `extensions.rollback`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionRollbackParams {
+    pub id: String,
+    /// The `consent` fingerprint of the review of the version being restored. A built-in needs none; any other package is
+    /// refused without it, as for an update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<String>,
+    /// The run token of the agent that sent this request, when an agent sent it. A request carrying one may not roll back
     /// (`extension.needs_person`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,

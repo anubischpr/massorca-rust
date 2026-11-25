@@ -14,6 +14,7 @@ pub mod layout;
 pub mod lockfile;
 pub mod removal;
 pub mod review;
+mod rollback;
 pub mod service;
 pub mod skills;
 pub mod source;

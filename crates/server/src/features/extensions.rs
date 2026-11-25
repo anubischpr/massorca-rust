@@ -20,7 +20,7 @@ use massorca_protocol::methods::extensions::{
     self, CliPlanState, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled,
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
     ExtensionList, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -71,6 +71,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             cap,
             Permission::HostAdmin,
             update,
+        )?,
+        // Its own capability, so a client that was not offered it never sends the rollback.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_ROLLBACK, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::ROLLBACK,
+            capabilities::EXTENSIONS_ROLLBACK,
+            Permission::HostAdmin,
+            rollback,
         )?,
         methods.register(
             Owner::Core,
@@ -189,6 +200,23 @@ async fn update(
             params.consent.as_deref(),
             params.sha256.as_deref(),
         )
+    })
+    .await?;
+    publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
+    wire(&entry)
+}
+
+/// Restores the version an update replaced. It publishes `extension.installed`, so readers reload the package.
+async fn rollback(
+    ctx: RequestCtx,
+    params: ExtensionRollbackParams,
+) -> Result<ExtensionInstalled, ErrorBody> {
+    refuse_agent_run(
+        params.agent_token.as_deref(),
+        "an agent cannot roll back an extension; ask the person to run the command",
+    )?;
+    let entry = on_extensions(&ctx, move |extensions| {
+        extensions.rollback(&params.id, params.consent.as_deref())
     })
     .await?;
     publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
@@ -458,6 +486,10 @@ mod tests {
     fn the_protocol_codes_match_the_codes_the_crates_raise() {
         let pairs = [
             (core_codes::INVALID_SOURCE, codes::EXTENSION_INVALID_SOURCE),
+            (
+                core_codes::NO_PREVIOUS_VERSION,
+                codes::EXTENSION_NO_PREVIOUS_VERSION,
+            ),
             (core_codes::NOT_FOUND, codes::EXTENSION_NOT_FOUND),
             (core_codes::NOT_INSTALLED, codes::EXTENSION_NOT_INSTALLED),
             (
