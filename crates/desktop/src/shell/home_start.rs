@@ -2,21 +2,26 @@
 //! the host, project and branch, and the start composer with its agent pick and access chip. Send creates a
 //! workspace in the project, named from the prompt, then starts the agent in it.
 
+use std::rc::Rc;
+
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, WeakEntity, Window, div, px};
-use massorca_protocol::methods::projects::Project;
-use massorca_ui::components::checkbox::Checkbox;
+use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, Window, div, px};
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::{MenuEntry, MenuItem};
 use massorca_ui::components::popover::{
     OverlayLayer, Popover, PopoverPlacement, PopoverVariant, PopoverWidth,
 };
 use massorca_ui::components::rose_logo::rose_logo;
-use massorca_ui::components::text_field::TextField;
+use massorca_ui::components::switch::Switch;
+use massorca_ui::components::text_field::{TextField, TextFieldEvent};
+use massorca_ui::components::tooltip::TooltipTrigger;
+use massorca_ui::style::{StateFill, Surface};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, SPACE_2, SPACE_3, SPACE_6, TYPE_CAPTION, TYPE_HEADING,
+    LAYOUT_CONVERSATION_READING, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_2, SPACE_3, SPACE_6,
+    TYPE_BODY, TYPE_CAPTION, TYPE_HEADING,
 };
-use massorca_ui::{ActiveTheme, IconName, TextStyled};
+use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled, Theme};
 
 use super::Shell;
 use super::start_page::{
@@ -25,9 +30,10 @@ use super::start_page::{
 use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
-    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails,
-    branch_pill, create_params, home_choice, home_start_params, name_is_derived,
-    no_project_branch_pill, no_project_start_params,
+    BranchPill, CHOOSE_A_PROJECT, FOLDER_NO_GIT_REASON, HOME_START, NEW_WORKTREE_REASON,
+    NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails, branch_pill, create_params,
+    home_choice, home_start_params, name_is_derived, no_project_branch_pill,
+    no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
@@ -49,52 +55,48 @@ pub(super) struct HomeFrame {
     pub mode: StartMode,
     /// The service refused because the data folder is not secured.
     pub profile_unsafe: bool,
-    /// The branch menu's fields and whether it is open.
+    /// Whether the project is a folder, which has no worktree or branch.
+    pub folder: bool,
+    /// The branches the popover lists: the project's base until the service lists the project's branches.
+    pub branches: Vec<String>,
+    /// The branch popover's selection and whether it is open.
     pub details: HomeDetails,
 }
 
-/// The branch menu of the start page with no workspace (D-AG-01, A89): whether it is open, whether Send reuses a
-/// branch, and its text fields. Kept on the shell so a draft survives redraws.
+/// The branch popover of the start page with no workspace (D-AG-01): whether it is open, the base the person picked,
+/// and the search over the project's branches. Kept on the shell so a search survives redraws.
 #[derive(Clone, Debug)]
 pub(super) struct HomeDetails {
     pub branch_menu: bool,
-    pub existing_branch: bool,
-    pub name: Entity<TextField>,
-    pub branch: Entity<TextField>,
-    pub base: Entity<TextField>,
+    /// The branch the new worktree starts from, once picked; `None` takes the project's base.
+    pub base: Option<String>,
+    pub search: Entity<TextField>,
+    /// Redraws the popover as the search changes.
+    _search_events: Rc<Subscription>,
 }
 
 impl HomeDetails {
-    /// The menu starts closed, with empty fields.
+    /// The popover starts closed, with no base picked and an empty search.
     pub(super) fn new(cx: &mut Context<Shell>) -> Self {
+        let search = cx.new(|cx| TextField::new(cx).placeholder("Search branches"));
+        let events = cx.subscribe(&search, |_, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                cx.notify();
+            }
+        });
         Self {
             branch_menu: false,
-            existing_branch: false,
-            name: cx.new(|cx| {
-                TextField::new(cx)
-                    .label("Name")
-                    .placeholder("From the prompt")
-            }),
-            branch: cx.new(|cx| {
-                TextField::new(cx)
-                    .label("Branch")
-                    .placeholder("Same as the name")
-            }),
-            base: cx.new(|cx| {
-                TextField::new(cx)
-                    .label("Base")
-                    .placeholder("The default branch")
-            }),
+            base: None,
+            search,
+            _search_events: Rc::new(events),
         }
     }
 
-    /// What Send reads from the menu: the fields' text and the reuse choice.
-    fn values(&self, cx: &App) -> WorkspaceDetails {
+    /// What Send reads from the popover: the base picked. The name comes from the prompt, never from the popover.
+    fn values(&self) -> WorkspaceDetails {
         WorkspaceDetails {
-            name: self.name.read(cx).text().to_owned(),
-            branch: self.branch.read(cx).text().to_owned(),
-            base: self.base.read(cx).text().to_owned(),
-            existing_branch: self.existing_branch,
+            name: String::new(),
+            base: self.base.clone().unwrap_or_default(),
         }
     }
 }
@@ -154,8 +156,13 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
     };
     let labels = if frame.no_project {
         no_project_branch_pill()
+    } else if frame.folder {
+        BranchPill {
+            label: "No Git".to_owned(),
+            detail: "folder".to_owned(),
+        }
     } else {
-        branch_pill(&frame.details.values(cx), frame.project_base.as_deref())
+        branch_pill(&frame.details.values(), frame.project_base.as_deref())
     };
     let host = host_pill(
         "home-start-host",
@@ -183,16 +190,21 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
     };
     let branch = {
         let shell = frame.shell.clone();
-        let no_project = frame.no_project;
+        let off = frame.no_project || frame.folder;
         let focus = pill_focus("home-start-branch", window, cx);
-        let trigger = if no_project {
-            // Off with "No project": the pill names why on hover and on keyboard focus.
+        let trigger = if off {
+            // Off with "No project" or a folder: the pill names why on hover and on keyboard focus.
+            let reason = if frame.folder {
+                FOLDER_NO_GIT_REASON
+            } else {
+                NO_WORKTREE_REASON
+            };
             off_pill(
                 "home-start-branch",
                 IconName::GitBranch,
                 labels.label,
                 Some(labels.detail),
-                NO_WORKTREE_REASON,
+                reason,
                 &theme,
                 focus,
             )
@@ -212,14 +224,22 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
             })
             .into_any_element()
         };
+        let body = branch_popover(
+            &frame.details,
+            &frame.branches,
+            frame.project_base.as_deref(),
+            frame.shell.clone(),
+            &theme,
+            cx,
+        );
         let dismiss = frame.shell.clone();
         Popover::new("home-start-branch-menu", trigger)
-            .open(frame.details.branch_menu && !no_project)
+            .open(frame.details.branch_menu && !off)
             .variant(PopoverVariant::Form)
             .width(PopoverWidth::Medium)
             .placement(PopoverPlacement::Below)
             .layer(OverlayLayer::Dialog)
-            .child(branch_fields(&frame.details, frame.shell.clone()))
+            .child(body)
             .on_dismiss(move |_, cx| {
                 let _ = dismiss.update(cx, |shell, cx| shell.close_branch_menu(cx));
             })
@@ -266,27 +286,92 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
         .into_any_element()
 }
 
-/// The branch menu's fields, as Send reads them for `workspace.create`: the name, the branch, the reuse choice and the
-/// base. Host lives in its own pill.
-fn branch_fields(details: &HomeDetails, shell: WeakEntity<Shell>) -> impl IntoElement {
-    let existing = {
-        let shell = shell.clone();
-        Checkbox::new("home-start-existing", details.existing_branch)
-            .label("Use an existing branch")
-            .on_change(move |checked, _, cx| {
-                let _ = shell.update(cx, |shell, cx| shell.set_home_existing_branch(checked, cx));
-            })
-    };
+/// The branch popover (D-AG-01): the "New worktree" switch, which stays on, and the branch row, a search over the
+/// project's branches that picks the base the new worktree starts from. A blank base takes the project's.
+fn branch_popover(
+    details: &HomeDetails,
+    branches: &[String],
+    project_base: Option<&str>,
+    shell: WeakEntity<Shell>,
+    theme: &Theme,
+    cx: &App,
+) -> impl IntoElement {
+    let p = &theme.palette;
+    let query = details.search.read(cx).text().to_lowercase();
+    let picked = details
+        .base
+        .clone()
+        .or_else(|| project_base.map(str::to_owned));
+    let current = picked
+        .clone()
+        .unwrap_or_else(|| "the default branch".to_owned());
+    let switch = TooltipTrigger::new(
+        "home-start-new-worktree-reason",
+        NEW_WORKTREE_REASON,
+        Switch::new("home-start-new-worktree", true)
+            .label("New worktree")
+            .disabled(true),
+    );
+    let rows = branches
+        .iter()
+        .filter(|branch| query.is_empty() || branch.to_lowercase().contains(&query))
+        .enumerate()
+        .map(|(index, branch)| {
+            let shell = shell.clone();
+            let value = branch.clone();
+            let chosen = picked.as_deref() == Some(branch.as_str());
+            let row = format!("home-start-branch-row-{index}");
+            div()
+                .id(row.clone())
+                .debug_selector(move || row.clone())
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .h(px(SIZE_CONTROL_DEFAULT))
+                .px(px(SPACE_2))
+                .rounded(px(RADIUS_MD))
+                .text_style(TYPE_BODY)
+                .text_color(p.text.primary)
+                .state_fills(theme, Surface::Overlay)
+                .child(branch.clone())
+                .when(chosen, |row| {
+                    row.child(
+                        Icon::new(IconName::Check)
+                            .size(IconSize::Small)
+                            .color(p.accent.fg),
+                    )
+                })
+                .on_click(move |_, _, cx| {
+                    let _ =
+                        shell.update(cx, |shell, cx| shell.set_home_base(Some(value.clone()), cx));
+                })
+        });
     div()
-        .debug_selector(|| "home-start-branch-fields".to_owned())
+        .debug_selector(|| "home-start-branch-popover".to_owned())
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_3))
-        .child(details.name.clone())
-        .child(details.branch.clone())
-        .child(existing)
-        .child(details.base.clone())
+        .child(
+            div()
+                .debug_selector(|| "home-start-new-worktree".to_owned())
+                .child(switch),
+        )
+        .child(
+            div()
+                .text_style(TYPE_CAPTION)
+                .text_color(p.text.secondary)
+                .child(format!("Branch: {current}")),
+        )
+        .child(details.search.clone())
+        .child(
+            div()
+                .debug_selector(|| "home-start-branch-list".to_owned())
+                .flex()
+                .flex_col()
+                .children(rows),
+        )
 }
 
 impl Shell {
@@ -311,9 +396,10 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Use an existing branch": Send reuses the branch the field names instead of creating one.
-    pub(super) fn set_home_existing_branch(&mut self, checked: bool, cx: &mut Context<Self>) {
-        self.home_details.existing_branch = checked;
+    /// Picks the branch the new worktree starts from and closes the popover; `None` takes the project's base.
+    pub(super) fn set_home_base(&mut self, base: Option<String>, cx: &mut Context<Self>) {
+        self.home_details.base = base;
+        self.home_details.branch_menu = false;
         cx.notify();
     }
 
@@ -321,17 +407,25 @@ impl Shell {
     pub(super) fn home_frame(&mut self, cx: &mut Context<Self>) -> Option<HomeFrame> {
         self.service.as_ref()?;
         let composer = self.start_composer(HOME_START, cx);
-        let (project, project_base, no_project) = {
+        let (project, project_base, no_project, folder) = {
             let projects = &self.store.read(cx).state().projects;
             match home_choice(projects, self.home_project.as_ref()) {
-                Some(ProjectChoice::NoProject) => (Some(NO_PROJECT_LABEL.to_owned()), None, true),
+                Some(ProjectChoice::NoProject) => {
+                    (Some(NO_PROJECT_LABEL.to_owned()), None, true, false)
+                }
                 Some(ProjectChoice::Project(id)) => match projects.iter().find(|p| p.id == id) {
-                    Some(project) => (Some(project.name.clone()), project.base_ref.clone(), false),
-                    None => (None, None, false),
+                    Some(project) => (
+                        Some(project.name.clone()),
+                        project.base_ref.clone(),
+                        false,
+                        matches!(project.kind, ProjectKind::Folder),
+                    ),
+                    None => (None, None, false, false),
                 },
-                None => (None, None, false),
+                None => (None, None, false, false),
             }
         };
+        let branches: Vec<String> = project_base.iter().cloned().collect();
         let starting = self
             .start_pending
             .as_ref()
@@ -345,6 +439,8 @@ impl Shell {
             starting,
             mode: self.start_mode(HOME_START, cx),
             profile_unsafe: self.profile_unsafe,
+            folder,
+            branches,
             details: self.home_details.clone(),
             composer,
         })
@@ -390,11 +486,7 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let details = self.home_details.values(cx);
-        // The branch menu names a worktree, so "No project" never waits on it.
-        if let (ProjectChoice::Project(_), Some(reason)) = (&choice, details.send_block()) {
-            return refuse_send(prompt, &composer, reason.to_owned(), cx);
-        }
+        let details = self.home_details.values();
         let mode = self.start_mode(HOME_START, cx);
         self.start_pending = Some(StartingSession {
             workspace: HOME_START.to_owned(),

@@ -21,8 +21,14 @@ pub const NO_PROJECT_NEEDS_SERVICE: &str = NEEDS_NEWER_SERVICE;
 pub const NO_WORKTREE_REASON: &str =
     "A conversation with no project runs in the conversations folder, with no worktree.";
 
-/// Send's reason while "Use an existing branch" has no branch name to reuse.
-pub const NAME_THE_BRANCH: &str = "Name the branch to reuse.";
+/// Why the "New worktree" switch stays on: the service makes a worktree for every Git project, and the main checkout is
+/// not offered yet.
+pub const NEW_WORKTREE_REASON: &str =
+    "Every Git project gets its own worktree; working in the main checkout is not offered yet.";
+
+/// Why the branch pill is off for a folder project: a folder is not a Git repository, so it has no worktree or branch.
+pub const FOLDER_NO_GIT_REASON: &str =
+    "This folder is not a Git repository, so it has no worktree or branch.";
 
 /// Send's reason while there is no project to create the workspace in.
 pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
@@ -120,23 +126,14 @@ pub fn home_choice(projects: &[Project], chosen: Option<&ProjectChoice>) -> Opti
     home_project(projects, id).map(|project| ProjectChoice::Project(project.id.clone()))
 }
 
-/// The Advanced section's fields as Send reads them. Blank text sends nothing for its field.
+/// The branch popover's choices as Send reads them (D-AG-01). A blank base takes the project's base. The name is
+/// derived from the prompt; a name typed anywhere is never changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkspaceDetails {
     /// Blank takes the prompt's first words, or the service's generated name.
     pub name: String,
-    /// The new branch's name, or the existing branch's when `existing_branch` is set.
-    pub branch: String,
-    /// The base ref the new branch starts from.
+    /// The branch the new worktree starts from; blank takes the project's base.
     pub base: String,
-    pub existing_branch: bool,
-}
-
-impl WorkspaceDetails {
-    /// Why Send is off: a branch to reuse must be named.
-    pub fn send_block(&self) -> Option<&'static str> {
-        (self.existing_branch && non_empty(&self.branch).is_none()).then_some(NAME_THE_BRANCH)
-    }
 }
 
 /// The branch pill's two labels: the branch Send creates or reuses, and where a new worktree starts (D-AG-01).
@@ -146,15 +143,9 @@ pub struct BranchPill {
     pub detail: String,
 }
 
-/// The branch pill's labels: a new worktree from the base the menu names, else the project's base, else the default
-/// branch; or the branch the menu reuses.
+/// The branch pill's labels: a new worktree from the base the popover names, else the project's base, else the default
+/// branch.
 pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> BranchPill {
-    if details.existing_branch {
-        return BranchPill {
-            label: non_empty(&details.branch).unwrap_or_else(|| "Existing branch".to_owned()),
-            detail: "existing branch".to_owned(),
-        };
-    }
     let base = non_empty(&details.base)
         .or_else(|| project_base.and_then(non_empty))
         .unwrap_or_else(|| "the default branch".to_owned());
@@ -172,7 +163,8 @@ pub fn no_project_branch_pill() -> BranchPill {
     }
 }
 
-/// The `workspace.create` that Send asks for: a new worktree in `project`.
+/// The `workspace.create` that Send asks for: a new worktree in `project`, from the base the popover names when it
+/// names one; without one the service starts from the project's base.
 pub fn create_params(
     project: &str,
     prompt: &str,
@@ -181,9 +173,9 @@ pub fn create_params(
     WorkspaceCreateParams {
         project: project.to_owned(),
         name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
-        branch: non_empty(&details.branch),
+        branch: None,
         base: non_empty(&details.base),
-        existing_branch: details.existing_branch,
+        existing_branch: false,
         refresh_base: false,
         path: None,
         request_id: None,
@@ -349,23 +341,46 @@ mod tests {
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
         assert_eq!(params.branch, None);
-        assert_eq!(params.base, None);
+        assert_eq!(
+            params.base, None,
+            "no base picked: the service starts from the project's base"
+        );
         assert!(!params.existing_branch);
     }
 
     #[test]
-    fn typed_details_name_the_workspace_and_add_its_branch_and_base() {
+    fn a_picked_base_is_the_base_the_worktree_starts_from() {
         let details = WorkspaceDetails {
-            name: "  login-fix ".into(),
-            branch: "feat/login".into(),
-            base: "main".into(),
-            existing_branch: false,
+            name: String::new(),
+            base: " release ".into(),
         };
         let params = create_params("p1", "fix the login", &details);
-        assert_eq!(params.name, "login-fix");
-        assert_eq!(params.branch.as_deref(), Some("feat/login"));
-        assert_eq!(params.base.as_deref(), Some("main"));
+        assert_eq!(params.base.as_deref(), Some("release"));
+        assert_eq!(params.branch, None);
         assert!(!params.existing_branch);
+    }
+
+    #[test]
+    fn a_typed_name_is_never_changed() {
+        let details = WorkspaceDetails {
+            name: "  login-fix ".into(),
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(
+            create_params("p1", "fix the login", &details).name,
+            "login-fix"
+        );
+    }
+
+    #[test]
+    fn only_a_blank_name_is_derived_from_the_prompt() {
+        let blank = WorkspaceDetails::default();
+        let typed = WorkspaceDetails {
+            name: "mine".into(),
+            ..WorkspaceDetails::default()
+        };
+        assert!(name_is_derived(&blank));
+        assert!(!name_is_derived(&typed), "a typed name is never changed");
     }
 
     #[test]
@@ -375,21 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn reusing_a_branch_needs_its_name_and_then_sends_it_as_existing() {
-        let mut details = WorkspaceDetails {
-            existing_branch: true,
-            ..WorkspaceDetails::default()
-        };
-        assert_eq!(details.send_block(), Some(NAME_THE_BRANCH));
-        details.branch = " feat/login ".into();
-        assert_eq!(details.send_block(), None);
-        let params = create_params("p1", "fix the login", &details);
-        assert_eq!(params.branch.as_deref(), Some("feat/login"));
-        assert!(params.existing_branch);
-    }
-
-    #[test]
-    fn a_new_worktree_starts_from_the_base_the_menu_names_then_the_project_base() {
+    fn a_new_worktree_starts_from_the_picked_base_then_the_project_base() {
         let mut details = WorkspaceDetails::default();
         assert_eq!(branch_pill(&details, None).label, "New worktree");
         assert_eq!(
@@ -399,23 +400,6 @@ mod tests {
         assert_eq!(branch_pill(&details, Some("main")).detail, "from main");
         details.base = " develop ".into();
         assert_eq!(branch_pill(&details, Some("main")).detail, "from develop");
-    }
-
-    #[test]
-    fn reusing_a_branch_shows_the_name_typed_or_asks_for_one() {
-        let mut details = WorkspaceDetails {
-            existing_branch: true,
-            ..WorkspaceDetails::default()
-        };
-        assert_eq!(branch_pill(&details, Some("main")).label, "Existing branch");
-        details.branch = " feat/login ".into();
-        assert_eq!(
-            branch_pill(&details, Some("main")),
-            BranchPill {
-                label: "feat/login".into(),
-                detail: "existing branch".into(),
-            }
-        );
     }
 
     #[test]
