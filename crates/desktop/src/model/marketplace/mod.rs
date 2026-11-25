@@ -43,6 +43,7 @@ pub use package_problem::{
 };
 pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use rollback_review::{RollbackOutcome, rollback_details, rollback_outcome};
+pub use run_log::{RunRow, run_log_text, run_row};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
