@@ -404,6 +404,37 @@ fn a_resume_names_the_session_and_carries_a_pending_bypass_mode(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn a_resume_starts_the_terminal_at_the_grid_the_session_view_last_drew(cx: &mut TestAppContext) {
+    let mut session = s1(true, Some(ActivityState::Done));
+    session.terminal_id = Some("t1".to_owned());
+    let (mut rig, cx) = session_rig(cx, vec![kind(true)], vec![session]);
+    rig.shell.update(cx, |shell, cx| {
+        shell.note_terminal_grid("t1", 150, 70, cx);
+        // A terminal the session view does not show leaves the size alone.
+        shell.note_terminal_grid("t2", 90, 20, cx);
+    });
+    assert_eq!(
+        rig.shell.read_with(cx, |shell, _| shell.session_grid()),
+        Some((150, 70))
+    );
+    click(cx, "composer-resume");
+    let params = resume_params(&mut rig.script).expect("the resume is sent to the service");
+    assert_eq!((params.cols, params.rows), (Some(150), Some(70)));
+}
+
+#[gpui::test]
+fn a_resume_before_any_drawn_grid_leaves_the_size_to_the_service(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(true, Some(ActivityState::Done))],
+    );
+    click(cx, "composer-resume");
+    let params = resume_params(&mut rig.script).expect("the resume is sent to the service");
+    assert_eq!((params.cols, params.rows), (None, None));
+}
+
+#[gpui::test]
 fn a_refused_resume_says_why_above_the_composer(cx: &mut TestAppContext) {
     let (mut rig, cx) = session_rig(
         cx,
