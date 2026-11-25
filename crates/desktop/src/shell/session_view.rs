@@ -18,6 +18,7 @@ use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
+use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::terminal_surface::TerminalSurface;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_READING, SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM,
@@ -31,9 +32,13 @@ use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
-use crate::model::permission_modes::{mode_to_set, session_modes};
+use crate::model::permission_modes::{SessionModes, mode_to_set, session_modes};
+use crate::model::session_ended::{
+    ENDED, ENDED_NOT_RESUMABLE, START_NEW, ended_offer, refusal_says_conversation_gone,
+    screen_says_conversation_gone,
+};
 use crate::model::shell::AgentState;
-use crate::model::start_page::VOICE_LATER;
+use crate::model::start_page::{VOICE_LATER, start_again_params};
 use crate::service::{Refusal, ServiceHandle};
 
 /// What the composer of a session waits for. A session has at most one call in flight.
@@ -47,6 +52,8 @@ pub(super) enum SessionCall {
     Stopping,
     /// The ended session is starting a new run.
     Resuming,
+    /// A new session is starting in place of the ended one, in the same workspace with the same agent.
+    Starting,
 }
 
 /// A session's composer and queue dock as the Shell keeps them, with the subscriptions that turn their events into
@@ -61,11 +68,32 @@ pub(super) struct SessionComposer {
     _dock_events: Subscription,
 }
 
+/// The header's mode chip of a session: a select over the kind's modes, kept while the kind lists the same names.
+#[derive(Debug)]
+pub(super) struct SessionModeChip {
+    pub entity: Entity<SelectView>,
+    pub(super) names: Vec<String>,
+    _events: Subscription,
+}
+
 const SENDING: &str = "Sending…";
 const QUEUEING: &str = "Queueing…";
 const RESUMING: &str = "Resuming…";
-const ENDED: &str = "This session has ended.";
-const ENDED_NOT_RESUMABLE: &str = "This session has ended and cannot be resumed.";
+const STARTING: &str = "Starting…";
+
+/// Whether a session runs in its terminal alone, with no composer (owner request 2026-11-24). Every session does until
+/// `AgentSession` carries `run: terminal|chat`, which then decides here.
+pub(super) fn is_terminal_arm(_session: &AgentSession) -> bool {
+    true
+}
+
+/// Whether a session's run is live: its terminal runs, or may still, so it can be stopped.
+fn is_live(session: &AgentSession) -> bool {
+    matches!(
+        session.execution.state,
+        TerminalState::Live | TerminalState::Unverifiable
+    )
+}
 
 /// What the composer of a session shows: whether the agent runs, why sending is off, and whether Resume is offered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,14 +120,12 @@ pub(super) fn composer_terms(
         AgentState::Running | AgentState::Waiting
     );
     let ended = session.execution.state == TerminalState::Exited;
-    let live = matches!(
-        session.execution.state,
-        TerminalState::Live | TerminalState::Unverifiable
-    );
+    let live = is_live(session);
     let (reason, resume) = match call {
         Some(SessionCall::Sending) => (Some(SENDING), false),
         Some(SessionCall::Queueing) => (Some(QUEUEING), false),
         Some(SessionCall::Resuming) => (Some(RESUMING), false),
+        Some(SessionCall::Starting) => (Some(STARTING), false),
         _ if !ended => (None, false),
         _ if resumable => (Some(ENDED), true),
         _ => (Some(ENDED_NOT_RESUMABLE), false),
@@ -110,6 +136,15 @@ pub(super) fn composer_terms(
         resume,
         stop_aside: live && !busy,
     }
+}
+
+/// The bar of an ended terminal-arm session: its reason and the one action its state offers.
+pub(super) struct EndedFrame {
+    pub reason: &'static str,
+    pub resume: bool,
+    pub start_new: bool,
+    /// A call is in flight, or the service is not connected: the actions wait.
+    pub busy: bool,
 }
 
 /// What the session view draws: the header's facts, the terminal's pane or the refusal of its attach, the refusal of
@@ -127,6 +162,13 @@ pub(super) struct SessionFrame {
     pub notice: Option<String>,
     /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
     pub stop_aside: Option<bool>,
+    /// A terminal-arm session has no composer: its header names the arm and carries the mode chip instead.
+    pub terminal_arm: bool,
+    /// The ended session's bar, when the session has ended in the terminal arm.
+    pub ended: Option<EndedFrame>,
+    pub mode_chip: Option<Entity<SelectView>>,
+    /// The caption after the mode chip, such as "Requested" or "Next resume: Plan".
+    pub mode_note: Option<String>,
     pub composer: Entity<Composer>,
     /// The session's queue dock, while the service keeps a queue and it holds a prompt.
     pub queue: Option<Entity<QueuedMessages>>,
@@ -142,6 +184,48 @@ pub(super) struct SessionFrame {
 pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = theme.palette;
+    let ended_bar = frame.ended.map(|ended| {
+        let (resume_shell, resume_session) = (frame.shell.clone(), frame.session.clone());
+        let (start_shell, start_session) = (frame.shell.clone(), frame.session.clone());
+        div()
+            .debug_selector(|| "session-ended".to_owned())
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_4))
+            .pb(px(SPACE_2))
+            .text_style(TYPE_BODY_SM)
+            .text_color(p.text.secondary)
+            .child(ended.reason)
+            .child(div().flex_1())
+            .when(ended.resume, |bar| {
+                bar.child(
+                    Button::new("session-resume", "Resume")
+                        .variant(ButtonVariant::Secondary)
+                        .size(ButtonSize::Compact)
+                        .disabled(ended.busy)
+                        .on_click(move |_, cx| {
+                            let _ = resume_shell
+                                .update(cx, |shell, cx| shell.resume_session(&resume_session, cx));
+                        }),
+                )
+            })
+            .when(ended.start_new, |bar| {
+                bar.child(
+                    Button::new("session-start-new", START_NEW)
+                        .variant(ButtonVariant::Secondary)
+                        .size(ButtonSize::Compact)
+                        .disabled(ended.busy)
+                        .on_click(move |_, cx| {
+                            let _ = start_shell.update(cx, |shell, cx| {
+                                shell.start_new_session(&start_session, cx)
+                            });
+                        }),
+                )
+            })
+    });
     let delegate = frame.can_delegate.then(|| {
         let (shell, session) = (frame.shell.clone(), frame.session.clone());
         Button::new("session-delegate", "Delegate")
@@ -176,7 +260,30 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                 .text_color(p.text.tertiary)
                 .child(frame.kind),
         )
+        .when(frame.terminal_arm, |header| {
+            header.child(
+                div()
+                    .debug_selector(|| "session-arm".to_owned())
+                    .flex_none()
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.tertiary)
+                    .child("Terminal"),
+            )
+        })
         .child(div().flex_1())
+        .when_some(frame.mode_chip, |header, chip| {
+            header.child(div().flex_none().child(chip))
+        })
+        .when_some(frame.mode_note, |header, note| {
+            header.child(
+                div()
+                    .debug_selector(|| "session-mode-note".to_owned())
+                    .flex_none()
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.tertiary)
+                    .child(note),
+            )
+        })
         .when_some(delegate, |header, button| header.child(button))
         .when_some(frame.stop_aside, |header, held| {
             let shell = frame.shell.clone();
@@ -229,6 +336,7 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                     .child(notice),
             )
         })
+        .when_some(ended_bar, |page, bar| page.child(bar))
         .when_some(frame.queue, |page, dock| {
             page.child(
                 div()
@@ -245,7 +353,9 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                     ),
             )
         })
-        .child(div().flex_none().pb(px(SPACE_3)).child(frame.composer))
+        .when(!frame.terminal_arm, |page| {
+            page.child(div().flex_none().pb(px(SPACE_3)).child(frame.composer))
+        })
         .into_any_element()
 }
 
@@ -298,14 +408,14 @@ impl Shell {
             composer.set_disabled_reason(terms.reason.map(SharedString::from), cx);
             composer.set_resume_offered(terms.resume, cx);
             // The chip always shows the service's mode; a pick only asks for a change.
-            match modes {
+            match &modes {
                 Some(modes) => {
                     composer.set_access_modes(
                         super::start_page::access_modes(&modes.choices),
                         modes.selected,
                         cx,
                     );
-                    composer.set_access_note(modes.note.map(SharedString::from), cx);
+                    composer.set_access_note(modes.note.clone().map(SharedString::from), cx);
                 }
                 None => {
                     composer.set_access_modes(Vec::new(), 0, cx);
@@ -313,6 +423,20 @@ impl Shell {
                 }
             }
         });
+        let terminal_arm = is_terminal_arm(&session);
+        let (mode_chip, mode_note) = match (&modes, terminal_arm) {
+            (Some(modes), true) => (
+                Some(self.session_mode_chip(&id, modes, cx)),
+                modes.note.clone(),
+            ),
+            _ => (None, None),
+        };
+        // A terminal-arm run has no composer to stop it, so its header keeps Stop for any live run.
+        let stop_aside = if terminal_arm {
+            is_live(&session)
+        } else {
+            terms.stop_aside
+        };
         let queue = queue.and_then(|prompts| {
             let dock = self.session_composers.get(&id)?.dock.clone();
             let runs = session.execution.state != TerminalState::Exited;
@@ -322,8 +446,32 @@ impl Shell {
             });
             Some(dock)
         });
+        let ended = (terminal_arm && session.execution.state == TerminalState::Exited).then(|| {
+            // The vendor CLI prints "No conversation found" and exits when the saved conversation is missing.
+            let shown_gone = surface.as_ref().is_some_and(|surface| {
+                let feed = surface.read(cx).feed();
+                screen_says_conversation_gone((0..feed.lines()).map(|row| feed.row_text(row)))
+            });
+            let gone = self.session_resume_gone.contains(&id) || shown_gone;
+            let offer = ended_offer(resumable, gone);
+            let reason = match call {
+                Some(SessionCall::Resuming) => RESUMING,
+                Some(SessionCall::Starting) => STARTING,
+                _ => offer.reason,
+            };
+            EndedFrame {
+                reason,
+                resume: offer.resume,
+                start_new: offer.start_new,
+                busy: call.is_some() || self.service.is_none(),
+            }
+        });
         Some(SessionFrame {
-            stop_aside: terms.stop_aside.then_some(call.is_some()),
+            stop_aside: stop_aside.then_some(call.is_some()),
+            terminal_arm,
+            ended,
+            mode_chip,
+            mode_note,
             title: session_title(&session, &kinds),
             kind: kind_name(&session.kind, &kinds),
             status: glyph_state(session_state(&session)),
@@ -339,6 +487,57 @@ impl Shell {
             can_delegate: self.service.is_some()
                 && session.execution.state != TerminalState::Exited,
         })
+    }
+
+    /// The header's mode chip of `session` for its kind's modes, kept while the kind lists the same names. It shows the
+    /// mode the service reports, and a pick calls `set_session_mode`, as the composer's chip does.
+    fn session_mode_chip(
+        &mut self,
+        session: &str,
+        modes: &SessionModes,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectView> {
+        let names: Vec<String> = modes
+            .choices
+            .iter()
+            .map(|choice| choice.name.clone())
+            .collect();
+        let kept = self
+            .session_mode_chips
+            .get(session)
+            .filter(|chip| chip.names == names)
+            .map(|chip| chip.entity.clone());
+        let entity = match kept {
+            Some(entity) => entity,
+            None => {
+                let id = session.to_owned();
+                let select = cx.new(|cx| {
+                    SelectView::new(names.clone(), cx)
+                        .label("Mode")
+                        .selected(Some(modes.selected))
+                });
+                let events =
+                    cx.subscribe(
+                        &select,
+                        move |shell, _, event: &SelectEvent, cx| match event {
+                            SelectEvent::Changed(index) => shell.set_session_mode(&id, *index, cx),
+                        },
+                    );
+                self.session_mode_chips.insert(
+                    session.to_owned(),
+                    SessionModeChip {
+                        entity: select.clone(),
+                        names,
+                        _events: events,
+                    },
+                );
+                select
+            }
+        };
+        entity.update(cx, |select, cx| {
+            select.set_selected(Some(modes.selected), cx)
+        });
+        entity
     }
 
     /// The composer of a session, created on first use and then kept, so its draft survives redraws and switches. It
@@ -574,11 +773,83 @@ impl Shell {
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let answer = service.agent_resume(&id, mode).await;
-            let _ = shell.update(cx, |shell, cx| {
-                shell.finish_session_call(&id, "Could not resume the session", answer, cx);
-            });
+            let _ = shell.update(cx, |shell, cx| shell.finish_resume(&id, answer, cx));
         })
         .detach();
+    }
+
+    /// The service's answer to a resume. A refusal that says the saved conversation is gone replaces the reason of the
+    /// ended session and offers Start a new session here; any other refusal is kept above the terminal with its reason.
+    fn finish_resume(
+        &mut self,
+        session: &str,
+        answer: Result<AgentSession, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_calls.remove(session);
+        match answer {
+            Ok(_) => {
+                self.session_resume_gone.remove(session);
+            }
+            Err(refusal) if refusal_says_conversation_gone(refusal.code()) => {
+                self.session_resume_gone.insert(session.to_owned());
+            }
+            Err(refusal) => {
+                self.session_notices.insert(
+                    session.to_owned(),
+                    format!("Could not resume the session: {}", refusal.sentence()),
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// Starts a new session in the ended session's workspace with its agent, without the saved conversation. The
+    /// service's new session opens in this view; a refusal is kept above the terminal with its reason.
+    fn start_new_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.begin_session_call(session, SessionCall::Starting, cx) else {
+            return;
+        };
+        let params = {
+            let state = self.store.read(cx).state();
+            state
+                .agents
+                .iter()
+                .find(|record| record.id == session)
+                .map(|record| start_again_params(&record.workspace_id, &record.kind))
+        };
+        let Some(params) = params else {
+            self.session_calls.remove(session);
+            cx.notify();
+            return;
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_start(params).await;
+            let _ = shell.update(cx, |shell, cx| shell.finish_start_new(&id, answer, cx));
+        })
+        .detach();
+    }
+
+    /// The service's answer to Start a new session here: the new session opens, or the refusal is kept above the terminal.
+    fn finish_start_new(
+        &mut self,
+        session: &str,
+        answer: Result<AgentSession, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_calls.remove(session);
+        match answer {
+            Ok(started) => self.model.open_started_session(started.id),
+            Err(refusal) => {
+                self.session_notices.insert(
+                    session.to_owned(),
+                    format!("Could not start a new session: {}", refusal.sentence()),
+                );
+            }
+        }
+        cx.notify();
     }
 
     /// Asks the service to switch the session to the mode of the chip's entry `index`: at once where the kind has a

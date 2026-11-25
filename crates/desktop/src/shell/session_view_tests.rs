@@ -21,8 +21,8 @@ use massorca_protocol::methods::agents::{
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::composer::ComposerEvent;
-use massorca_ui::components::composer::policy::PrimaryAction;
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
+use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -145,13 +145,36 @@ fn reason_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> Option<Stri
     })
 }
 
-/// Focuses the session's composer, types `text` and presses Enter.
+/// Puts `text` in the session's composer and sends it, as Enter does there. A terminal-arm session draws no composer,
+/// so the test emits the event the composer emits.
 fn type_and_send(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
     let composer = composer_of(rig, cx);
-    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    composer.update(cx, |composer, cx| {
+        composer.set_draft(text, cx);
+        cx.emit(ComposerEvent::Send(text.to_owned()));
+    });
     cx.run_until_parked();
-    cx.simulate_input(text);
-    cx.simulate_keystrokes("enter");
+}
+
+/// Puts `text` in the session's composer and queues it, as Send does while a queueing session's agent is busy.
+fn type_and_queue(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
+    let composer = composer_of(rig, cx);
+    composer.update(cx, |composer, cx| {
+        composer.set_draft(text, cx);
+        cx.emit(ComposerEvent::Queue(text.to_owned()));
+    });
+    cx.run_until_parked();
+}
+
+/// The ended session's bar as the shell offers it: its reason, whether Resume is offered, whether Start a new session
+/// here is offered.
+fn ended_of(rig: &Rig, cx: &mut VisualTestContext) -> Option<(&'static str, bool, bool)> {
+    rig.shell.update(cx, |shell, cx| {
+        shell
+            .session_frame(cx)
+            .and_then(|frame| frame.ended)
+            .map(|ended| (ended.reason, ended.resume, ended.start_new))
+    })
 }
 
 /// Clicks the element `selector` and lets the call it starts reach the script.
@@ -267,44 +290,26 @@ fn a_refused_prompt_keeps_the_draft_and_shows_the_services_sentence(cx: &mut Tes
 }
 
 #[gpui::test]
-fn while_the_agent_works_stop_replaces_send_and_stops_it_at_once(cx: &mut TestAppContext) {
+fn while_the_agent_works_the_header_stop_stops_it_at_once(cx: &mut TestAppContext) {
     let (mut rig, cx) = session_rig(
         cx,
         vec![kind(true)],
         vec![s1(false, Some(ActivityState::Working))],
     );
-    let composer = composer_of(&rig, cx);
-    assert_eq!(
-        composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
-        PrimaryAction::Stop
+    assert!(
+        cx.debug_bounds("composer-primary").is_none(),
+        "a terminal-arm session draws no composer"
     );
-    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
-    cx.simulate_input("later");
-    cx.run_until_parked();
-    assert_eq!(
-        composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
-        PrimaryAction::Stop,
-        "a draft cannot queue into a running agent"
-    );
-    click(cx, "composer-primary");
+    assert!(cx.debug_bounds("button:session-stop").is_some());
+    click(cx, "button:session-stop");
     let (session, _reply) =
         stop_call(&mut rig.script).expect("the stop is sent at once, with no confirm");
     assert_eq!(session, "s1");
 }
 
 #[gpui::test]
-fn a_live_run_without_status_hooks_keeps_send_and_a_header_stop(cx: &mut TestAppContext) {
+fn a_live_run_without_status_hooks_keeps_a_header_stop(cx: &mut TestAppContext) {
     let (mut rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(false, None)]);
-    let composer = composer_of(&rig, cx);
-    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
-    cx.simulate_input("status?");
-    cx.run_until_parked();
-    assert_eq!(
-        composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
-        PrimaryAction::Send,
-        "nothing says the agent works, so Send stays primary"
-    );
-    draw(cx);
     click(cx, "button:session-stop");
     let (session, _reply) =
         stop_call(&mut rig.script).expect("the header Stop stops the live run at once");
@@ -312,26 +317,13 @@ fn a_live_run_without_status_hooks_keeps_send_and_a_header_stop(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn the_header_stop_is_drawn_only_for_a_live_run_the_composer_does_not_stop(
-    cx: &mut TestAppContext,
-) {
-    let (_rig, cx) = session_rig(
-        cx,
-        vec![kind(true)],
-        vec![s1(false, Some(ActivityState::Working))],
-    );
-    draw(cx);
-    assert!(cx.debug_bounds("button:session-stop").is_none());
-}
-
-#[gpui::test]
-fn a_refused_stop_says_why_above_the_composer(cx: &mut TestAppContext) {
+fn a_refused_stop_says_why_above_the_terminal(cx: &mut TestAppContext) {
     let (mut rig, cx) = session_rig(
         cx,
         vec![kind(true)],
         vec![s1(false, Some(ActivityState::Working))],
     );
-    click(cx, "composer-primary");
+    click(cx, "button:session-stop");
     let (_, reply) = stop_call(&mut rig.script).expect("the stop is sent to the service");
     let refusal = refused(codes::AGENT_NOT_LIVE, "session s1 is not live");
     reply
@@ -359,13 +351,12 @@ fn an_ended_resumable_session_offers_resume_and_sends_agent_resume(cx: &mut Test
         vec![kind(true)],
         vec![s1(true, Some(ActivityState::Done))],
     );
-    let composer = composer_of(&rig, cx);
     assert_eq!(
-        reason_of(&composer, cx).as_deref(),
-        Some("This session has ended.")
+        ended_of(&rig, cx),
+        Some(("This session has ended.", true, false)),
+        "the ended terminal offers Resume and nothing else"
     );
-    assert!(composer.read_with(cx, |composer, _| composer.resume_offered()));
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     let (session, _reply) =
         resume_call(&mut rig.script).expect("the resume is sent to the service");
     assert_eq!(session, "s1");
@@ -397,7 +388,7 @@ fn a_resume_names_the_session_and_carries_a_pending_bypass_mode(cx: &mut TestApp
     let mut session = s1(true, Some(ActivityState::Done));
     session.pending_permission_mode = Some("bypassPermissions".to_owned());
     let (mut rig, cx) = session_rig(cx, vec![claude], vec![session]);
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     let params = resume_params(&mut rig.script).expect("the resume is sent to the service");
     assert_eq!(params.session, "s1");
     assert_eq!(params.permission_mode.as_deref(), Some("bypassPermissions"));
@@ -410,7 +401,7 @@ fn a_refused_resume_says_why_above_the_composer(cx: &mut TestAppContext) {
         vec![kind(true)],
         vec![s1(true, Some(ActivityState::Done))],
     );
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     let (session, reply) = resume_call(&mut rig.script).expect("the resume is sent to the service");
     assert_eq!(session, "s1");
     let refusal = refused(codes::AGENT_NOT_LIVE, "the agent is gone");
@@ -431,14 +422,17 @@ fn a_refused_resume_says_why_above_the_composer(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn an_ended_session_that_cannot_resume_says_so_and_offers_no_control(cx: &mut TestAppContext) {
+fn an_ended_session_that_cannot_resume_says_so_and_offers_a_new_start_only(
+    cx: &mut TestAppContext,
+) {
     let (rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(true, None)]);
-    let composer = composer_of(&rig, cx);
     assert_eq!(
-        reason_of(&composer, cx).as_deref(),
-        Some("This session has ended and cannot be resumed.")
+        ended_of(&rig, cx),
+        Some(("This session has ended and cannot be resumed.", false, true))
     );
-    assert!(!composer.read_with(cx, |composer, _| composer.resume_offered()));
+    assert!(cx.debug_bounds("button:session-resume").is_none());
+    assert!(cx.debug_bounds("button:session-start-new").is_some());
+    assert!(cx.debug_bounds("button:session-stop").is_none());
 }
 
 #[gpui::test]
@@ -448,7 +442,7 @@ fn after_a_resume_the_session_view_attaches_the_terminal_of_the_new_run(cx: &mut
         vec![kind(true)],
         vec![s1(true, Some(ActivityState::Done))],
     );
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     let (_, reply) = resume_call(&mut rig.script).expect("the resume is sent to the service");
     let mut resumed = s1(false, None);
     resumed.terminal_id = Some("t2".to_owned());
@@ -498,7 +492,7 @@ fn send_while_the_agent_works_queues_the_text_for_the_session(cx: &mut TestAppCo
         vec![s1(false, Some(ActivityState::Working))],
         s1_queue(Vec::new()),
     );
-    type_and_send(&rig, cx, "also add tests");
+    type_and_queue(&rig, cx, "also add tests");
     cx.run_until_parked();
     let Some(QueueCommand::Add { params, reply }) = queue_call(&mut rig.script) else {
         panic!("the text is queued through agent.queue");
@@ -527,7 +521,7 @@ fn a_refused_queue_keeps_the_draft_with_the_services_sentence(cx: &mut TestAppCo
         vec![s1(false, Some(ActivityState::Working))],
         s1_queue(Vec::new()),
     );
-    type_and_send(&rig, cx, "also add tests");
+    type_and_queue(&rig, cx, "also add tests");
     cx.run_until_parked();
     let Some(QueueCommand::Add { reply, .. }) = queue_call(&mut rig.script) else {
         panic!("the text is queued through agent.queue");
@@ -716,16 +710,17 @@ fn set_mode_call(script: &mut Script) -> Option<SetModeCall> {
     None
 }
 
-fn chip_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> (Vec<String>, usize) {
-    composer.read_with(cx, |composer, _| {
-        (
-            composer
-                .access_modes()
-                .iter()
-                .map(|mode| mode.name.to_string())
-                .collect(),
-            composer.access_index(),
-        )
+/// The header's mode chip of session s1.
+fn header_chip(rig: &Rig, cx: &VisualTestContext) -> Entity<SelectView> {
+    rig.shell
+        .read_with(cx, |shell, _| shell.session_mode_chips["s1"].entity.clone())
+}
+
+/// The header's mode chip of session s1: its entries, and the selected one.
+fn header_chip_of(rig: &Rig, cx: &VisualTestContext) -> (Vec<String>, Option<usize>) {
+    rig.shell.read_with(cx, |shell, cx| {
+        let chip = &shell.session_mode_chips["s1"];
+        (chip.names.clone(), chip.entity.read(cx).selected_index())
     })
 }
 
@@ -734,21 +729,22 @@ fn a_session_in_the_vendors_default_shows_it_and_a_pick_asks_the_service(cx: &mu
     let mut session = s1(false, None);
     session.mode_source = Some(ModeSource::VendorDefault);
     let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session.clone()]);
-    let composer = composer_of(&rig, cx);
     assert_eq!(
-        chip_of(&composer, cx),
+        header_chip_of(&rig, cx),
         (
             vec![
                 "The CLI's default (Plan)".to_owned(),
                 "Plan".to_owned(),
                 "Bypass permissions".to_owned()
             ],
-            0
+            Some(0)
         )
     );
-    assert!(cx.debug_bounds("composer-access").is_some());
+    assert!(cx.debug_bounds("select-trigger").is_some());
+    assert!(cx.debug_bounds("composer-primary").is_none());
+    assert!(cx.debug_bounds("session-arm").is_some());
 
-    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(1)));
+    header_chip(&rig, cx).update(cx, |_, cx| cx.emit(SelectEvent::Changed(1)));
     cx.run_until_parked();
     let (params, reply) =
         set_mode_call(&mut rig.script).expect("the switch is sent to the service");
@@ -768,8 +764,12 @@ fn a_session_in_the_vendors_default_shows_it_and_a_pick_asks_the_service(cx: &mu
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    assert_eq!(chip_of(&composer, cx).1, 0, "the running mode is unchanged");
-    assert!(cx.debug_bounds("composer-access-note").is_some());
+    assert_eq!(
+        header_chip_of(&rig, cx).1,
+        Some(0),
+        "the running mode is unchanged"
+    );
+    assert!(cx.debug_bounds("session-mode-note").is_some());
 }
 
 #[gpui::test]
@@ -777,8 +777,7 @@ fn picking_the_running_mode_or_the_clis_default_sends_nothing(cx: &mut TestAppCo
     let mut session = s1(false, None);
     session.mode_source = Some(ModeSource::VendorDefault);
     let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session]);
-    let composer = composer_of(&rig, cx);
-    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(0)));
+    header_chip(&rig, cx).update(cx, |_, cx| cx.emit(SelectEvent::Changed(0)));
     cx.run_until_parked();
     assert!(set_mode_call(&mut rig.script).is_none());
 }
@@ -790,9 +789,8 @@ fn a_refused_switch_says_why_above_the_composer(cx: &mut TestAppContext) {
     session.mode_source = Some(ModeSource::Chosen);
     session.mode_confirmed = true;
     let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session]);
-    let composer = composer_of(&rig, cx);
-    assert_eq!(chip_of(&composer, cx).1, 0);
-    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(1)));
+    assert_eq!(header_chip_of(&rig, cx).1, Some(0));
+    header_chip(&rig, cx).update(cx, |_, cx| cx.emit(SelectEvent::Changed(1)));
     cx.run_until_parked();
     let (params, reply) =
         set_mode_call(&mut rig.script).expect("the switch is sent to the service");
@@ -810,8 +808,8 @@ fn a_refused_switch_says_why_above_the_composer(cx: &mut TestAppContext) {
         Some(format!("Could not change the mode: {}", refusal.sentence()))
     );
     assert_eq!(
-        chip_of(&composer, cx).1,
-        0,
+        header_chip_of(&rig, cx).1,
+        Some(0),
         "the chip keeps the service's mode"
     );
 }
@@ -819,9 +817,11 @@ fn a_refused_switch_says_why_above_the_composer(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_kind_without_modes_has_no_chip_in_the_session(cx: &mut TestAppContext) {
     let (rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(false, None)]);
-    let composer = composer_of(&rig, cx);
-    assert!(chip_of(&composer, cx).0.is_empty());
-    assert!(cx.debug_bounds("composer-access").is_none());
+    assert!(
+        !rig.shell
+            .read_with(cx, |shell, _| shell.session_mode_chips.contains_key("s1"))
+    );
+    assert!(cx.debug_bounds("select-trigger").is_none());
 }
 
 /// The mode the next `agent.resume` names.
@@ -841,7 +841,7 @@ fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &m
     session.mode_source = Some(ModeSource::Chosen);
     session.pending_permission_mode = Some("bypassPermissions".into());
     let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session.clone()]);
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     assert_eq!(
         resume_mode(&mut rig.script),
         Some(Some("bypassPermissions".to_owned()))
@@ -859,6 +859,6 @@ fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &m
     });
     cx.run_until_parked();
     draw(cx);
-    click(cx, "composer-resume");
+    click(cx, "button:session-resume");
     assert_eq!(resume_mode(&mut rig.script), Some(None));
 }

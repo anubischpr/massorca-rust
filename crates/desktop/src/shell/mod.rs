@@ -75,7 +75,7 @@ use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
 use source_control::SourceControl;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -199,10 +199,14 @@ pub struct Shell {
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
+    /// Each session's header mode chip, kept while its kind lists the same modes.
+    session_mode_chips: HashMap<String, session_view::SessionModeChip>,
     /// The call in flight for each session, if any: one at a time per session.
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
+    session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -510,8 +514,10 @@ impl Shell {
             path_picker: path_field::system_picker(),
             profile_unsafe: false,
             session_composers: HashMap::new(),
+            session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
