@@ -54,7 +54,7 @@ use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::hosted_services::{self, ServicesCommand};
-use super::hosts::{self, SshAdded, SshFailed, SshHost};
+use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
@@ -224,6 +224,16 @@ pub(crate) enum Command {
         target: String,
         ssh_args: Vec<String>,
         reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
+    },
+    /// Forgets a paired host, revoking this device there first. Needs no connection to this computer's service.
+    RemoveHost {
+        name: String,
+        reply: oneshot::Sender<Result<HostRemoval, Refusal>>,
+    },
+    /// Counts what a paired host holds, for the remove confirm. Needs no connection to this computer's service.
+    CountHostLoss {
+        name: String,
+        reply: oneshot::Sender<Result<HostLoss, Refusal>>,
     },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
@@ -679,6 +689,8 @@ impl Link {
             Command::RefreshHosts
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
+            | Command::RemoveHost { .. }
+            | Command::CountHostLoss { .. }
             | Command::AcceptOffer { .. } => {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
