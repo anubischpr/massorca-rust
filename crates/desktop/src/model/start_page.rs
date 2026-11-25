@@ -123,7 +123,7 @@ pub fn start_params(
     permission_mode: Option<String>,
 ) -> AgentStartParams {
     AgentStartParams {
-        workspace: workspace.to_owned(),
+        workspace: Some(workspace.to_owned()),
         kind: kind.to_owned(),
         prompt: Some(prompt.to_owned()),
         args: Vec::new(),
@@ -134,7 +134,9 @@ pub fn start_params(
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
         permission_mode,
-        // The chosen model and effort stay in the picker until agent.start takes them (PR #288).
+        // The picker's model and effort are not sent yet; the per-kind model lists come with the kind options.
+        model: None,
+        effort: None,
     }
 }
 
@@ -300,7 +302,7 @@ mod tests {
     #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
         let params = start_params("w1", "claude", "fix the login", None);
-        assert_eq!(params.workspace, "w1");
+        assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));

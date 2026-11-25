@@ -105,7 +105,8 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--query=<TEXT>] [PROMPT WORDS...]`. The flags
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>]
+/// [PROMPT WORDS...]`. The flags
 /// count only before the first prompt word; every later word belongs to the prompt. `--query=<TEXT>` is the startup
 /// query of a kind with the `startup-query` prompt mode (0054): the agent takes it as its prompt, as if it were typed.
 #[derive(Debug, Default)]
@@ -113,6 +114,9 @@ struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
     mode: Option<String>,
+    /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0092).
+    model: Option<String>,
+    effort: Option<String>,
     prompt: Option<String>,
 }
 
@@ -129,6 +133,8 @@ impl Arguments {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
+                "--model" if words.is_empty() => parsed.model = args.next(),
+                "--effort" if words.is_empty() => parsed.effort = args.next(),
                 text if words.is_empty() && text.starts_with(QUERY_PREFIX) => {
                     query = Some(text[QUERY_PREFIX.len()..].to_owned());
                 }
@@ -182,6 +188,12 @@ impl Agent {
         }
         if let Some(mode) = &arguments.mode {
             say(&format!("mode {mode}"));
+        }
+        if let Some(model) = &arguments.model {
+            say(&format!("model {model}"));
+        }
+        if let Some(effort) = &arguments.effort {
+            say(&format!("effort {effort}"));
         }
         say(if credentials_found() {
             "credentials found"

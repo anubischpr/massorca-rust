@@ -271,7 +271,7 @@ mod tests {
     fn a_blank_prompt_starts_the_agent_with_no_prompt() {
         assert_eq!(home_start_params("w9", "claude", "  ", None).prompt, None);
         let params = home_start_params("w9", "claude", "fix it", Some("plan".into()));
-        assert_eq!(params.workspace, "w9");
+        assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
     }

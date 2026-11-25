@@ -178,7 +178,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
         .expect("the store listens");
     cx.run_until_parked();
     let (start, reply) = expect_start(&mut rig.script);
-    assert_eq!(start.workspace, "w9");
+    assert_eq!(start.workspace.as_deref(), Some("w9"));
     assert_eq!(start.kind, "claude");
     assert_eq!(start.prompt.as_deref(), Some("Fix the login bug"));
     let session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w9", 9);
@@ -322,7 +322,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
         .expect("the shell waits for the create");
     cx.run_until_parked();
     let (start, _reply) = expect_start(&mut rig.script);
-    assert_eq!(start.workspace, "w9");
+    assert_eq!(start.workspace.as_deref(), Some("w9"));
     assert_eq!(start.prompt, None);
 }
 
