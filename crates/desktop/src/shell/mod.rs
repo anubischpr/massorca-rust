@@ -36,6 +36,7 @@ mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod transcript_rows;
 mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
@@ -78,7 +79,9 @@ use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
 use source_control::SourceControl;
-use std::collections::{BTreeMap, HashMap};
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -204,10 +207,16 @@ pub struct Shell {
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
+    /// Each session's header mode chip, kept while its kind lists the same modes.
+    session_mode_chips: HashMap<String, session_view::SessionModeChip>,
     /// The call in flight for each session, if any: one at a time per session.
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
+    chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
+    /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
+    session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -265,12 +274,22 @@ pub struct Shell {
     marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
+    work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
+    /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
+    work_panel_applied: Option<(u16, u16)>,
+    /// New terminals waiting for the Work panel's pane to paint its size (`create_terminal`).
+    pane_waits: usize,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
+    /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
+    conversation_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The terminal whose closing waits for the stop question.
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
+    focus_started_terminal: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -531,8 +550,11 @@ impl Shell {
             path_picker: path_field::system_picker(),
             profile_unsafe: false,
             session_composers: HashMap::new(),
+            session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            chat_transcripts: HashMap::new(),
+            session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
@@ -565,9 +587,14 @@ impl Shell {
             marketplace_skills_request: 0,
             marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
+            work_panel_size: Rc::default(),
+            work_panel_applied: None,
+            pane_waits: 0,
             session_grid: None,
+            conversation_size: Rc::default(),
             stop_prompt: None,
             terminal_notice: None,
+            focus_started_terminal: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
@@ -734,6 +761,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -866,6 +894,7 @@ impl Render for Shell {
                 pairing,
                 session,
             },
+            self.conversation_size.clone(),
             window,
             cx,
         );
@@ -1081,5 +1110,21 @@ impl Render for Shell {
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
             .when_some(close_dialog, |el, dialog| el.child(dialog))
+    }
+}
+
+impl Shell {
+    /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
+    /// composer can never start a second session.
+    fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.focus_started_terminal.as_deref() else {
+            return;
+        };
+        let Some(view) = self.terminal_views.get(terminal) else {
+            return;
+        };
+        let focus = view.surface.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.focus_started_terminal = None;
     }
 }
