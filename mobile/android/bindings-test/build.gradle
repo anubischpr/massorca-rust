@@ -1,0 +1,49 @@
+// The generated Kotlin bindings and the Keystore module's plain classes on the JVM (decision 0080, task A6). No React
+// Native and no node_modules: `scripts/ci/kotlin-bindings-test.sh` builds the Rust library, generates the bindings into
+// build/uniffi, starts a server and runs `gradle test`.
+plugins {
+    id 'com.android.library' version '8.13.2'
+    id 'org.jetbrains.kotlin.android' version '2.2.0'
+}
+
+android {
+    namespace 'dev.massorca.bindingstest'
+    compileSdk 36
+    defaultConfig {
+        minSdk 24
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets {
+        // The same classes the app's Keystore module delegates to.
+        main.java.srcDir '../app/src/main/java/dev/massorca/app/keystore/storage'
+        test.java.srcDir layout.buildDirectory.dir('uniffi')
+    }
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                it.systemProperty 'jna.library.path', System.getenv('MASSORCA_FFI_LIB_DIR') ?: ''
+                it.testLogging {
+                    events 'passed', 'failed', 'skipped'
+                    exceptionFormat 'full'
+                    showStandardStreams = true
+                }
+            }
+        }
+    }
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
+    // The JVM jar, not the Android one: the library under test is the host's own build.
+    testImplementation 'net.java.dev.jna:jna:5.17.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+}
