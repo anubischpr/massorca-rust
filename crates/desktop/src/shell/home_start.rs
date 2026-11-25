@@ -26,12 +26,13 @@ use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_ca
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails,
-    branch_pill, create_params, home_choice, home_start_params, no_project_branch_pill,
-    no_project_start_params,
+    branch_pill, create_params, home_choice, home_start_params, name_is_derived,
+    no_project_branch_pill, no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
+use crate::service::create_for_start;
 
 /// What the page draws, gathered by the shell for one frame.
 pub(super) struct HomeFrame {
@@ -401,6 +402,9 @@ impl Shell {
         });
         let options = self.chosen_options(&composer, cx);
         let grid = self.start_grid(cx);
+        // A name derived from the prompt may be made unique by the service; a typed name is never changed.
+        let derived = name_is_derived(&details);
+        let unique_offered = self.store.read(cx).state().workspace_unique_name;
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -411,9 +415,13 @@ impl Shell {
                     service.agent_start(params).await
                 }
                 ProjectChoice::Project(project) => {
-                    match service
-                        .create_workspace(create_params(&project, &prompt, &details))
-                        .await
+                    match create_for_start(
+                        &service,
+                        create_params(&project, &prompt, &details),
+                        derived,
+                        unique_offered,
+                    )
+                    .await
                     {
                         Ok(workspace) => {
                             let params = home_start_params(

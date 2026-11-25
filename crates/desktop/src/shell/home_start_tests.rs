@@ -80,6 +80,7 @@ fn type_into(cx: &mut VisualTestContext, field: &Entity<TextField>, text: &str) 
 
 type CreateCall = (
     WorkspaceCreateParams,
+    bool,
     oneshot::Sender<Result<Workspace, Refusal>>,
 );
 type StartCall = (
@@ -96,7 +97,11 @@ enum Call {
 fn next_call(script: &mut Script) -> Option<Call> {
     while let Some(command) = script.next() {
         match command {
-            Command::Create { params, reply } => return Some(Call::Create((params, reply))),
+            Command::Create {
+                params,
+                unique_name,
+                reply,
+            } => return Some(Call::Create((params, unique_name, reply))),
             Command::AgentStart { params, reply } => return Some(Call::Start((params, reply))),
             _ => {}
         }
@@ -199,7 +204,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
     assert_eq!(create.name, "fix-the-login-bug");
     assert!(
@@ -230,6 +235,151 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
         .shell
         .read_with(cx, |shell, _| shell.model.snapshot().active_session.clone());
     assert_eq!(active.as_deref(), Some(session.id.as_str()));
+}
+
+/// A refusal of `workspace.create` because the name is taken.
+fn taken_name() -> Refusal {
+    Refusal::Failed {
+        code: massorca_protocol::codes::WORKSPACE_NAME_TAKEN.to_owned(),
+        message: "that name is taken".to_owned(),
+    }
+}
+
+#[gpui::test]
+fn with_the_unique_name_capability_a_derived_name_asks_for_a_free_one_and_is_not_retried(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceUniqueNameOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.name, "fix-the-login-bug");
+    assert!(unique, "a derived name asks the service for a free one");
+    reply
+        .send(Err(taken_name()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "the service makes names unique itself, so the client does not retry"
+    );
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_a_taken_derived_name_is_retried_with_a_suffix(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (first, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!((first.name.as_str(), unique), ("fix-the-login-bug", false));
+    reply
+        .send(Err(taken_name()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    let (second, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        (second.name.as_str(), unique),
+        ("fix-the-login-bug-2", false)
+    );
+    let created = workspace("w9", "p1", "fix-the-login-bug-2", 9);
+    reply
+        .send(Ok(created.clone()))
+        .expect("the shell waits for the create");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let (start, _reply) = expect_start(&mut rig.script);
+    assert_eq!(start.workspace.as_deref(), Some("w9"));
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_every_name_taken_shows_the_error_and_starts_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    for attempt in 1..=crate::model::home_start::FREE_NAME_TRIES {
+        let (create, unique, reply) = expect_create(&mut rig.script);
+        let expected = if attempt == 1 {
+            "fix-the-login-bug".to_owned()
+        } else {
+            format!("fix-the-login-bug-{attempt}")
+        };
+        assert_eq!((create.name, unique), (expected, false));
+        reply
+            .send(Err(taken_name()))
+            .expect("the shell waits for the create");
+        cx.run_until_parked();
+    }
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "every name is taken: no agent starts"
+    );
+    let shown = home_composer(&rig, cx).read_with(cx, |composer, _| {
+        composer.error_reason().map(|text| text.to_string())
+    });
+    assert!(
+        shown.is_some_and(|text| text.to_lowercase().contains("that name is taken")),
+        "the first refusal is shown once every name is taken"
+    );
+}
+
+#[gpui::test]
+fn without_the_unique_name_capability_a_refusal_that_is_not_a_taken_name_is_shown_at_once(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (_, _, reply) = expect_create(&mut rig.script);
+    reply
+        .send(Err(Refusal::Failed {
+            code: massorca_protocol::codes::WORKSPACE_NAME_INVALID.to_owned(),
+            message: "that name is not valid".to_owned(),
+        }))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "only a taken name is retried: the other refusal stops the send"
+    );
+}
+
+#[gpui::test]
+fn a_typed_name_is_never_changed_nor_sent_with_the_unique_option_even_when_taken(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceUniqueNameOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    offer_chat(&rig);
+    // The name field is drawn only while the branch menu is open.
+    click(cx, "home-start-branch");
+    let name_field = rig
+        .shell
+        .read_with(cx, |shell, _| shell.home_details.name.clone());
+    type_into(cx, &name_field, "my-own-name");
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, unique, reply) = expect_create(&mut rig.script);
+    assert_eq!((create.name.as_str(), unique), ("my-own-name", false));
+    reply
+        .send(Err(taken_name()))
+        .expect("the shell waits for the create");
+    cx.run_until_parked();
+    assert!(
+        next_call(&mut rig.script).is_none(),
+        "a typed name is never changed, so nothing retries it"
+    );
 }
 
 #[gpui::test]
@@ -275,7 +425,7 @@ fn the_placement_card_has_the_host_project_and_branch_pills_and_the_host_opens_n
 fn an_untouched_advanced_section_sends_the_plain_create_call(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "fix-the-login-bug");
     assert_eq!(create.branch, None);
     assert_eq!(create.base, None);
@@ -301,7 +451,7 @@ fn the_advanced_fields_go_into_the_create_call(cx: &mut TestAppContext) {
     type_into(cx, &branch, "feat/login");
     type_into(cx, &base, "main");
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "login-fix");
     assert_eq!(create.branch.as_deref(), Some("feat/login"));
     assert_eq!(create.base.as_deref(), Some("main"));
@@ -337,7 +487,7 @@ fn reusing_a_branch_needs_its_name_before_send_creates_anything(cx: &mut TestApp
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.branch.as_deref(), Some("feat/login"));
     assert!(create.existing_branch);
     reply
@@ -352,7 +502,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
     rig.shell
         .update(cx, |shell, cx| shell.start_from_home("", composer, cx));
     cx.run_until_parked();
-    let (create, reply) = expect_create(&mut rig.script);
+    let (create, _unique, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "", "a blank name asks the service for one");
     reply
         .send(Ok(workspace("w9", "p1", "coral-reef", 9)))
@@ -367,7 +517,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
 fn a_refused_create_shows_the_refusal_keeps_the_draft_and_starts_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "fix the login");
-    let (_, reply) = expect_create(&mut rig.script);
+    let (_, _, reply) = expect_create(&mut rig.script);
     let refusal = Refusal::NameProblem {
         message: "the name fix-the-login is taken".to_owned(),
     };
@@ -483,7 +633,7 @@ fn an_unsafe_data_folder_refusal_shows_a_banner_with_the_command_to_run(cx: &mut
     draw(cx);
     assert!(cx.debug_bounds("start-profile-banner").is_none());
     type_and_send(&rig, cx, "fix the login");
-    let (_, reply) = expect_create(&mut rig.script);
+    let (_, _, reply) = expect_create(&mut rig.script);
     reply
         .send(Err(unsafe_location()))
         .expect("the shell waits for the create");
@@ -641,7 +791,7 @@ fn no_project_without_the_capability_stays_off_and_send_creates_in_the_first_pro
         );
     });
     type_and_send(&rig, cx, "fix the login");
-    let (create, _) = expect_create(&mut rig.script);
+    let (create, _, _) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
 }
 
