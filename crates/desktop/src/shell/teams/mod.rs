@@ -126,13 +126,15 @@ fn team_shape(character: TeamCharacter) -> TeamShape {
     }
 }
 
+#[cfg(test)]
+mod routine_tests;
 
 #[cfg(test)]
 mod tests {
     use super::team_shape;
     use crate::data::SampleDataSource;
     use crate::model::canvas::Canvas;
-    use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
+    use crate::model::teams::{ProjectId, RoutineId, SampleTeamsSource, TeamId, TeamPage};
     use massorca_protocol::methods::teams::TeamCharacter;
     use massorca_ui::components::team_character::TeamShape;
 
@@ -174,6 +176,8 @@ mod tests {
             TeamPage::Files(team),
             TeamPage::Project(team, ProjectId(1)),
             TeamPage::NewRoutine(team),
+            TeamPage::EditRoutine(team, RoutineId(3)),
+            TeamPage::RoutineHistory(team, RoutineId(3)),
         ];
         for page in pages {
             shell.update(cx, |shell, cx| {
