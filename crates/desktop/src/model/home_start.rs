@@ -156,8 +156,16 @@ pub fn home_start_params(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    start_in(Some(workspace), kind, prompt, permission_mode, options)
+    start_in(
+        Some(workspace),
+        kind,
+        prompt,
+        permission_mode,
+        options,
+        grid,
+    )
 }
 
 /// The `agent.start` with no workspace, which the service takes only with `agent-no-project/1`: the session runs in its
@@ -167,8 +175,9 @@ pub fn no_project_start_params(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    start_in(None, kind, prompt, permission_mode, options)
+    start_in(None, kind, prompt, permission_mode, options, grid)
 }
 
 /// The `agent.start` in `workspace`, or with none. A blank prompt starts the agent with none.
@@ -178,8 +187,9 @@ fn start_in(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    let mut params = start_params(workspace, kind, prompt, permission_mode, options);
+    let mut params = start_params(workspace, kind, prompt, permission_mode, options, grid);
     if prompt.trim().is_empty() {
         params.prompt = None;
     }
@@ -316,10 +326,17 @@ mod tests {
     fn a_blank_prompt_starts_the_agent_with_no_prompt() {
         let none = StartOptions::default;
         assert_eq!(
-            home_start_params("w9", "claude", "  ", None, none()).prompt,
+            home_start_params("w9", "claude", "  ", None, none(), (120, 40)).prompt,
             None
         );
-        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()), none());
+        let params = home_start_params(
+            "w9",
+            "claude",
+            "fix it",
+            Some("plan".into()),
+            none(),
+            (120, 40),
+        );
         assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
@@ -345,7 +362,7 @@ mod tests {
             model: Some("opus".to_owned()),
             effort: Some("xhigh".to_owned()),
         };
-        let params = no_project_start_params("claude", "fix it", None, options);
+        let params = no_project_start_params("claude", "fix it", None, options, (120, 40));
         assert_eq!(params.workspace, None);
         assert_eq!(params.model.as_deref(), Some("opus"));
         assert_eq!(params.effort.as_deref(), Some("xhigh"));
@@ -358,12 +375,14 @@ mod tests {
             "fix it",
             Some("plan".into()),
             StartOptions::default(),
+            (120, 40),
         );
         assert_eq!(params.workspace, None);
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
         assert_eq!(
-            no_project_start_params("claude", "  ", None, StartOptions::default()).prompt,
+            no_project_start_params("claude", "  ", None, StartOptions::default(), (120, 40))
+                .prompt,
             None
         );
     }
