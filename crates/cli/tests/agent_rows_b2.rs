@@ -1,9 +1,11 @@
-//! First prompts that do not fit a launch argument (decision 0168), through
+//! First prompts that do not fit a launch argument, and session metadata (decision 0168), through
 //! the CLI against the fake agent. Every wait is on an observed state, never a sleep.
 
 mod harness;
 
-use harness::{Sandbox, eventually};
+use std::path::PathBuf;
+
+use harness::{Sandbox, eventually, git_repo};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -82,6 +84,26 @@ fn sandbox() -> Sandbox {
     );
     sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
     sandbox
+}
+
+/// Adds `<home>/repo` as a git project and creates its worktree workspace `feature`, on branch `feature`.
+fn add_feature_worktree(sandbox: &Sandbox) {
+    let repo: PathBuf = sandbox.home().join("repo");
+    git_repo(&repo);
+    let root = sandbox.home().join("ws");
+    let repo_text = repo.to_string_lossy().into_owned();
+    let root_text = root.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "project",
+            "add",
+            repo_text.as_str(),
+            "--workspaces-root",
+            root_text.as_str(),
+        ],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
 }
 
 fn start(sandbox: &Sandbox, kind: &str, workspace: &str, extra: &[&str]) -> Value {
@@ -231,4 +253,72 @@ fn every_delivery_form_reaches_the_agent() {
             "{kind}: {lines:?}"
         );
     }
+}
+
+/// A session shows its model, effort, branch and a preview of its result; a resume keeps the model and the effort and
+/// passes them again (HIST-02).
+#[test]
+fn a_session_shows_its_model_effort_branch_and_preview_and_a_resume_keeps_them() {
+    let sandbox = sandbox();
+    add_feature_worktree(&sandbox);
+    let started = start(
+        &sandbox,
+        "fake",
+        "feature",
+        &["--prompt", "hello", "--model", "m-1", "--effort", "high"],
+    );
+    let session = text(&started, "id").to_owned();
+    assert_eq!(started["model"], "m-1");
+    assert_eq!(started["effort"], "high");
+    assert_eq!(started["branch"], "feature");
+    assert!(started.get("forked_from").is_none(), "{started}");
+
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["preview"], "done: hello");
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    let row = listed["sessions"]
+        .as_array()
+        .and_then(|sessions| sessions.iter().find(|row| row["id"] == session.as_str()))
+        .expect("the session is listed")
+        .clone();
+    assert_eq!(
+        (
+            &row["model"],
+            &row["effort"],
+            &row["branch"],
+            &row["preview"]
+        ),
+        (
+            &json!("m-1"),
+            &json!("high"),
+            &json!("feature"),
+            &json!("done: hello")
+        )
+    );
+    let shown = sandbox
+        .run("default", &["agent", "status", &session])
+        .success();
+    let shown = String::from_utf8_lossy(&shown.get_output().stdout).into_owned();
+    for line in [
+        "branch: feature",
+        "model: m-1",
+        "effort: high",
+        "preview: done: hello",
+    ] {
+        assert!(shown.lines().any(|shown| shown == line), "{line}: {shown}");
+    }
+
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+    let resumed = sandbox.json_ok("default", &["agent", "resume", &session]);
+    assert_eq!(
+        (&resumed["model"], &resumed["effort"]),
+        (&json!("m-1"), &json!("high"))
+    );
+    let terminal = text(&resumed, "terminal_id").to_owned();
+    wait_for(&sandbox, &terminal, "the resumed run's model", |line| {
+        line == "fake-agent: model m-1"
+    });
+    wait_for(&sandbox, &terminal, "the resumed run's effort", |line| {
+        line == "fake-agent: effort high"
+    });
 }

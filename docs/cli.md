@@ -225,8 +225,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   kind declares them, as a flag the value follows or as `args` with `{value}` (decision 0096). A
   kind that declares neither refuses the option with `agent.option_unsupported`. An `--effort`
   that the kind's levels do not list, or that the named model does not accept, fails with
-  `request.invalid_params` naming the allowed ids. A resumed run keeps the kind's default model
-  and effort.
+  `request.invalid_params` naming the allowed ids. A resumed run gets the model and effort of the
+  start again when the kind still takes them (decision 0168); one it no longer takes is left out, and the run's `notes` say
+  so. The session shows the model and effort its latest run used, as `model:` and `effort:`, with `branch:` and a
+  one-line `preview:` of its result.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
   shell in between), with the first prompt as the kind declares. A worktree workspace holds one
   live session that is not `--read-only`; a second writing start there fails with
@@ -235,7 +237,7 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
-  within 120 s or the run ends first. A prompt longer than 4 KiB, or one with a line break for a
+  within 120 s or the run ends first, and a drop is noted in the session's `notes`. A prompt longer than 4 KiB, or one with a line break for a
   kind that pastes bracketed, is typed at the first `idle` the same way when the kind reports one,
   instead of riding the command line (decision 0168); for a `.cmd` or `.bat` program the limit is 2 KiB, since `cmd.exe`
   holds 8,191 characters on a line, and a longer prompt the kind cannot type is refused with `agent.prompt_invalid`.
@@ -257,7 +259,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 - `agent resume SESSION` starts a new run of an exited session in a new terminal of its
   workspace, with the kind's resume arguments and the agent's own ref, so the agent continues
   its conversation. The session keeps its id and its agent ref; its activity is absent until
-  the new run reports. The arguments and environment of the first start are not kept. A live
+  the new run reports. The arguments and environment of the first start are not kept; its
+  model and effort are, when the kind still takes them (decision 0168). A live
   run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
   known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
   session whose agent saved no conversation for its ref fails with `agent.resume_not_found`

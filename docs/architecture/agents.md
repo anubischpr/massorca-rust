@@ -215,9 +215,9 @@ directory that does not exist has no kinds.
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
-| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>."; and, for the current run, what a resume or fork left out of the stored model or effort, and a first input the agent never took (decision 0168) |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
-| `model?`, `effort?` | the model and the reasoning effort the start named (decision 0168) |
+| `model?`, `effort?` | the model and the reasoning effort the latest run used (decision 0168): the start's, kept across resumes and forks, which pass them again when the kind still takes them; one it no longer takes is left out with a note, and the record then names what the run used |
 | `branch?` | the branch of the session's workspace now; absent for a plain folder (decision 0168) |
 | `preview?` | at most 200 characters on one line (decision 0168): a chat's newest user or assistant message, or a terminal session's `result`. Read from the store with the view's details, no file per row; the exit sweep does not read it. Withheld as `result` is from a run holding secrets |
 | `forked_from?` | the session this one was forked from with `agent.fork` (decision 0168) |
@@ -401,8 +401,8 @@ A first prompt for a kind whose `prompt.mode` is `none` waits for the run's firs
 `idle` types it on a thread of its own, so the report returns at once. Decision 0054 leaves open
 what happens when no `idle` comes, so two bounds apply: the held prompt is dropped when the run
 exits first, and when no `idle` arrives within 120 s of the start (`FIRST_PROMPT_WAIT`). A drop is
-logged with the session id only. The session record does not show a drop: its activity stays as it
-was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
+logged with the session id only, and its run gets a note (`notes`) that the first input was dropped; the session is sent
+to watchers with it. Its activity stays as it was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
 cannot wait for one, so `agent.start` refuses such a first prompt with `agent.prompt_invalid`
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
@@ -428,8 +428,8 @@ startup query of pv96 (`hermes chat --query=<text>`, decision 0054 amendment). N
 arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
 one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
 exit is cleared, and its activity is absent until the new run reports. The caller's arguments and
-environment of the first start are not kept, so a resumed run gets the kind's own arguments and the
-resume arguments only. The run is registered under the status lock before its program starts, as in
+environment of the first start are not kept, so a resumed run gets the kind's own arguments, the
+resume arguments, and the model and effort flags of the start (decision 0168) when the kind still takes them; a stored model or effort it no longer takes is left out, the run's notes say so, and the record is rewritten to what the run uses. The run is registered under the status lock before its program starts, as in
 `agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
 `agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
 session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has

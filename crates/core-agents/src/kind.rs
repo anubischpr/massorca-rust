@@ -878,6 +878,15 @@ impl KindDecl {
         )
     }
 
+    /// Whether the kind still takes `model`, a model a session stored (decision 0168): its `model` flag accepts the value,
+    /// and, when the kind lists choices, one of them has that id. A resume or a fork passes it again only then.
+    pub(crate) fn takes_model(&self, model: &str) -> bool {
+        self.option_args(Some(model), None).is_ok()
+            && self.model.as_ref().is_some_and(|decl| {
+                decl.choices.is_empty() || decl.choices.iter().any(|choice| choice.id == model)
+            })
+    }
+
     /// The declared choice `id` of the `model` option.
     fn model_choice(&self, id: &str) -> Option<&ModelChoiceDecl> {
         self.model
