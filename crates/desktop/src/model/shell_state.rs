@@ -9,7 +9,7 @@ use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_
 use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
-use super::remote_sessions::{RemoteSessions, session_tree_rows};
+use super::remote_sessions::{RemoteSessions, remote_row, session_tree_rows};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, TreeRow, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
@@ -30,6 +30,8 @@ pub struct ShellModel {
     remote_hosts: Vec<(String, HostState)>,
     /// The agent sessions each paired host runs, listed under its row (STAT-16).
     remote_sessions: Vec<(String, RemoteSessions)>,
+    /// The remote session the Canvas shows, as (host, session id); None while a session of This PC or none is open.
+    open_remote: Option<(String, String)>,
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
@@ -67,6 +69,7 @@ impl ShellModel {
             regions: RegionState::default(),
             remote_hosts: Vec::new(),
             remote_sessions: Vec::new(),
+            open_remote: None,
             teams: TeamsState::unavailable(),
             marketplace: MarketplaceSnapshot::default(),
             marketplace_query: String::new(),
@@ -260,7 +263,7 @@ impl ShellModel {
                     .find(|(host, _)| host == name)
                     .map(|(_, sessions)| sessions);
                 if let Some(sessions) = sessions {
-                    tree.extend(session_tree_rows(sessions, active));
+                    tree.extend(session_tree_rows(name, sessions, active));
                 }
             }
         }
@@ -304,9 +307,25 @@ impl ShellModel {
         let found = find_session(&self.snapshot.projects, id)
             .map(|session| (session.title.clone(), session.id.clone()));
         if let Some((title, id)) = found {
+            self.open_remote = None;
+            self.snapshot.session_title = Some(title);
+            self.snapshot.active_session = Some(id);
+            return;
+        }
+        // A session a paired host runs opens in the Canvas too, from the host's own rows (STAT-16).
+        if let Some((host, row)) = remote_row(&self.remote_sessions, id) {
+            let (title, id) = (row.title.clone(), row.id.clone());
+            self.open_remote = Some((host.to_owned(), id.clone()));
             self.snapshot.session_title = Some(title);
             self.snapshot.active_session = Some(id);
         }
+    }
+
+    /// The remote session the Canvas shows, as (host, session id), while one is open.
+    pub fn open_remote_session(&self) -> Option<(&str, &str)> {
+        self.open_remote
+            .as_ref()
+            .map(|(host, id)| (host.as_str(), id.as_str()))
     }
 
     /// Opens a session the service has just started. It opens as soon as the Sidebar lists it.
@@ -811,5 +830,32 @@ mod tests {
             "the session sits under its host: {tree:?}"
         );
         assert_eq!(tree.len(), host + 2, "nothing else follows it");
+    }
+
+    #[test]
+    fn opening_a_session_of_a_paired_host_shows_it_in_the_canvas_with_its_host() {
+        use crate::model::canvas::Canvas;
+        use crate::model::remote_sessions::remote_sessions;
+        use crate::service::fixtures::{agent, workspace};
+        use crate::service::{HostAgents, HostSessionsRead, StoreState, StoreUpdate};
+        let mut store = StoreState::default();
+        store.apply(
+            StoreUpdate::HostSessions(HostSessionsRead {
+                host: "vps".to_owned(),
+                request: 1,
+                answer: Some(HostAgents {
+                    sessions: vec![agent("a1", "w1", 1)],
+                    workspaces: vec![workspace("w1", "p1", "feat", 1)],
+                }),
+            }),
+            std::time::Instant::now(),
+        );
+        let mut model = shell(1440.0);
+        model.set_remote_sessions(remote_sessions(&store));
+        assert_eq!(model.open_remote_session(), None);
+        model.open_session("a1");
+        assert_eq!(model.open_remote_session(), Some(("vps", "a1")));
+        assert_eq!(model.snapshot().active_session.as_deref(), Some("a1"));
+        assert!(matches!(model.canvas(), Canvas::Session(_)));
     }
 }

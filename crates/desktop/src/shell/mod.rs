@@ -17,6 +17,7 @@ mod palette;
 mod path_field;
 mod project_sidebar;
 mod rail;
+mod remote_session_view;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
@@ -821,6 +822,7 @@ impl Render for Shell {
         .then(|| self.home_frame(cx))
         .flatten();
         let session = self.session_frame(cx);
+        let remote_session = self.remote_session_frame(cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
             .store
@@ -903,6 +905,7 @@ impl Render for Shell {
                 marketplace,
                 pairing,
                 session,
+                remote_session,
             },
             self.conversation_size.clone(),
             window,

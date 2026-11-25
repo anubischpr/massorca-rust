@@ -7,6 +7,7 @@ use super::Shell;
 use super::home_start::{self, HomeFrame};
 use super::marketplace::{self, MarketplaceFrame};
 use super::pairing::{self, PairingFrame};
+use super::remote_session_view as remote_session;
 use super::session_view::{self, SessionFrame};
 use super::settings::{self, SettingsFrame};
 use super::setup;
@@ -18,6 +19,7 @@ use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use crate::model::remote_sessions::RemoteSessionView;
 use crate::model::shell::{ServiceNotice, ServiceTone};
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, TeamPage};
@@ -54,6 +56,8 @@ pub(super) struct PageFrames<'a> {
     pub pairing: PairingFrame,
     /// The open session's view, while the Canvas shows a session.
     pub session: Option<SessionFrame>,
+    /// The open session of a paired host, while the Canvas shows one that This PC does not run (STAT-16).
+    pub remote_session: Option<RemoteSessionView>,
 }
 
 pub(super) fn canvas(
@@ -197,9 +201,14 @@ fn conversation(
             theme,
         )
         .into_any_element(),
-        Canvas::Session(_) => match pages.session {
-            Some(frame) => session_view::session_page(frame, cx),
-            None => placeholder(
+        Canvas::Session(_) => match (pages.session, pages.remote_session) {
+            (Some(frame), _) => session_view::session_page(frame, cx),
+            (None, Some(view)) => remote_session::remote_session_page(&view, cx),
+            (None, None) if model.open_remote_session().is_some() => {
+                placeholder("Session", "This session is not listed by its host.", theme)
+                    .into_any_element()
+            }
+            (None, None) => placeholder(
                 "Session",
                 "This session is not listed by the service.",
                 theme,

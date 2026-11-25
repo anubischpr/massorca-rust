@@ -35,6 +35,7 @@ use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
 use crate::model::permission_modes::{SessionModes, mode_to_set, session_modes};
+use crate::model::remote_sessions::RemoteSessionView;
 use crate::model::session_ended::{
     ENDED, ENDED_NOT_RESUMABLE, START_NEW, ended_offer, refusal_says_conversation_gone,
     screen_says_conversation_gone,
@@ -537,6 +538,15 @@ impl Shell {
 
     /// The header's mode chip of `session` for its kind's modes, kept while the kind lists the same names. It shows the
     /// mode the service reports, and a pick calls `set_session_mode`, as the composer's chip does.
+    /// The view of the open remote session, while the Canvas shows a session This PC does not run (STAT-16).
+    pub(super) fn remote_session_frame(&self, cx: &App) -> Option<RemoteSessionView> {
+        if !matches!(self.model.canvas(), Canvas::Session(_)) {
+            return None;
+        }
+        let (host, id) = self.model.open_remote_session()?;
+        crate::model::remote_sessions::remote_session_view(self.store.read(cx).state(), host, id)
+    }
+
     fn session_mode_chip(
         &mut self,
         session: &str,
