@@ -15,6 +15,7 @@ mod refs;
 mod remote;
 mod remote_identity;
 mod repository;
+mod repository_init;
 mod status;
 mod submodule_diff;
 mod untrusted;
