@@ -1,5 +1,6 @@
 //! Invocation banner: example prompts tagged with an item, then how to ask it directly.
 
+use crate::components::terminal_surface::colors::mix;
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{Color, Palette, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
@@ -123,6 +124,44 @@ fn banner_element(
     )
 }
 
+/// How many tints a stop tries, from its full colour down to the Canvas.
+const TINT_STEPS: u32 = 20;
+/// The contrast the footer sentence keeps on each gradient stop (WCAG AA for body text).
+const READABLE_CONTRAST: f32 = 4.5;
+
+/// The strongest tint of `colour` over the Canvas that keeps `text` readable, or the Canvas when none does.
+pub fn readable_stop(colour: Color, canvas: Color, text: Color) -> Color {
+    (0..=TINT_STEPS)
+        .rev()
+        .map(|step| mix(canvas, colour, step as f32 / TINT_STEPS as f32))
+        .find(|stop| text.contrast(*stop) >= READABLE_CONTRAST)
+        .unwrap_or(canvas)
+}
+
+/// The two gradient stops: each listed colour as readable as it can be; with one colour the end fades halfway
+/// into the Canvas.
+pub fn gradient_stops(
+    first: Color,
+    second: Option<Color>,
+    canvas: Color,
+    text: Color,
+) -> (Color, Color) {
+    let start = readable_stop(first, canvas, text);
+    let end = match second {
+        Some(colour) => readable_stop(colour, canvas, text),
+        None => mix(start, canvas, 0.5),
+    };
+    (start, end)
+}
+
+/// The prompt without the tag that its chip shows; the whole prompt when nothing follows the tag.
+pub fn prompt_text<'a>(prompt: &'a str, tag: &str) -> &'a str {
+    match prompt.strip_prefix(tag).map(str::trim_start) {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => prompt,
+    }
+}
+
 /// Example prompts for an item, each with its tag highlighted, then how to type the tag in a chat.
 #[derive(Debug, IntoElement)]
 pub struct InvocationBanner {
@@ -215,6 +254,77 @@ mod tests {
         );
         assert!(tag_ranges("no tag here", "@GitHub").is_empty());
         assert!(tag_ranges("anything", "").is_empty());
+    }
+
+    const CLAUDE_BRAND: Color = Color::rgba8(0xD9, 0x77, 0x57, 1.0);
+    const GREEN: Color = Color::rgba8(0x3F, 0x9B, 0x6E, 1.0);
+    const GREY: Color = Color::rgba8(0x8E, 0x8E, 0x93, 1.0);
+
+    /// Every colour an item can be tinted with: listed brands, and the six slots of both themes.
+    fn brands() -> Vec<Color> {
+        let mut colours = vec![CLAUDE_BRAND, GREEN, GREY];
+        for palette in [Palette::DARK, Palette::LIGHT] {
+            let usage = palette.usage;
+            colours.extend([
+                usage.ring_1,
+                usage.ring_2,
+                usage.ring_3,
+                usage.ring_4,
+                usage.ring_5,
+                usage.ring_6,
+            ]);
+        }
+        colours
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_pill_text_drops_only_the_leading_tag() {
+        assert_eq!(
+            prompt_text("@Claude review my changes", "@Claude"),
+            "review my changes"
+        );
+        assert_eq!(
+            prompt_text("ask @Claude later", "@Claude"),
+            "ask @Claude later"
+        );
+        assert_eq!(prompt_text("@Claude", "@Claude"), "@Claude");
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_gradient_takes_each_listed_colour_into_its_stop() {
+        let p = Palette::DARK;
+        let (start, end) = gradient_stops(GREEN, Some(GREY), p.surface.canvas, p.text.secondary);
+        assert_eq!(
+            start,
+            readable_stop(GREEN, p.surface.canvas, p.text.secondary)
+        );
+        assert_eq!(end, readable_stop(GREY, p.surface.canvas, p.text.secondary));
+        assert_ne!(start, end, "two listed colours make a visible gradient");
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_with_one_colour_fades_its_end_into_the_canvas() {
+        let p = Palette::DARK;
+        let (start, end) = gradient_stops(CLAUDE_BRAND, None, p.surface.canvas, p.text.secondary);
+        assert_eq!(end, mix(start, p.surface.canvas, 0.5));
+        assert_ne!(start, end);
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_footer_stays_readable_on_both_stops_in_both_themes() {
+        for palette in [Palette::DARK, Palette::LIGHT] {
+            let (canvas, text) = (palette.surface.canvas, palette.text.secondary);
+            for brand in brands() {
+                let (start, end) = gradient_stops(brand, Some(brand), canvas, text);
+                let (_, faded) = gradient_stops(brand, None, canvas, text);
+                for stop in [start, end, faded] {
+                    assert!(
+                        text.contrast(stop) >= 4.5,
+                        "the footer on {stop:?} is below 4.5:1 (brand {brand:?})"
+                    );
+                }
+            }
+        }
     }
 
     #[gpui::test]
