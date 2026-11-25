@@ -14,6 +14,8 @@ The owner's words, summarised:
 
 Inventory: Marketplace item page (D-MK item page, section 7.2 order), desktop and Android.
 
+Code: `crates/ui/src/components/invocation_banner.rs` (the component), `crates/desktop/src/shell/marketplace/item.rs` (`banner`, `banner_colours`, `start_chat_with_prompt`), `crates/desktop/src/model/marketplace/item_page.rs` (`banner_tag`, `banner_palette_slot`).
+
 ## Anatomy
 
 | Part | Spec | Tokens |
@@ -84,13 +86,15 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 | Pill hover | The pill fill changes to `fill.hover.raised`. |
 | Pill pressed | `fill.pressed.overlay` over the pill. |
 | Pill focus | The standard focus ring outside the pill, at `radius.lg`. |
-| No example prompts | There is no banner. The page goes straight from the host line to Connection. |
+| No example prompts | There is no panel. The part shows one sentence instead: "This item lists no example prompts, so there is nothing to invoke." |
 | One or two prompts | The same panel with fewer pills. Its height follows the pills. |
 | Long prompt | One line with an ellipsis. The full text is in the tooltip and in the accessible name. |
 
 ## Behaviour
 
-- Pressing a pill (by click, Enter or Space) starts a chat with the pill's full prompt, including its `@Tag`.
+- Pressing a pill opens a new chat in the Canvas: the selected workspace's start page or, with no workspace, the start page with none. The full prompt goes into its composer and is not sent.
+- Keyboard: Space presses a focused pill, and Enter presses it through GPUI's keyboard click, as for `Button`.
+- The footer names the item's mention from `listing.mention`, or else its name.
 - Each pill is a button and a tab stop, in order from top to bottom. The panel itself is not a tab stop.
 - Reduced motion has no effect, because nothing moves.
 
@@ -115,6 +119,8 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 - Examples come from the item's listing. The tag chip shows the item's display name, not the `@` handle.
 
 ## Token gaps and open points
+
+- Build status: the first build (PR #364) has pills with `radius.full`, a `text.secondary` footer, 20 px top and bottom padding, and `usage.ring.1` to `usage.ring.6` for items with no colour. This spec and Ruling R-IB1 replace those; the building session changes them.
 
 - New tokens: `banner.palette.1` to `banner.palette.8` and `banner.end` (Ruling R-IB1). They are added to `tokens.json` by the session that builds this.
 - Sizes use existing tokens. The 44 px pill height is a fixed measure from the approved screenshot, not a new token.

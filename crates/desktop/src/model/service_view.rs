@@ -4,16 +4,17 @@
 
 use std::time::{Duration, Instant};
 
-use super::agent_sessions::{session_state, top_session_rows};
+use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
 use super::hosts::{HostTone, host_state};
 use super::shell::{
-    AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
-    ShellSnapshot, StatusBarModel, WorkspaceRow,
+    Agent, AgentState, HostGroup, HostReach, PlaceholderRow, ProjectGroup, ServiceNotice,
+    ServiceStatus, ServiceTone, ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
 use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
+use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::ProjectIcon;
+use massorca_protocol::methods::projects::{Project, ProjectIcon};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -38,6 +39,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             id: project.id.clone(),
             name: project.name.clone(),
             emoji: project.icon.as_ref().and_then(emoji_of),
+            owner: remote_owner_of(project),
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
@@ -51,6 +53,9 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                     state
                         .workspace(id)
                         .is_some_and(|workspace| workspace.project_id == project.id)
+                }),
+                placeholders: placeholder_rows(state, |workspace| {
+                    workspace.project_id == project.id
                 }),
             }],
         })
@@ -67,11 +72,13 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
+            owner: None,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
                 workspaces: workspace_rows(state.workspaces.iter().filter(|w| !listed(w))),
                 sessions: conversations,
+                placeholders: placeholder_rows(state, |workspace| !listed(workspace)),
             }],
         });
     }
@@ -105,6 +112,34 @@ fn workspace_rows<'a>(workspaces: impl Iterator<Item = &'a Workspace>) -> Vec<Wo
             name: workspace.name.clone(),
             branch: workspace.branch.clone(),
             usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
+        })
+        .collect()
+}
+
+/// The workspaces `keep` accepts that have no session yet, as placeholder rows (A97). Only a workspace this app saw
+/// created is listed. Its row shows the chosen agent, else the configured default, else a neutral glyph.
+fn placeholder_rows(state: &StoreState, keep: impl Fn(&Workspace) -> bool) -> Vec<PlaceholderRow> {
+    let default_agent = state
+        .config_value(DEFAULT_AGENT_KEY)
+        .and_then(|value| value.value.as_str())
+        .map(agent_of_kind);
+    state
+        .workspaces
+        .iter()
+        .filter(|workspace| keep(workspace) && !state.workspace_has_session(&workspace.id))
+        .filter_map(|workspace| {
+            let chosen = state.awaiting_session.get(&workspace.id)?;
+            Some(PlaceholderRow {
+                workspace_id: workspace.id.clone(),
+                title: workspace_title(workspace),
+                agent: chosen
+                    .as_deref()
+                    .map(agent_of_kind)
+                    .or(default_agent)
+                    .unwrap_or(Agent::Unknown),
+                branch: workspace.branch.clone(),
+                path: Some(workspace.path.clone()),
+            })
         })
         .collect()
 }
@@ -222,6 +257,12 @@ pub fn teams_view(state: &StoreState) -> TeamsState {
     }
 }
 
+/// The owner or org a project's remote shows after its name (A10). Nothing supplies one yet.
+fn remote_owner_of(_project: &Project) -> Option<String> {
+    // Project.remote_owner (core PR #332) is not in the protocol yet; None until it lands.
+    None
+}
+
 /// The emoji an icon is; the other icon kinds are not drawn yet.
 fn emoji_of(icon: &ProjectIcon) -> Option<String> {
     match icon {
@@ -242,6 +283,7 @@ mod tests {
     };
     use massorca_client::HostRecord;
     use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+    use massorca_protocol::methods::config::ConfigValue;
 
     fn connected() -> ConnectionState {
         ConnectionState::Connected {
@@ -265,6 +307,195 @@ mod tests {
             now,
         );
         state
+    }
+
+    #[test]
+    fn no_project_shows_an_owner_line_until_the_protocol_carries_one() {
+        let now = Instant::now();
+        let snapshot = service_snapshot(&loaded(now), now);
+        assert!(
+            snapshot
+                .projects
+                .iter()
+                .all(|project| project.owner.is_none())
+        );
+    }
+
+    fn setting(key: &str, value: &str) -> ConfigValue {
+        ConfigValue {
+            owner: "core".into(),
+            key: key.into(),
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+
+    fn placeholders_of(state: &StoreState, now: Instant) -> Vec<PlaceholderRow> {
+        service_snapshot(state, now).projects[0].hosts[0]
+            .placeholders
+            .clone()
+    }
+
+    fn tree_rows(state: &StoreState, now: Instant) -> Vec<TreeRow> {
+        let snapshot = service_snapshot(state, now);
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        tree
+    }
+
+    /// Loaded p1 with w1 and w2; then w4 is created in p1 and its agent kind is chosen as `kind`.
+    fn created_with_kind(now: Instant, kind: &str) -> StoreState {
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: kind.into(),
+            },
+            now,
+        );
+        state
+    }
+
+    #[test]
+    fn a_workspace_created_with_no_session_is_a_placeholder_of_its_chosen_agent() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        assert!(
+            placeholders_of(&state, now).is_empty(),
+            "the workspaces listed at startup have no row"
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: "codex".into(),
+            },
+            now,
+        );
+        assert_eq!(
+            placeholders_of(&state, now),
+            vec![PlaceholderRow {
+                workspace_id: "w4".into(),
+                title: "feat/four".into(),
+                agent: Agent::Codex,
+                branch: Some("feat/four".into()),
+                path: Some("/repos/four".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_first_session_takes_the_placeholders_place_in_the_tree() {
+        let now = Instant::now();
+        let mut state = created_with_kind(now, "codex");
+        state.apply(StoreUpdate::AgentChanged(agent("s0", "w1", 1)), now);
+        let placeholder = tree_rows(&state, now)
+            .iter()
+            .position(|row| matches!(row, TreeRow::Placeholder { .. }))
+            .expect("the placeholder is listed");
+
+        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        let rows = tree_rows(&state, now);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, TreeRow::Placeholder { .. }))
+        );
+        assert!(matches!(
+            &rows[placeholder],
+            TreeRow::Session { id, depth: 0, .. } if id == "s4"
+        ));
+    }
+
+    #[test]
+    fn a_workspace_with_no_session_left_has_no_row_and_no_placeholder_comes_back() {
+        let now = Instant::now();
+        let mut state = created_with_kind(now, "codex");
+        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(StoreUpdate::AgentGone("s4".into()), now);
+        assert!(placeholders_of(&state, now).is_empty());
+        assert!(!state.awaiting_session.contains_key("w4"));
+        assert!(
+            tree_rows(&state, now)
+                .iter()
+                .all(|row| !matches!(row, TreeRow::Session { .. } | TreeRow::Placeholder { .. }))
+        );
+    }
+
+    #[test]
+    fn a_workspace_the_service_made_takes_the_configured_default_kind() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting(DEFAULT_AGENT_KEY, "gemini")]),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Gemini);
+    }
+
+    #[test]
+    fn a_workspace_with_no_known_kind_at_all_is_a_neutral_glyph() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Unknown);
+    }
+
+    #[test]
+    fn the_chosen_kind_wins_over_the_default_whichever_arrives_first() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting(DEFAULT_AGENT_KEY, "gemini")]),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: "codex".into(),
+            },
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Codex);
+    }
+
+    #[test]
+    fn a_workspace_announced_before_the_first_list_is_not_waiting_for_a_session() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::Connection(connected()), now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w1", "p1", "one", 1)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha")],
+                workspaces: vec![workspace("w1", "p1", "one", 1)],
+            },
+            now,
+        );
+        assert!(placeholders_of(&state, now).is_empty());
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub(super) struct Rig {
     pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
