@@ -399,33 +399,14 @@ fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
 }
 
 #[gpui::test]
-fn a_kind_that_cannot_start_is_listed_missing_and_says_why_with_a_marketplace_action(
-    cx: &mut TestAppContext,
-) {
-    let (rig, cx) = start_page_rig(
+fn a_kind_that_cannot_start_draws_no_notice_and_no_marketplace_action(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("codex", "Codex", PackageState::Disabled)],
     );
-    let composer = composer_of(&rig, cx);
-    let availability = composer.read_with(cx, |composer, cx| {
-        composer.picker().read(cx).state().agents()[0].availability
-    });
-    assert_eq!(
-        availability,
-        massorca_ui::components::model_picker::AgentAvailability::Missing
-    );
     draw(cx);
-    assert!(cx.debug_bounds("start-kind-notice").is_some());
-    let notice = rig
-        .shell
-        .update(cx, |shell, cx| shell.kind_notice(&composer, cx))
-        .map(|notice| notice.text);
-    assert_eq!(notice.as_deref(), Some("Codex cannot start: Disabled."));
-    click_selector(cx, "button:start-kind-marketplace");
-    assert!(matches!(
-        rig.shell.read_with(cx, |shell, _| shell.model.canvas()),
-        Canvas::Page(crate::model::navigation::Page::Marketplace(_))
-    ));
+    assert!(cx.debug_bounds("start-kind-notice").is_none());
+    assert!(cx.debug_bounds("button:start-kind-marketplace").is_none());
 }
 
 #[gpui::test]
@@ -446,15 +427,6 @@ fn send_with_a_kind_that_cannot_start_shows_why_and_sends_nothing(cx: &mut TestA
     });
     assert_eq!(error.as_deref(), Some("Codex cannot start: Disabled."));
     assert_eq!(draft, "fix the login");
-}
-
-fn click_selector(cx: &mut VisualTestContext, selector: &'static str) {
-    draw(cx);
-    let bounds = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("no element with selector {selector}"));
-    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
 }
 
 #[gpui::test]

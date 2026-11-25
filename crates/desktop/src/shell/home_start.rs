@@ -18,9 +18,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
-use super::start_page::{
-    KindNotice, key_hints, kind_notice_row, profile_banner, refuse_send, starting_line,
-};
+use super::start_page::{key_hints, profile_banner, refuse_send, starting_line};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NEEDS_NEWER_SERVICE, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails,
@@ -39,8 +37,6 @@ pub(super) struct HomeFrame {
     /// The start in flight from this page, shown under the composer.
     pub starting: Option<String>,
     pub mode: StartMode,
-    /// Why the chosen agent cannot start, when it cannot.
-    pub kind_notice: Option<KindNotice>,
     /// The service refused because the data folder is not secured.
     pub profile_unsafe: bool,
     /// The Advanced section's fields and whether it is open.
@@ -147,9 +143,6 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
                     .text_color(p.text.secondary)
                     .child(TERMINAL_NOTE),
             )
-        })
-        .when_some(frame.kind_notice.clone(), |column, notice| {
-            column.child(kind_notice_row(notice, frame.shell.clone(), &theme))
         })
         .child(key_hints(&theme))
         .when_some(frame.starting.clone(), |column, status| {
@@ -294,7 +287,6 @@ impl Shell {
             project,
             starting,
             mode: self.start_mode(HOME_START),
-            kind_notice: self.kind_notice(&composer, cx),
             profile_unsafe: self.profile_unsafe,
             details: self.home_details.clone(),
             composer,

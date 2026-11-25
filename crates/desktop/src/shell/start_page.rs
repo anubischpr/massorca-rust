@@ -34,8 +34,6 @@ use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, start_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
-use crate::model::marketplace::ItemKind;
-use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
@@ -58,17 +56,8 @@ pub(super) struct StartFrame {
     pub starting: Option<String>,
     /// Where the session the composer starts opens.
     pub mode: StartMode,
-    /// Why the chosen agent cannot start, when it cannot.
-    pub kind_notice: Option<KindNotice>,
     /// The service refused because the data folder is not secured.
     pub profile_unsafe: bool,
-}
-
-/// Why the chosen agent cannot start, and the Marketplace page that can install or turn it on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct KindNotice {
-    pub text: String,
-    pub page: MarketplacePage,
 }
 
 /// The banner a data folder that is not secured gets: the service refuses every call until the
@@ -89,38 +78,9 @@ pub(super) fn profile_banner() -> impl IntoElement {
         )
 }
 
-/// What the page says when the service declares no agent at all.
-const NO_AGENTS: &str = "No agent is installed. Add one from the Marketplace.";
-
 /// The refusal Send shows for a kind that cannot start.
 fn cannot_start(name: &str, reason: &str) -> String {
     format!("{name} cannot start: {reason}.")
-}
-
-/// The notice under a start composer, with its direct action to the Marketplace.
-pub(super) fn kind_notice_row(
-    notice: KindNotice,
-    shell: WeakEntity<Shell>,
-    theme: &Theme,
-) -> impl IntoElement {
-    let page = notice.page;
-    div()
-        .debug_selector(|| "start-kind-notice".to_owned())
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap(px(SPACE_2))
-        .text_style(TYPE_CAPTION)
-        .text_color(theme.palette.text.secondary)
-        .child(notice.text)
-        .child(
-            Button::new("start-kind-marketplace", "Open in Marketplace")
-                .variant(ButtonVariant::Secondary)
-                .on_click(move |_, cx| {
-                    let _ = shell.update(cx, |shell, cx| shell.open_marketplace(page, cx));
-                }),
-        )
 }
 
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
@@ -208,9 +168,6 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
                     .text_color(p.text.secondary)
                     .child(TERMINAL_NOTE),
             )
-        })
-        .when_some(frame.kind_notice.clone(), |column, notice| {
-            column.child(kind_notice_row(notice, frame.shell.clone(), &theme))
         })
         .child(key_hints(&theme))
         .when_some(frame.starting.clone(), |column, status| {
@@ -676,52 +633,6 @@ impl Shell {
         })
         .detach();
         cx.notify();
-    }
-
-    /// Why the composer's chosen kind cannot start, with where to fix it; or why there is none.
-    pub(super) fn kind_notice(&self, composer: &Entity<Composer>, cx: &App) -> Option<KindNotice> {
-        let state = self.store.read(cx).state();
-        if state.agent_kinds.is_empty() {
-            return state.connection.is_connected().then(|| KindNotice {
-                text: NO_AGENTS.to_owned(),
-                page: MarketplacePage::Category(ItemKind::Agent),
-            });
-        }
-        let chosen = composer
-            .read(cx)
-            .picker()
-            .read(cx)
-            .state()
-            .choice()
-            .model
-            .clone();
-        let declared = state
-            .agent_kinds
-            .iter()
-            .find(|kind| kind.id == chosen.as_ref())?;
-        let choice = start_kind_choices(std::slice::from_ref(declared)).pop()?;
-        let reason = choice.unavailable?;
-        let item = declared.package.id.as_deref().and_then(|package| {
-            self.marketplace
-                .snapshot()
-                .search("")
-                .into_iter()
-                .find_map(|item| {
-                    (item.kind == ItemKind::Agent
-                        && item
-                            .extension
-                            .as_ref()
-                            .is_some_and(|entry| entry.id == package))
-                    .then_some(item.id)
-                })
-        });
-        Some(KindNotice {
-            text: cannot_start(&choice.name, reason),
-            page: item.map_or(
-                MarketplacePage::Category(ItemKind::Agent),
-                MarketplacePage::Item,
-            ),
-        })
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
