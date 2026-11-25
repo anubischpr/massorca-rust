@@ -27,6 +27,7 @@ mod version;
 mod worktree;
 mod worktree_locks;
 mod worktree_porcelain;
+mod worktree_prune;
 
 pub use availability::GitAvailability;
 pub use base::Base;
