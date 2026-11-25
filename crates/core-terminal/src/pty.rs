@@ -326,15 +326,75 @@ impl PtyChild {
     /// Blocks until the program exits.
     pub fn wait(&mut self) -> io::Result<ExitInfo> {
         let status = self.inner.wait()?;
-        Ok(match status.signal() {
-            Some(name) => ExitInfo {
+        Ok(exit_info(
+            status.exit_code(),
+            status.signal(),
+            cfg!(windows),
+        ))
+    }
+}
+
+/// `STATUS_CONTROL_C_EXIT`: the status a Windows console program ends with when a console event ends it, such as the
+/// `CTRL_CLOSE_EVENT` that closing the pseudoconsole sends on a stop.
+const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+
+/// How a program ended, from its exit code and the signal that ended it. A signal death has no exit code. On Windows a
+/// console event plays the part of a signal: its status reads as the signal `Interrupt` rather than as the code
+/// 3221225786, so a stop reads the same on every platform.
+fn exit_info(code: u32, signal: Option<&str>, windows: bool) -> ExitInfo {
+    match signal {
+        Some(name) => ExitInfo {
+            code: None,
+            signal: Some(name.to_owned()),
+        },
+        None if windows && code == STATUS_CONTROL_C_EXIT => ExitInfo {
+            code: None,
+            signal: Some("Interrupt".to_owned()),
+        },
+        None => ExitInfo {
+            code: Some(i64::from(code)),
+            signal: None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::{ExitInfo, exit_info};
+
+    #[test]
+    fn a_windows_console_event_reads_as_an_interrupt_with_no_code() {
+        assert_eq!(
+            exit_info(0xC000_013A, None, true),
+            ExitInfo {
                 code: None,
-                signal: Some(name.to_owned()),
-            },
-            None => ExitInfo {
-                code: Some(i64::from(status.exit_code())),
+                signal: Some("Interrupt".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn other_exits_keep_their_code_or_signal() {
+        assert_eq!(
+            exit_info(0xC000_013A, None, false),
+            ExitInfo {
+                code: Some(3_221_225_786),
                 signal: None,
-            },
-        })
+            }
+        );
+        assert_eq!(
+            exit_info(3, None, true),
+            ExitInfo {
+                code: Some(3),
+                signal: None,
+            }
+        );
+        assert_eq!(
+            exit_info(1, Some("Hangup"), false),
+            ExitInfo {
+                code: None,
+                signal: Some("Hangup".to_owned()),
+            }
+        );
     }
 }
