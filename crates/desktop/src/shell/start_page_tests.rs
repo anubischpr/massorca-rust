@@ -609,12 +609,46 @@ fn resize_calls(script: &mut Script) -> Vec<(String, u16, u16)> {
     resizes
 }
 
+/// A live terminal of workspace w1 at `cols` x `rows`, as the store lists it.
+fn live_terminal(id: &str, cols: u16, rows: u16) -> Terminal {
+    Terminal {
+        id: id.to_owned(),
+        workspace_id: "w1".to_owned(),
+        state: TerminalState::Live,
+        title: None,
+        cols,
+        rows,
+        pid: None,
+        shell: "/bin/zsh".to_owned(),
+        cwd: "/repos/fix-login".to_owned(),
+        created_at_ms: 1,
+        exit: None,
+        holds_secrets: false,
+    }
+}
+
+/// The (cols, rows) the terminal's surface applies to its pane, as its feed holds them.
+fn applied_grid(rig: &Rig, cx: &mut VisualTestContext, terminal: &str) -> (u16, u16) {
+    rig.shell.read_with(cx, |shell, app| {
+        let feed = shell
+            .terminal_views
+            .get(terminal)
+            .expect("the terminal has a view")
+            .surface
+            .read(app)
+            .feed();
+        (feed.columns() as u16, feed.lines() as u16)
+    })
+}
+
 #[gpui::test]
 fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    // Chat is on, so the session opens in the session view, which applies the grid the start sent.
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -627,20 +661,9 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
     session.terminal_id = Some(terminal.to_owned());
     // The service created the terminal at the start's grid, and the store lists it so.
     rig._updates
-        .send(StoreUpdate::TerminalChanged(Terminal {
-            id: terminal.to_owned(),
-            workspace_id: "w1".to_owned(),
-            state: TerminalState::Live,
-            title: None,
-            cols,
-            rows,
-            pid: None,
-            shell: "/bin/zsh".to_owned(),
-            cwd: "/repos/fix-login".to_owned(),
-            created_at_ms: 1,
-            exit: None,
-            holds_secrets: false,
-        }))
+        .send(StoreUpdate::TerminalChanged(live_terminal(
+            terminal, cols, rows,
+        )))
         .expect("the store listens");
     reply
         .send(Ok(session.clone()))
@@ -671,6 +694,70 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
         "the first draw sends no resize request"
     );
     drop(stream_tx);
+}
+
+#[gpui::test]
+fn a_terminal_start_opens_the_agents_terminal_at_the_grid_the_work_panel_pane_applies(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    // A terminal shown in the Work panel paints its pane, so the panel knows the grid that pane fits.
+    let shown = "0196a6f0-0000-7000-8000-0000000000bb";
+    rig._updates
+        .send(StoreUpdate::TerminalChanged(live_terminal(shown, 120, 40)))
+        .expect("the store listens");
+    cx.run_until_parked();
+    rig.shell.update(cx, |shell, cx| {
+        shell.model.show_region(Region::WorkPanel);
+        shell.reveal_terminal("w1", shown, cx);
+    });
+    cx.run_until_parked();
+    draw(cx);
+    let pane = applied_grid(&rig, cx, shown);
+    while rig._script.next().is_some() {}
+
+    // Chat is off without the capability, so the start opens the agent's terminal in the Work panel.
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let (cols, rows) = (
+        params.cols.expect("the start sends its columns"),
+        params.rows.expect("the start sends its rows"),
+    );
+    assert_eq!(
+        (cols, rows),
+        pane,
+        "the agent's terminal opens at the grid the Work panel pane applies"
+    );
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    rig._updates
+        .send(StoreUpdate::TerminalChanged(live_terminal(
+            terminal, cols, rows,
+        )))
+        .expect("the store listens");
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        applied_grid(&rig, cx, terminal),
+        (cols, rows),
+        "the Work panel pane applies the start grid"
+    );
+    assert!(
+        resize_calls(&mut rig._script).is_empty(),
+        "the first draw sends no resize request"
+    );
 }
 
 #[gpui::test]

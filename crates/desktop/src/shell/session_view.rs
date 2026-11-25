@@ -38,7 +38,7 @@ use crate::model::session_ended::{
     screen_says_conversation_gone,
 };
 use crate::model::shell::AgentState;
-use crate::model::start_page::{VOICE_LATER, start_again_params};
+use crate::model::start_page::{StartMode, VOICE_LATER, start_again_params};
 use crate::service::{Refusal, ServiceHandle};
 
 /// What the composer of a session waits for. A session has at most one call in flight.
@@ -772,7 +772,8 @@ impl Shell {
             return;
         };
         let mode = self.pending_bypass(session, cx);
-        let grid = Some(self.start_grid(cx));
+        // A resumed run opens in this session view, so it takes the Conversation's grid.
+        let grid = Some(self.start_grid(StartMode::Chat, cx));
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -814,7 +815,8 @@ impl Shell {
         let Some(service) = self.begin_session_call(session, SessionCall::Starting, cx) else {
             return;
         };
-        let grid = self.start_grid(cx);
+        // The new session opens in this view, so it takes the Conversation's grid.
+        let grid = self.start_grid(StartMode::Chat, cx);
         let params = {
             let state = self.store.read(cx).state();
             state

@@ -239,14 +239,18 @@ impl Shell {
         .detach();
     }
 
+    /// The grid the Work panel's pane fits now, once a paint has recorded its size (`Shell::work_panel_size`).
+    pub(super) fn work_panel_measured_grid(&self, cx: &App) -> Option<(u16, u16)> {
+        self.work_panel_size.get().and_then(|(width, height)| {
+            let cell = grid_paint::cell_metrics(cx)?;
+            Some(pane_grid(width, height, cell))
+        })
+    }
+
     /// The grid a new Work panel terminal opens at (`new_terminal_grid`): the grid its pane fits now, else the grid a
     /// Work panel pane last applied, else the fixed size.
     pub(super) fn work_panel_grid(&self, cx: &App) -> (u16, u16) {
-        let measured = self.work_panel_size.get().and_then(|(width, height)| {
-            let cell = grid_paint::cell_metrics(cx)?;
-            Some(pane_grid(width, height, cell))
-        });
-        new_terminal_grid(measured, self.work_panel_applied)
+        new_terminal_grid(self.work_panel_measured_grid(cx), self.work_panel_applied)
     }
 
     /// Remembers the grid a Work panel pane applied, the fallback for a new terminal's grid.
