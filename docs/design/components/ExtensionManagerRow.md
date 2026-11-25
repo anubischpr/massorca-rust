@@ -25,9 +25,9 @@ Inventory ID: D-EX-03 (extension manager). Screen spec: teams-extensions-setting
 | Disabled | neutral Badge "Disabled" | off |
 | Update available 2.1.0 | info Badge with the word | on |
 | Installing, 40% | the word in `text.secondary` | disabled |
-| Failed to start | danger glyph (octagon-alert), the word in `status.danger.fg`, ghost "View log" | off, still usable |
+| Failed to start | danger glyph (octagon-alert) and the word in `status.danger.fg` | off, still usable |
 
-The row has no Update button. The artboard shows none, so the update is named in the status and acted on from the Updates list and the item page, which keep the card.
+The row has no Update button. Update stays on the Updates page and the cards.
 
 ## States
 
@@ -36,20 +36,20 @@ The row has no Update button. The artboard shows none, so the update is named in
 | default | As anatomy | `surface.raised`, `border.default` |
 | focus-visible | Ring on the name link, the switch and the More button, not on the row | `border.focus`, 2 px, offset 2 px |
 | installing | Switch disabled; the word shows the percent | disabled switch tokens |
-| error | Failed to start, with View log | `status.danger.fg` |
+| error | Failed to start | `status.danger.fg` |
 
 ## Behaviour (handoff)
 
 - Name press: opens the item page. Switch press: sends the change to the caller, which applies it; the switch settles when the service confirms.
-- More press: opens the row's menu at the pointer. Roll back (to the previous version when there is one) and View log are disabled with "Not available yet" until the service has them. Remove, in the danger colour, opens the uninstall confirm that the item page's Danger zone opens. Up and Down move in the menu, Enter chooses and Escape closes it.
-- View log: sends View log. Until the service has a log, the caller opens the item page, as the card does.
-- Keyboard: each row is a list item. Tab visits the name, the switch, View log (failed rows only) and More.
+- More press: opens the row's menu at the pointer, which lists Remove only. Remove, in the danger colour, opens the uninstall confirm that the item page's Danger zone opens. Roll back and View log join the menu when extensions.rollback and extensions.log exist. Up and Down move in the menu, Enter chooses and Escape closes it.
+- A failed row has no link of its own. The item page shows the state, not the failure, and the name already opens it.
+- Keyboard: each row is a list item. Tab visits the name, the switch and More.
 - Accessibility: rows are list items named by the extension's name. The switch is named "Enable <name>". The status word is plain text, read in order.
 
 ## Copy
 
 - Status words, from the desktop model: "Enabled", "Disabled", "Update available <version>", "Installing, <percent>%", "Failed to start".
-- Actions: "View log". Accessible names: "Enable <name>", "More actions for <name>".
+- Accessible names: "Enable <name>", "More actions for <name>".
 
 ## Token and spec notes
 

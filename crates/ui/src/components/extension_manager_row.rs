@@ -3,7 +3,7 @@
 
 use super::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use super::badge::{Badge, BadgeTone};
-use super::button::{Button, ButtonSize, ButtonVariant};
+use super::button::ButtonSize;
 use super::extension_card::{
     ActionHandler, ExtensionAction, ExtensionState, route, route_click, route_toggle, status_word,
 };
@@ -12,9 +12,7 @@ use super::switch::Switch;
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{
-    Palette, RADIUS_MD, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_BODY_STRONG,
-};
+use crate::tokens::{Palette, RADIUS_MD, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_BODY_STRONG};
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
@@ -103,7 +101,7 @@ impl ExtensionManagerRow {
         self
     }
 
-    /// Runs with the action a press asks for: Open, Toggle, More or ViewLog.
+    /// Runs with the action a press asks for: Open, Toggle or More.
     pub fn on_action(
         mut self,
         listener: impl Fn(ExtensionAction, &mut Window, &mut App) + 'static,
@@ -189,13 +187,7 @@ impl RenderOnce for ExtensionManagerRow {
             .w(px(STATUS_WIDTH))
             .flex_none()
             .min_w_0()
-            .child(status_content(
-                &self.state,
-                self.status_word.clone(),
-                &p,
-                &key,
-                &handler,
-            ));
+            .child(status_content(&self.state, self.status_word.clone(), &p));
 
         let switch_selector = key.clone();
         let switch = div()
@@ -250,15 +242,9 @@ fn byline_text(publisher: &str, version: &str, contribution: &str) -> String {
         .join(" · ")
 }
 
-/// The status column: the word with its glyph, a badge for an update or a disabled row, and for a failed start
-/// the word with its View log button.
-fn status_content(
-    state: &ExtensionState,
-    word: SharedString,
-    p: &Palette,
-    key: &SharedString,
-    handler: &Option<ActionHandler>,
-) -> AnyElement {
+/// The status column: the word with its glyph, or a badge for an update or a disabled row. A failed start has no link:
+/// the item page shows the state, not the failure.
+fn status_content(state: &ExtensionState, word: SharedString, p: &Palette) -> AnyElement {
     match state {
         ExtensionState::Installed {
             update: Some(_), ..
@@ -269,23 +255,9 @@ fn status_content(
         ExtensionState::Installed { enabled: false, .. } => Badge::text(word)
             .tone(BadgeTone::Neutral)
             .into_any_element(),
-        ExtensionState::Failed { .. } => div()
-            .flex()
-            .items_center()
-            .gap(px(SPACE_2))
-            .min_w_0()
-            .child(status_word(
-                IconName::OctagonAlert,
-                p.status.danger_fg,
-                &word,
-            ))
-            .child(
-                Button::new(SharedString::from(format!("{key}-log")), "View log")
-                    .variant(ButtonVariant::Ghost)
-                    .size(ButtonSize::Compact)
-                    .on_click(route(handler, ExtensionAction::ViewLog)),
-            )
-            .into_any_element(),
+        ExtensionState::Failed { .. } => {
+            status_word(IconName::OctagonAlert, p.status.danger_fg, &word)
+        }
         ExtensionState::Catalog
         | ExtensionState::Installing { .. }
         | ExtensionState::Incompatible { .. } => div()
@@ -367,25 +339,24 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_failed_row_offers_view_log_and_its_switch_stays_usable(cx: &mut gpui::TestAppContext) {
+    fn a_failed_row_has_no_view_log_link_and_its_switch_stays_usable(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let (seen, cx) = drawn(
             cx,
             ExtensionState::Failed {
                 reason: "The CLI did not start".into(),
             },
         );
-        let log = cx
-            .debug_bounds("button:row-1-log")
-            .expect("View log is drawn");
-        cx.simulate_click(log.center(), gpui::Modifiers::none());
+        assert!(
+            cx.debug_bounds("button:row-1-log").is_none(),
+            "no View log link: the item page shows the state, not the failure"
+        );
         let switch = cx
             .debug_bounds("row-switch:row-1")
             .expect("the switch is drawn");
         cx.simulate_click(switch.center(), gpui::Modifiers::none());
-        assert_eq!(
-            *seen.borrow(),
-            vec![ExtensionAction::ViewLog, ExtensionAction::Toggle(true)]
-        );
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Toggle(true)]);
     }
 
     #[gpui::test]

@@ -20,22 +20,6 @@ use massorca_ui::components::menu::{
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::tokens::RADIUS_LG;
 
-/// The rows of an installed item's menu, in order. Roll back and View log have no service method yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowMenuRow {
-    RollBack,
-    ViewLog,
-    Separator,
-    Remove,
-}
-
-const ROW_MENU: [RowMenuRow; 4] = [
-    RowMenuRow::RollBack,
-    RowMenuRow::ViewLog,
-    RowMenuRow::Separator,
-    RowMenuRow::Remove,
-];
-
 /// The menu open on one installed row: the menu, where it opened, and the subscription that answers its choice.
 #[derive(Debug)]
 struct OpenRowMenu {
@@ -110,10 +94,6 @@ fn manager_row(
     let id = item.id;
     let shell = frame.shell.clone();
     let menu = menu.clone();
-    let roll_back = match &item.previous_version {
-        Some(version) => format!("Roll back to {version}"),
-        None => "Roll back".to_owned(),
-    };
     let mut row = ExtensionManagerRow::new(
         SharedString::from(format!("marketplace-row-{}", item.id.0)),
         item.name.clone(),
@@ -133,7 +113,7 @@ fn manager_row(
                 shell.set_marketplace_enabled(id, enabled, cx)
             });
         }
-        ExtensionAction::More => open_row_menu(&menu, id, &roll_back, shell.clone(), window, cx),
+        ExtensionAction::More => open_row_menu(&menu, id, shell.clone(), window, cx),
         _ => {
             let _ = shell.update(cx, |shell, cx| {
                 shell.open_marketplace(MarketplacePage::Item(id), cx)
@@ -142,20 +122,16 @@ fn manager_row(
     })
 }
 
-/// Opens the menu of an installed row at the pointer. Remove asks the existing uninstall confirm; the entries that are
-/// not available yet choose nothing. A choice or a dismissal closes the menu and redraws the Shell.
+/// Opens the menu of an installed row at the pointer. Remove asks the existing uninstall confirm. A choice or a
+/// dismissal closes the menu and redraws the Shell.
 fn open_row_menu(
     menu: &Entity<RowMenu>,
     item: MarketplaceItemId,
-    roll_back: &str,
     shell: WeakEntity<Shell>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let entries: Vec<MenuEntry> = ROW_MENU
-        .iter()
-        .map(|row| menu_entry(*row, roll_back))
-        .collect();
+    let entries = row_menu_entries();
     let view = cx.new(|cx| MenuView::new(entries, window, cx).with_layer(OverlayLayer::Page));
     let at = window.mouse_position();
     let on_choice = shell.clone();
@@ -166,10 +142,10 @@ fn open_row_menu(
             move |state: &mut RowMenu, _, event: &MenuEvent, _, cx| {
                 // Taking the menu closes it, on a choice or a dismissal alike.
                 let _closed = state.open.take();
-                if matches!(event, MenuEvent::Chosen(choice) if ROW_MENU.get(choice.row) == Some(&RowMenuRow::Remove))
-                {
-                    let _ = on_choice
-                        .update(cx, |shell, cx| shell.ask_marketplace_uninstall(item, cx));
+                // Remove is the only entry, so any choice asks for it.
+                if matches!(event, MenuEvent::Chosen(_)) {
+                    let _ =
+                        on_choice.update(cx, |shell, cx| shell.ask_marketplace_uninstall(item, cx));
                 }
                 let _ = on_choice.update(cx, |_, cx| cx.notify());
             },
@@ -184,21 +160,28 @@ fn open_row_menu(
     let _ = shell.update(cx, |_, cx| cx.notify());
 }
 
-/// The menu row a row-menu entry draws as.
-fn menu_entry(row: RowMenuRow, roll_back: &str) -> MenuEntry {
-    match row {
-        RowMenuRow::RollBack => MenuItem::new(roll_back.to_owned())
-            .icon(IconName::History)
-            .disabled("Not available yet")
-            .into(),
-        RowMenuRow::ViewLog => MenuItem::new("View log")
-            .icon(IconName::FileText)
-            .disabled("Not available yet")
-            .into(),
-        RowMenuRow::Separator => MenuEntry::Separator,
-        RowMenuRow::Remove => MenuItem::new("Remove")
+/// The entries of an installed row's menu: Remove only. Roll back and View log join it when extensions.rollback and
+/// extensions.log exist, so the menu never lists an action that does not work.
+fn row_menu_entries() -> Vec<MenuEntry> {
+    vec![
+        MenuItem::new("Remove")
             .icon(IconName::Trash2)
             .destructive()
             .into(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_row_menu_lists_only_remove() {
+        let entries = row_menu_entries();
+        let [MenuEntry::Item(remove)] = entries.as_slice() else {
+            panic!("the row menu lists exactly one entry, Remove");
+        };
+        assert_eq!(remove.label().to_string(), "Remove");
+        assert!(!remove.is_disabled(), "Remove works, so it is not disabled");
     }
 }
