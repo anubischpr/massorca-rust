@@ -1385,7 +1385,7 @@ mod tests {
     use crate::shell::service_tests::{click, draw, rig};
     use gpui::{Entity, TestAppContext, VisualTestContext};
     use massorca_protocol::methods::agents::PackageState;
-    use massorca_protocol::methods::teams::{Board, TeamProject};
+    use massorca_protocol::methods::teams::{Board, TeamCharacter, TeamProject};
     use massorca_ui::{Appearance, Theme};
 
     fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -1957,6 +1957,140 @@ mod tests {
                     Some("bot Nora owns 1 open task(s); unassign them to remove it")
                 ),
                 other => panic!("the confirm should stay open with the refusal, found {other:?}"),
+            });
+    }
+
+    #[gpui::test]
+    fn a_team_saved_with_a_new_shape_and_workspaces_sends_both(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team("t1", "Desarrollo")]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        rig.shell.update(cx, |shell, cx| {
+            shell.set_edit_team_shape(1, cx);
+            shell.set_team_workspaces(true, cx);
+        });
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(
+            (
+                params.name,
+                params.purpose,
+                params.character,
+                params.workspaces
+            ),
+            (None, None, Some(TeamCharacter::Square), Some(true))
+        );
+    }
+
+    #[gpui::test]
+    fn a_team_the_service_refuses_keeps_the_edit_form_open_with_the_reason(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team("t1", "Desarrollo")]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        let name = rig
+            .shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::Team(form)) => form.name.clone(),
+                other => panic!("the Edit team form should open, found {other:?}"),
+            });
+        name.update_in(cx, |field, window, cx| field.set_text("Ops", window, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateTeam { reply, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        let _ = reply.send(Err(Refusal::NameProblem {
+            message: "Name is already used in this host.".into(),
+        }));
+        cx.run_until_parked();
+        rig.shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::Team(form)) => {
+                    assert!(matches!(form.mode, TeamFormMode::Edit { .. }));
+                    assert_eq!(
+                        form.error.as_deref(),
+                        Some("Name is already used in this host.")
+                    );
+                }
+                other => panic!("the Edit team form should stay open, found {other:?}"),
+            });
+    }
+
+    #[gpui::test]
+    fn a_bot_the_service_refuses_keeps_the_edit_bot_form_open_with_the_reason(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_nora()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        let bot = first_bot(&rig.shell, cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_edit_bot(TeamId(1), bot, window, cx);
+        });
+        cx.run_until_parked();
+        let name = rig
+            .shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) if form.edit.is_some() => form.name.clone(),
+                other => panic!("the Edit bot form should open, found {other:?}"),
+            });
+        draw(cx);
+        name.update_in(cx, |field, window, cx| field.set_text("Lucia", window, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { reply, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        let _ = reply.send(Err(Refusal::NameProblem {
+            message: "A bot in this team already has that name.".into(),
+        }));
+        cx.run_until_parked();
+        rig.shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) => {
+                    assert!(form.edit.is_some());
+                    assert_eq!(
+                        form.error.as_deref(),
+                        Some("A bot in this team already has that name.")
+                    );
+                }
+                other => panic!("the Edit bot form should stay open, found {other:?}"),
             });
     }
 
