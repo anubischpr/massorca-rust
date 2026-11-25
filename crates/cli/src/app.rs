@@ -262,6 +262,10 @@ fn pair_command(globals: &Globals, command: PairCommand, output: Output) -> Resu
             let target = globals.target()?;
             block_on(pair::offer(&target, globals.autostart, &args, output))
         }
+        PairCommand::Cancel(args) => {
+            let target = globals.target()?;
+            block_on(pair::cancel(&target, globals.autostart, &args, output))
+        }
         PairCommand::Accept(args) => {
             globals.local_only("pair accept")?;
             block_on(pair::accept(&globals.profile()?, &args, output))

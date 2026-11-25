@@ -3,7 +3,8 @@
 
 use massorca_protocol::methods::devices::{
     self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
-    NetworkStatus, PairingCreateParams, PairingCreated, WhoAmI,
+    NetworkStatus, PairingCancelParams, PairingCancelled, PairingCreateParams, PairingCreated,
+    WhoAmI,
 };
 
 use massorca_protocol::capabilities;
@@ -59,6 +60,21 @@ impl Client {
             });
         }
         self.call(devices::PAIRING_CREATE, params).await
+    }
+
+    /// `pairing.cancel`: retires one pending offer, or every one, before it expires. Sent only to a service offering
+    /// `pairing-cancel/1`.
+    pub async fn pairing_cancel(
+        &self,
+        params: &PairingCancelParams,
+    ) -> Result<PairingCancelled, ClientError> {
+        if !self.has_capability(capabilities::PAIRING_CANCEL) {
+            return Err(ClientError::CapabilityMissing {
+                what: "retiring a pairing offer".to_owned(),
+                capability: capabilities::PAIRING_CANCEL.to_owned(),
+            });
+        }
+        self.call(devices::PAIRING_CANCEL, params).await
     }
 
     /// `network.status`: the listeners, the server pin, and how many devices and offers there are.

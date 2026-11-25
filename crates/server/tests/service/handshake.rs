@@ -47,6 +47,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::HOST,
             capabilities::NETWORK,
             capabilities::PAIRING_ADDRESS,
+            capabilities::PAIRING_CANCEL,
             capabilities::PROJECT_UPDATE,
             capabilities::PROJECTS,
             capabilities::SECRETS,

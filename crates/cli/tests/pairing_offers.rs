@@ -99,3 +99,40 @@ fn an_address_no_device_can_dial_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_cancelled_offer_no_longer_pairs_and_all_retires_the_rest() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let (_service, _port) = start_server(&server);
+
+    let made = offer(&server, &[]);
+    let id = text(&made["offer_id"]).to_owned();
+    let retired = server.json_ok("server", &["--no-autostart", "pair", "cancel", &id]);
+    assert_eq!(retired["cancelled"], 1);
+    let refused = accept(&client, text(&made["offer"]), "srv").code(4);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "pairing.invalid"
+    );
+
+    let again = server
+        .run(
+            "server",
+            &with_json(&["--no-autostart", "pair", "cancel", &id]),
+        )
+        .failure();
+    assert_eq!(
+        single_document(&again)["error"]["code"],
+        "pairing.offer_not_found"
+    );
+
+    offer(&server, &[]);
+    offer(&server, &[]);
+    let all = server.json_ok("server", &["--no-autostart", "pair", "cancel", "--all"]);
+    assert_eq!(all["cancelled"], 2);
+
+    server
+        .run("server", &["--no-autostart", "pair", "cancel"])
+        .code(2);
+}

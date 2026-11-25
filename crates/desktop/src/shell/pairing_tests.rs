@@ -22,6 +22,7 @@ fn created(offer: &str) -> PairingCreated {
         scopes: vec!["read".into()],
         addresses: vec!["100.64.0.10:7347".into()],
         server_pin: "sha256:test".into(),
+        offer_id: None,
     }
 }
 

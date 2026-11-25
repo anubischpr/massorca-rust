@@ -12,6 +12,8 @@ pub const FORGET: &str = "device.forget";
 pub const GRANT: &str = "device.grant";
 pub const WHOAMI: &str = "device.whoami";
 pub const PAIRING_CREATE: &str = "pairing.create";
+/// Retires pending offers before they expire (device-admin; `pairing-cancel/1`).
+pub const PAIRING_CANCEL: &str = "pairing.cancel";
 pub const NETWORK_STATUS: &str = "network.status";
 
 /// Permission classes a device may hold, as they appear on the wire.
@@ -122,6 +124,24 @@ pub struct PairingCreated {
     pub scopes: Vec<String>,
     pub addresses: Vec<String>,
     pub server_pin: String,
+    /// Names the offer for `pairing.cancel`; it is not a credential. Absent from services before `pairing-cancel/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+}
+
+/// Which pending offers to retire: the one `offer_id` names, or every one with `all`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingCancelParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingCancelled {
+    /// How many pending offers were retired.
+    pub cancelled: u32,
 }
 
 /// One network listener of the service.

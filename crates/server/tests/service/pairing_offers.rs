@@ -1,8 +1,9 @@
 //! Pairing offers beyond the basics (SRV-06, SRV-07): addresses the owner gives, and retiring an offer early.
 
+use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::devices::{
-    self, NetworkStatus, PairingCreateParams, PairingCreated,
+    self, NetworkStatus, PairingCancelParams, PairingCancelled, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::pairing::Offer;
 
@@ -74,5 +75,84 @@ async fn an_address_no_device_can_dial_is_refused_and_no_offer_is_made() {
     }
     let status: NetworkStatus = owner.call(devices::NETWORK_STATUS, &()).await.unwrap();
     assert_eq!(status.pending_offers, 0);
+    stop(running).await;
+}
+
+async fn create(owner: &Client) -> PairingCreated {
+    owner
+        .call(devices::PAIRING_CREATE, &with_addresses(&[]))
+        .await
+        .expect("an offer")
+}
+
+async fn cancel(owner: &Client, params: PairingCancelParams) -> Result<u32, ClientError> {
+    owner
+        .pairing_cancel(&params)
+        .await
+        .map(|done: PairingCancelled| done.cancelled)
+}
+
+fn by_id(id: &str) -> PairingCancelParams {
+    PairingCancelParams {
+        offer_id: Some(id.to_owned()),
+        all: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_offer_is_refused_and_the_others_still_pair() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let owner = connect(home.path(), "server").await;
+    let retired = create(&owner).await;
+    let kept = create(&owner).await;
+    let id = retired.offer_id.clone().expect("the offer has an id");
+    assert_ne!(Some(&id), kept.offer_id.as_ref());
+
+    assert_eq!(cancel(&owner, by_id(&id)).await.expect("cancelled"), 1);
+    let again = cancel(&owner, by_id(&id)).await.expect_err("not pending");
+    assert_eq!(remote_code(&again), codes::PAIRING_OFFER_NOT_FOUND);
+
+    let (_client_home, hosts) = client_side();
+    let offer = Offer::decode(retired.offer.expose()).expect("decodes");
+    match pair(&hosts, &offer, "vps").await {
+        Err(ClientError::Handshake { error, .. }) => {
+            assert_eq!(error.code, codes::PAIRING_INVALID);
+        }
+        other => panic!("a retired offer paired or failed otherwise: {other:?}"),
+    }
+    let offer = Offer::decode(kept.offer.expose()).expect("decodes");
+    pair(&hosts, &offer, "vps")
+        .await
+        .expect("the other offer pairs");
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn all_retires_every_pending_offer_and_a_request_names_one_way() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let owner = connect(home.path(), "server").await;
+    create(&owner).await;
+    create(&owner).await;
+    let all = PairingCancelParams {
+        offer_id: None,
+        all: true,
+    };
+    assert_eq!(cancel(&owner, all.clone()).await.expect("cancelled"), 2);
+    let status: NetworkStatus = owner.call(devices::NETWORK_STATUS, &()).await.unwrap();
+    assert_eq!(status.pending_offers, 0);
+    assert_eq!(cancel(&owner, all).await.expect("nothing left"), 0);
+
+    for params in [
+        PairingCancelParams::default(),
+        PairingCancelParams {
+            offer_id: Some("x".to_owned()),
+            all: true,
+        },
+    ] {
+        let refused = cancel(&owner, params).await.expect_err("refused");
+        assert_eq!(remote_code(&refused), codes::REQUEST_INVALID_PARAMS);
+    }
     stop(running).await;
 }

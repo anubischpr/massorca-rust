@@ -227,6 +227,18 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "pair.cancel",
+            "Retire a pending pairing offer before it expires",
+            "pairing.cancel",
+            json!({
+                "type": "object",
+                "properties": {
+                    "offer_id": { "type": "string" },
+                    "all": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "server.status",
             "Show the service's network listeners and devices",
             "network.status",
