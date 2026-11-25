@@ -1018,3 +1018,64 @@ fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &m
     click(cx, "button:session-resume");
     assert_eq!(resume_mode(&mut rig.script), Some(None));
 }
+
+/// The transcript a chat session holds after its first exchange: the person's ask and the agent's answer.
+fn chat_transcript() -> crate::model::chat_transcript::ChatTranscript {
+    use crate::model::chat_items::{
+        ChatBody, ChatCursor, ChatEvent, ChatItem, ChatSnapshot, MessageState,
+    };
+
+    let item = |id: &str, position: u64, body: ChatBody| ChatItem {
+        id: id.to_owned(),
+        position,
+        seq: position,
+        turn: None,
+        parent: None,
+        at_ms: 0,
+        body,
+    };
+    let mut transcript = crate::model::chat_transcript::ChatTranscript::default();
+    transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
+        cursor: ChatCursor {
+            epoch: "epoch-1".to_owned(),
+            seq: 2,
+        },
+        items: vec![
+            item(
+                "ask",
+                1,
+                ChatBody::UserMessage {
+                    text: "Fix the parser.".to_owned(),
+                },
+            ),
+            item(
+                "answer",
+                2,
+                ChatBody::AssistantMessage {
+                    text: "Reading it now.".to_owned(),
+                    state: MessageState::Completed,
+                },
+            ),
+        ],
+        has_older: false,
+        latest_turn: None,
+        activity: None,
+    })));
+    transcript
+}
+
+#[gpui::test]
+fn a_chat_arm_session_draws_its_transcript_and_composer_and_no_terminal(cx: &mut TestAppContext) {
+    let (rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(false, None)]);
+    rig.shell.update(cx, |shell, _| {
+        shell
+            .chat_transcripts
+            .insert("s1".to_owned(), chat_transcript());
+    });
+    draw(cx);
+
+    assert!(cx.debug_bounds("transcript-list").is_some());
+    assert!(cx.debug_bounds("transcript-row-ask").is_some());
+    assert!(cx.debug_bounds("composer-primary").is_some());
+    assert!(cx.debug_bounds("session-terminal").is_none());
+}
