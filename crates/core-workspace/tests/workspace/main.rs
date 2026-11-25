@@ -14,6 +14,7 @@ mod layout;
 mod names;
 mod names_and_paths;
 mod project_base;
+mod project_git_init;
 mod project_icon;
 mod project_icon_detection;
 mod projects;
