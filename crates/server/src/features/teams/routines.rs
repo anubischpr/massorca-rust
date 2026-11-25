@@ -237,7 +237,7 @@ impl HostZone {
     }
 }
 
-fn add_routine(
+pub(super) fn add_routine(
     store: &Store,
     params: RoutineAddParams,
     admin: bool,

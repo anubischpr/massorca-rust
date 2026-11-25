@@ -6,6 +6,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::tasks::Task;
+use super::teams::Routine;
 
 /// Params: [`TeamRoomListParams`]. Result: [`TeamRoomList`], oldest first.
 pub const ROOM_LIST: &str = "team.room_list";
@@ -39,6 +40,9 @@ pub struct TeamRoomMessage {
     /// The task the line is about, as the Board shows it now; absent once the task was removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<Task>,
+    /// The one-time routine the line scheduled (decision 0121); absent once the routine was removed, and from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<Routine>,
     pub created_at_ms: i64,
 }
 
@@ -58,7 +62,8 @@ pub struct TeamRoomList {
 }
 
 /// Params of `team.room_post`. Without `bot`, a person posts and the line becomes a task for a bot of the team: the bot
-/// named with `@name` at the start of a word, else `to`, else the team's lead, else its first bot. With `bot`, that bot
+/// named with `@name` at the start of a word, else `to`, else the team's lead, else its first bot. A line that names one
+/// day and one time becomes a one-time routine of that bot instead (decision 0121). With `bot`, that bot
 /// posts. An agent run sends its `session` and `agent_token`, and then posts only as the bot of its own task.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamRoomPostParams {

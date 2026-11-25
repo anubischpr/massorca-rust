@@ -563,6 +563,13 @@ CREATE TABLE agent_chat_text_chunks (
 "#,
         foreign_keys_off: false,
     },
+    // A room line about the one-time routine it scheduled (decision 0121); the routine's removal keeps the line.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN routine_id TEXT REFERENCES team_routines(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

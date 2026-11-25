@@ -150,6 +150,7 @@ mod tests {
             bot_name: bot.map(|(_, name)| name.to_owned()),
             text: text.to_owned(),
             task: None,
+            routine: None,
             created_at_ms: 1_700_000_000_000,
         }
     }

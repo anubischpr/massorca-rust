@@ -13,11 +13,12 @@ pub struct TeamRoomMessageRow {
     pub text: String,
     /// The task the line is about, for its Board card.
     pub task_id: Option<String>,
+    /// The one-time routine the line scheduled (decision 0121).
+    pub routine_id: Option<String>,
     pub created_at: i64,
 }
 
-const SELECT_ROOM: &str =
-    "SELECT id, team_id, author, bot_id, text, task_id, created_at FROM team_room_messages";
+const SELECT_ROOM: &str = "SELECT id, team_id, author, bot_id, text, task_id, routine_id, created_at FROM team_room_messages";
 
 fn room_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoomMessageRow> {
     Ok(TeamRoomMessageRow {
@@ -27,6 +28,7 @@ fn room_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoomMessageRow> {
         bot_id: row.get("bot_id")?,
         text: row.get("text")?,
         task_id: row.get("task_id")?,
+        routine_id: row.get("routine_id")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -35,7 +37,7 @@ impl Store {
     /// Inserts a room line. An unknown team or bot is `StoreError::Constraint`.
     pub fn insert_team_room_message(&self, row: &TeamRoomMessageRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO team_room_messages (id, team_id, author, bot_id, text, task_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO team_room_messages (id, team_id, author, bot_id, text, task_id, routine_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 row.id,
                 row.team_id,
@@ -43,6 +45,7 @@ impl Store {
                 row.bot_id,
                 row.text,
                 row.task_id,
+                row.routine_id,
                 row.created_at
             ],
         )?;

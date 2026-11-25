@@ -1,16 +1,23 @@
 //! `team.room_list` and `team.room_post` (capability `team-room/1`, decision 0102): a team's Conference room. A
 //! person's line becomes a task for one bot, which starts at once; the bot answers in the room, and posts again when the
-//! task ends (see `task_outcome`).
+//! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead (decision 0121).
 
+use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use massorca_core_agents::{Agents, SecretGrant};
+use massorca_core_schedule::host_zone_used;
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
-use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_ROOM_CHANGED};
+use massorca_protocol::methods::events::{
+    TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+};
 use massorca_protocol::methods::tasks::{TaskCreateParams, TaskOrigin};
 use massorca_protocol::methods::team_room::{
     self, RoomAuthor, TeamRoomList, TeamRoomListParams, TeamRoomMessage, TeamRoomPostParams,
     TeamRoomPosted,
 };
+use massorca_protocol::methods::teams::{RoutineAddParams, RoutineCadence};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
@@ -21,6 +28,8 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
+use super::room_schedule::{Moment, scheduled_moment};
+use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
 use super::task_start::{Changes, publish_changes, start_task};
 use super::{blocking, invalid, non_blank, selectors, store_error, task_state};
@@ -78,6 +87,13 @@ async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomLis
 struct Start {
     workspaces: Workspaces,
     grant: SecretGrant,
+}
+
+impl Start {
+    /// Whether the caller holds host-admin scope, which a routine it schedules keeps for its runs (decision 0071).
+    fn admin(&self) -> bool {
+        matches!(self.grant, SecretGrant::Provide)
+    }
 }
 
 /// Who posts a line: a person, a bot a person names, or the agent run of a bot's own task.
@@ -150,6 +166,9 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
     for task in messages.iter().filter_map(|line| line.task.as_ref()) {
         publish(&ctx, TOPIC_TASK_CHANGED, &task.id);
     }
+    if messages.iter().any(|line| line.routine.is_some()) {
+        publish(&ctx, TOPIC_TEAM_CHANGED, &team_id);
+    }
     publish(&ctx, TOPIC_TEAM_ROOM_CHANGED, &team_id);
     Ok(TeamRoomPosted { messages })
 }
@@ -192,7 +211,8 @@ fn agent_line(
 }
 
 /// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the first bot), starts
-/// the task and stores the bot's answer. A team without bots refuses the line and stores nothing.
+/// the task and stores the bot's answer. A line that names a day and a time becomes that bot's one-time routine instead.
+/// A team without bots refuses the line and stores nothing.
 fn person_line(
     store: &Store,
     agents: &Agents,
@@ -207,6 +227,10 @@ fn person_line(
     let Some(bot) = addressed_bot(&bots, &text, to.as_ref()) else {
         return Err(ErrorBody::new(codes::TASK_NO_BOT, NO_BOTS));
     };
+    let now = now_ms();
+    if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&text, today)) {
+        return schedule_line(store, team, bot, text, moment, start.admin(), now);
+    }
     let title = task_title(&text);
     let task = create_task(
         store,
@@ -234,6 +258,64 @@ fn person_line(
     };
     let bot_line = insert_line(store, team, Some(bot), answer, Some(task.id))?;
     Ok(vec![person, bot_line])
+}
+
+/// Stores a person's line that names a day and a time, schedules it as `bot`'s one-time routine through the path of
+/// `team.routine_add`, and stores the bot's answer: the routine, or why it was not made (such as a moment already past).
+fn schedule_line(
+    store: &Store,
+    team: &TeamRow,
+    bot: &BotRow,
+    text: String,
+    moment: Moment,
+    admin: bool,
+    now: i64,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let title = task_title(&text);
+    let (date, time) = (moment.run_date(), moment.clock());
+    let added = add_routine(
+        store,
+        RoutineAddParams {
+            team: team.id.clone(),
+            bot: bot.id.clone(),
+            name: title.clone(),
+            prompt: text.clone(),
+            cadence: RoutineCadence::Once,
+            time: time.clone(),
+            weekday: None,
+            month_day: None,
+            run_date: Some(date.clone()),
+            zone: None,
+        },
+        admin,
+        now,
+        &HostZone::read(),
+    );
+    let person = insert_line(store, team, None, text, None)?;
+    let mut answer = new_line(team, Some(bot), String::new(), None);
+    match added {
+        Ok(routine) => {
+            answer.text = format!("Routine created: {title}. It runs once on {date} at {time}.");
+            answer.routine_id = Some(routine.id);
+        }
+        Err(error) => answer.text = format!("Not scheduled: {}", error.message),
+    }
+    store
+        .insert_team_room_message(&answer)
+        .map_err(store_error)?;
+    Ok(vec![person, answer])
+}
+
+/// Today on the clock a routine without a zone runs on: the host's zone, else UTC.
+fn host_today(now: i64) -> Option<Date> {
+    let zone = host_zone_used()
+        .0
+        .and_then(|name| TimeZone::get(&name).ok())
+        .unwrap_or(TimeZone::UTC);
+    Some(
+        zone.to_datetime(Timestamp::from_millisecond(now).ok()?)
+            .date(),
+    )
 }
 
 /// The bot a line names with `@name` at the start of a word (the longest name wins), else `to`, else the lead, else the
@@ -294,17 +376,28 @@ pub(super) fn insert_line(
     text: String,
     task_id: Option<String>,
 ) -> Result<TeamRoomMessageRow, ErrorBody> {
-    let row = TeamRoomMessageRow {
+    let row = new_line(team, bot, text, task_id);
+    store.insert_team_room_message(&row).map_err(store_error)?;
+    Ok(row)
+}
+
+/// One line of `team`'s room, not yet stored.
+fn new_line(
+    team: &TeamRow,
+    bot: Option<&BotRow>,
+    text: String,
+    task_id: Option<String>,
+) -> TeamRoomMessageRow {
+    TeamRoomMessageRow {
         id: new_id(),
         team_id: team.id.clone(),
         author: if bot.is_some() { "bot" } else { "person" }.to_owned(),
         bot_id: bot.map(|bot| bot.id.clone()),
         text,
         task_id,
+        routine_id: None,
         created_at: now_ms(),
-    };
-    store.insert_team_room_message(&row).map_err(store_error)?;
-    Ok(row)
+    }
 }
 
 /// The lines as the room shows them: each bot's name and each task as the Board shows it now.
@@ -315,8 +408,16 @@ fn views(
     rows: &[TeamRoomMessageRow],
 ) -> Result<Vec<TeamRoomMessage>, ErrorBody> {
     let bots = store.list_bots(&team.id).map_err(store_error)?;
+    let host = HostZone::read();
     rows.iter()
         .map(|row| {
+            let routine = match row.routine_id.as_deref() {
+                Some(id) => store
+                    .get_routine(id)
+                    .map_err(store_error)?
+                    .map(|routine| routine_view(&routine, &host)),
+                None => None,
+            };
             let task = match row.task_id.as_deref() {
                 Some(id) => match store.get_task(id).map_err(store_error)? {
                     Some(task) => Some(view_of(&task, &task_state::load(agents, &task)?)),
@@ -340,6 +441,7 @@ fn views(
                 }),
                 text: row.text.clone(),
                 task,
+                routine,
                 created_at_ms: row.created_at,
             })
         })
@@ -486,5 +588,64 @@ mod tests {
             .map(|line| line.text)
             .collect();
         assert_eq!(texts, ["On it", "Still on it"]);
+    }
+
+    #[test]
+    fn a_line_with_a_day_and_a_time_becomes_a_one_time_routine_of_its_bot() {
+        let (store, team, _) = store_with_room_task();
+        let bots = store.list_bots(&team.id).unwrap();
+        let mara = bots.iter().find(|bot| bot.name == "Mara").unwrap();
+        let text = "Back up the docs on 2099-01-02 at 09:00".to_owned();
+        let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
+        let lines =
+            schedule_line(&store, &team, mara, text.clone(), moment, true, now_ms()).unwrap();
+
+        assert_eq!(lines[0].author, "person");
+        assert_eq!(lines[0].text, text);
+        assert_eq!(lines[1].bot_id.as_deref(), Some("mara"));
+        assert_eq!(
+            lines[1].text,
+            "Routine created: Back up the docs on 2099-01-02 at 09:00. It runs once on 2099-01-02 at 09:00."
+        );
+        let routines = store.list_routines(&team.id).unwrap();
+        assert_eq!(routines.len(), 1);
+        let routine = &routines[0];
+        assert_eq!(lines[1].routine_id.as_deref(), Some(routine.id.as_str()));
+        assert_eq!(
+            (
+                routine.cadence.as_str(),
+                routine.run_date.as_deref(),
+                routine.time.as_str()
+            ),
+            ("once", Some("2099-01-02"), "09:00")
+        );
+        assert_eq!(routine.bot_id.as_deref(), Some("mara"));
+        assert_eq!(routine.prompt, text);
+        assert!(
+            routine.starts_as_admin,
+            "it keeps the poster's host-admin scope"
+        );
+        assert!(routine.next_run_at.is_some());
+        assert_eq!(
+            store.list_tasks(Some(&team.id)).unwrap().len(),
+            1,
+            "no task beyond the fixture's"
+        );
+    }
+
+    #[test]
+    fn a_moment_already_past_is_answered_and_schedules_nothing() {
+        let (store, team, _) = store_with_room_task();
+        let bots = store.list_bots(&team.id).unwrap();
+        let text = "2000-01-01 at 9am rotate logs".to_owned();
+        let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
+        let lines = schedule_line(&store, &team, &bots[0], text, moment, false, now_ms()).unwrap();
+        assert_eq!(
+            lines[1].text,
+            "Not scheduled: the one-time run on 2000-01-01 has already passed"
+        );
+        assert_eq!(lines[1].routine_id, None);
+        assert!(store.list_routines(&team.id).unwrap().is_empty());
+        assert_eq!(store.list_team_room(&team.id, None).unwrap().len(), 2);
     }
 }

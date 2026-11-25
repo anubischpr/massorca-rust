@@ -619,6 +619,7 @@ mod tests {
             bot_name: bot.map(|(_, name)| name.into()),
             text: text.into(),
             task: None,
+            routine: None,
             created_at_ms: 1_700_000_000_000,
         }
     }
