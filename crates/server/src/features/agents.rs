@@ -54,6 +54,14 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_RELEASE, Owner::Core)?,
+        // A start with no workspace runs in the conversations folder (decision 0092).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_NO_PROJECT, Owner::Core)?,
+        // `model` and `effort` on a start (decision 0092).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,

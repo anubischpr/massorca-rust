@@ -10,10 +10,11 @@ use crate::paths;
 use crate::workspaces::Workspaces;
 
 impl Workspaces {
-    /// Projects are unique by id, name and path, so each step matches at most one row.
+    /// Projects are unique by id, name and path, so each step matches at most one row. The hidden project of a
+    /// conversations folder (decision 0092) is never selected: no list shows it, so no command may act on it.
     pub(crate) fn resolve_project(&self, selector: &str) -> Result<ProjectRow, DomainError> {
         refuse_relative_path(selector)?;
-        if let Some(row) = self.store.get_project(selector)? {
+        if let Some(row) = self.store.get_listed_project(selector)? {
             return Ok(row);
         }
         if let Some(row) = self.store.find_project_by_name(selector)? {

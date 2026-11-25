@@ -398,11 +398,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.start",
-            "Start an agent in a workspace",
+            "Start an agent in a workspace, or with no project in the conversations folder",
             "agent.start",
             json!({
                 "type": "object",
-                "required": ["workspace", "kind"],
+                "required": ["kind"],
                 "properties": {
                     "workspace": { "type": "string" },
                     "kind": { "type": "string" },
@@ -410,7 +410,9 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "args": { "type": "array", "items": { "type": "string" } },
                     "read_only": { "type": "boolean" },
                     "title": { "type": "string" },
-                    "request_id": { "type": "string" }
+                    "request_id": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" }
                 }
             }),
         ),
