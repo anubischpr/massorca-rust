@@ -119,12 +119,6 @@ async fn run_session(
         }
     };
 
-    if closing != Closing::ShuttingDown {
-        // Nobody is left to read the replies, or the device may no longer have them, so the requests are cancelled.
-        requests.abort_all();
-    }
-    // The accept loop bounds this wait when the service is stopping.
-    while requests.join_next().await.is_some() {}
     // Each open stream is told why it ends, so a client does not mistake it for a finished stream.
     let reason = match closing {
         Closing::PeerLeft => None,
@@ -134,8 +128,22 @@ async fn run_session(
         )),
         Closing::Revoked => Some(revoked_error()),
     };
+    if closing == Closing::ShuttingDown {
+        // Subscribers learn at once, before the in-flight requests drain.
+        end_streams(session, reason.as_ref()).await;
+    } else {
+        // Nobody is left to read the replies, or the device may no longer have them, so the requests are cancelled.
+        requests.abort_all();
+    }
+    // The accept loop bounds this wait when the service is stopping.
+    while requests.join_next().await.is_some() {}
+    // Also ends streams that requests opened while draining.
+    end_streams(session, reason.as_ref()).await;
+}
+
+async fn end_streams(session: &Session, reason: Option<&ErrorBody>) {
     for stream in session.streams.close_all() {
-        if let Some(error) = &reason {
+        if let Some(error) = reason {
             let _ = session
                 .outbound
                 .send(Frame::Message(Message::End {
