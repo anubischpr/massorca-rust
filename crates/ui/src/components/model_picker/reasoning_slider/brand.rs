@@ -1,9 +1,48 @@
-//! The brand colours of the reasoning slider's fill and of the level name.
+//! The brand colours of the reasoning slider: the fill runs between an agent's two listing colours,
+//! and the level name takes whichever of the two reads better on the picker's surface.
+
+use crate::tokens::Color;
+
+/// An agent's listing colours (`listing.banner.colors`), first and second. One colour serves both ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgentBrand {
+    pub first: Color,
+    pub second: Option<Color>,
+}
+
+/// The two colours of the fill: `first` at the bottom, `second` at the top.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrandColours {
+    pub first: Color,
+    pub second: Color,
+}
+
+/// The fill colours of `brand`, or the accent (`default` to `fg`) when the agent lists none.
+pub fn brand_colours(brand: Option<&AgentBrand>, accent: (Color, Color)) -> BrandColours {
+    match brand {
+        Some(brand) => BrandColours {
+            first: brand.first,
+            second: brand.second.unwrap_or(brand.first),
+        },
+        None => BrandColours {
+            first: accent.0,
+            second: accent.1,
+        },
+    }
+}
+
+/// The colour of the level name: whichever brand colour contrasts more with `surface`.
+pub fn name_colour(brand: BrandColours, surface: Color) -> Color {
+    if brand.first.contrast(surface) >= brand.second.contrast(surface) {
+        brand.first
+    } else {
+        brand.second
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokens::Color;
 
     fn rgb(r: u8, g: u8, b: u8) -> Color {
         Color::rgba8(r, g, b, 1.0)
