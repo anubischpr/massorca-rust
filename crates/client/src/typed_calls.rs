@@ -257,8 +257,9 @@ impl Client {
     }
 
     /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
-    /// 0094). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
-    /// `agent-options/1`; a service that offers neither is refused before anything is sent.
+    /// 0094). A start with no workspace needs capability `agent-no-project/1`, one with a `model` or an `effort` needs
+    /// `agent-options/1`, and one with `fast` needs `agent-fast/1` (decision 0165); a service that offers none of them is
+    /// refused before anything is sent.
     pub async fn agent_start(
         &self,
         params: &AgentStartParams,
@@ -275,6 +276,13 @@ impl Client {
                 self.has_capability(capabilities::AGENT_OPTIONS),
                 capabilities::AGENT_OPTIONS,
                 "a model or an effort",
+            )?;
+        }
+        if params.fast.is_some() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_FAST),
+                capabilities::AGENT_FAST,
+                "fast mode",
             )?;
         }
         self.call(agents::START, params).await

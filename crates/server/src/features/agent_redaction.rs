@@ -76,6 +76,7 @@ mod tests {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
         }
     }

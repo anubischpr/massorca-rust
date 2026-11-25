@@ -64,6 +64,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // Fast mode on a start, a kind, a model and a session (decision 0165).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_FAST, Owner::Core)?,
         // Import source detection, and an import without a folder (decision 0097).
         registries
             .capabilities

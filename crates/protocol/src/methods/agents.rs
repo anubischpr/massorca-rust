@@ -266,6 +266,27 @@ pub struct AgentKind {
     /// effort, and from a peer that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<KindEffort>,
+    /// Fast mode the kind takes at start (decision 0165). Absent from a peer that predates it; a kind that declares no fast
+    /// mode says so with `supported: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<KindFast>,
+}
+
+/// The `fast` option of a kind (decision 0165), as `agent.kinds` lists it: whether it takes fast mode at start, and why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindFast {
+    pub supported: bool,
+    /// Why the kind takes no fast mode, when `supported` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The fast mode of a session (decision 0165): whether its current or last run was started with it on, and whether
+/// something confirmed the vendor took it. Nothing confirms it yet, so `confirmed` is false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFast {
+    pub on: bool,
+    pub confirmed: bool,
 }
 
 /// The `model` option of a kind (decision 0094), as `agent.kinds` lists it: the choices its picker shows.
@@ -287,6 +308,9 @@ pub struct KindModelChoice {
     /// The effort levels this model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub efforts: Option<Vec<String>>,
+    /// Whether the model takes fast mode (decision 0165). Omitted when it does not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
 }
 
 /// The `effort` option of a kind (decision 0094), as `agent.kinds` lists it: the levels its picker shows.
@@ -390,6 +414,8 @@ struct AgentKindWire {
     model: Option<KindModel>,
     #[serde(default)]
     effort: Option<KindEffort>,
+    #[serde(default)]
+    fast: Option<KindFast>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -412,6 +438,7 @@ impl From<AgentKindWire> for AgentKind {
             chat: wire.chat,
             model: wire.model,
             effort: wire.effort,
+            fast: wire.fast,
         }
     }
 }
@@ -492,6 +519,10 @@ pub struct AgentStartParams {
     /// declares no effort flag refuses it with `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Fast mode for this start (capability `agent-fast/1`, decision 0165): passed as the kind's `fast` settings. A kind
+    /// that declares no fast mode, or a model that does not take it, refuses it with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
 }
 
 /// Params of `agent.list`.
@@ -926,6 +957,10 @@ pub struct AgentSession {
     /// (absent) otherwise, and from an older peer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Whether the run was started with fast mode on (capability `agent-fast/1`, decision 0165). Absent when off, and
+    /// from a peer without the capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<SessionFast>,
 }
 
 /// The children a session could delegate now (decision 0161).

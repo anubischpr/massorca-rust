@@ -95,6 +95,7 @@ fn the_chat_start_carries_the_agent_start_fields_at_the_top_level() {
             request_id: Some("r-1".to_owned()),
             permission_mode: Some("default".to_owned()),
             model: None,
+            fast: None,
             effort: None,
         },
     };
