@@ -22,6 +22,7 @@ use massorca_protocol::methods::workspaces::Workspace;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
+use super::skills::SkillsRead;
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
@@ -68,6 +69,8 @@ pub enum StoreUpdate {
     Extensions(ExtensionsRead),
     /// What a paired host's Marketplace reads answered; the newest answer per host is kept.
     HostMarketplace(HostMarketplaceRead),
+    /// What a discovery of skills answered, for This computer or a paired host; the newest answer per host is kept.
+    Skills(SkillsRead),
     /// Every setting the service declares with its value, after a connect. Replaces what was held.
     ConfigResync(Vec<ConfigValue>),
     /// One setting the service changed or stored, read again by its owner and key.
@@ -232,6 +235,8 @@ pub struct StoreState {
     pub extensions: Option<ExtensionsRead>,
     /// The newest Marketplace answer of each paired host, by host name.
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
+    /// The newest skills answer of This computer (None) and of each paired host, by host name.
+    pub skills: BTreeMap<Option<String>, SkillsRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
@@ -270,6 +275,7 @@ impl Default for StoreState {
             extension_read: 0,
             extensions: None,
             host_listings: BTreeMap::new(),
+            skills: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
@@ -371,6 +377,7 @@ impl StoreState {
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
+            StoreUpdate::Skills(read) => self.apply_skills(read),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
                 replace_by(&mut self.config, value, |held| {
@@ -455,6 +462,18 @@ impl StoreState {
             return;
         }
         self.host_listings.insert(read.host.clone(), read);
+    }
+
+    /// Keeps the newest skills answer of each host, so an answer to an older request never replaces a newer one.
+    fn apply_skills(&mut self, read: SkillsRead) {
+        if self
+            .skills
+            .get(&read.host)
+            .is_some_and(|held| held.request > read.request)
+        {
+            return;
+        }
+        self.skills.insert(read.host.clone(), read);
     }
 
     /// Replaces the host records, keeping what each host's last check found. A host no longer listed is dropped.
@@ -1201,5 +1220,28 @@ mod tests {
         state.apply(StoreUpdate::HostMarketplace(newest.clone()), now);
         state.apply(StoreUpdate::HostMarketplace(older), now);
         assert_eq!(state.host_listings.get("vps"), Some(&newest));
+    }
+
+    #[test]
+    fn marketplace_skills_keep_the_newest_answer_of_each_host() {
+        use crate::service::SkillsListing;
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let answer = |host: Option<&str>, request| SkillsRead {
+            host: host.map(str::to_owned),
+            request,
+            listing: SkillsListing::UpdateNeeded,
+        };
+        state.apply(StoreUpdate::Skills(answer(None, 2)), now);
+        state.apply(StoreUpdate::Skills(answer(None, 1)), now);
+        state.apply(StoreUpdate::Skills(answer(Some("vps"), 3)), now);
+        assert_eq!(state.skills.get(&None).map(|read| read.request), Some(2));
+        assert_eq!(
+            state
+                .skills
+                .get(&Some("vps".to_owned()))
+                .map(|read| read.request),
+            Some(3)
+        );
     }
 }
