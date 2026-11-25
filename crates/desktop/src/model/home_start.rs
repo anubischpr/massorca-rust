@@ -351,6 +351,7 @@ mod tests {
         assert_eq!(params.effort.as_deref(), Some("xhigh"));
     }
 
+    #[test]
     fn a_no_project_start_carries_no_workspace_and_a_blank_prompt_sends_none() {
         let params = no_project_start_params(
             "claude",
