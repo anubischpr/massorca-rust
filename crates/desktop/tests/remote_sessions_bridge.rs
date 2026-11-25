@@ -87,7 +87,18 @@ async fn until(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
-    let folded = timeout(WAIT, async {
+    until_within(updates, state, what, WAIT, done).await;
+}
+
+/// Folds the bridge's updates until `done` holds, or fails once `within` has passed.
+async fn until_within(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    within: Duration,
+    done: impl Fn(&StoreState) -> bool,
+) {
+    let folded = timeout(within, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
             state.apply(update, Instant::now());
@@ -292,4 +303,129 @@ async fn a_paired_hosts_session_is_listed_and_kept_unverifiable_when_the_host_st
     );
 
     drop(client_bridge);
+}
+
+/// The bridge's poll checks a host every 30 s; a change inside this window reached the desktop by the host's
+/// event subscription, not by the poll.
+const BEFORE_THE_POLL: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() {
+    let server_home = temp_home();
+    let repo_dir = server_home.path.with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(&server_home.path);
+    let server = start_listening(&server_home.path).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(&server_home.path);
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let workspace = add_workspace(&server_handle, &repo_dir).await;
+    let first = start_fake(&server_handle, &workspace.id).await;
+    let offer = server_handle
+        .create_offer(PairingCreateParams {
+            ttl_secs: None,
+            admin: false,
+            standard: false,
+        })
+        .await
+        .expect("an offer is made");
+
+    let client_home = temp_home();
+    let (client_bridge, client_handle, mut client_updates) = bridge_for(&client_home.path);
+    client_handle
+        .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
+        .await
+        .expect("the offer pairs");
+    client_handle.refresh_hosts();
+    let mut state = StoreState::default();
+    let first_id = first.id.clone();
+    until(&mut client_updates, &mut state, "the first session", |s| {
+        listed_under(s, "vps").contains(&first_id)
+    })
+    .await;
+
+    // The host starts a second session; the desktop follows the host's event and lists it without a refresh.
+    // One workspace runs one writing session at a time, so the second session gets its own workspace.
+    let second_workspace = server_handle
+        .create_workspace(WorkspaceCreateParams {
+            project: workspace.project_id.clone(),
+            name: "second".to_owned(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: false,
+            path: None,
+            request_id: None,
+            no_setup: false,
+        })
+        .await
+        .expect("the second workspace is created");
+    let second = start_fake(&server_handle, &second_workspace.id).await;
+    let second_id = second.id.clone();
+    until_within(
+        &mut client_updates,
+        &mut state,
+        "the second session by event",
+        BEFORE_THE_POLL,
+        |s| listed_under(s, "vps").contains(&second_id),
+    )
+    .await;
+
+    drop(client_bridge);
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
+async fn a_stop_of_a_paired_hosts_session_is_answered_by_that_host() {
+    let server_home = temp_home();
+    let repo_dir = server_home.path.with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(&server_home.path);
+    let server = start_listening(&server_home.path).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(&server_home.path);
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let workspace = add_workspace(&server_handle, &repo_dir).await;
+    let session = start_fake(&server_handle, &workspace.id).await;
+    let offer = server_handle
+        .create_offer(PairingCreateParams {
+            ttl_secs: None,
+            admin: false,
+            standard: false,
+        })
+        .await
+        .expect("an offer is made");
+
+    let client_home = temp_home();
+    let (client_bridge, client_handle, mut client_updates) = bridge_for(&client_home.path);
+    client_handle
+        .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
+        .await
+        .expect("the offer pairs");
+    client_handle.refresh_hosts();
+    let mut state = StoreState::default();
+    let session_id = session.id.clone();
+    until(&mut client_updates, &mut state, "the host's session", |s| {
+        listed_under(s, "vps").contains(&session_id)
+    })
+    .await;
+
+    // The stop goes over the host's connection; the host answers with its own session.
+    let stopped = client_handle
+        .host_agent_stop("vps", &session.id)
+        .await
+        .expect("the host stops its session");
+    assert_eq!(stopped.id, session.id);
+    assert!(
+        client_handle
+            .host_agent_stop("missing", &session.id)
+            .await
+            .is_err(),
+        "a host that is not paired is refused, not sent to another host"
+    );
+
+    drop(client_bridge);
+    drop(server_bridge);
+    stop_service(server).await;
 }

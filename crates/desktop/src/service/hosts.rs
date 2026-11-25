@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
-use super::host_sessions::{self, HostSessionsRead};
+use super::host_sessions::{Followed, connected, follow};
 use super::refusal::{Refusal, sentence};
 use super::update::{HostLink, StoreUpdate};
 
@@ -66,9 +66,10 @@ pub(super) fn spawn(
     profile: Profile,
     command: Command,
     updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: &Followed,
 ) {
     match command {
-        Command::RefreshHosts => refresh(&profile, &updates),
+        Command::RefreshHosts => refresh(&profile, &updates, followed),
         Command::AddSshHost { host, reply } => {
             tokio::spawn(async move {
                 let result = add_ssh(&profile, host, &updates).await;
@@ -146,22 +147,28 @@ impl ServiceHandle {
     }
 }
 
-/// Lists the hosts, then checks each one at once; each check reports when it finishes.
-fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>) {
+/// Lists the hosts, then checks each one that no task follows at once; each check reports when it finishes. A host
+/// a task follows reports through that task's own connection, so it is not checked again here.
+fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>, followed: &Followed) {
     let hosts = Hosts::of(profile);
     let Ok(records) = hosts.list() else {
         return;
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
-    let check = host_sessions::next_check();
     for record in records {
-        tokio::spawn(probe(hosts.clone(), record.name, check, updates.clone()));
+        if let Some(claim) = followed.claim(&record.name) {
+            tokio::spawn(follow(profile.clone(), record.name, claim, updates.clone()));
+        }
     }
 }
 
-/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs, so a host that comes back shows
-/// its sessions at the next check. Each check is one connection per host, the same as a refresh.
-pub(super) fn check_hosts_again(profile: Profile, updates: mpsc::UnboundedSender<StoreUpdate>) {
+/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs. This is the fallback for a host
+/// with no live event subscription: a host that a task follows is left to that task.
+pub(super) fn check_hosts_again(
+    profile: Profile,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: Followed,
+) {
     tokio::spawn(async move {
         let mut every = tokio::time::interval(HOST_CHECK_EVERY);
         every.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -170,49 +177,13 @@ pub(super) fn check_hosts_again(profile: Profile, updates: mpsc::UnboundedSender
             if updates.is_closed() {
                 return;
             }
-            refresh(&profile, &updates);
+            refresh(&profile, &updates, &followed);
         }
     });
 }
 
-/// How often the paired hosts are checked again while the bridge runs (STAT-16, STAT-17).
+/// How often the paired hosts without a live event subscription are checked again (STAT-16, STAT-17).
 const HOST_CHECK_EVERY: Duration = Duration::from_secs(30);
-
-async fn probe(
-    hosts: Hosts,
-    name: String,
-    check: u64,
-    updates: mpsc::UnboundedSender<StoreUpdate>,
-) {
-    let link = match Client::connect_host(&hosts, &name, &peer()).await {
-        Ok(client) => {
-            let answer = host_sessions::read(&client).await;
-            let _ = updates.send(StoreUpdate::HostSessions(HostSessionsRead {
-                host: name.clone(),
-                request: check,
-                answer,
-            }));
-            connected(&client)
-        }
-        Err(error) => {
-            let _ = updates.send(StoreUpdate::HostSessions(HostSessionsRead {
-                host: name.clone(),
-                request: check,
-                answer: None,
-            }));
-            HostLink::from_error(&error)
-        }
-    };
-    let _ = updates.send(StoreUpdate::HostLinkChanged { name, link });
-}
-
-fn connected(client: &Client) -> HostLink {
-    let server = &client.welcome().server;
-    HostLink::Connected {
-        server: server.name.clone(),
-        version: server.version.clone(),
-    }
-}
 
 /// Tells the store the hosts as they are now, then what this call found about the host it changed.
 fn announce(
