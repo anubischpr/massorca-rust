@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
+use massorca_desktop::model::agent_models::{DeclaredModel, declared_models};
 use massorca_desktop::model::agent_sessions::bring_back_refusal;
 use massorca_desktop::model::session_ended::refusal_says_conversation_gone;
 use massorca_desktop::model::start_page::start_again_params;
@@ -146,6 +147,73 @@ async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
         Instant::now(),
     );
     assert_eq!(store.agent_kinds, declared);
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn the_claude_kind_declares_its_models_and_levels_to_the_store_and_the_picker_on_a_real_service()
+ {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+
+    let declared = timeout(WAIT, async {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if let StoreUpdate::AgentKindsResync(kinds) = update {
+                return kinds;
+            }
+        }
+    })
+    .await
+    .expect("the agent kinds arrive after the connect");
+    let mut store = StoreState::default();
+    store.apply(StoreUpdate::AgentKindsResync(declared), Instant::now());
+    let claude = store
+        .agent_kinds
+        .iter()
+        .find(|kind| kind.id == "claude")
+        .expect("the service declares claude");
+    // What `agent.kinds` reported for claude, as the store holds it: the models it declares, then its levels.
+    let model_ids: Vec<&str> = claude.model.as_ref().map_or_else(Vec::new, |model| {
+        model
+            .choices
+            .iter()
+            .map(|choice| choice.id.as_str())
+            .collect()
+    });
+    assert_eq!(
+        model_ids,
+        ["fable", "opus", "sonnet", "haiku"],
+        "the real service declares claude's models"
+    );
+    // The picker's rows, built from that declaration: each model with the levels it accepts and its preselected level.
+    let rows = declared_models(claude);
+    fn level_ids(model: &DeclaredModel) -> Vec<&str> {
+        model
+            .efforts
+            .iter()
+            .map(|effort| effort.id.as_str())
+            .collect()
+    }
+    assert_eq!(
+        rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        ["fable", "opus", "sonnet", "haiku"]
+    );
+    assert_eq!(
+        level_ids(&rows[1]),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    assert!(level_ids(&rows[3]).is_empty(), "haiku takes no level");
+    assert!(rows[2].default, "sonnet is the declared default model");
+    assert_eq!(
+        rows[2].efforts[rows[2].default_effort].id, "high",
+        "the declared default level is preselected"
+    );
 
     drop(bridge);
     stop_service(service).await;
