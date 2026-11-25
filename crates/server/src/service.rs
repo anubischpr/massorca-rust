@@ -222,8 +222,16 @@ impl Service {
         let git = Git::from_env();
         let default_root = PathBuf::from(features::default_workspace_root()?);
         let workspaces = Arc::new(Workspaces::new(store.clone(), git.clone(), default_root));
-        let mut terminal_config =
-            ManagerConfig::new(EnvSnapshot::current(), server_version.clone());
+        // A run identity the service inherited belongs to another session: no terminal of this service carries it
+        // (decision 0160). Each agent run gets its own from its launch.
+        let base_env = EnvSnapshot::from_pairs(std::env::vars_os().filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            // A vendor's session marker (an inherited CLAUDE_CODE_CHILD_SESSION, say) is dropped too, so no run reads it.
+            (!massorca_core_agents::launch::is_run_identity(&name)
+                && !massorca_core_agents::launch::is_inherited_vendor_marker(&name))
+            .then_some((name, value.into_string().ok()?))
+        }));
+        let mut terminal_config = ManagerConfig::new(base_env, server_version.clone());
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
@@ -247,6 +255,8 @@ impl Service {
             conversations_default: PathBuf::from(crate::features::default_conversations_root()?),
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
+            // The service's own environment: where the vendor CLIs it starts save their conversations (decision 0160).
+            vendor_env: Some(massorca_core_agents::VendorEnv::process()),
         });
         // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
         let guarded = agents.clone();
