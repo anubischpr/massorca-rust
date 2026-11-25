@@ -21,6 +21,7 @@ use massorca_protocol::methods::team_room::TeamRoomPostParams;
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
+use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::menu::{MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::scroll_area::{ScrollArea, ScrollAxis};
@@ -45,6 +46,8 @@ pub(in crate::shell) struct RoomPage {
     notice: Option<(TeamId, String)>,
     /// A refused line's text, put back in the field on the next draw.
     restore: Option<String>,
+    /// Start at once is off: a person's next task waits in Todo.
+    hold: bool,
     /// The room reads asked for, by the service's team id, so each team is read once per open page.
     requested: Option<String>,
     pub(in crate::shell) receiver_menu: Option<OpenReceiverMenu>,
@@ -60,6 +63,7 @@ impl fmt::Debug for RoomPage {
             .field("picks", &self.picks)
             .field("sending", &self.sending)
             .field("notice", &self.notice)
+            .field("hold", &self.hold)
             .field("receiver_menu", &self.receiver_menu.is_some())
             .finish_non_exhaustive()
     }
@@ -87,6 +91,8 @@ pub(in crate::shell) struct RoomFrame {
     receiver: Option<(String, bool)>,
     sending: bool,
     notice: Option<String>,
+    /// Whether a person's task starts at once.
+    at_once: bool,
     shell: WeakEntity<Shell>,
 }
 
@@ -141,6 +147,7 @@ impl Shell {
             receiver,
             sending: self.room_page.sending,
             notice,
+            at_once: !self.room_page.hold,
             shell: cx.entity().downgrade(),
         })
     }
@@ -227,6 +234,7 @@ impl Shell {
             to,
             session: None,
             agent_token: None,
+            start: self.room_page.hold.then_some(false),
         };
         cx.spawn(async move |this, cx| {
             let answer = service.post_to_team_room(params).await;
@@ -538,10 +546,14 @@ fn routine_card(
     )
 }
 
-/// The composer: the refusal of the last line, the field, the receiver and Send.
+/// The composer: the refusal of the last line, the field, the receiver, Start at once and Send.
 fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
     let team = frame.team.id;
-    let (send, pick) = (frame.shell.clone(), frame.shell.clone());
+    let (send, pick, hold) = (
+        frame.shell.clone(),
+        frame.shell.clone(),
+        frame.shell.clone(),
+    );
     let reason = if frame.team.bots.is_empty() {
         Some(NO_BOTS.to_owned())
     } else {
@@ -585,6 +597,19 @@ fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
                                 shell.open_receiver_menu(team, window, cx);
                             });
                         }),
+                )
+                .child(
+                    div().debug_selector(|| "room-start".to_owned()).child(
+                        Checkbox::new("room-start", frame.at_once)
+                            .label("Start at once")
+                            .disabled(!ready)
+                            .on_change(move |checked, _, cx| {
+                                let _ = hold.update(cx, |shell, cx| {
+                                    shell.room_page.hold = !checked;
+                                    cx.notify();
+                                });
+                            }),
+                    ),
                 )
                 .child(div().flex_1())
                 .child(
@@ -675,6 +700,32 @@ mod tests {
             routine: None,
             created_at_ms: 1_700_000_000_000,
         }
+    }
+
+    #[gpui::test]
+    fn start_at_once_off_sends_a_line_whose_task_waits_in_todo(cx: &mut TestAppContext) {
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        click(cx, "room-start");
+        rig.shell.update_in(cx, |shell, window, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            field.update(cx, |field, cx| {
+                field.set_text("Parse the headers", window, cx)
+            });
+        });
+        click(cx, "room-send");
+        let Some(Command::Room(RoomCommand::Post { params, .. })) = rig.script.next() else {
+            panic!("Send posts the line");
+        };
+        assert_eq!(params.start, Some(false));
     }
 
     #[gpui::test]
@@ -790,6 +841,7 @@ mod tests {
         assert_eq!(params.text, "Add magic link sign-in");
         assert_eq!(params.to.as_deref(), Some("b2"), "the lead receives it");
         assert_eq!(params.bot, None);
+        assert_eq!(params.start, None, "a task starts at once by default");
         let _ = reply.send(Err(Refusal::Failed {
             code: "task.no_bot".into(),
             message: "Add a bot to this team first.".into(),
