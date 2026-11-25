@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use super::ModelPicker;
+use super::reasoning_slider::effects::{clock_seconds, move_progress};
 use super::reasoning_slider::{
     ReasoningSlider, brand_colours, has_slider, is_top_level, name_colour,
 };
@@ -57,7 +58,9 @@ struct ModelRow {
 impl ModelPicker {
     /// Chooses a reasoning level. The popover stays open: only Escape or an outside click closes it.
     pub(super) fn choose_effort(&mut self, index: usize, cx: &mut Context<Self>) {
+        let before = self.state.choice().effort;
         if self.state.select_effort(index) {
+            self.note_level_change(before);
             self.emit_change(cx);
         }
         cx.notify();
@@ -418,6 +421,21 @@ impl ModelPicker {
             .when_some(shortcut, |row, shortcut| row.child(Kbd::new(shortcut)))
     }
 
+    /// Whether the chosen model's selected level is its top level, which shows the top effects.
+    pub(super) fn top_level_shown(&self) -> bool {
+        let Some(model) = self.state.current_model() else {
+            return false;
+        };
+        let count = model.efforts.len();
+        let selected = self
+            .state
+            .choice()
+            .effort
+            .unwrap_or(model.default_effort)
+            .min(count.saturating_sub(1));
+        is_top_level(selected, count)
+    }
+
     /// The reasoning column: the level's name, the agent and model, and a vertical slider with one stop per
     /// level the model declares. A model with fewer than two levels says it has none.
     pub(super) fn reasoning_column(&self, cx: &mut Context<Self>) -> Div {
@@ -485,6 +503,7 @@ impl ModelPicker {
         let brand = brand_colours(None, (p.accent.default, p.accent.fg));
         let name = name_colour(brand, p.surface.overlay);
         let agent = self.state.current_kind().label();
+        let reduced = cx.reduce_motion();
         let picker = cx.entity();
         let slider = ReasoningSlider {
             id: "model-picker-reasoning-slider".into(),
@@ -497,6 +516,12 @@ impl ModelPicker {
             on_change: Rc::new(move |index, _, cx| {
                 picker.update(cx, |picker, cx| picker.choose_effort(index, cx));
             }),
+            elapsed: clock_seconds(reduced),
+            reduced,
+            moving_from: self.effort_move.map(|moved| moved.from),
+            progress: self
+                .effort_move
+                .map_or(1.0, |moved| move_progress(moved.started.elapsed().as_secs_f32(), reduced)),
         };
         let level = div()
             .flex()

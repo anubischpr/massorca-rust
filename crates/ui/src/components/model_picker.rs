@@ -13,6 +13,7 @@ pub use state::{
 };
 
 use std::fmt;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -88,6 +89,13 @@ pub enum ModelPickerAction {
     OpenMarketplace,
 }
 
+/// A level change in progress: the level the slider moves from and when the move started.
+#[derive(Clone, Copy, Debug)]
+struct EffortMove {
+    from: usize,
+    started: Instant,
+}
+
 /// The model picker: a trigger chip and its popover. The owner subscribes to its events.
 pub struct ModelPicker {
     state: PickerState,
@@ -96,6 +104,7 @@ pub struct ModelPicker {
     marketplace_focus: FocusHandle,
     slider_focus: FocusHandle,
     slider_track: TriggerBounds,
+    effort_move: Option<EffortMove>,
     trigger_bounds: TriggerBounds,
     search: Entity<TextField>,
     _search_events: Subscription,
@@ -141,6 +150,7 @@ impl ModelPicker {
             marketplace_focus: cx.focus_handle().tab_stop(true),
             slider_focus: cx.focus_handle().tab_stop(true),
             slider_track: TriggerBounds::default(),
+            effort_move: None,
             trigger_bounds: TriggerBounds::default(),
             search,
             _search_events: search_events,
@@ -194,10 +204,26 @@ impl ModelPicker {
     }
 
     fn choose_row(&mut self, row: RowRef, cx: &mut Context<Self>) {
+        let before = self.state.choice().effort;
         if self.state.select_model(row) {
+            self.note_level_change(before);
             self.emit_change(cx);
         }
         cx.notify();
+    }
+
+    /// Starts the bounded move of the slider from the level it was on, when the selected level changed.
+    fn note_level_change(&mut self, before: Option<usize>) {
+        let now = self.state.choice().effort;
+        if let Some(from) = before
+            && now.is_some()
+            && now != before
+        {
+            self.effort_move = Some(EffortMove {
+                from,
+                started: Instant::now(),
+            });
+        }
     }
 
     /// Shows the quiet empty state, with its Marketplace link, while no agent is installed.
@@ -244,6 +270,16 @@ impl Render for ModelPicker {
             p.text.primary
         };
         let open = self.open;
+        let reduced = cx.reduce_motion();
+        let moving = self.effort_move.is_some_and(|moved| {
+            reasoning_slider::effects::move_running(moved.started.elapsed().as_secs_f32(), reduced)
+        });
+        if self.effort_move.is_some() && !moving {
+            self.effort_move = None;
+        }
+        if reasoning_slider::effects::effect_frames(open, self.top_level_shown(), reduced) || (open && moving) {
+            reasoning_slider::effects::request_frame(window);
+        }
         let aria = match &effort {
             Some(effort) => format!("Model: {name}, {effort}"),
             None => format!("Model: {name}"),
@@ -756,6 +792,63 @@ mod tests {
         assert!(
             !picker.read_with(cx, |picker, _| picker.is_open()),
             "the link closes the popover"
+        );
+    }
+
+    #[gpui::test]
+    fn only_the_top_level_draws_the_glow(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        assert!(
+            cx.debug_bounds("reasoning-halo").is_none(),
+            "Medium is not the top level"
+        );
+        click(cx, "reasoning-level-3");
+        assert!(
+            cx.debug_bounds("reasoning-halo").is_some(),
+            "Max is the top level"
+        );
+        click(cx, "reasoning-level-0");
+        assert!(cx.debug_bounds("reasoning-halo").is_none());
+    }
+
+    #[gpui::test]
+    fn frames_are_requested_only_for_an_open_top_level_and_not_under_reduced_motion(
+        cx: &mut TestAppContext,
+    ) {
+        use super::reasoning_slider::effects::FRAME_REQUESTS;
+        let frames = || FRAME_REQUESTS.with(|count| count.get());
+        let reset = || FRAME_REQUESTS.with(|count| count.set(0));
+        let (picker, cx) = picker_in(cx);
+        reset();
+        cx.run_until_parked();
+        assert_eq!(frames(), 0, "a closed picker requests no frames");
+        open_and_draw(&picker, cx);
+        assert_eq!(frames(), 0, "below the top level nothing loops");
+        reset();
+        click(cx, "reasoning-level-3");
+        assert!(frames() > 0, "the open top level asks for frames");
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        reset();
+        picker.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        assert_eq!(frames(), 0, "reduced motion holds the frame still");
+    }
+
+    #[gpui::test]
+    fn a_level_change_starts_a_bounded_move_and_reduced_motion_has_none(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        click(cx, "reasoning-level-0");
+        assert!(
+            picker.read_with(cx, |picker, _| picker.effort_move.is_some()),
+            "the thumb moves from Medium to Low"
+        );
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        click(cx, "reasoning-level-2");
+        assert!(
+            picker.read_with(cx, |picker, _| picker.effort_move.is_none()),
+            "reduced motion jumps to the new stop"
         );
     }
 }

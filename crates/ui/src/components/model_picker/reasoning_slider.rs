@@ -2,16 +2,19 @@
 //! stop per level the model declares. It draws the track, the stops, the brand fill, the thumb and the
 //! level labels, and reports each change to its owner, which keeps the popover open.
 
+pub(super) mod effects;
 mod brand;
 mod stops;
 
 use std::rc::Rc;
 
 use gpui::accesskit::Orientation;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement, Styled, Window, actions, div, px, relative,
+    App, BoxShadow, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement, Styled, Window, actions, canvas, div, point,
+    px, relative,
 };
 
 pub use brand::{BrandColours, brand_colours, name_colour};
@@ -20,6 +23,7 @@ use stops::{STOP_INSET, Slide, nearest_stop, stop_fraction, value_text};
 
 use crate::components::popover::TriggerBounds;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
+use crate::tokens::Color;
 use crate::tokens::{
     RADIUS_FULL, SIZE_REASONING_SLIDER_THUMB, SIZE_REASONING_SLIDER_TRACK, TYPE_BODY,
     TYPE_BODY_STRONG,
@@ -65,6 +69,53 @@ pub struct ReasoningSlider {
     /// The track's bounds from its last paint, which a pointer position is read against.
     pub track: TriggerBounds,
     pub on_change: Pick,
+    /// Seconds on the effects clock, frozen under reduced motion.
+    pub elapsed: f32,
+    pub reduced: bool,
+    /// The level the thumb and fill are moving from, and how far the move has got (0 to 1).
+    pub moving_from: Option<usize>,
+    pub progress: f32,
+}
+
+/// The glow around the bar at the top level: 6 px outside it, in the second brand colour at 55 percent, blurred.
+fn halo(colour: Color) -> impl IntoElement {
+    let tint: Hsla = colour.into();
+    div()
+        .debug_selector(|| "reasoning-halo".to_owned())
+        .absolute()
+        .top(px(-6.))
+        .bottom(px(-6.))
+        .left(px(-6.))
+        .right(px(-6.))
+        .rounded(px(RADIUS_FULL))
+        .shadow(vec![BoxShadow {
+            color: tint.alpha(0.55),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(6.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+}
+
+/// The thumb's rings at the top level: a 4 px ring in the second brand colour at 45 percent, and a 16 px glow in it.
+fn top_rings(colour: Color) -> [BoxShadow; 2] {
+    let tint: Hsla = colour.into();
+    [
+        BoxShadow {
+            color: tint.alpha(0.45),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(4.),
+            inset: false,
+        },
+        BoxShadow {
+            color: tint,
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(16.),
+            spread_radius: px(2.),
+            inset: false,
+        },
+    ]
 }
 
 /// Moves the selection by `slide` and reports the new level when it changes.
@@ -111,7 +162,16 @@ impl RenderOnce for ReasoningSlider {
             return div().into_any_element();
         }
         let selected = self.selected.min(count - 1);
-        let fraction = stop_fraction(selected, count);
+        let target = stop_fraction(selected, count);
+        let fraction = match self.moving_from {
+            Some(from) => {
+                let from = stop_fraction(from.min(count - 1), count);
+                from + (target - from) * self.progress
+            }
+            None => target,
+        };
+        let top = is_top_level(selected, count);
+        let (elapsed, reduced) = (self.elapsed, self.reduced);
         let tertiary: Hsla = p.text.tertiary.into();
         let pick = self.on_change.clone();
         let value: SharedString = value_text(&self.levels[selected], selected, count).into();
@@ -130,6 +190,17 @@ impl RenderOnce for ReasoningSlider {
                 gpui::linear_color_stop(self.brand.first, 0.),
                 gpui::linear_color_stop(self.brand.second, 1.),
             ));
+        let fill = fill.when(top, |fill| {
+            fill.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        effects::paint_top(bounds, elapsed, reduced, window)
+                    },
+                )
+                .size_full(),
+            )
+        });
         let stops = (0..count).map(|index| {
             let colour = if index <= selected {
                 gpui::white().opacity(0.7)
@@ -146,6 +217,10 @@ impl RenderOnce for ReasoningSlider {
                 .rounded(px(2.))
                 .bg(colour)
         });
+        let mut thumb_shadows = box_shadows(theme.shadows.e1);
+        if top {
+            thumb_shadows.extend(top_rings(self.brand.second));
+        }
         let thumb = div()
             .absolute()
             .top(relative(1.0 - fraction))
@@ -156,7 +231,7 @@ impl RenderOnce for ReasoningSlider {
             .bg(p.slider.thumb)
             .border_1()
             .border_color(Hsla::from(p.border.default).opacity(0.5))
-            .shadow(box_shadows(theme.shadows.e1));
+            .shadow(thumb_shadows);
         let lane = div()
             .absolute()
             .top(px(STOP_INSET))
@@ -183,6 +258,7 @@ impl RenderOnce for ReasoningSlider {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .debug_selector(|| "reasoning-slider".to_owned())
+            .when(top, |track| track.child(halo(self.brand.second)))
             .child(lane)
             .on_action({
                 let pick = pick.clone();
