@@ -177,6 +177,23 @@ fn a_failed_installer_leaves_nothing_installed_but_its_log() {
 }
 
 #[test]
+fn a_failed_installer_says_what_it_looked_for_where_and_its_last_output() {
+    let s = setup(
+        FakeHost::new()
+            .exit_for("install", 3)
+            .searching("registry", &["C:\\Tools"]),
+    );
+    let source = Source::Catalogue("massorca.codex".to_owned());
+    let error = s.install(&source, true).expect_err("installer fails");
+    let data = error.data().expect("the error says what it looked for");
+    assert_eq!(data["programs"], serde_json::json!(["npm"]), "{data}");
+    assert_eq!(data["path_source"], "registry", "{data}");
+    assert_eq!(data["searched"], serde_json::json!(["C:\\Tools"]), "{data}");
+    let tail = serde_json::to_string(&data["output_tail"]).expect("the output lines");
+    assert!(tail.contains("-> 3"), "{data}");
+}
+
+#[test]
 fn a_failed_verify_leaves_nothing_installed() {
     // Antigravity's installer is PowerShell on Windows and bash elsewhere; its verify command is `agy --version`.
     let source = Source::Catalogue("massorca.antigravity".to_owned());

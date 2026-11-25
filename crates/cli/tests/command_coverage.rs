@@ -114,6 +114,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "device.whoami",
             "extension.catalogue",
             "extension.disable",
+            "extension.doctor",
             "extension.enable",
             "extension.inspect",
             "extension.install",

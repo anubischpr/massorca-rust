@@ -371,6 +371,65 @@ fn an_ended_resumable_session_offers_resume_and_sends_agent_resume(cx: &mut Test
     assert_eq!(session, "s1");
 }
 
+/// The next `agent.resume` the shell sends, with its whole params.
+fn resume_params(
+    script: &mut Script,
+) -> Option<massorca_protocol::methods::agents::AgentResumeParams> {
+    while let Some(command) = script.next() {
+        if let Command::AgentResume { params, .. } = command {
+            return Some(params);
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn a_resume_names_the_session_and_carries_a_pending_bypass_mode(cx: &mut TestAppContext) {
+    let mut claude = kind(true);
+    claude.permission_modes = vec![massorca_protocol::methods::agents::PermissionMode {
+        id: "bypassPermissions".to_owned(),
+        label: "Bypass permissions".to_owned(),
+        description: None,
+        bypass: true,
+        live_switch: false,
+        may_fall_back: false,
+    }];
+    let mut session = s1(true, Some(ActivityState::Done));
+    session.pending_permission_mode = Some("bypassPermissions".to_owned());
+    let (mut rig, cx) = session_rig(cx, vec![claude], vec![session]);
+    click(cx, "composer-resume");
+    let params = resume_params(&mut rig.script).expect("the resume is sent to the service");
+    assert_eq!(params.session, "s1");
+    assert_eq!(params.permission_mode.as_deref(), Some("bypassPermissions"));
+}
+
+#[gpui::test]
+fn a_refused_resume_says_why_above_the_composer(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(true, Some(ActivityState::Done))],
+    );
+    click(cx, "composer-resume");
+    let (session, reply) = resume_call(&mut rig.script).expect("the resume is sent to the service");
+    assert_eq!(session, "s1");
+    let refusal = refused(codes::AGENT_NOT_LIVE, "the agent is gone");
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
+    assert_eq!(
+        notice,
+        Some(format!(
+            "Could not resume the session: {}",
+            refusal.sentence()
+        ))
+    );
+}
+
 #[gpui::test]
 fn an_ended_session_that_cannot_resume_says_so_and_offers_no_control(cx: &mut TestAppContext) {
     let (rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(true, None)]);

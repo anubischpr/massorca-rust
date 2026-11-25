@@ -18,15 +18,17 @@ mod source;
 mod types;
 
 pub use accounts::{
-    AccountActivity, AccountView, TerminalSignIn, account_views, busy_refusal, connection_rows,
-    import_outcome, terminal_sign_in,
+    AccountActivity, AccountView, TerminalSignIn, account_block, account_views, busy_refusal,
+    connection_rows, import_outcome, terminal_sign_in,
 };
 pub use agent_links::{AgentLink, installed_agent_links};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;
-pub use install_review::review_lines;
+pub use install_review::{
+    install_button_label, installer_runs, review_details, review_lines, shown_risk,
+};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_tag, information,

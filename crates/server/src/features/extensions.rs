@@ -11,7 +11,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use massorca_core_extensions::item::Item;
 use massorca_core_extensions::source::Source;
-use massorca_core_extensions::{Error, Extensions};
+use massorca_core_extensions::{Diagnosis, Error, Extensions};
 use massorca_protocol::methods::events::{
     TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED,
     TOPIC_EXTENSION_REMOVED,
@@ -279,9 +279,10 @@ where
     F: FnOnce(&Extensions) -> Result<T, Error> + Send + 'static,
 {
     let extensions = Arc::clone(&ctx.state.extensions);
+    let may_see_paths = may_see_host_paths(ctx);
     // Counted until it returns, so the profile lock outlives an install and the next start's sweep never sees it.
     match ctx.state.activity.blocking(move || call(&extensions)).await {
-        Ok(result) => result.map_err(error_body),
+        Ok(result) => result.map_err(|error| refusal_body(error, may_see_paths)),
         Err(error) => Err(ErrorBody::new(
             codes::INTERNAL,
             format!("the extensions task failed: {error}"),
@@ -291,9 +292,50 @@ where
 
 /// The protocol error of a refusal: its own code, which for a guard is the guard's (`agent.busy`).
 fn error_body(error: Error) -> ErrorBody {
-    let mut body = ErrorBody::new(error.code(), error.to_string());
-    body.data = error.data();
+    refusal_body(error, false)
+}
+
+/// The protocol error of a refusal. A failed vendor command also says what it looked for; the folders it searched and
+/// its last output name host paths, so only a host administrator gets those (decision 0092).
+fn refusal_body(error: Error, may_see_host_paths: bool) -> ErrorBody {
+    let mut message = error.to_string();
+    let mut data = error.data();
+    if let Some(diagnosis) = error.diagnosis() {
+        message.push_str(&failure_detail(diagnosis, may_see_host_paths));
+    }
+    if !may_see_host_paths && let Some(serde_json::Value::Object(fields)) = &mut data {
+        fields.remove("searched");
+        fields.remove("output_tail");
+    }
+    let mut body = ErrorBody::new(error.code(), message);
+    body.data = data;
     body
+}
+
+/// The lines a failed vendor command adds to its message, one per fact, each on its own line.
+fn failure_detail(diagnosis: &Diagnosis, may_see_host_paths: bool) -> String {
+    let mut lines = Vec::new();
+    if !diagnosis.programs.is_empty() {
+        let source = if diagnosis.search.source.is_empty() {
+            String::new()
+        } else {
+            format!(" on the {} PATH", diagnosis.search.source)
+        };
+        lines.push(format!(
+            "Looked for {}{source}.",
+            diagnosis.programs.join(", ")
+        ));
+    }
+    if may_see_host_paths {
+        if !diagnosis.search.dirs.is_empty() {
+            lines.push(format!("Searched: {}", diagnosis.search.dirs.join("; ")));
+        }
+        if !diagnosis.output_tail.is_empty() {
+            lines.push("Last output:".to_owned());
+            lines.extend(diagnosis.output_tail.iter().cloned());
+        }
+    }
+    lines.iter().map(|line| format!("\n{line}")).collect()
 }
 
 /// A service view in its wire shape.
@@ -305,6 +347,64 @@ fn wire<T: Serialize, R: DeserializeOwned>(view: &T) -> Result<R, ErrorBody> {
 
 fn wire_all<T: Serialize, R: DeserializeOwned>(views: &[T]) -> Result<Vec<R>, ErrorBody> {
     views.iter().map(wire).collect()
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use massorca_core_extensions::Diagnosis;
+    use massorca_core_extensions::host::ProgramSearch;
+
+    use super::*;
+
+    fn failed_install() -> Error {
+        Error::InstallerFailed {
+            agent: "codex".to_owned(),
+            message: "`npm` was not found on PATH".to_owned(),
+            diagnosis: Box::new(Diagnosis {
+                programs: vec!["npm".to_owned()],
+                search: ProgramSearch {
+                    source: "registry".to_owned(),
+                    dirs: vec!["C:\\Tools".to_owned()],
+                },
+                output_tail: vec!["could not start".to_owned()],
+            }),
+        }
+    }
+
+    /// A caller without host administration learns what was looked for, not the host's folders or its output.
+    #[test]
+    fn a_caller_without_host_administration_gets_no_host_paths_or_output() {
+        let body = refusal_body(failed_install(), false);
+        assert!(
+            body.message
+                .contains("Looked for npm on the registry PATH."),
+            "{}",
+            body.message
+        );
+        assert!(
+            !body.message.contains("C:\\Tools") && !body.message.contains("could not start"),
+            "{}",
+            body.message
+        );
+        let data = body.data.expect("the data says what was looked for");
+        assert_eq!(data["programs"], serde_json::json!(["npm"]));
+        assert!(data.get("searched").is_none(), "{data}");
+        assert!(data.get("output_tail").is_none(), "{data}");
+    }
+
+    /// A host administrator also gets the folders searched and the last output of the command.
+    #[test]
+    fn a_host_administrator_gets_the_folders_searched_and_the_last_output() {
+        let body = refusal_body(failed_install(), true);
+        assert!(
+            body.message.contains("Searched: C:\\Tools"),
+            "{}",
+            body.message
+        );
+        assert!(body.message.contains("could not start"), "{}", body.message);
+        let data = body.data.expect("the data");
+        assert_eq!(data["searched"], serde_json::json!(["C:\\Tools"]));
+    }
 }
 
 #[cfg(test)]
