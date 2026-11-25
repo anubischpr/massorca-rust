@@ -385,6 +385,9 @@ fn a_resume_names_the_session_and_carries_a_pending_bypass_mode(cx: &mut TestApp
         bypass: true,
         live_switch: false,
         may_fall_back: false,
+        icon: None,
+        tone: None,
+        selectable: true,
     }];
     let mut session = s1(true, Some(ActivityState::Done));
     session.pending_permission_mode = Some("bypassPermissions".to_owned());
@@ -728,6 +731,9 @@ fn kind_with_modes() -> AgentKind {
         bypass,
         live_switch: false,
         may_fall_back: false,
+        icon: None,
+        tone: None,
+        selectable: true,
     };
     let mut kind = kind(true);
     kind.permission_modes = vec![

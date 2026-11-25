@@ -198,6 +198,9 @@ mod tests {
             bypass,
             live_switch: false,
             may_fall_back: false,
+            icon: None,
+            tone: None,
+            selectable: true,
         }
     }
 
