@@ -1,6 +1,6 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
-//! `workspace.current` (`workspace-current/1`). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.current` (`workspace-current/1`), `workspace.rename` (`workspace-rename/1`, decision 0111). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceUpdateParams,
+    WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -92,6 +92,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::WORKSPACE_CURRENT,
             Permission::Read,
             current,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_RENAME, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::RENAME,
+            capabilities::WORKSPACE_RENAME,
+            Permission::Workspace,
+            rename,
         )?,
     ])
 }
@@ -221,6 +231,14 @@ async fn remove(
 async fn update(ctx: RequestCtx, params: WorkspaceUpdateParams) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     let workspace = blocking(move || domain.update_workspace(params)).await?;
+    publish(&ctx, TOPIC_WORKSPACE_UPDATED, &workspace.id);
+    Ok(workspace)
+}
+
+/// Renames a generated name and its branch; the prefix setting applies as at create, so it takes the mutation handle.
+async fn rename(ctx: RequestCtx, params: WorkspaceRenameParams) -> Result<Workspace, ErrorBody> {
+    let domain = for_mutation(&ctx).await?;
+    let workspace = blocking(move || domain.rename_workspace(params)).await?;
     publish(&ctx, TOPIC_WORKSPACE_UPDATED, &workspace.id);
     Ok(workspace)
 }

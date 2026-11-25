@@ -29,7 +29,7 @@ use massorca_protocol::methods::terminals::{
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceUpdateParams,
+    WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 
 use crate::client::Client;
@@ -164,6 +164,14 @@ impl Client {
         params: &WorkspaceUpdateParams,
     ) -> Result<Workspace, ClientError> {
         self.call(workspaces::UPDATE, params).await
+    }
+
+    /// `workspace.rename`: replaces a name the service chose, and its branch (decision 0111).
+    pub async fn workspace_rename(
+        &self,
+        params: &WorkspaceRenameParams,
+    ) -> Result<Workspace, ClientError> {
+        self.call(workspaces::RENAME, params).await
     }
 
     /// `workspace.check`: whether a workspace's folder is there and, for a worktree, still registered.

@@ -1,10 +1,11 @@
-//! `massorca workspace create|list|show|current|rm` (alias `ws`): creating and removing workspaces through the service.
+//! `massorca workspace create|list|show|current|rm|update|rename|check` (alias `ws`): creating and removing workspaces through the service.
 
 use std::path::Path;
 
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceListParams,
-    WorkspaceRef, WorkspaceRemoveParams, WorkspaceSetup, WorkspaceUpdateParams,
+    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRenameParams, WorkspaceSetup,
+    WorkspaceUpdateParams,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
@@ -101,6 +102,23 @@ pub async fn execute(
                 .await?;
             let line = workspace_text::workspace_line(&updated, "updated");
             output.success(&updated, &[line]);
+        }
+        WorkspaceCommand::Rename {
+            workspace,
+            new_name,
+            from_generated,
+            expected_branch,
+        } => {
+            let renamed = client
+                .workspace_rename(&WorkspaceRenameParams {
+                    workspace: paths.selector(&workspace)?,
+                    name: new_name,
+                    from_generated,
+                    expected_branch,
+                })
+                .await?;
+            let line = workspace_text::workspace_line(&renamed, "renamed");
+            output.success(&renamed, &[line]);
         }
         WorkspaceCommand::Check { workspace } => {
             let check = client

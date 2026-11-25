@@ -828,3 +828,48 @@ fn check_reports_a_folder_whose_directory_is_gone_and_exits_zero() {
         .success()
         .stdout(contains("main: the folder is missing"));
 }
+
+#[test]
+fn rename_from_generated_renames_a_generated_workspace_and_its_branch_and_refuses_a_typed_one() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo"]);
+    let id = created["id"].as_str().expect("id").to_owned();
+    let old_branch = created["branch"].as_str().expect("branch").to_owned();
+    assert_eq!(created["name_generated"], true);
+    sandbox.json_ok("default", &["workspace", "create", "repo", "typed"]);
+
+    let renamed = sandbox.json_ok(
+        "default",
+        &[
+            "workspace",
+            "rename",
+            id.as_str(),
+            "fix-login",
+            "--from-generated",
+            "--expected-branch",
+            old_branch.as_str(),
+        ],
+    );
+    assert_eq!(renamed["name"], "fix-login");
+    assert_eq!(renamed["branch"], "fix-login");
+    assert_eq!(renamed["path"], created["path"], "the folder is not moved");
+    sandbox
+        .run("default", &["workspace", "show", "fix-login"])
+        .success()
+        .stdout(contains("name generated: yes"));
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "rename", "typed", "x", "--from-generated"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "workspace.name_not_generated"
+    );
+    sandbox
+        .run("default", &["workspace", "rename", "typed", "x"])
+        .code(2);
+}
