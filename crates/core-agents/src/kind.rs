@@ -7,7 +7,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use massorca_protocol::codes;
+
 pub use crate::event::{DoneOutcome, EventTarget};
+use crate::sessions::AgentError;
 
 /// The placeholder replaced by the agent's own conversation id.
 pub const REF_PLACEHOLDER: &str = "{ref}";
@@ -49,7 +52,26 @@ pub struct KindDecl {
     /// The mode a run gets when its caller names none. Required with modes, never a `bypass` mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
+    /// The flag a start's `model` is passed with (decision 0092), as `{"flag": "--model"}`; the value follows it. Absent
+    /// means the kind takes no model, and a start that names one is refused with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<OptionFlagDecl>,
+    /// The flag a start's `effort` is passed with (decision 0092), as `model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<OptionFlagDecl>,
 }
+
+/// The launch flag of a session option such as `model` or `effort` (decision 0092). The value follows the flag as the
+/// next argument, after the mode's arguments and before the caller's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionFlagDecl {
+    /// The flag, starting with `-` and holding no spaces, `=` or control characters: `--model`.
+    pub flag: String,
+}
+
+/// Longest value of a `model` or an `effort` a start may name.
+pub const MAX_OPTION_VALUE_LEN: usize = 128;
 
 /// One permission mode of a kind (decision 0083): how it is passed at launch, and how a running session switches to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +113,37 @@ pub struct LiveSwitchDecl {
     #[serde(rename = "type")]
     pub kind: LiveSwitchType,
     pub text: String,
+}
+
+/// A flag that can take a value: it starts with `-` and holds no spaces, `=` or control characters.
+fn valid_option_flag(text: &str) -> bool {
+    text.len() > 1
+        && text.starts_with('-')
+        && !text.chars().any(|character| {
+            character.is_whitespace() || character.is_control() || character == '='
+        })
+}
+
+/// A value a start may name for `model` or `effort`: 1 to [`MAX_OPTION_VALUE_LEN`] letters, digits, `-`, `_`, `.`, `:` or
+/// `/`, never starting with `-`, so it cannot be read as a flag.
+fn valid_option_value(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= MAX_OPTION_VALUE_LEN
+        && !text.starts_with('-')
+        && text
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.:/".contains(character))
+}
+
+fn option_flag_problems(name: &str, flag: Option<&OptionFlagDecl>, problems: &mut Vec<String>) {
+    if let Some(flag) = flag
+        && !valid_option_flag(&flag.flag)
+    {
+        problems.push(format!(
+            "{name}.flag {:?} must start with - and hold no spaces, = or control characters",
+            flag.flag
+        ));
+    }
 }
 
 fn default_icon() -> String {
@@ -343,7 +396,43 @@ impl KindDecl {
             accounts_problems(self.credentials.as_ref(), accounts, &mut problems);
         }
         self.mode_problems(&mut problems);
+        option_flag_problems("model", self.model.as_ref(), &mut problems);
+        option_flag_problems("effort", self.effort.as_ref(), &mut problems);
         problems
+    }
+
+    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags (decision 0092).
+    /// An option the kind declares no flag for is `agent.option_unsupported`, naming the kind; a value that could be read
+    /// as a flag, or is empty, too long or has a space, is `request.invalid_params`.
+    pub(crate) fn option_args(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<Vec<String>, AgentError> {
+        let mut args = Vec::new();
+        for (name, value, flag) in [
+            ("model", model, self.model.as_ref()),
+            ("effort", effort, self.effort.as_ref()),
+        ] {
+            let Some(value) = value else { continue };
+            let Some(flag) = flag else {
+                return Err(AgentError::new(
+                    codes::AGENT_OPTION_UNSUPPORTED,
+                    format!("kind {} declares no flag for a {name}", self.id),
+                ));
+            };
+            if !valid_option_value(value) {
+                return Err(AgentError::new(
+                    codes::REQUEST_INVALID_PARAMS,
+                    format!(
+                        "the {name} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
+                    ),
+                ));
+            }
+            args.push(flag.flag.clone());
+            args.push(value.to_owned());
+        }
+        Ok(args)
     }
 
     fn mode_problems(&self, problems: &mut Vec<String>) {
