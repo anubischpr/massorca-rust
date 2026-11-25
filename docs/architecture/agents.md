@@ -142,7 +142,11 @@ directory that does not exist has no kinds.
 - `session_ref.assign`: args added at the first launch with a generated
   UUID as `{ref}`. `learn`: payload field that carries the agent's own id.
 - `resume`: args for a new run of an exited session; absent means not
-  resumable.
+  resumable. `resume_transcript` (`{ env?, dir, glob }`) says where the CLI saves one
+  conversation per ref, and `resume_not_found_pattern` is a regular expression over a failed
+  resumed run's output that means the CLI found none; both need `resume` (decision 0160).
+- `strip_inherited_env`: variable names, each once, that no run of the kind and none of its
+  account commands may inherit from the service (decision 0160).
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
@@ -231,7 +235,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.hook_refused`,
+`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
@@ -301,11 +305,20 @@ was made keeps the folder, the same as a failed delegated start keeps its child 
 
 ## Run environment
 
-On top of the terminal environment (0032): `MASSORCA_AGENT_SESSION`,
-`MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`, `MASSORCA_BIN`, the kind's
+On top of the terminal environment (0032): `MASSORCA_BIN`, the kind's
 home variable when the profile has a home for it (0056), minus the kind's
 `strip_env` in that case, then the profile vault's secrets for the workspace's
-project (0071), then the caller's `env`. A vault secret named `MASSORCA_*` or
+project (0071), then the caller's `env`, then the run's own identity,
+`MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN` and `MASSORCA_AGENT_KIND`, which
+the caller cannot override. The kind's `strip_inherited_env` names are stripped
+from every run, unless the launch sets them (decision 0160).
+
+The service builds every terminal's environment without the run identity it may
+have inherited (when the service was started from inside an agent run), so
+neither a plain terminal nor a run started directly carries another session's
+identity. The account commands (check, sign-in, sign-out) strip the
+credentials' and accounts' `strip_env`, the kind's `strip_inherited_env` and
+the run identity names (decision 0160). A vault secret named `MASSORCA_*` or
 like the home variable fails the launch with `agent.secrets_unavailable`; one
 named in `strip_env` is set, not emptied. Only a run whose caller holds HostAdmin gets
 vault variables; such a run and its children are marked `holds_secrets`, and
@@ -313,7 +326,7 @@ their terminals, prompts, resume and delegation then need HostAdmin (0071).
 
 Limitation: a terminal's environment (0032) can add variables but not remove
 inherited ones, and `core-terminal` is not changed in this phase. Until it can,
-a stripped variable is set to the empty string instead of removed. Agents treat
+a stripped variable (from `strip_env` or `strip_inherited_env`) is set to the empty string instead of removed. Agents treat
 an empty key as missing in practice, but a program that checks only for the
 variable's presence still sees it. Removing it belongs to the terminals chain.
 
@@ -380,9 +393,32 @@ resume arguments only. The run is registered under the status lock before its pr
 `agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
 `agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
 session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has
-no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
+no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_found` when the
+session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+### Resume state (decision 0160)
+
+Every session view carries `resume: { available, code?, reason? }`, set by the service
+(`core-agents::resume_state`); an older peer sends none.
+
+- `agent.resume_unavailable` when the kind is no longer declared, is invalid, declares no
+  resume form, or the session's ref is not known.
+- `agent.resume_not_found`, reason "the agent saved no conversation for this session", when an
+  exited session's kind declares `resume_transcript` and no file matches its `glob` with the ref
+  in place of `{ref}`. The folder is the account home the last run used (recorded as
+  `run-account` in the run directory), else the `env` variable's value when it is an absolute
+  local path, else `dir` with `{home}` from `USERPROFILE` or `HOME`. Only metadata is read; a
+  link, as a folder on the way or as the file, counts as missing, and a ref that is not a plain
+  file name matches nothing. The built-in `claude` checks `projects/*/{ref}.jsonl` under
+  `CLAUDE_CONFIG_DIR` or `{home}/.claude`.
+- The same code when a resumed run exited with a failure and the last 4 KiB of its output match
+  the kind's `resume_not_found_pattern` (`claude`: "No conversation found with session ID"). The
+  run directory keeps the ref (`resume-not-found`); the session stays exited, and its exit is
+  recorded as it was.
+
+`agent.resume` refuses a session whose state is `agent.resume_not_found` before it starts a run.
 
 ### Crash-safe start
 

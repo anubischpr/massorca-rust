@@ -234,9 +234,17 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   its conversation. The session keeps its id and its agent ref; its activity is absent until
   the new run reports. The arguments and environment of the first start are not kept. A live
   run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
-  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; another
+  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
+  session whose agent saved no conversation for its ref fails with `agent.resume_not_found`
+  before any run starts (decision 0160); another
   writing session in the workspace
   fails with `agent.workspace_busy`.
+- `agent status` shows, for an exited session that cannot resume, a line
+  `resume: unavailable: REASON (CODE)`, for example
+  `resume: unavailable: the agent saved no conversation for this session (agent.resume_not_found)`.
+  With `--json` every session carries `resume: { available, code?, reason? }`. A resumed run
+  that fails because its agent found no conversation (Claude: "No conversation found with
+  session ID") leaves the session exited with that state, and its exit as it was.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what
