@@ -33,9 +33,9 @@ pub use install_details::review_details;
 pub use install_review::{ReviewOutcome, installer_runs, review_outcome};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
-    CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_tag, information,
-    information_links, offers_cli_removal, settings_rows, state_chip, uninstall_body,
-    uninstall_body_for,
+    CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_palette_slot,
+    banner_tag, information, information_links, offers_cli_removal, settings_rows, state_chip,
+    uninstall_body, uninstall_body_for,
 };
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
