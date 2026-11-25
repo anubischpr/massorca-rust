@@ -135,8 +135,6 @@ pub enum RowBody {
     PairingLink,
     /// Opens the Add host dialog, its SSH path (D-HO-02).
     AddHost,
-    /// Opens the Marketplace's Services, where GitLab, Bitbucket, Azure DevOps and Gitea connect (SKL-35).
-    MarketplaceServices,
     Planned(Planned),
 }
 
@@ -388,11 +386,6 @@ const SOURCES: &[RowSpec] = &[
         label: "GitHub",
         helper: "Repositories, branches and pull requests.",
         body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "Hosted services",
-        helper: "GitLab, Bitbucket, Azure DevOps and Gitea connect in the Marketplace; Linear and Jira show their state there.",
-        body: RowBody::MarketplaceServices,
     },
     RowSpec {
         label: "Default branch",
@@ -774,15 +767,15 @@ mod tests {
     }
 
     #[test]
-    fn hosted_services_point_to_the_marketplace_instead_of_disabled_connect_rows() {
-        let rows = rows(SettingsSection::Sources);
-        assert!(
-            rows.iter()
-                .any(|row| row.body == RowBody::MarketplaceServices),
-            "{rows:?}"
-        );
-        for gone in ["GitLab", "Linear", "Jira"] {
-            assert!(!rows.iter().any(|row| row.label == gone), "{gone}");
+    fn hosted_services_live_in_the_marketplace_only() {
+        for section in SettingsSection::ALL {
+            for row in rows(section) {
+                assert!(
+                    !["Hosted services", "GitLab", "Linear", "Jira"].contains(&row.label),
+                    "{} in {section:?}",
+                    row.label
+                );
+            }
         }
     }
 
