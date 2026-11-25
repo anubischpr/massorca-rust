@@ -1,9 +1,12 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
+use std::collections::BTreeMap;
+
 use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 use super::bot_edit::BotChange;
+use super::filters::ProjectFilter;
 use super::live::agent_of_kind;
 use super::page::TeamPage;
 use super::team_edit::TeamChange;
@@ -91,6 +94,10 @@ pub struct TeamsState {
     access_notice: Option<(TeamId, String)>,
     /// Why the last removal of a team was refused, and for which team.
     removal_notice: Option<(TeamId, String)>,
+    /// The project filter each team's Board shows; a team with none shows every card.
+    board_filters: BTreeMap<TeamId, ProjectFilter>,
+    /// Whether the Sidebar leaves out the projects whose cards are all Done.
+    hide_finished_projects: bool,
     next_id: u32,
 }
 
@@ -113,6 +120,8 @@ impl TeamsState {
             notice: None,
             access_notice: None,
             removal_notice: None,
+            board_filters: BTreeMap::new(),
+            hide_finished_projects: false,
             next_id,
         }
     }
@@ -158,7 +167,44 @@ impl TeamsState {
         fresh.memory_tab = self.memory_tab;
         fresh.notice = self.notice.clone();
         fresh.access_notice = self.access_notice.clone();
+        fresh.board_filters = self.board_filters.clone();
+        fresh.hide_finished_projects = self.hide_finished_projects;
         fresh
+    }
+
+    /// The project filter a team's Board shows. A project the team no longer holds shows every card.
+    pub fn board_filter(&self, team: TeamId) -> ProjectFilter {
+        match self.board_filters.get(&team).copied().unwrap_or_default() {
+            ProjectFilter::Project(project)
+                if self
+                    .team(team)
+                    .is_none_or(|team| team.project(project).is_none()) =>
+            {
+                ProjectFilter::All
+            }
+            filter => filter,
+        }
+    }
+
+    /// Chooses the project filter of a team's Board. A card picked up under the old filter is put back.
+    pub fn set_board_filter(
+        &mut self,
+        team: TeamId,
+        filter: ProjectFilter,
+    ) -> Result<(), TeamError> {
+        self.team(team).ok_or(TeamError::Missing)?;
+        self.board_filters.insert(team, filter);
+        self.pick = None;
+        Ok(())
+    }
+
+    /// Whether the Sidebar leaves out the projects whose cards are all Done.
+    pub fn hides_finished_projects(&self) -> bool {
+        self.hide_finished_projects
+    }
+
+    pub fn set_hide_finished_projects(&mut self, hidden: bool) {
+        self.hide_finished_projects = hidden;
     }
 
     pub fn pick(&self) -> Option<&Pick> {

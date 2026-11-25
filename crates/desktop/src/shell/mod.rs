@@ -217,6 +217,8 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
+    filter_menu: Option<teams::OpenFilterMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -251,6 +253,10 @@ pub struct Shell {
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
+    /// The request number of the newest skills read; only its answer is shown.
+    marketplace_skills_request: u64,
+    /// Whether the Skills section's "Where MassOrca looked" report is open.
+    marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The grid the session view last drew its terminal at (`session_grid`).
@@ -526,6 +532,7 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            filter_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -546,6 +553,8 @@ impl Shell {
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
+            marketplace_skills_request: 0,
+            marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
             session_grid: None,
             stop_prompt: None,
@@ -963,6 +972,10 @@ impl Render for Shell {
             .team_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let filter_menu = self
+            .filter_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
             .revoke
             .as_ref()
@@ -1047,6 +1060,7 @@ impl Render for Shell {
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
