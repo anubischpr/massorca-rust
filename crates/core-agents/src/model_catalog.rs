@@ -422,3 +422,386 @@ fn fresh_entry(entry: Option<&Entry>, now_ms: u64) -> Option<Entry> {
     (now_ms.saturating_sub(at_ms) < window_ms).then(|| entry.clone())
 }
 
+#[cfg(test)]
+impl ModelCache {
+    /// The entry for `key` when its latest fetch is still fresh at `now_ms`.
+    fn fresh(&self, key: &ListingKey, now_ms: u64) -> Option<Entry> {
+        fresh_entry(self.get(key).as_ref(), now_ms)
+    }
+
+    /// The entry for `key`, however old its fetch is.
+    fn get(&self, key: &ListingKey) -> Option<Entry> {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries
+            .get(key)
+            .cloned()
+    }
+
+    /// Stores a listing the vendor CLI answered; it clears an earlier failure.
+    fn record_listing(&self, key: ListingKey, at_ms: u64, models: Vec<Listed>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = state.entries.entry(key).or_default();
+        entry.listed = Some(Fetched { at_ms, models });
+        entry.failed = None;
+        evict_oldest(&mut state.entries);
+    }
+
+    /// Stores a failed listing. The last answer, if there is one, is kept beside it.
+    fn record_failure(&self, key: ListingKey, at_ms: u64, error: ModelListingError) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.entries.entry(key).or_default().failed = Some(Failed { at_ms, error });
+        evict_oldest(&mut state.entries);
+    }
+}
+
+/// Drops the listing fetched least recently while more than [`MAX_LISTINGS`] are held.
+fn evict_oldest(entries: &mut HashMap<ListingKey, Entry>) {
+    while entries.len() > MAX_LISTINGS {
+        let oldest = entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.touched_ms())
+            .map(|(key, _)| key.clone());
+        let Some(oldest) = oldest else {
+            break;
+        };
+        entries.remove(&oldest);
+    }
+}
+
+/// The result of `agent.models` for a kind: the merged models, the time of the listing they come from, and the latest
+/// failure. `entry` is `None` when nothing has been listed for the account yet.
+pub fn view(declared: &[ModelChoiceDecl], entry: Option<&Entry>) -> AgentModels {
+    let listed = entry.and_then(|entry| entry.listed.as_ref());
+    let listed_models = match listed {
+        Some(listing) => listing.models.as_slice(),
+        None => &[],
+    };
+    AgentModels {
+        models: merge(declared, listed_models),
+        fetched_at_ms: listed.map(|listing| listing.at_ms),
+        error: entry
+            .and_then(|entry| entry.failed.as_ref())
+            .map(|failed| failed.error.clone()),
+    }
+}
+
+/// The listing time limit for a value of [`LISTING_TIMEOUT_ENV`]: whole milliseconds above zero. Any other value, or none,
+/// is [`LISTING_TIMEOUT`].
+pub(crate) fn listing_timeout_from(value: Option<&str>) -> Duration {
+    value
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map_or(LISTING_TIMEOUT, Duration::from_millis)
+}
+
+fn listing_error(code: ModelListingFailure, message: &str) -> ModelListingError {
+    ModelListingError {
+        code,
+        message: message.to_owned(),
+    }
+}
+
+impl Agents {
+    /// The models `kind`'s picker offers for `account` (decision 0166): the declared choices, then what the kind's vendor
+    /// CLI lists for the account. Without `account` the kind's active account is listed, or the vendor's usual home when
+    /// the kind has none. A kind that declares no listing answers with its declared choices alone. The vendor CLI is
+    /// asked only when the cache holds no fresh answer, or when `refresh` asks again.
+    pub fn agent_models(
+        &self,
+        kind: &str,
+        account: Option<&str>,
+        refresh: bool,
+    ) -> Result<AgentModels, AgentError> {
+        self.require_enabled_kind(kind)?;
+        let (decl, program) = self.listing_kind(kind)?;
+        let declared = match &decl.model {
+            Some(model) => model.choices.as_slice(),
+            None => &[],
+        };
+        let Some(discover) = decl
+            .model
+            .as_ref()
+            .and_then(|model| model.discover.as_ref())
+        else {
+            return Ok(view(declared, None));
+        };
+        let home = self.listing_home(&decl, kind, account)?;
+        let key = ListingKey {
+            kind: kind.to_owned(),
+            account: home.as_ref().map(|(id, _)| id.clone()),
+        };
+        let now = u64::try_from(now_ms()).unwrap_or(0);
+        let entry = match self.model_cache().claim(&key, now, refresh) {
+            Claim::Fresh(entry) => entry,
+            Claim::Waiting(running) => running.wait(),
+            Claim::Lead(leader) => {
+                let outcome = match program {
+                    None => Err(listing_error(
+                        ModelListingFailure::CliMissing,
+                        "the kind's program was not found",
+                    )),
+                    Some(program) => self.list_models(&decl, &program, discover, home.as_ref()),
+                };
+                leader.finish(outcome)
+            }
+        };
+        Ok(view(declared, Some(&entry)))
+    }
+
+    /// Drops the cached listings a change to `account` of `kind` can make wrong (decision 0166): the account's own, and the
+    /// ones the default request uses now, which are the usual home's and the active account's.
+    pub(crate) fn forget_listings(&self, kind: &str, account: &str) {
+        let active = self.store().get_active_agent_account(kind).ok().flatten();
+        self.model_cache().invalidate_account(kind, account);
+        self.model_cache()
+            .invalidate_defaults(kind, active.as_deref(), active.as_deref());
+    }
+
+    /// The kind's declaration and the program it runs, or `None` for the program when no candidate resolves on the
+    /// service's `PATH`. The kind must be declared, valid and enabled, as a start requires.
+    fn listing_kind(&self, kind: &str) -> Result<(KindDecl, Option<PathBuf>), AgentError> {
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
+        let entry = catalog.find(kind).ok_or_else(|| {
+            AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {kind}"))
+        })?;
+        let decl = entry.valid().ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!(
+                    "agent kind {kind} is invalid: {}",
+                    entry.problems.join("; ")
+                ),
+            )
+        })?;
+        let program = resolve_first(&decl.program, &SearchEnv::current());
+        Ok((decl.clone(), program))
+    }
+
+    /// The account a listing runs for and its home (decision 0166), read as a run reads it: the named account, else the
+    /// active one, else none. An account with no usable home is refused, and its home is repaired first (decision 0099).
+    fn listing_home(
+        &self,
+        decl: &KindDecl,
+        kind: &str,
+        account: Option<&str>,
+    ) -> Result<Option<(String, PathBuf)>, AgentError> {
+        let id = match account {
+            Some(id) => {
+                self.account_of(kind, id)?;
+                id.to_owned()
+            }
+            None => match self.store().get_active_agent_account(kind)? {
+                Some(id) => id,
+                None if self.store().kind_has_had_account(kind)? => {
+                    return Err(AgentError::new(
+                        codes::AGENT_CREDENTIALS_INVALID,
+                        format!(
+                            "the active account for {kind} was removed; choose or add an account"
+                        ),
+                    ));
+                }
+                None => return Ok(None),
+            },
+        };
+        let _gate = credentials::lock_homes();
+        let home = credentials::usable_account_home(self.profile_dir(), kind, &id)?.ok_or_else(
+            || {
+                AgentError::new(
+                    codes::AGENT_CREDENTIALS_INVALID,
+                    format!(
+                        "the account of agent kind {kind} has no credential home; sign in again or remove it"
+                    ),
+                )
+            },
+        )?;
+        repair_state(decl, &home)?;
+        Ok(Some((id, home)))
+    }
+
+    /// Runs the kind's listing with the account's home variable set (decision 0166), then reads it. A listing that fails
+    /// on an account its check says needs a sign-in is `not_signed_in`, so the picker can offer the sign-in command.
+    fn list_models(
+        &self,
+        decl: &KindDecl,
+        program: &Path,
+        discover: &DiscoverDecl,
+        home: Option<&(String, PathBuf)>,
+    ) -> Result<Vec<Listed>, ModelListingError> {
+        let home_var = decl
+            .credentials
+            .as_ref()
+            .map(|credentials| credentials.home_env.as_str());
+        let home_for_run = match (home, home_var) {
+            (Some((_, path)), Some(name)) => Some((name, path.as_path())),
+            _ => None,
+        };
+        let strip = account_strip_names(decl);
+        let result = run_listing(
+            program,
+            discover,
+            home_for_run,
+            &strip,
+            self.listing_timeout(),
+        )
+        .and_then(|stdout| {
+            let listed = parse_listing(discover.format, &stdout);
+            if listed.is_empty() {
+                Err(listing_error(
+                    ModelListingFailure::NoModels,
+                    "the vendor CLI listed no model MassOrca can use",
+                ))
+            } else {
+                Ok(listed)
+            }
+        });
+        match (result, home) {
+            (Err(error), Some((account, _)))
+                if matches!(
+                    error.code,
+                    ModelListingFailure::Failed | ModelListingFailure::NoModels
+                ) && self.needs_sign_in(decl, program, account) =>
+            {
+                Err(listing_error(
+                    ModelListingFailure::NotSignedIn,
+                    "the account is not signed in",
+                ))
+            }
+            (result, _) => result,
+        }
+    }
+
+    /// Whether the kind's check reports that `account` needs a sign-in. A kind that declares no check never does.
+    fn needs_sign_in(&self, decl: &KindDecl, program: &Path, account: &str) -> bool {
+        self.check_verdict(decl, program, account, None).state == AccountState::NeedsSignIn
+    }
+}
+
+/// Runs `program` with the listing's arguments for at most `timeout` (decision 0166). The home variable is set to `home`
+/// when there is one, and the names in `strip` are removed; the process tree is stopped before this returns. The listing
+/// succeeds only when it exits with status 0; its stdout is the output.
+fn run_listing(
+    program: &Path,
+    discover: &DiscoverDecl,
+    home: Option<(&str, &Path)>,
+    strip: &[String],
+    timeout: Duration,
+) -> Result<String, ModelListingError> {
+    let mut command = massorca_process::command(program);
+    command
+        .args(&discover.args)
+        .stdin(if discover.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some((name, path)) = home {
+        command.env(name, path);
+    }
+    for name in strip {
+        command.env_remove(name);
+    }
+    let (mut child, mut tree) = process_tree::spawn(&mut command).map_err(|error| {
+        let code = if error.kind() == io::ErrorKind::NotFound {
+            ModelListingFailure::CliMissing
+        } else {
+            ModelListingFailure::Failed
+        };
+        listing_error(code, "the vendor CLI could not be started")
+    })?;
+    if let (Some(mut pipe), Some(text)) = (child.stdin.take(), discover.stdin.clone()) {
+        // Written on a thread of its own, so a CLI that never reads its stdin cannot hold up the deadline; dropping the
+        // pipe closes it.
+        thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
+    let stdout = read_capped(child.stdout.take());
+    drop(read_capped(child.stderr.take()));
+    let exit = wait_until(&mut child, timeout);
+    tree.stop();
+    match exit {
+        None => Err(listing_error(
+            ModelListingFailure::TimedOut,
+            "the vendor CLI did not list its models in time",
+        )),
+        Some(Some(0)) => Ok(stdout
+            .recv_timeout(OUTPUT_GRACE)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()),
+        Some(_) => Err(listing_error(
+            ModelListingFailure::Failed,
+            "the vendor CLI exited without listing its models",
+        )),
+    }
+}
+
+/// Reads a stream to its end, or to [`LISTING_OUTPUT_LIMIT`], on a thread of its own. The bytes arrive on the channel.
+fn read_capped<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(stream) = stream {
+            let _ = stream.take(LISTING_OUTPUT_LIMIT).read_to_end(&mut bytes);
+        }
+        let _ = sender.send(bytes);
+    });
+    receiver
+}
+
+/// The child's exit code once it exits before `timeout`: the outer `None` when it ran past the deadline, and then it is
+/// killed. The inner `None` is a child that ended with no code, such as one stopped by a signal.
+fn wait_until(child: &mut Child, timeout: Duration) -> Option<Option<i32>> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.code()),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(POLL),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice(id: &str, label: &str, default: bool, efforts: Option<&[&str]>) -> ModelChoiceDecl {
+        ModelChoiceDecl {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            default,
+            efforts: efforts.map(|levels| levels.iter().map(|level| (*level).to_owned()).collect()),
+        }
+    }
+
+    fn listed(id: &str) -> Vec<Listed> {
+        vec![Listed {
+            id: id.to_owned(),
+            label: id.to_owned(),
+            efforts: None,
+        }]
+    }
+
+    fn key(kind: &str, account: Option<&str>) -> ListingKey {
+        ListingKey {
+            kind: kind.to_owned(),
+            account: account.map(str::to_owned),
+        }
+    }
+
+    fn failure(code: ModelListingFailure, message: &str) -> ModelListingError {
+        ModelListingError {
+            code,
+            message: message.to_owned(),
+        }
+    }
+
+}
