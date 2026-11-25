@@ -115,6 +115,8 @@ mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod session_menu_tests;
+#[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
@@ -979,6 +981,11 @@ impl Render for Shell {
             .remove
             .as_ref()
             .map(|flow| workspace_dialog_views::remove_dialog(flow, &shell, cx));
+        let delete_session = self
+            .dialogs
+            .delete_session
+            .as_ref()
+            .map(|flow| workspace_dialog_views::session_delete_dialog(flow, &shell, cx));
         let menu = self
             .dialogs
             .menu
@@ -1086,6 +1093,7 @@ impl Render for Shell {
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
