@@ -15,6 +15,7 @@ pub mod lockfile;
 pub mod removal;
 pub mod review;
 mod rollback;
+pub mod run_log;
 pub mod service;
 pub mod skills;
 pub mod source;

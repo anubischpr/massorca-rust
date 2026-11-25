@@ -18,7 +18,19 @@ const VALUE_END: &[char] = &['&', ';', ',', '\'', '"'];
 /// The last lines of a command's log, for the person who asks why it failed. Each line is redacted and cut, and the
 /// newest lines stay when the total would pass `TAIL_BYTES`.
 pub(crate) fn last_log_lines(log: &Path) -> Vec<String> {
-    let text = fs::read_to_string(log).unwrap_or_default();
+    lines_tail(&fs::read_to_string(log).unwrap_or_default())
+}
+
+/// The last lines a command wrote to `log` after its first `offset` bytes, as `last_log_lines` carries them.
+pub(crate) fn last_log_lines_after(log: &Path, offset: u64) -> Vec<String> {
+    let bytes = fs::read(log).unwrap_or_default();
+    let from = usize::try_from(offset)
+        .unwrap_or(usize::MAX)
+        .min(bytes.len());
+    lines_tail(&String::from_utf8_lossy(&bytes[from..]))
+}
+
+fn lines_tail(text: &str) -> Vec<String> {
     let mut kept = Vec::new();
     let mut bytes = 0;
     for line in text.lines().rev().take(DIAGNOSIS_LINES) {

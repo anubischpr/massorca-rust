@@ -4,6 +4,7 @@
 use crate::error::Error;
 use crate::lockfile::{KeptVersion, LockEntry};
 use crate::review;
+use crate::run_log::RunAction;
 use crate::service::{Extensions, agent_kind_ids, installed_source};
 use crate::source::Source;
 
@@ -65,6 +66,14 @@ impl Extensions {
             *slot = fresh.clone();
         }
         lockfile.write(&self.layout.lock_path())?;
+        self.note_run(
+            id,
+            RunAction::Rollback,
+            Some(current.version.clone()),
+            Some(fresh.version.clone()),
+            true,
+            Vec::new(),
+        );
         Ok(fresh)
     }
 }

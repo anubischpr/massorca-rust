@@ -19,12 +19,13 @@ use crate::catalogue;
 use crate::error::{Diagnosis, Error};
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
-use crate::install_log_tail::last_log_lines;
+use crate::install_log_tail::{last_log_lines, last_log_lines_after};
 use crate::layout::Layout;
 use crate::lockfile::{
     InstallerRun, KeptVersion, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
 };
 use crate::review::{self, CliPlan, PlanState, Review};
+use crate::run_log::{RunAction, log_len};
 use crate::source::{self, Files, LoadedPackage, Source};
 
 /// The extension service of one profile.
@@ -104,8 +105,22 @@ impl Extensions {
         sha256: Option<&str>,
     ) -> Result<LockEntry, Error> {
         let staged = self.stage(source, consent, run_installer, sha256)?;
+        let id = staged.manifest.id.clone();
+        let to = staged.version.clone();
+        let install_log = self.layout.install_log(&id);
+        let offset = log_len(&install_log);
         let ran = self.run_installers(&staged.manifest, &staged.plan);
-        self.commit(staged, ran)
+        let output = last_log_lines_after(&install_log, offset);
+        let committed = self.commit(staged, ran);
+        self.log_run(
+            &id,
+            RunAction::Install,
+            None,
+            Some(to),
+            committed.is_ok(),
+            output,
+        );
+        committed
     }
 
     /// Checks the install and unpacks it, under the change lock. The returned mark keeps the package busy until the
@@ -225,7 +240,19 @@ impl Extensions {
         sha256: Option<&str>,
     ) -> Result<LockEntry, Error> {
         let (old, staged) = self.stage_update(id, consent, sha256)?;
-        self.commit_update(&old, staged)
+        let committed = self.commit_update(&old, staged);
+        if let Ok(entry) = &committed {
+            let to = Some(entry.version.clone());
+            self.log_run(
+                id,
+                RunAction::Update,
+                Some(old.version.clone()),
+                to,
+                true,
+                Vec::new(),
+            );
+        }
+        committed
     }
 
     /// Checks the new package and unpacks it, under the change lock. The returned mark keeps the package busy until the
