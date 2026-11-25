@@ -3,6 +3,7 @@
 //! service is down.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use massorca_client::{Client, ClientError, HostRecord, Hosts, default_device_name};
 use massorca_core_remote::bootstrap::{
@@ -14,8 +15,10 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::pairing::Offer;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
+use super::host_sessions::{self, HostSessionsRead};
 use super::refusal::{Refusal, sentence};
 use super::update::{HostLink, StoreUpdate};
 
@@ -150,15 +153,55 @@ fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>) {
         return;
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
+    let check = host_sessions::next_check();
     for record in records {
-        tokio::spawn(probe(hosts.clone(), record.name, updates.clone()));
+        tokio::spawn(probe(hosts.clone(), record.name, check, updates.clone()));
     }
 }
 
-async fn probe(hosts: Hosts, name: String, updates: mpsc::UnboundedSender<StoreUpdate>) {
+/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs, so a host that comes back shows
+/// its sessions at the next check. Each check is one connection per host, the same as a refresh.
+pub(super) fn check_hosts_again(profile: Profile, updates: mpsc::UnboundedSender<StoreUpdate>) {
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(HOST_CHECK_EVERY);
+        every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            if updates.is_closed() {
+                return;
+            }
+            refresh(&profile, &updates);
+        }
+    });
+}
+
+/// How often the paired hosts are checked again while the bridge runs (STAT-16, STAT-17).
+const HOST_CHECK_EVERY: Duration = Duration::from_secs(30);
+
+async fn probe(
+    hosts: Hosts,
+    name: String,
+    check: u64,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
     let link = match Client::connect_host(&hosts, &name, &peer()).await {
-        Ok(client) => connected(&client),
-        Err(error) => HostLink::from_error(&error),
+        Ok(client) => {
+            let answer = host_sessions::read(&client).await;
+            let _ = updates.send(StoreUpdate::HostSessions(HostSessionsRead {
+                host: name.clone(),
+                request: check,
+                answer,
+            }));
+            connected(&client)
+        }
+        Err(error) => {
+            let _ = updates.send(StoreUpdate::HostSessions(HostSessionsRead {
+                host: name.clone(),
+                request: check,
+                answer: None,
+            }));
+            HostLink::from_error(&error)
+        }
     };
     let _ = updates.send(StoreUpdate::HostLinkChanged { name, link });
 }

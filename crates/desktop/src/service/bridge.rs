@@ -625,6 +625,7 @@ struct Link {
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
+        hosts::check_hosts_again(self.profile.clone(), self.updates.clone());
         let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
