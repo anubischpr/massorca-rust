@@ -10,8 +10,14 @@ use super::start_page::start_params;
 /// The key of the page's composer among the workspace start composers; no workspace id is empty.
 pub const HOME_START: &str = "";
 
+/// Why a start-page control is off until the service can take it.
+pub const NEEDS_NEWER_SERVICE: &str = "Needs a newer service.";
+
 /// Why "No project" is off until the service can start an agent without a workspace (A95).
-pub const NO_PROJECT_NEEDS_SERVICE: &str = "Needs a newer service.";
+pub const NO_PROJECT_NEEDS_SERVICE: &str = NEEDS_NEWER_SERVICE;
+
+/// Send's reason while "Use an existing branch" has no branch name to reuse.
+pub const NAME_THE_BRANCH: &str = "Name the branch to reuse.";
 
 /// Send's reason while there is no project to create the workspace in.
 pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
@@ -52,19 +58,48 @@ pub fn home_project<'a>(projects: &'a [Project], chosen: Option<&str>) -> Option
         .or_else(|| projects.first())
 }
 
-/// The `workspace.create` that Send asks for: a new worktree in `project`, named from the prompt.
-pub fn create_params(project: &str, prompt: &str) -> WorkspaceCreateParams {
+/// The Advanced section's fields as Send reads them. Blank text sends nothing for its field.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceDetails {
+    /// Blank takes the prompt's first words, or the service's generated name.
+    pub name: String,
+    /// The new branch's name, or the existing branch's when `existing_branch` is set.
+    pub branch: String,
+    /// The base ref the new branch starts from.
+    pub base: String,
+    pub existing_branch: bool,
+}
+
+impl WorkspaceDetails {
+    /// Why Send is off: a branch to reuse must be named.
+    pub fn send_block(&self) -> Option<&'static str> {
+        (self.existing_branch && non_empty(&self.branch).is_none()).then_some(NAME_THE_BRANCH)
+    }
+}
+
+/// The `workspace.create` that Send asks for: a new worktree in `project`.
+pub fn create_params(
+    project: &str,
+    prompt: &str,
+    details: &WorkspaceDetails,
+) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
         project: project.to_owned(),
-        name: workspace_name_seed(prompt),
-        branch: None,
-        base: None,
-        existing_branch: false,
+        name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
+        branch: non_empty(&details.branch),
+        base: non_empty(&details.base),
+        existing_branch: details.existing_branch,
         refresh_base: false,
         path: None,
         request_id: None,
         no_setup: false,
     }
+}
+
+/// The text trimmed, or `None` when nothing is left of it.
+fn non_empty(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// The `agent.start` in the new workspace. A blank prompt starts the agent with none.
@@ -134,11 +169,47 @@ mod tests {
 
     #[test]
     fn the_create_call_names_the_workspace_from_the_prompt() {
-        let params = create_params("p1", "fix the login");
+        let params = create_params("p1", "fix the login", &WorkspaceDetails::default());
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
         assert_eq!(params.branch, None);
+        assert_eq!(params.base, None);
         assert!(!params.existing_branch);
+    }
+
+    #[test]
+    fn typed_details_name_the_workspace_and_add_its_branch_and_base() {
+        let details = WorkspaceDetails {
+            name: "  login-fix ".into(),
+            branch: "feat/login".into(),
+            base: "main".into(),
+            existing_branch: false,
+        };
+        let params = create_params("p1", "fix the login", &details);
+        assert_eq!(params.name, "login-fix");
+        assert_eq!(params.branch.as_deref(), Some("feat/login"));
+        assert_eq!(params.base.as_deref(), Some("main"));
+        assert!(!params.existing_branch);
+    }
+
+    #[test]
+    fn a_blank_name_with_no_prompt_words_asks_the_service_for_one() {
+        let params = create_params("p1", "  ", &WorkspaceDetails::default());
+        assert_eq!(params.name, "");
+    }
+
+    #[test]
+    fn reusing_a_branch_needs_its_name_and_then_sends_it_as_existing() {
+        let mut details = WorkspaceDetails {
+            existing_branch: true,
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(details.send_block(), Some(NAME_THE_BRANCH));
+        details.branch = " feat/login ".into();
+        assert_eq!(details.send_block(), None);
+        let params = create_params("p1", "fix the login", &details);
+        assert_eq!(params.branch.as_deref(), Some("feat/login"));
+        assert!(params.existing_branch);
     }
 
     #[test]

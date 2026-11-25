@@ -189,6 +189,8 @@ pub struct Shell {
     start_pending: Option<crate::model::start_page::StartingSession>,
     /// The project the start page with no workspace creates in; `None` stands for the first one.
     home_project: Option<String>,
+    /// The Advanced section of the start page with no workspace: its fields and open state.
+    home_details: home_start::HomeDetails,
     /// The last start-page call was refused because the data folder is not secured.
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
@@ -309,6 +311,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let width = f32::from(window.viewport_size().width);
+        let home_details = home_start::HomeDetails::new(cx);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // A close the OS asks for waits on the confirm while a session runs or waits for the person (PLAT-10).
@@ -501,6 +504,7 @@ impl Shell {
             start_composers: HashMap::new(),
             start_pending: None,
             home_project: None,
+            home_details,
             profile_unsafe: false,
             session_composers: HashMap::new(),
             session_calls: HashMap::new(),

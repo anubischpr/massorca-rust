@@ -9,12 +9,13 @@ use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
 use crate::model::workspace_flow::NO_PROJECT_LABEL;
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{Command, Refusal, Script, StoreUpdate};
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::MenuEntry;
+use massorca_ui::components::text_field::TextField;
 use tokio::sync::oneshot;
 
 /// A connected shell with projects alpha and beta that declares Claude, on the page "+ Create" opens.
@@ -43,6 +44,15 @@ fn type_and_send(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
     cx.run_until_parked();
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
+/// Types into one of the section's fields: focuses it, then sends the keys.
+fn type_into(cx: &mut VisualTestContext, field: &Entity<TextField>, text: &str) {
+    draw(cx);
+    let focus = field.read_with(cx, |field, cx| field.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.simulate_input(text);
     cx.run_until_parked();
 }
 
@@ -137,6 +147,95 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
         .shell
         .read_with(cx, |shell, _| shell.model.snapshot().active_session.clone());
     assert_eq!(active.as_deref(), Some(session.id.as_str()));
+}
+
+#[gpui::test]
+fn the_advanced_section_starts_closed_and_opens_on_its_toggle(cx: &mut TestAppContext) {
+    let (rig, cx) = home_rig(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("button:home-start-advanced").is_some());
+    assert!(
+        cx.debug_bounds("button:home-start-host").is_none(),
+        "the fields start hidden"
+    );
+    click(cx, "button:home-start-advanced");
+    assert!(cx.debug_bounds("button:home-start-host").is_some());
+    rig.shell
+        .read_with(cx, |shell, _| assert!(shell.home_details.expanded));
+}
+
+#[gpui::test]
+fn an_untouched_advanced_section_sends_the_plain_create_call(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.name, "fix-the-login-bug");
+    assert_eq!(create.branch, None);
+    assert_eq!(create.base, None);
+    assert!(!create.existing_branch);
+    reply
+        .send(Err(Refusal::unavailable("The service is not connected.")))
+        .expect("the shell waits for the create");
+}
+
+#[gpui::test]
+fn the_advanced_fields_go_into_the_create_call(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    click(cx, "button:home-start-advanced");
+    let (name, branch, base) = rig.shell.read_with(cx, |shell, _| {
+        let details = &shell.home_details;
+        (
+            details.name.clone(),
+            details.branch.clone(),
+            details.base.clone(),
+        )
+    });
+    type_into(cx, &name, "login-fix");
+    type_into(cx, &branch, "feat/login");
+    type_into(cx, &base, "main");
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.name, "login-fix");
+    assert_eq!(create.branch.as_deref(), Some("feat/login"));
+    assert_eq!(create.base.as_deref(), Some("main"));
+    assert!(!create.existing_branch);
+    reply
+        .send(Err(Refusal::unavailable("The service is not connected.")))
+        .expect("the shell waits for the create");
+}
+
+#[gpui::test]
+fn reusing_a_branch_needs_its_name_before_send_creates_anything(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    click(cx, "button:home-start-advanced");
+    rig.shell
+        .update(cx, |shell, cx| shell.set_home_existing_branch(true, cx));
+    rig.shell
+        .read_with(cx, |shell, _| assert!(shell.home_details.existing_branch));
+    type_and_send(&rig, cx, "Fix the login bug");
+    assert!(
+        rig.script.next().is_none(),
+        "nothing is created while the branch to reuse is unnamed"
+    );
+    let composer = home_composer(&rig, cx);
+    let reason = composer.read_with(cx, |composer, _| {
+        composer.error_reason().map(|reason| reason.to_string())
+    });
+    assert_eq!(reason.as_deref(), Some("Name the branch to reuse."));
+    let branch = rig
+        .shell
+        .read_with(cx, |shell, _| shell.home_details.branch.clone());
+    type_into(cx, &branch, "feat/login");
+    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let (create, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.branch.as_deref(), Some("feat/login"));
+    assert!(create.existing_branch);
+    reply
+        .send(Err(Refusal::unavailable("The service is not connected.")))
+        .expect("the shell waits for the create");
 }
 
 #[gpui::test]
