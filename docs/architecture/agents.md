@@ -451,7 +451,8 @@ forms pv96 builds (`src/shared/agent-resume-argv.ts`); the other built-ins decla
 The new session has a new id, runs in the source's workspace, and records `forked_from`. It keeps the source's read-only mark and the model and effort its kind still takes (a stored one it no longer takes is
 left out and noted, as on a resume), takes `title` or the source's title, and its prompt and mode as a start does; its first
 prompt follows the fork form like a first prompt. A source holding vault secrets makes the fork hold them too, and
-`agent.fork` on it needs host-admin scope. Every check of `agent.start` follows, the one-writer rule among them.
+`agent.fork` on it needs host-admin scope. Every check of `agent.start` follows, the one-writer rule among them. A ref the fork learns that equals its source's is
+dropped, so the fork never binds to the source's transcript: it keeps no ref, and resuming it is `agent.resume_unavailable`.
 Refusals: `agent.busy` while the source runs (its transcript may be mid-turn, and the fork would write in the same
 workspace); `agent.chat_unsupported` for a chat session; `agent.fork_unavailable` when the kind declares no fork form,
 the source's ref is not known, or the source's resume state is `agent.resume_not_found`.

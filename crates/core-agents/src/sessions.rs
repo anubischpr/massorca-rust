@@ -1214,6 +1214,7 @@ impl Agents {
             row.result.take()
         };
         let learned = report.learned_ref.filter(|_| row.agent_ref.is_none());
+        let learned = self.kept_learned_ref(&row, learned)?;
         self.store().set_agent_session_status(
             &row.id,
             Some(&report.activity),
@@ -2101,6 +2102,37 @@ impl Agents {
         Ok(if folder { others } else { Vec::new() })
     }
 
+    /// The learned ref of a run, unless it is the ref of the session's fork source: a fork that kept its source's ref would
+    /// resume the source's transcript, so the ref is dropped and the fork keeps none (decision 0168).
+    fn kept_learned_ref(
+        &self,
+        row: &AgentSessionRow,
+        learned: Option<String>,
+    ) -> Result<Option<String>, AgentError> {
+        let Some(learned) = learned else {
+            return Ok(None);
+        };
+        let Some(source) = self
+            .store()
+            .agent_session_origin(&row.id)?
+            .and_then(|origin| origin.forked_from)
+        else {
+            return Ok(Some(learned));
+        };
+        let source_ref = self
+            .store()
+            .get_agent_session(&source)?
+            .and_then(|source| source.agent_ref);
+        if source_ref.as_deref() == Some(learned.as_str()) {
+            tracing::warn!(
+                session = %row.id,
+                "a fork reported its source's agent ref, which is not kept"
+            );
+            return Ok(None);
+        }
+        Ok(Some(learned))
+    }
+
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
     /// for this view. The transcript is looked for only once the run has exited, and a found one is kept in memory
     /// until a run starts or exits.
@@ -2955,6 +2987,52 @@ pub(crate) mod tests {
         );
     }
 
+    /// A fork's learned ref is dropped when it is its source's, so a fork never binds to the source's transcript; any
+    /// other ref is kept, and so is any ref of a session that is no fork (decision 0168).
+    #[test]
+    fn a_fork_never_keeps_the_ref_of_its_source() {
+        use super::release_tests::exited_row;
+        let (agents, workspace_id, _profile) = service();
+        let mut source = exited_row(&workspace_id, "terminal-source");
+        source.agent_ref = Some("ref-source".to_owned());
+        agents
+            .store()
+            .insert_agent_session_with_origin(&source, &SessionOrigin::default(), None)
+            .unwrap();
+        let fork = exited_row(&workspace_id, "terminal-fork");
+        agents
+            .store()
+            .insert_agent_session_with_origin(
+                &fork,
+                &SessionOrigin {
+                    forked_from: Some(source.id.clone()),
+                    ..SessionOrigin::default()
+                },
+                None,
+            )
+            .unwrap();
+        let fork = agents.store().get_agent_session(&fork.id).unwrap().unwrap();
+        let learned = |text: &str| Some(text.to_owned());
+
+        assert_eq!(
+            agents
+                .kept_learned_ref(&fork, learned("ref-source"))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            agents.kept_learned_ref(&fork, learned("ref-fork")).unwrap(),
+            learned("ref-fork")
+        );
+        assert_eq!(
+            agents
+                .kept_learned_ref(&source, learned("ref-source"))
+                .unwrap(),
+            learned("ref-source"),
+            "a session that is no fork keeps its ref"
+        );
+    }
+
     /// A resume of a session that does not exist is refused as not found (0054).
     #[test]
     fn a_resume_of_an_unknown_session_is_not_found() {
@@ -3084,7 +3162,7 @@ mod release_tests {
     use super::*;
 
     /// An exited session of `workspace` whose terminal is `terminal`, which the terminal manager may not know.
-    fn exited_row(workspace: &str, terminal: &str) -> AgentSessionRow {
+    pub(super) fn exited_row(workspace: &str, terminal: &str) -> AgentSessionRow {
         AgentSessionRow {
             id: new_id(),
             kind: "fake".to_owned(),

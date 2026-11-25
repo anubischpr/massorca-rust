@@ -399,3 +399,83 @@ fn a_fork_of_a_kind_without_a_fork_form_is_refused() {
         "nothing was started"
     );
 }
+
+/// A stored model the kind no longer lists is left out of a fork and of a resume, and each run says so; the source keeps
+/// its record until a resume of it leaves the model out (decision 0168).
+#[test]
+fn a_fork_and_a_resume_leave_out_a_model_the_kind_no_longer_takes() {
+    let sandbox = sandbox();
+    let started = start(
+        &sandbox,
+        "fake",
+        "main",
+        &["--prompt", "first", "--model", "m-1", "--effort", "high"],
+    );
+    let session = text(&started, "id").to_owned();
+    until(&sandbox, &session, "done");
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+    // The kind lists other models only, so the stored m-1 is no longer one it takes.
+    declare(
+        &sandbox,
+        "fake",
+        json!({ "mode": "argv", "paste": "bracketed" }),
+        json!({
+            "fork": ["--fork", "{ref}"],
+            "model": { "flag": "--model", "choices": [{ "id": "m-2", "label": "Two" }] }
+        }),
+    );
+    let note =
+        "The model m-1 is no longer accepted by Fake agent fake, so this run did not use it.";
+    let says_note = |session: &Value| {
+        session["notes"]
+            .as_array()
+            .is_some_and(|notes| notes.iter().any(|line| line.as_str() == Some(note)))
+    };
+
+    let forked = sandbox.json_ok(
+        "default",
+        &["agent", "fork", &session, "--prompt", "second"],
+    );
+    let fork = text(&forked, "id").to_owned();
+    assert!(forked.get("model").is_none(), "{forked}");
+    assert_eq!(forked["effort"], "high");
+    assert!(says_note(&forked), "{forked}");
+    let terminal = text(&forked, "terminal_id").to_owned();
+    wait_for(&sandbox, &terminal, "the fork's effort", |line| {
+        line == "fake-agent: effort high"
+    });
+    assert!(
+        !screen(&sandbox, &terminal)
+            .iter()
+            .any(|line| line == "fake-agent: model m-1"),
+        "the fork was not given the model"
+    );
+    assert_eq!(until(&sandbox, &fork, "done")["result"], "done: second");
+    // The fork is a writing session of the same workspace, so it stops before the source resumes there.
+    sandbox.json_ok("default", &["agent", "stop", &fork, "--force"]);
+    assert_eq!(
+        sandbox.json_ok("default", &["agent", "status", &session])["model"],
+        "m-1",
+        "the source keeps the record of its start"
+    );
+
+    let resumed = sandbox.json_ok("default", &["agent", "resume", &session]);
+    assert!(resumed.get("model").is_none(), "{resumed}");
+    assert_eq!(resumed["effort"], "high");
+    assert!(says_note(&resumed), "{resumed}");
+    let terminal = text(&resumed, "terminal_id").to_owned();
+    wait_for(&sandbox, &terminal, "the resumed run's effort", |line| {
+        line == "fake-agent: effort high"
+    });
+    assert!(
+        !screen(&sandbox, &terminal)
+            .iter()
+            .any(|line| line == "fake-agent: model m-1"),
+        "the resumed run was not given the model"
+    );
+    let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+    assert!(
+        shown.get("model").is_none(),
+        "the record names only what the run used: {shown}"
+    );
+}
