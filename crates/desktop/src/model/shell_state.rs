@@ -9,6 +9,7 @@ use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_
 use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
+use super::remote_sessions::{RemoteSessions, session_tree_rows};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, TreeRow, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
@@ -27,6 +28,8 @@ const INLINE_ORDER: [Region; 3] = [
 pub struct ShellModel {
     /// The paired remote hosts and their states, listed under the projects in the Sidebar (D-HO-01).
     remote_hosts: Vec<(String, HostState)>,
+    /// The agent sessions each paired host runs, listed under its row (STAT-16).
+    remote_sessions: Vec<(String, RemoteSessions)>,
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
@@ -63,6 +66,7 @@ impl ShellModel {
             navigation: Navigation::default(),
             regions: RegionState::default(),
             remote_hosts: Vec::new(),
+            remote_sessions: Vec::new(),
             teams: TeamsState::unavailable(),
             marketplace: MarketplaceSnapshot::default(),
             marketplace_query: String::new(),
@@ -123,6 +127,11 @@ impl ShellModel {
     /// The paired remote hosts and their states, as the store holds them now.
     pub fn set_remote_hosts(&mut self, hosts: Vec<(String, HostState)>) {
         self.remote_hosts = hosts;
+    }
+
+    /// The agent sessions each paired host runs, as the store holds them now.
+    pub fn set_remote_sessions(&mut self, sessions: Vec<(String, RemoteSessions)>) {
+        self.remote_sessions = sessions;
     }
 
     pub fn set_teams(&mut self, teams: TeamsState) {
@@ -239,14 +248,21 @@ impl ShellModel {
     pub fn sidebar(&self) -> SidebarContent {
         let mut content = sidebar_content(&self.snapshot, self.navigation.mode);
         if let SidebarContent::Workspaces { tree, .. } = &mut content {
-            tree.extend(
-                self.remote_hosts
+            let active = self.snapshot.active_session.as_deref();
+            for (name, state) in &self.remote_hosts {
+                tree.push(TreeRow::RemoteHost {
+                    name: name.clone(),
+                    state: state.clone(),
+                });
+                let sessions = self
+                    .remote_sessions
                     .iter()
-                    .map(|(name, state)| TreeRow::RemoteHost {
-                        name: name.clone(),
-                        state: state.clone(),
-                    }),
-            );
+                    .find(|(host, _)| host == name)
+                    .map(|(_, sessions)| sessions);
+                if let Some(sessions) = sessions {
+                    tree.extend(session_tree_rows(sessions, active));
+                }
+            }
         }
         content
     }
@@ -754,5 +770,46 @@ mod tests {
             matches!(last, TreeRow::RemoteHost { name, state } if name == "vps" && state.word == "Connected"),
             "the host comes last, with its state: {last:?}"
         );
+    }
+    #[test]
+    fn a_remote_host_lists_its_sessions_directly_below_its_row() {
+        use crate::model::hosts::{HostState, HostTone};
+        use crate::model::remote_sessions::remote_sessions;
+        use crate::service::fixtures::{agent, workspace};
+        use crate::service::{HostAgents, HostSessionsRead, StoreState, StoreUpdate};
+        let mut store = StoreState::default();
+        store.apply(
+            StoreUpdate::HostSessions(HostSessionsRead {
+                host: "vps".to_owned(),
+                request: 1,
+                answer: Some(HostAgents {
+                    sessions: vec![agent("a1", "w1", 1)],
+                    workspaces: vec![workspace("w1", "p1", "feat", 1)],
+                }),
+            }),
+            std::time::Instant::now(),
+        );
+        let mut model = shell(1440.0);
+        model.set_remote_hosts(vec![(
+            "vps".to_owned(),
+            HostState {
+                word: "Connected",
+                tone: HostTone::Connected,
+                detail: None,
+            },
+        )]);
+        model.set_remote_sessions(remote_sessions(&store));
+        let SidebarContent::Workspaces { tree, .. } = model.sidebar() else {
+            panic!("the workspaces sidebar is shown");
+        };
+        let host = tree
+            .iter()
+            .position(|row| matches!(row, TreeRow::RemoteHost { name, .. } if name == "vps"))
+            .expect("the host row is listed");
+        assert!(
+            matches!(&tree[host + 1], TreeRow::Session { id, depth: 0, dimmed: false, .. } if id == "a1"),
+            "the session sits under its host: {tree:?}"
+        );
+        assert_eq!(tree.len(), host + 2, "nothing else follows it");
     }
 }

@@ -386,6 +386,11 @@ impl Shell {
             let hosts =
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
+            shell
+                .model
+                .set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+                    store.read(cx).state(),
+                ));
             if shell.service.is_some() {
                 let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
@@ -435,6 +440,9 @@ impl Shell {
         model.set_remote_hosts(crate::model::hosts::host_rows(
             &store.read(cx).state().hosts,
             Instant::now(),
+        ));
+        model.set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+            store.read(cx).state(),
         ));
         model.set_marketplace(marketplace.snapshot());
         if service.is_some() {
