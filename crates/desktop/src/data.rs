@@ -1,6 +1,7 @@
 //! Where the shell's view models come from (decision 0023). Sample data now;
 //! a `ClientDataSource` on the `client` crate later, through the same trait.
 
+use crate::model::project_icon::ProjectGlyph;
 use crate::model::shell::{
     Agent, AgentState, HostGroup, HostReach, ProjectGroup, SessionRow, ShellSnapshot,
     StatusBarModel, UsageModel, UsageStatus, WorkspaceRow,
@@ -78,7 +79,7 @@ impl DataSource for SampleDataSource {
         ShellSnapshot {
             projects: vec![
                 ProjectGroup {
-                    emoji: None,
+                    icon: ProjectGlyph::Folder,
                     owner: None,
                     id: "massorca-rust".into(),
                     name: "massorca-rust".into(),
@@ -118,7 +119,7 @@ impl DataSource for SampleDataSource {
                     ],
                 },
                 ProjectGroup {
-                    emoji: None,
+                    icon: ProjectGlyph::Folder,
                     owner: None,
                     id: "datalake".into(),
                     name: "datalake".into(),

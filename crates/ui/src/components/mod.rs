@@ -45,6 +45,7 @@ pub mod select;
 pub mod session_summary_card;
 pub mod settings_row;
 pub mod sheet;
+pub mod project_mark;
 pub mod sidebar_row;
 pub mod skeleton;
 pub mod splitter;

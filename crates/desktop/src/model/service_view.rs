@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
 use super::hosts::{HostTone, host_state};
+use super::project_icon::ProjectGlyph;
 use super::shell::{
     Agent, AgentState, HostGroup, HostReach, PlaceholderRow, ProjectGroup, ServiceNotice,
     ServiceStatus, ServiceTone, ShellSnapshot, StatusBarModel, WorkspaceRow,
@@ -15,7 +16,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::{Project, ProjectIcon};
+use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -50,7 +51,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             .map(|project| ProjectGroup {
                 id: project.id.clone(),
                 name: project.name.clone(),
-                emoji: project.icon.as_ref().and_then(emoji_of),
+                icon: ProjectGlyph::of(project.icon.as_ref()),
                 owner: remote_owner_of(project),
                 hosts: vec![HostGroup {
                     name: LOCAL_HOST.to_owned(),
@@ -81,7 +82,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         projects.push(ProjectGroup {
             id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
@@ -298,14 +299,6 @@ pub fn teams_view(state: &StoreState) -> TeamsState {
 fn remote_owner_of(_project: &Project) -> Option<String> {
     // Project.remote_owner (core PR #332) is not in the protocol yet; None until it lands.
     None
-}
-
-/// The emoji an icon is; the other icon kinds are not drawn yet.
-fn emoji_of(icon: &ProjectIcon) -> Option<String> {
-    match icon {
-        ProjectIcon::Emoji { emoji } => Some(emoji.clone()),
-        ProjectIcon::Lucide { .. } | ProjectIcon::Image { .. } => None,
-    }
 }
 
 #[cfg(test)]

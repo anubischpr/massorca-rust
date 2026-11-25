@@ -3,9 +3,11 @@
 
 use super::Shell;
 use super::change;
+use super::project_mark::decoded_image;
 use super::rail::agent_kind;
+use crate::model::project_icon::ProjectGlyph;
 use crate::model::shell::{Agent, AgentState, HostReach};
-use crate::model::sidebar::{HOST_INDENT, NavKind, NavRow, TreeRow, project_label, session_indent};
+use crate::model::sidebar::{HOST_INDENT, NavKind, NavRow, TreeRow, session_indent};
 use crate::model::workspace_flow::NO_PROJECT_LABEL;
 use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*, px};
 use massorca_ui::IconName;
@@ -13,6 +15,7 @@ use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
+use massorca_ui::components::project_mark::{emoji_mark, image_mark, lucide_icon};
 use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
 use massorca_ui::tokens::SPACE_2;
 
@@ -40,6 +43,25 @@ pub(super) fn nav_row(row: &NavRow, focus: &FocusHandle, shell: &WeakEntity<Shel
     item
 }
 
+/// A project's row: the struck folder for the "No project" group (A95), else the icon its owner chose (decision 0091).
+fn project_row(id: SharedString, name: &str, icon: &ProjectGlyph) -> SidebarRow {
+    if name == NO_PROJECT_LABEL {
+        return SidebarRow::project(id, IconName::FolderX, name);
+    }
+    match icon {
+        ProjectGlyph::Folder => SidebarRow::project(id, IconName::Folder, name),
+        ProjectGlyph::Lucide(icon_name) => {
+            SidebarRow::project(id, lucide_icon(icon_name).unwrap_or(IconName::Folder), name)
+        }
+        ProjectGlyph::Emoji(emoji) => {
+            SidebarRow::project_element(id, emoji_mark(emoji.clone().into()), name)
+        }
+        ProjectGlyph::Image(image) => {
+            SidebarRow::project_element(id, image_mark(decoded_image(image)), name)
+        }
+    }
+}
+
 /// One row of the project tree, identified by its position in the list.
 pub(super) fn tree_row(
     row: &TreeRow,
@@ -52,20 +74,14 @@ pub(super) fn tree_row(
         TreeRow::Project {
             id: project_id,
             name,
-            emoji,
+            icon,
             owner,
             expanded,
         } => {
-            // The "No project" group wears the struck folder, as its project menu row does (A95).
-            let icon = if name == NO_PROJECT_LABEL {
-                IconName::FolderX
-            } else {
-                IconName::Folder
-            };
             let (click_shell, click_id) = (shell.clone(), project_id.clone());
             let (key_shell, key_id) = (shell.clone(), project_id.clone());
             // A click on the row, or Left and Right on the keyboard, folds the project's rows (A10).
-            let row = SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
+            let row = project_row(id, name, icon)
                 .expanded(*expanded)
                 .on_click(move |_, _, cx| {
                     let id = click_id.clone();

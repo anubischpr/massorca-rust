@@ -16,6 +16,7 @@ mod marketplace;
 mod pairing;
 mod palette;
 mod path_field;
+mod project_mark;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;

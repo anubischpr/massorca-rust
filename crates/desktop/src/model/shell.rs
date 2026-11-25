@@ -102,8 +102,8 @@ pub struct HostGroup {
 pub struct ProjectGroup {
     pub id: String,
     pub name: String,
-    /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
-    pub emoji: Option<String>,
+    /// What the project's row and pickers draw (decision 0091).
+    pub icon: crate::model::project_icon::ProjectGlyph,
     /// The owner or org of the project's remote, drawn after its name (A10); None until the protocol carries one.
     pub owner: Option<String>,
     pub hosts: Vec<HostGroup>,
