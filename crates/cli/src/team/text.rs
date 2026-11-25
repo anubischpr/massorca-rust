@@ -269,7 +269,7 @@ fn weekday_word(day: RoutineWeekday) -> &'static str {
 }
 
 /// One room line per row: its author (`you` or the bot's name), its text, then the task it is about and its Board
-/// column.
+/// column, or the one-time routine it scheduled and when that runs.
 pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
     messages
         .iter()
@@ -286,7 +286,16 @@ pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
                     task.id,
                     task.column.label()
                 ),
-                None => format!("{author}	{}", line.text),
+                None => match &line.routine {
+                    Some(routine) => format!(
+                        "{author}	{}	routine {} ({} {})",
+                        line.text,
+                        routine.id,
+                        routine.run_date.as_deref().unwrap_or("-"),
+                        routine.time
+                    ),
+                    None => format!("{author}	{}", line.text),
+                },
             }
         })
         .collect()
