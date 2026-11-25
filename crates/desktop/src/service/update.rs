@@ -24,6 +24,7 @@ use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
 use super::skills::SkillsRead;
+use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
@@ -81,6 +82,8 @@ pub enum StoreUpdate {
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
+    /// What a read of one team's Conference room answered; the newest answer per team is kept.
+    TeamRoom(TeamRoomRead),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
     /// What a paired host's Marketplace reads answered; the newest answer per host is kept.
@@ -237,6 +240,8 @@ pub struct StoreState {
     pub team_read: u64,
     /// The numbers the pages give the ids of the teams, their cards and their bots.
     pub team_ids: TeamIds,
+    /// The Conference rooms read so far, by the service's team id (decision 0102).
+    pub team_rooms: TeamRooms,
     /// The hosts this computer paired with, by name.
     pub hosts: Vec<HostEntry>,
     /// The devices paired with this computer's service, once listed.
@@ -298,6 +303,7 @@ impl Default for StoreState {
             teams: None,
             team_read: 0,
             team_ids: TeamIds::default(),
+            team_rooms: TeamRooms::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
@@ -438,6 +444,7 @@ impl StoreState {
             }
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),

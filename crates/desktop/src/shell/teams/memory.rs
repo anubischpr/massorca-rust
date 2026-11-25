@@ -2,12 +2,13 @@
 //! memory entry is deleted after a confirm, and the page says who can read it.
 
 use super::super::Shell;
-use super::dialogs::TeamConfirm;
 use super::team_pill;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{MemoryEntry, MemoryTab, Team, TeamId};
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, prelude::*, px};
-use massorca_ui::components::empty_state::EmptyState;
+use crate::model::teams::{MemoryEntry, MemoryTab, Team, TeamId, TeamPage};
+use gpui::{
+    AnyElement, App, Div, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*,
+    px,
+};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::ListRow;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
@@ -19,6 +20,7 @@ pub(in crate::shell) fn memory_page(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     team: TeamId,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -36,16 +38,26 @@ pub(in crate::shell) fn memory_page(
                 .text_color(theme.palette.text.primary)
                 .child("Memory"),
         )
-        .child(team_pill(&team_data.name, team_data.character, &theme));
+        .child(team_pill(
+            TeamPage::Memory(team),
+            &team_data.name,
+            team_data.character,
+            shell,
+            window,
+            cx,
+        ));
     let entries: Vec<&MemoryEntry> = team_data
         .memory
         .iter()
         .filter(|entry| entry.tab == tab)
         .collect();
     let body = if entries.is_empty() {
-        EmptyState::new("memory-empty", "Nothing remembered here yet")
-            .explanation("What the team remembers shows here. Bots add notes when they learn something that helps later work.")
-            .into_any_element()
+        note(
+            "What the team remembers shows here. Bots add notes when they learn something that helps later work.",
+            &theme,
+        )
+        .debug_selector(|| "memory-empty".to_owned())
+        .into_any_element()
     } else {
         let mut list = div().flex().flex_col().gap(px(SPACE_2));
         for entry in entries {
@@ -94,7 +106,7 @@ fn tabs(shell: &WeakEntity<Shell>, tab: MemoryTab) -> impl IntoElement {
     })
 }
 
-/// One entry: its sentence, who wrote it and when, and a delete that asks first.
+/// One entry: its sentence, who wrote it and when, and a More menu whose Delete asks first.
 fn entry_row(
     entry: &MemoryEntry,
     team: TeamId,
@@ -105,25 +117,25 @@ fn entry_row(
         .author
         .and_then(|id| team_data.bot(id))
         .map_or_else(|| "the team".to_owned(), |bot| bot.name.clone());
-    let delete = {
+    let more = {
         let shell = shell.clone();
         let memory = entry.id;
-        IconButton::new(
-            format!("memory-delete-{}", entry.id.0),
-            IconName::Trash2,
-            "Delete memory",
+        let trigger = format!("memory-more-{}", entry.id.0);
+        let selector = trigger.clone();
+        div().debug_selector(move || selector).child(
+            IconButton::new(trigger, IconName::Ellipsis, "More").on_click(move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_memory_menu(team, memory, window, cx)
+                });
+            }),
         )
-        .on_click(move |_, cx| {
-            let confirm = TeamConfirm::DeleteMemory { team, memory };
-            let _ = shell.update(cx, |shell, cx| shell.open_team_confirm(confirm, cx));
-        })
     };
     ListRow::new(format!("memory-{}", entry.id.0), entry.text.clone())
         .secondary(format!("From {author}, {}", entry.date))
-        .trailing(delete)
+        .trailing(more)
 }
 
-fn note(text: &str, theme: &Theme) -> impl IntoElement {
+fn note(text: &str, theme: &Theme) -> Div {
     div()
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.tertiary)
@@ -140,10 +152,11 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
+    use super::super::dialogs::TeamConfirm;
     use super::*;
     use crate::data::SampleDataSource;
     use crate::model::teams::{MemoryId, SampleTeamsSource, TeamPage};
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
     use massorca_ui::{Appearance, Theme as UiTheme};
 
     fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -188,5 +201,79 @@ mod tests {
         shell.update(cx, |shell, cx| shell.confirm_team_delete(cx));
         assert_eq!(count(&shell, cx), 1);
         cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    fn memory_count(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> usize {
+        shell.read_with(cx, |shell, _| {
+            shell.model().teams().team(TeamId(1)).unwrap().memory.len()
+        })
+    }
+
+    #[gpui::test]
+    fn a_memory_more_menu_delete_opens_the_same_confirm_the_trash_button_did(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx) = shell(cx);
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Memory(TeamId(1)));
+            shell.set_memory_tab(MemoryTab::Bot, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let more = cx
+            .debug_bounds("memory-more-2")
+            .expect("the entry draws its More button");
+        cx.simulate_click(more.center(), Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(
+                shell.team_confirm,
+                Some(TeamConfirm::DeleteMemory {
+                    team: TeamId(1),
+                    memory: MemoryId(2),
+                }),
+                "Delete in the More menu asks the confirm first"
+            );
+        });
+        assert_eq!(
+            memory_count(&shell, cx),
+            2,
+            "nothing is deleted before the confirm"
+        );
+        shell.update(cx, |shell, cx| shell.confirm_team_delete(cx));
+        assert_eq!(memory_count(&shell, cx), 1);
+    }
+
+    #[gpui::test]
+    fn an_empty_memory_tab_says_one_sentence_with_no_panel_or_title(cx: &mut TestAppContext) {
+        let (shell, cx) = shell(cx);
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Memory(TeamId(1)));
+            shell.set_memory_tab(MemoryTab::Team, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        shell.update(cx, |shell, cx| {
+            shell.open_team_confirm(
+                TeamConfirm::DeleteMemory {
+                    team: TeamId(1),
+                    memory: MemoryId(1),
+                },
+                cx,
+            );
+            shell.confirm_team_delete(cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("memory-empty").is_some(),
+            "the empty Team tab says its sentence"
+        );
+        assert!(
+            cx.debug_bounds("empty-panel").is_none(),
+            "the empty state draws no panel and no title"
+        );
     }
 }

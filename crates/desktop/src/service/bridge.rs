@@ -26,7 +26,8 @@ use massorca_protocol::methods::events::{
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
     TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
     TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -57,6 +58,7 @@ use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
+use super::team_room::{self, RoomCommand};
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -100,6 +102,8 @@ pub(crate) enum Command {
     Terminal(TerminalCommand),
     /// A Bot Teams write, answered on its oneshot.
     Team(TeamCommand),
+    /// A team's Conference room: a read, or a post answered on its oneshot (decision 0102).
+    Room(RoomCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
@@ -511,6 +515,7 @@ impl ServiceBridge {
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
+            room_reads: Arc::new(Sequence::default()),
             extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
@@ -612,6 +617,8 @@ struct Link {
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
     team_reads: Arc<Sequence>,
+    /// Numbers the Conference room reads, so a stale answer never replaces a newer one.
+    room_reads: Arc<Sequence>,
     /// Numbers the extension reads across the connections of this bridge.
     extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
@@ -885,6 +892,9 @@ impl Link {
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
                             }
+                            Some(Command::Room(command)) => {
+                                team_room::spawn_call(client, command, &self.updates, &self.room_reads);
+                            }
                             Some(Command::Extension(command)) => {
                                 extensions::spawn_call(
                                     client,
@@ -986,6 +996,10 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
+            // The id is the team's: its room is read again.
+            TOPIC_TEAM_ROOM_CHANGED => team_room::read(client, &self.room_reads, id.clone())
+                .await
+                .map(StoreUpdate::TeamRoom),
             // The events carry only the package id, so both lists are read again (decision 0062). A package can
             // carry an agent kind, and there is no kind event, so the kinds are read again too.
             TOPIC_EXTENSION_INSTALLED
@@ -1282,6 +1296,7 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
+        Command::Room(command) => team_room::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
