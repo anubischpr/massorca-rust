@@ -26,12 +26,7 @@ pub enum AgentState {
     Done,
 }
 
-impl AgentState {
-    /// Waiting, Error and Running never fold (WS-33). Unreachable is a lost link, not a failure.
-    pub fn never_folds(self) -> bool {
-        matches!(self, Self::Waiting | Self::Error | Self::Running)
-    }
-}
+impl AgentState {}
 
 /// Whether the app can reach a host right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

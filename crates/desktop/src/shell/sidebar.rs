@@ -7,7 +7,7 @@ use super::teams;
 use super::tooltip::with_tooltip;
 use crate::model::morph::ease;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::{NavRow, SidebarContent, SidebarFolds, TreeRow, fold_sessions};
+use crate::model::sidebar::{NavRow, SidebarContent, TreeRow};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Div, Entity, FocusHandle, IntoElement,
     MouseButton, SharedString, Stateful, Window, div, prelude::*, px,
@@ -27,7 +27,6 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 /// if any: its content fades in over it.
 pub(super) fn sidebar(
     model: &ShellModel,
-    folds: &SidebarFolds,
     search: &Entity<SearchField>,
     overlay: bool,
     switch: Option<u64>,
@@ -74,13 +73,7 @@ pub(super) fn sidebar(
             let content = nav_rows(content, &nav, "nav", &shell, window, cx);
             content
                 .child(projects_header(&theme))
-                .child(tree_list(
-                    &fold_sessions(tree, folds),
-                    &shell,
-                    window,
-                    cx,
-                    &theme,
-                ))
+                .child(tree_list(&tree, &shell, window, cx, &theme))
                 .child(footer())
         }
         SidebarContent::BotTeams => {

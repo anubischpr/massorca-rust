@@ -302,7 +302,11 @@ impl Shell {
         );
     }
 
-    /// The context menu of a workspace row (D-WS-02), built from the workspace's record.
+    /// The context menu of a workspace (D-WS-02). No tree row opens it now (A97); the project row menu will.
+    #[expect(
+        dead_code,
+        reason = "workspace menu waits for the project row menu (A97)"
+    )]
     pub(super) fn open_workspace_menu(
         &mut self,
         id: String,

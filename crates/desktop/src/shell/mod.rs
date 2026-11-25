@@ -54,7 +54,6 @@ use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -262,8 +261,6 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
-    sidebar_folds: SidebarFolds,
 }
 
 impl Shell {
@@ -545,7 +542,6 @@ impl Shell {
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
-            sidebar_folds: SidebarFolds::default(),
         }
     }
 
@@ -874,7 +870,6 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -900,7 +895,6 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
                         &self.search,
                         true,
                         self.rail.morph_generation(),

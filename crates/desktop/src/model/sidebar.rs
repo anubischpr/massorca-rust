@@ -1,8 +1,6 @@
-//! The Sidebar's rows in each mode: the Workspaces navigation and project tree. The Bot Teams
-//! rows come from the teams sidebar (D-WS-29); here Bot Teams is only the marker (A9, A10, A83).
-
-use std::collections::BTreeSet;
-use std::iter::Peekable;
+//! The Sidebar's rows in each mode: the Workspaces navigation and project tree. The tree is project, host, then
+//! the host's sessions; it has no workspace row (A97). The Bot Teams rows come from the teams sidebar (D-WS-29);
+//! here Bot Teams is only the marker (A9, A10, A83).
 
 use super::navigation::{Mode, Page};
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
@@ -29,8 +27,7 @@ pub struct NavRow {
     pub chevron: bool,
 }
 
-/// One row of the project tree, top to bottom: a project, its hosts, their workspaces and
-/// their sessions.
+/// One row of the project tree, top to bottom: a project, its host, then that host's sessions (A97).
 #[derive(Clone, Debug, PartialEq)]
 pub enum TreeRow {
     Project {
@@ -47,43 +44,26 @@ pub enum TreeRow {
         name: String,
         state: crate::model::hosts::HostState,
     },
-    Workspace {
-        /// The workspace's id, for actions on the row.
-        id: String,
-        name: String,
-        branch: Option<String>,
-        usage_slot: u8,
-    },
-    /// A session at `depth` (0 for a top session, 1 for its child sessions, A83).
+    /// One session at `depth` (0 for a top session, 1 for its child sessions, A83).
     Session {
         /// The session's id, for the actions on its row.
         id: String,
+        /// The session's title, or its branch (or folder name) until the agent sets one (A97).
         title: String,
         agent: Agent,
         state: AgentState,
         depth: usize,
         selected: bool,
+        /// An unread session: shown with a dot (WS-33).
+        unread: bool,
         /// Whether the row offers to bring this child back.
         can_bring_back: bool,
-        /// An unread session: shown with a dot and never folded (WS-33).
-        unread: bool,
         /// The row tooltip: "branch · worktree path", or the folder path (A97).
         tooltip: Option<String>,
         /// The workspace the session runs in, for the row menu.
         workspace_id: String,
         /// Its host is unreachable, so the row dims (A10).
         dimmed: bool,
-    },
-    /// Shows a workspace's folded sessions: `count` of its top sessions are hidden behind it.
-    ShowMore {
-        workspace_id: String,
-        count: usize,
-        /// The worst state among the hidden sessions, if the row marks it (Error, Waiting).
-        worst: Option<AgentState>,
-    },
-    /// Folds a workspace's sessions back behind "Show N more", once they are all listed.
-    ShowLess {
-        workspace_id: String,
     },
 }
 
@@ -222,124 +202,6 @@ fn push_session(
     }
 }
 
-/// How many top-level sessions a workspace lists before the rest fold (WS-33).
-pub const SESSIONS_SHOWN: usize = 5;
-
-/// The workspaces whose folded sessions the user has unfolded, by workspace id. Kept for the app run only.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SidebarFolds {
-    unfolded: BTreeSet<String>,
-}
-
-impl SidebarFolds {
-    pub fn unfold(&mut self, workspace_id: &str) {
-        self.unfolded.insert(workspace_id.to_owned());
-    }
-
-    pub fn fold(&mut self, workspace_id: &str) {
-        self.unfolded.remove(workspace_id);
-    }
-
-    pub fn is_unfolded(&self, workspace_id: &str) -> bool {
-        self.unfolded.contains(workspace_id)
-    }
-}
-
-/// Folds each workspace's top sessions past the fifth. The fold row comes after the listed sessions.
-pub fn fold_sessions(tree: Vec<TreeRow>, folds: &SidebarFolds) -> Vec<TreeRow> {
-    let mut out = Vec::with_capacity(tree.len());
-    let mut rows = tree.into_iter().peekable();
-    while let Some(row) = rows.next() {
-        let workspace = match &row {
-            TreeRow::Workspace { id, .. } => Some(id.clone()),
-            _ => None,
-        };
-        out.push(row);
-        let Some(workspace_id) = workspace else {
-            continue;
-        };
-        let blocks = session_blocks(&mut rows);
-        out.extend(fold_blocks(&workspace_id, blocks, folds));
-    }
-    out
-}
-
-/// The top sessions after a workspace row, each with the child sessions below it, in order.
-fn session_blocks(rows: &mut Peekable<impl Iterator<Item = TreeRow>>) -> Vec<Vec<TreeRow>> {
-    let mut blocks: Vec<Vec<TreeRow>> = Vec::new();
-    while let Some(row) = rows.next_if(|row| matches!(row, TreeRow::Session { .. })) {
-        let top = matches!(row, TreeRow::Session { depth: 0, .. });
-        match blocks.last_mut() {
-            Some(block) if !top => block.push(row),
-            _ => blocks.push(vec![row]),
-        }
-    }
-    blocks
-}
-
-/// One workspace's session rows: all of them when unfolded, else the listed ones and a fold row.
-fn fold_blocks(
-    workspace_id: &str,
-    blocks: Vec<Vec<TreeRow>>,
-    folds: &SidebarFolds,
-) -> Vec<TreeRow> {
-    let hidden: Vec<bool> = blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| index >= SESSIONS_SHOWN && !stays_listed(block))
-        .collect();
-    let folded = hidden.iter().filter(|&&hidden| hidden).count();
-    if folded == 0 {
-        return blocks.into_iter().flatten().collect();
-    }
-    if folds.is_unfolded(workspace_id) {
-        let mut rows: Vec<TreeRow> = blocks.into_iter().flatten().collect();
-        rows.push(TreeRow::ShowLess {
-            workspace_id: workspace_id.to_owned(),
-        });
-        return rows;
-    }
-    let worst = worst_hidden_state(
-        blocks
-            .iter()
-            .zip(&hidden)
-            .filter(|(_, hidden)| **hidden)
-            .flat_map(|(block, _)| block)
-            .filter_map(|row| match row {
-                TreeRow::Session { state, .. } => Some(*state),
-                _ => None,
-            }),
-    );
-    let mut rows: Vec<TreeRow> = blocks
-        .into_iter()
-        .zip(hidden)
-        .filter(|(_, hidden)| !hidden)
-        .flat_map(|(block, _)| block)
-        .collect();
-    rows.push(TreeRow::ShowMore {
-        workspace_id: workspace_id.to_owned(),
-        count: folded,
-        worst,
-    });
-    rows
-}
-
-/// Whether a top session and its children stay listed: one is open, unread, waits for the person or failed.
-fn stays_listed(block: &[TreeRow]) -> bool {
-    block.iter().any(|row| {
-        matches!(row, TreeRow::Session { state, selected, unread, .. } if *selected || *unread || state.never_folds())
-    })
-}
-
-/// The worst state a fold row marks among the sessions it hides: Error, else Waiting. Every other
-/// state marks nothing; Unreachable is a lost link, not a failure.
-fn worst_hidden_state(states: impl IntoIterator<Item = AgentState>) -> Option<AgentState> {
-    let states: Vec<AgentState> = states.into_iter().collect();
-    [AgentState::Error, AgentState::Waiting]
-        .into_iter()
-        .find(|worst| states.contains(worst))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,132 +216,12 @@ mod tests {
         rows.iter().map(|row| row.label).collect()
     }
 
-    #[test]
-    fn workspaces_list_the_navigation_rows_with_their_pages() {
-        let SidebarContent::Workspaces { nav, .. } = sidebar_content(&sample(), Mode::Workspaces)
+    fn tree_of(snapshot: &ShellSnapshot) -> Vec<TreeRow> {
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(snapshot, Mode::Workspaces)
         else {
             panic!("workspaces content expected");
         };
-        assert_eq!(
-            labels(&nav),
-            vec!["Prototypes", "Tasks", "Automations", "MassOrca Mobile"]
-        );
-        assert_eq!(nav[0].count, Some(3));
-        assert_eq!(nav[2].page, Some(Page::Automations));
-        assert_eq!(nav[3].page, None);
-    }
-
-    #[test]
-    fn only_prototypes_shows_a_chevron() {
-        let SidebarContent::Workspaces { nav, .. } = sidebar_content(&sample(), Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        let chevrons: Vec<bool> = nav.iter().map(|row| row.chevron).collect();
-        assert_eq!(chevrons, [true, false, false, false]);
-    }
-
-    #[test]
-    fn the_tree_has_project_host_and_session_rows_and_no_workspace_row() {
-        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&sample(), Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        // 2 projects, 3 hosts and 6 sessions (three of them children of another): no workspace row.
-        assert_eq!(tree.len(), 11);
-        assert!(
-            tree.iter()
-                .all(|row| !matches!(row, TreeRow::Workspace { .. }))
-        );
-        assert_eq!(
-            tree[0],
-            TreeRow::Project {
-                name: "massorca-rust".into(),
-                emoji: None,
-            }
-        );
-        assert!(matches!(
-            tree[1],
-            TreeRow::Host { ref name, reach: HostReach::Connected } if name == "This PC"
-        ));
-    }
-
-    #[test]
-    fn child_sessions_sit_one_level_deeper_than_their_parent() {
-        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&sample(), Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        let depth_of = |wanted: &str| {
-            tree.iter().find_map(|row| match row {
-                TreeRow::Session { title, depth, .. } if title == wanted => Some(*depth),
-                _ => None,
-            })
-        };
-        assert_eq!(depth_of("Implementation of master catalogs"), Some(0));
-        assert_eq!(depth_of("Feed endpoints"), Some(1));
-        assert_eq!(depth_of("Catalog tests"), Some(1));
-    }
-
-    #[test]
-    fn only_the_open_session_is_selected() {
-        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&sample(), Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        let selected: Vec<&str> = tree
-            .iter()
-            .filter_map(|row| match row {
-                TreeRow::Session {
-                    title,
-                    selected: true,
-                    ..
-                } => Some(title.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(selected, vec!["Implementation of master catalogs"]);
-    }
-
-    #[test]
-    fn an_unreachable_host_keeps_how_long_it_has_been_unreachable() {
-        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&sample(), Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        assert!(tree.iter().any(|row| matches!(
-            row,
-            TreeRow::Host {
-                name,
-                reach: HostReach::Unreachable { minutes: 5 },
-            } if name == "VPS"
-        )));
-    }
-
-    #[test]
-    fn bot_teams_lists_no_workspace_rows() {
-        assert_eq!(
-            sidebar_content(&sample(), Mode::BotTeams),
-            SidebarContent::BotTeams
-        );
-    }
-
-    #[test]
-    fn a_project_row_takes_its_emoji_into_its_label() {
-        let groups = vec![ProjectGroup {
-            name: "massorca".into(),
-            emoji: Some("🚀".into()),
-            hosts: Vec::new(),
-        }];
-        assert_eq!(
-            flatten(&groups, None)[0],
-            TreeRow::Project {
-                name: "massorca".into(),
-                emoji: Some("🚀".into()),
-            }
-        );
-        assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
-        assert_eq!(project_label("massorca", None), "massorca");
+        tree
     }
 
     fn sample_session(id: &str) -> SessionRow {
@@ -497,14 +239,6 @@ mod tests {
             unread: false,
             children: Vec::new(),
         }
-    }
-
-    fn tree_of(snapshot: &ShellSnapshot) -> Vec<TreeRow> {
-        let SidebarContent::Workspaces { tree, .. } = sidebar_content(snapshot, Mode::Workspaces)
-        else {
-            panic!("workspaces content expected");
-        };
-        tree
     }
 
     fn host_with(sessions: Vec<SessionRow>, reach: HostReach) -> HostGroup {
@@ -535,6 +269,54 @@ mod tests {
             service_status: None,
             service_notice: None,
         }
+    }
+
+    #[test]
+    fn workspaces_list_the_navigation_rows_with_their_pages() {
+        let SidebarContent::Workspaces { nav, .. } = sidebar_content(&sample(), Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        assert_eq!(
+            labels(&nav),
+            vec!["Prototypes", "Tasks", "Automations", "MassOrca Mobile"]
+        );
+        assert_eq!(nav[0].count, Some(3));
+        assert_eq!(nav[2].page, Some(Page::Automations));
+        assert_eq!(nav[3].page, None);
+    }
+
+    #[test]
+    fn only_prototypes_shows_a_chevron() {
+        let SidebarContent::Workspaces { nav, .. } = sidebar_content(&sample(), Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        let chevrons: Vec<bool> = nav.iter().map(|row| row.chevron).collect();
+        assert_eq!(chevrons, [true, false, false, false]);
+    }
+
+    #[test]
+    fn the_tree_has_project_host_and_session_rows_and_no_workspace_row() {
+        let tree = tree_of(&sample());
+        // 2 projects, 3 hosts and 6 sessions (three of them children of another): no workspace row.
+        assert_eq!(tree.len(), 11);
+        assert_eq!(
+            tree[0],
+            TreeRow::Project {
+                name: "massorca-rust".into(),
+                emoji: None,
+            }
+        );
+        assert!(matches!(
+            tree[1],
+            TreeRow::Host { ref name, reach: HostReach::Connected } if name == "This PC"
+        ));
+        assert!(matches!(
+            tree[2],
+            TreeRow::Session { ref title, depth: 0, .. }
+                if title == "Implementation of master catalogs"
+        ));
     }
 
     #[test]
@@ -574,6 +356,59 @@ mod tests {
     }
 
     #[test]
+    fn child_sessions_sit_one_level_deeper_than_their_parent() {
+        let tree = tree_of(&sample());
+        let depth_of = |wanted: &str| {
+            tree.iter().find_map(|row| match row {
+                TreeRow::Session { title, depth, .. } if title == wanted => Some(*depth),
+                _ => None,
+            })
+        };
+        assert_eq!(depth_of("Implementation of master catalogs"), Some(0));
+        assert_eq!(depth_of("Feed endpoints"), Some(1));
+        assert_eq!(depth_of("Catalog tests"), Some(1));
+    }
+
+    #[test]
+    fn indents_are_eight_twenty_four_forty_and_sixty_two_px() {
+        assert_eq!(
+            [PROJECT_INDENT, HOST_INDENT, SESSION_INDENT, CHILD_INDENT],
+            [8.0, 24.0, 40.0, 62.0]
+        );
+        assert_eq!(session_indent(0), 40.0);
+        assert_eq!(session_indent(1), 62.0);
+        // A grandchild steps in again by the same 22 px, so its mark stays under its parent's title.
+        assert_eq!(session_indent(2), 84.0);
+    }
+
+    #[test]
+    fn only_the_open_session_is_selected() {
+        let selected: Vec<String> = tree_of(&sample())
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Session {
+                    title,
+                    selected: true,
+                    ..
+                } => Some(title.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected, vec!["Implementation of master catalogs"]);
+    }
+
+    #[test]
+    fn an_unreachable_host_keeps_how_long_it_has_been_unreachable() {
+        assert!(tree_of(&sample()).iter().any(|row| matches!(
+            row,
+            TreeRow::Host {
+                name,
+                reach: HostReach::Unreachable { minutes: 5 },
+            } if name == "VPS"
+        )));
+    }
+
+    #[test]
     fn the_sessions_of_an_unreachable_host_dim_and_the_others_do_not() {
         let dimmed: Vec<(String, bool)> = tree_of(&sample())
             .iter()
@@ -584,6 +419,32 @@ mod tests {
             .collect();
         assert!(dimmed.contains(&("s3".to_owned(), true)));
         assert!(dimmed.contains(&("s1".to_owned(), false)));
+    }
+
+    #[test]
+    fn bot_teams_lists_no_workspace_rows() {
+        assert_eq!(
+            sidebar_content(&sample(), Mode::BotTeams),
+            SidebarContent::BotTeams
+        );
+    }
+
+    #[test]
+    fn a_project_row_takes_its_emoji_into_its_label() {
+        let groups = vec![ProjectGroup {
+            name: "massorca".into(),
+            emoji: Some("🚀".into()),
+            hosts: Vec::new(),
+        }];
+        assert_eq!(
+            flatten(&groups, None)[0],
+            TreeRow::Project {
+                name: "massorca".into(),
+                emoji: Some("🚀".into()),
+            }
+        );
+        assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
+        assert_eq!(project_label("massorca", None), "massorca");
     }
 
     #[test]
@@ -617,17 +478,5 @@ mod tests {
             .filter(|row| matches!(row, TreeRow::Session { .. }))
             .count();
         assert_eq!(listed, 9);
-    }
-
-    #[test]
-    fn indents_are_eight_twenty_four_forty_and_sixty_two_px() {
-        assert_eq!(
-            [PROJECT_INDENT, HOST_INDENT, SESSION_INDENT, CHILD_INDENT],
-            [8.0, 24.0, 40.0, 62.0]
-        );
-        assert_eq!(session_indent(0), 40.0);
-        assert_eq!(session_indent(1), 62.0);
-        // A grandchild steps in again by the same 22 px, so its mark stays under its parent's title.
-        assert_eq!(session_indent(2), 84.0);
     }
 }
