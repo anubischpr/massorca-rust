@@ -14,19 +14,27 @@ pub enum ReviewOutcome {
         sentence: String,
         command: String,
     },
+    /// Every install step needs administrator rights: the person runs one of these commands; MassOrca never does.
+    Manual {
+        title: String,
+        sentence: String,
+        commands: Vec<String>,
+    },
 }
 
 impl ReviewOutcome {
     pub fn title(&self) -> &str {
         match self {
-            Self::Add { title, .. } | Self::Install { title, .. } => title,
+            Self::Add { title, .. } | Self::Install { title, .. } | Self::Manual { title, .. } => {
+                title
+            }
         }
     }
 
     /// The primary button.
     pub fn button(&self) -> &'static str {
         match self {
-            Self::Add { .. } => "Add to MassOrca",
+            Self::Add { .. } | Self::Manual { .. } => "Add to MassOrca",
             Self::Install { .. } => "Install",
         }
     }
@@ -55,6 +63,26 @@ pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
             title: format!("Install {name}"),
             sentence: format!("MassOrca will install {name} on this computer."),
             command: commands.join("; "),
+        };
+    }
+    let manual: Vec<String> = review
+        .cli
+        .iter()
+        .filter_map(|plan| match &plan.state {
+            CliPlanState::Manual { commands } => {
+                Some(commands.iter().map(|command| command.join(" ")))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if !manual.is_empty() {
+        return ReviewOutcome::Manual {
+            title: format!("Add {name} to MassOrca"),
+            sentence: format!(
+                "{name} needs administrator rights to install. Run this command yourself; MassOrca never runs it."
+            ),
+            commands: manual,
         };
     }
     let detected = review
@@ -182,6 +210,19 @@ pub(super) mod tests {
 {sentence}
 {command}"
             ),
+            ReviewOutcome::Manual {
+                title,
+                sentence,
+                commands,
+            } => format!(
+                "{title}
+{sentence}
+{}",
+                commands.join(
+                    "
+"
+                )
+            ),
         }
     }
 
@@ -252,5 +293,30 @@ pub(super) mod tests {
                     .to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn a_step_that_needs_admin_rights_is_shown_to_run_yourself() {
+        let mut tool = review();
+        tool.listing.category = "tools".to_owned();
+        tool.runs_installer = false;
+        let apt: Vec<String> = ["sudo", "apt-get", "install", "-y", "git"]
+            .map(String::from)
+            .into();
+        tool.cli[0].state = CliPlanState::Manual {
+            commands: vec![apt.clone()],
+        };
+        let outcome = review_outcome(&tool, "Git");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Manual {
+                title: "Add Git to MassOrca".to_owned(),
+                sentence: "Git needs administrator rights to install. Run this command yourself; MassOrca never runs it."
+                    .to_owned(),
+                commands: vec!["sudo apt-get install -y git".to_owned()],
+            }
+        );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert!(!installer_runs(&tool));
     }
 }

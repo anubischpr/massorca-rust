@@ -127,3 +127,27 @@ fn a_third_party_host_program_with_vendor_commands_is_refused() {
 
     assert_eq!(error.code(), codes::VENDOR_COMMAND_REFUSED);
 }
+
+#[test]
+fn a_linux_install_that_needs_admin_rights_is_shown_and_never_run() {
+    let mut s = setup(FakeHost::new());
+    s.service = s.service.with_os(Some(CliOs::Linux));
+
+    let review = s.service.inspect(&git()).expect("review");
+
+    assert!(!review.runs_installer);
+    match &review.cli[0].state {
+        massorca_core_extensions::review::PlanState::Manual { commands } => {
+            assert_eq!(commands[0], ["sudo", "apt-get", "install", "-y", "git"]);
+            assert_eq!(commands[1], ["sudo", "dnf", "install", "-y", "git"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    s.install(&git(), true).expect("registers the package");
+    assert!(
+        s.host.runs().is_empty(),
+        "MassOrca never runs a manual step"
+    );
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["packages"][0]["cli"][0]["installed_by_package"], false);
+}

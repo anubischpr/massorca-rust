@@ -116,3 +116,25 @@ fn removal_names_the_program_only_when_the_package_installed_it() {
     assert!(uninstall_effects(&manifest, false).cli_binaries.is_empty());
     assert!(uninstall_effects(&manifest, true).offered.is_empty());
 }
+
+#[test]
+fn a_manual_install_step_may_name_any_program_but_only_installs_are_manual() {
+    let mut cli = git_cli();
+    cli["install"] = json!([
+        { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "git"], "manual": true },
+        { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "git"], "manual": true }
+    ]);
+    let value = tool_package(json!({ "hostPrograms": [{ "id": "git", "cli": cli.clone() }] }));
+    assert_eq!(problems(&value), Vec::new());
+
+    cli["uninstall"] =
+        json!([{ "os": "linux", "command": ["sudo", "apt-get", "remove", "git"], "manual": true }]);
+    let value = tool_package(json!({ "hostPrograms": [{ "id": "git", "cli": cli }] }));
+    assert!(
+        problems(&value)
+            .iter()
+            .any(|problem| problem.path == "/contributes/hostPrograms/0/cli/uninstall/0/manual"),
+        "{:?}",
+        problems(&value)
+    );
+}

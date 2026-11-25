@@ -115,6 +115,10 @@ impl Manifest {
 pub struct CliStep {
     pub os: CliOs,
     pub command: Vec<String>,
+    /// A step that needs administrator rights: shown for the person to run, never run by MassOrca (decision 0151).
+    /// Only an install step may be manual, and an OS may list several manual steps, such as apt and dnf.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 /// The operating systems a CLI step may target.
@@ -249,22 +253,30 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
             "must be an https URL to the vendor's official install docs",
         );
     }
-    check_steps(&cli.install, &at(base, "install"), problems);
-    check_steps(&cli.update, &at(base, "update"), problems);
-    check_steps(&cli.uninstall, &at(base, "uninstall"), problems);
+    check_steps(&cli.install, &at(base, "install"), true, problems);
+    check_steps(&cli.update, &at(base, "update"), false, problems);
+    check_steps(&cli.uninstall, &at(base, "uninstall"), false, problems);
 }
 
-fn check_steps(steps: &[CliStep], base: &str, problems: &mut Problems) {
+fn check_steps(steps: &[CliStep], base: &str, manual_allowed: bool, problems: &mut Problems) {
     let mut seen = HashSet::new();
+    let mut manual_os = HashSet::new();
     for (index, step) in steps.iter().enumerate() {
         let here = at(base, index);
+        check_argv(&step.command, &at(&here, "command"), problems);
+        if step.manual {
+            if !manual_allowed {
+                problems.add(at(&here, "manual"), "only an install step may be manual");
+            }
+            manual_os.insert(step.os);
+            continue;
+        }
         if !seen.insert(step.os) {
             problems.add(
                 at(&here, "os"),
                 "has one entry per operating system in this list",
             );
         }
-        check_argv(&step.command, &at(&here, "command"), problems);
         if !is_vendor_program(&step.command) {
             problems.add(
                 at(&here, "command"),
@@ -272,6 +284,14 @@ fn check_steps(steps: &[CliStep], base: &str, problems: &mut Problems) {
                     "must start with an allowlisted program: {}",
                     VENDOR_PROGRAMS.join(", ")
                 ),
+            );
+        }
+    }
+    for (index, step) in steps.iter().enumerate() {
+        if !step.manual && manual_os.contains(&step.os) {
+            problems.add(
+                at(&at(base, index), "os"),
+                "an operating system has either a run step or manual steps",
             );
         }
     }

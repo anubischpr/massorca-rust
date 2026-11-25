@@ -97,6 +97,17 @@ fn install_review(
                 .text_color(p.text.primary)
                 .child(command),
         ),
+        Some(ReviewOutcome::Manual {
+            sentence: text,
+            commands,
+            ..
+        }) => {
+            let mut body = body.child(sentence(text));
+            for (index, command) in commands.into_iter().enumerate() {
+                body = body.child(manual_command(index, command, cx));
+            }
+            body
+        }
     };
     if let Some(answer) = &review.review {
         let (toggle, open) = (weak.clone(), review.details_open);
@@ -148,6 +159,33 @@ fn install_review(
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
+}
+
+/// A command the person runs themselves, with a Copy button; MassOrca never runs it (decision 0151).
+fn manual_command(index: usize, command: String, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let copied = command.clone();
+    div()
+        .debug_selector(move || format!("marketplace-manual-command-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_style(TYPE_MONO_SM)
+                .text_color(theme.palette.text.primary)
+                .child(command),
+        )
+        .child(
+            Button::new(("marketplace-manual-copy", index), "Copy")
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
+                }),
+        )
+        .into_any_element()
 }
 
 /// Show details: a ghost toggle, collapsed by default, and the technical lines under it when open.

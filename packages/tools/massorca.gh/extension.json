@@ -21,7 +21,9 @@
         "sourceChecked": "2026-11-25",
         "install": [
           { "os": "windows", "command": ["winget", "install", "--id", "GitHub.cli", "-e"] },
-          { "os": "macos", "command": ["brew", "install", "gh"] }
+          { "os": "macos", "command": ["brew", "install", "gh"] },
+          { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "gh"], "manual": true },
+          { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "gh"], "manual": true }
         ],
         "update": [
           { "os": "windows", "command": ["winget", "upgrade", "--id", "GitHub.cli", "-e"] },

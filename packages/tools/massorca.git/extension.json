@@ -21,7 +21,9 @@
         "sourceChecked": "2026-11-25",
         "install": [
           { "os": "windows", "command": ["winget", "install", "--id", "Git.Git", "-e"] },
-          { "os": "macos", "command": ["brew", "install", "git"] }
+          { "os": "macos", "command": ["brew", "install", "git"] },
+          { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "git"], "manual": true },
+          { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "git"], "manual": true }
         ],
         "update": [
           { "os": "windows", "command": ["winget", "upgrade", "--id", "Git.Git", "-e"] },

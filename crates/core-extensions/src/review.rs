@@ -64,6 +64,9 @@ pub enum PlanState {
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         runs_package_scripts: bool,
     },
+    /// Every step for this OS needs administrator rights: the person runs one of these, MassOrca never does
+    /// (decision 0151). The package registers, and the program is found once it is installed.
+    Manual { commands: Vec<Vec<String>> },
     /// No `cli` block, or no command for this OS: the package registers, and the CLI stays missing.
     Unsupported,
 }
@@ -109,13 +112,19 @@ fn plan_one(cli: &AgentCli, resolver: &dyn ProgramResolver, os: Option<CliOs>) -
     if let Some(path) = resolver.resolve(&cli.binary) {
         return PlanState::Detected { path };
     }
-    cli.install
-        .iter()
-        .find(|step| Some(step.os) == os)
-        .map_or(PlanState::Unsupported, |step| PlanState::WillRun {
+    let steps = || cli.install.iter().filter(|step| Some(step.os) == os);
+    if let Some(step) = steps().find(|step| !step.manual) {
+        return PlanState::WillRun {
             command: step.command.clone(),
             runs_package_scripts: runs_package_scripts(&step.command),
-        })
+        };
+    }
+    let commands: Vec<Vec<String>> = steps().map(|step| step.command.clone()).collect();
+    if commands.is_empty() {
+        PlanState::Unsupported
+    } else {
+        PlanState::Manual { commands }
+    }
 }
 
 /// `npm install` runs the lifecycle scripts of the package and its dependencies unless scripts are turned off.

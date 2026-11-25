@@ -308,6 +308,15 @@ fn plan_line(plan: &CliPlan) -> String {
                 ""
             }
         ),
+        CliPlanState::Manual { commands } => format!(
+            "cli {} ({binary}): not found; it needs administrator rights, so run this command yourself (MassOrca never runs it): {}",
+            plan.agent,
+            commands
+                .iter()
+                .map(|command| command_text(command))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
         CliPlanState::Unsupported => format!(
             "cli {} ({binary}): not found, and no vendor command for this system; the agent registers without it",
             plan.agent

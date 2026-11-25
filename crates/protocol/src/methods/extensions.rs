@@ -596,6 +596,9 @@ pub enum CliPlanState {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         runs_package_scripts: bool,
     },
+    /// Every step for the host OS needs administrator rights: the person runs one of these commands, the host never
+    /// does (decision 0151). Absent from older peers, which decode it as `Unknown`.
+    Manual { commands: Vec<Vec<String>> },
     /// No command fits: the package registers, and the CLI stays missing.
     Unsupported,
     /// A state from a newer peer that this build does not know; never sent by this build.
