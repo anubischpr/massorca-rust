@@ -316,7 +316,7 @@ fn hide_item_path(ctx: &RequestCtx, item: &mut Item) {
 }
 
 fn strip_program_paths(item: &mut Item) {
-    for agent in &mut item.agents {
+    for agent in item.agents.iter_mut().chain(&mut item.programs) {
         agent.program_path = None;
     }
 }

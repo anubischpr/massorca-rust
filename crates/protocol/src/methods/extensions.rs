@@ -220,7 +220,10 @@ pub struct ExtensionItem {
     pub readme: Option<String>,
     #[serde(default)]
     pub agents: Vec<AgentItem>,
-    /// For an agent package: whether every agent's CLI resolves on the host.
+    /// For a tool package: each host program and where it resolves on the host (decision 0151). Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub programs: Vec<AgentItem>,
+    /// For an agent or tool package: whether every agent's CLI and host program resolves on the host.
     #[serde(default)]
     pub detected: Option<bool>,
     #[serde(default)]
@@ -331,7 +334,7 @@ pub struct RiskReason {
 pub struct Listing {
     #[serde(default)]
     pub logo: Option<String>,
-    /// `extensions`, `agents`, `skills`, `services` or `themes`; other values may come from a newer peer.
+    /// `extensions`, `agents`, `skills`, `services`, `themes` or `tools`; other values may come from a newer peer.
     pub category: String,
     #[serde(default)]
     pub developer: Option<Developer>,

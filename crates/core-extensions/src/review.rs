@@ -68,30 +68,39 @@ pub enum PlanState {
     Unsupported,
 }
 
-/// The CLI plan of every agent adapter, in declaration order.
+/// Every agent adapter, with its `cli` block if any, then every host program (decision 0151), in declaration order.
+pub(crate) fn planned_clis(manifest: &Manifest) -> Vec<(&str, Option<&AgentCli>)> {
+    let contributes = &manifest.contributes;
+    let adapters = contributes
+        .agent_adapters
+        .iter()
+        .map(|adapter| (adapter.id.as_str(), adapter.cli.as_ref()));
+    let programs = contributes
+        .host_programs
+        .iter()
+        .map(|program| (program.id.as_str(), Some(&program.cli)));
+    adapters.chain(programs).collect()
+}
+
+/// The CLI plan of every agent adapter and host program, in declaration order.
 pub fn plan(
     manifest: &Manifest,
     resolver: &dyn ProgramResolver,
     os: Option<CliOs>,
 ) -> Vec<CliPlan> {
-    manifest
-        .contributes
-        .agent_adapters
-        .iter()
-        .map(|adapter| {
-            let cli = adapter.cli.as_ref();
-            CliPlan {
-                agent: adapter.id.clone(),
-                binary: cli.map(|cli| cli.binary.clone()),
-                verify: cli.and_then(|cli| cli.verify.clone()),
-                uninstall: cli.and_then(|cli| {
-                    cli.uninstall
-                        .iter()
-                        .find(|step| Some(step.os) == os)
-                        .map(|step| step.command.clone())
-                }),
-                state: cli.map_or(PlanState::Unsupported, |cli| plan_one(cli, resolver, os)),
-            }
+    planned_clis(manifest)
+        .into_iter()
+        .map(|(id, cli)| CliPlan {
+            agent: id.to_owned(),
+            binary: cli.map(|cli| cli.binary.clone()),
+            verify: cli.and_then(|cli| cli.verify.clone()),
+            uninstall: cli.and_then(|cli| {
+                cli.uninstall
+                    .iter()
+                    .find(|step| Some(step.os) == os)
+                    .map(|step| step.command.clone())
+            }),
+            state: cli.map_or(PlanState::Unsupported, |cli| plan_one(cli, resolver, os)),
         })
         .collect()
 }
@@ -146,18 +155,21 @@ pub fn fingerprint(
             _ => None,
         })
         .collect();
+    let step_for = |steps: &'_ [massorca_ext_package::manifest::agent::CliStep]| {
+        steps
+            .iter()
+            .find(|step| Some(step.os) == os)
+            .map(|step| step.command.clone())
+    };
     let lifecycle: Vec<Value> = manifest
-        .contributes
-        .agent_adapters
-        .iter()
-        .filter_map(|adapter| {
-            let cli = adapter.cli.as_ref()?;
-            let uninstall = cli
-                .uninstall
-                .iter()
-                .find(|step| Some(step.os) == os)
-                .map(|step| &step.command);
-            Some(json!([adapter.id, cli.verify, uninstall]))
+        .program_clis()
+        .map(|(id, cli)| {
+            let uninstall = step_for(&cli.uninstall);
+            // Packages without an update command keep the fingerprint they had before 0151.
+            match step_for(&cli.update) {
+                Some(update) => json!([id, cli.verify, uninstall, update]),
+                None => json!([id, cli.verify, uninstall]),
+            }
         })
         .collect();
     let document = json!([

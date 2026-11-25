@@ -6,6 +6,7 @@ mod busy;
 mod fakes;
 mod first_party;
 mod fixture;
+mod host_programs;
 mod install;
 mod item;
 mod kind_packages;

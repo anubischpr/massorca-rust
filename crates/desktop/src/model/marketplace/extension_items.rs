@@ -276,6 +276,7 @@ pub(super) mod tests {
             },
             readme: None,
             agents: Vec::new(),
+            programs: Vec::new(),
             detected: None,
             settings: Vec::new(),
             uninstall: UninstallEffects {

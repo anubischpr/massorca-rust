@@ -52,7 +52,7 @@ async fn next_event(subscription: &mut massorca_client::Subscription) -> ChangeE
 }
 
 #[tokio::test]
-async fn the_catalogue_lists_the_four_agent_packages_and_each_decodes() {
+async fn the_catalogue_lists_the_agent_and_tool_packages_and_each_decodes() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
@@ -70,7 +70,10 @@ async fn the_catalogue_lists_the_four_agent_packages_and_each_decodes() {
             "massorca.claude",
             "massorca.codex",
             "massorca.antigravity",
-            "massorca.gentle-shell"
+            "massorca.gentle-shell",
+            "massorca.git",
+            "massorca.gh",
+            "massorca.node"
         ]
     );
     assert!(

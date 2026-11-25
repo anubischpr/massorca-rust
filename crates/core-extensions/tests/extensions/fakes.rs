@@ -88,13 +88,16 @@ impl ProgramResolver for FakeHost {
 
 /// The CLI a built-in's install or uninstall command names, by the package it names.
 pub fn cli_named_by(argv: &[String]) -> Option<&'static str> {
-    const PACKAGES: [(&str, &str); 6] = [
+    const PACKAGES: [(&str, &str); 9] = [
         ("@openai/codex", "codex"),
         ("@anthropic-ai/claude-code", "claude"),
         ("Anthropic.ClaudeCode", "claude"),
         ("claude-code", "claude"),
         ("antigravity.google", "agy"),
         ("gentle-pi", "gentle-shell"),
+        ("Git.Git", "git"),
+        ("GitHub.cli", "gh"),
+        ("OpenJS.NodeJS.LTS", "node"),
     ];
     PACKAGES
         .iter()

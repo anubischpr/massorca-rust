@@ -264,14 +264,7 @@ impl Extensions {
             CliAction::LeftAlone
         } else {
             let command = manifest
-                .and_then(|manifest| {
-                    manifest
-                        .contributes
-                        .agent_adapters
-                        .iter()
-                        .find(|adapter| adapter.id == cli.agent)
-                })
-                .and_then(|adapter| adapter.cli.as_ref())
+                .and_then(|manifest| manifest.cli_of(&cli.agent))
                 .and_then(|spec| spec.uninstall.iter().find(|step| Some(step.os) == self.os))
                 .map(|step| step.command.clone());
             match command {
@@ -335,12 +328,7 @@ fn pending_uninstalls(
         .filter(|cli| cli.installed_by_package)
         .filter_map(|cli| {
             manifest?
-                .contributes
-                .agent_adapters
-                .iter()
-                .find(|adapter| adapter.id == cli.agent)?
-                .cli
-                .as_ref()?
+                .cli_of(&cli.agent)?
                 .uninstall
                 .iter()
                 .find(|step| Some(step.os) == os)
