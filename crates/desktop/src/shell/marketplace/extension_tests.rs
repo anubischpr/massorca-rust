@@ -1235,3 +1235,27 @@ fn details_start_collapsed_open_on_show_details_and_leave_the_install_request_un
         _ => panic!("opening the details changes nothing the install sends"),
     }
 }
+
+#[gpui::test]
+fn removing_a_package_with_connections_deletes_its_agent_homes(cx: &mut TestAppContext) {
+    let mut package = installed_package(true);
+    package.listing.connections = vec![massorca_protocol::methods::extensions::Connection {
+        id: "notes-login".to_owned(),
+        kind: "agent-login".to_owned(),
+        title: "Notes account".to_owned(),
+        multiple: true,
+    }];
+    let (mut rig, cx, _) = open_listed(cx, vec![package.clone()], vec![package]);
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, .. })) => {
+            assert!(
+                params.delete_agent_homes,
+                "accounts the package connected go with it"
+            );
+            assert!(!params.uninstall_cli);
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+}
