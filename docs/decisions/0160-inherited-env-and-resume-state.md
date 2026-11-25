@@ -30,24 +30,31 @@ Status: accepted, 2026-11-24.
   them, and the account commands strip them.
 - Every session view carries `resume: { available, code?, reason? }`:
   - `agent.resume_unavailable` when the kind is not declared, invalid or not resumable, or no ref is known.
+  - `agent.busy` with the reason "the session is running" while its run is live.
   - `agent.resume_not_found` with the reason "the agent saved no conversation for this session" when the kind
     declares `resume_transcript: { env?, dir, glob }` and, for an exited session, no file matches. The folder is the
     account home the run used, else the `env` variable's absolute local value, else `dir` with `{home}`. Only metadata
-    is read and links count as missing. `claude` declares
+    is read, links are followed, and only a search that completed and matched nothing counts as missing; an
+    unreadable or oversized folder leaves the session available. `claude` declares
     `{ "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude", "glob": "projects/*/{ref}.jsonl" }`.
-  - The same code when a resumed run exits with a failure and the end of its output matches the kind's
-    `resume_not_found_pattern` (`claude`: "No conversation found with session ID"). The session stays exited and its
-    `exit` is recorded unchanged.
+  - The same code when a resumed run exits early with a failure (before any hook report and within 10 seconds) and
+    the end of its output matches the kind's `resume_not_found_pattern` (`claude`: "No conversation found with
+    session ID"), so output printed during a conversation cannot set it. The session stays exited and its `exit` is
+    recorded unchanged. A transcript check that finds the file drops this mark.
 - `agent.resume` refuses with `agent.resume_not_found` instead of starting a run when the state says so.
 
 ## Consequences
 
 - A Claude session started from a service that inherited another session's markers saves its transcript and can be
   resumed.
-- The terminal can only add variables, so a stripped name is set to the empty string, not removed (the limitation of
+- The service drops the built-in markers (`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`,
+  `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDECODE`) from the environment every terminal starts from, so they are removed
+  outright. A name only a kind lists, such as one of a kind installed after the service started, is set to the empty
+  string rather than removed, because a terminal can only add variables (the limitation of
   docs/architecture/agents.md). That an empty marker reads as unset to the vendor CLI is expected, not verified here;
   a program that checks only for presence still sees it.
 - A caller that relied on setting the run identity through `env` no longer can.
-- Every view of an exited session whose kind declares a transcript check lists the folders matched by the glob's `*`
-  parts. Unit tests configure no vendor environment, so they never look outside the profile.
+- A view of an exited session whose kind declares a transcript check lists the folders matched by the glob's `*`
+  parts until the transcript is found; a found one is remembered until a run starts or exits, and a list loads the
+  kind catalog once. Unit tests configure no vendor environment, so they never look outside the profile.
 - Declarations gain three optional fields; a peer that predates them refuses a declaration that uses them.

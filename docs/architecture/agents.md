@@ -405,18 +405,25 @@ Every session view carries `resume: { available, code?, reason? }`, set by the s
 
 - `agent.resume_unavailable` when the kind is no longer declared, is invalid, declares no
   resume form, or the session's ref is not known.
+- `agent.busy`, reason "the session is running", while its run is live.
 - `agent.resume_not_found`, reason "the agent saved no conversation for this session", when an
   exited session's kind declares `resume_transcript` and no file matches its `glob` with the ref
   in place of `{ref}`. The folder is the account home the last run used (recorded as
   `run-account` in the run directory), else the `env` variable's value when it is an absolute
-  local path, else `dir` with `{home}` from `USERPROFILE` or `HOME`. Only metadata is read; a
-  link, as a folder on the way or as the file, counts as missing, and a ref that is not a plain
-  file name matches nothing. The built-in `claude` checks `projects/*/{ref}.jsonl` under
-  `CLAUDE_CONFIG_DIR` or `{home}/.claude`.
-- The same code when a resumed run exited with a failure and the last 4 KiB of its output match
-  the kind's `resume_not_found_pattern` (`claude`: "No conversation found with session ID"). The
-  run directory keeps the ref (`resume-not-found`); the session stays exited, and its exit is
-  recorded as it was.
+  local path, else `dir` with `{home}` from `USERPROFILE` or `HOME`. Only metadata is read, and
+  links and junctions are followed. Only a search that completed and matched nothing counts as
+  missing: an unreadable folder, a folder of more than 10,000 entries, a ref that is not a plain
+  file name, or no home to look under leaves the session available. A found transcript is kept
+  in memory until a run starts or exits; a missing one is looked for at each view, and `agent
+  list` reads the kind catalog once. The built-in `claude` checks `projects/*/{ref}.jsonl` under
+  `CLAUDE_CONFIG_DIR` or `{home}/.claude`. `dir` and `glob` parts are plain names: `..`, `.`, a
+  second root or a drive is a declaration problem.
+- The same code when a resumed run exited early with a failure (before any hook report and
+  within 10 seconds of its start) and the last 4 KiB of its output match the kind's
+  `resume_not_found_pattern` (`claude`: "No conversation found with session ID"). A later exit
+  is never classified. The run directory keeps the ref (`resume-not-found`); the session stays
+  exited, and its exit is recorded as it was. A transcript check that finds the file drops the
+  mark.
 
 `agent.resume` refuses a session whose state is `agent.resume_not_found` before it starts a run.
 

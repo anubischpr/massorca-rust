@@ -647,7 +647,7 @@ impl KindDecl {
                     "resume_transcript.env {env:?} is not a variable name"
                 ));
             }
-            if !valid_source_template(&transcript.dir) {
+            if !valid_transcript_dir(&transcript.dir) {
                 problems.push(format!(
                     "resume_transcript.dir {:?} must be {{home}} or an absolute local folder, without ..",
                     transcript.dir
@@ -1216,6 +1216,29 @@ fn valid_env_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// A transcript folder (decision 0160): a source template whose parts after its root are plain names, never `.`, `..`,
+/// empty (a second root) or a drive.
+pub(crate) fn valid_transcript_dir(dir: &str) -> bool {
+    if !valid_source_template(dir) {
+        return false;
+    }
+    let rest = match dir.strip_prefix("{home}") {
+        Some(rest) => rest,
+        None if dir.starts_with('/') => dir,
+        None => &dir[2..],
+    };
+    let mut parts = rest.split(['/', '\\']);
+    // The root itself: `{home}` is followed by a separator, an absolute path starts with one.
+    if parts.next().is_some_and(|first| !first.is_empty()) {
+        return false;
+    }
+    let parts: Vec<&str> = parts.collect();
+    let trailing = usize::from(parts.last().is_some_and(|last| last.is_empty()));
+    parts[..parts.len() - trailing]
+        .iter()
+        .all(|part| valid_file_name(part))
+}
+
 /// A transcript glob (decision 0160): `/`-separated parts, none empty, `.` or `..`; a part is `*` or a plain name without
 /// `*`; the last part is a plain name with `{ref}` exactly once, and no other part has it.
 pub(crate) fn valid_transcript_glob(glob: &str) -> bool {
@@ -1485,12 +1508,33 @@ mod tests {
 
     #[test]
     fn a_transcript_glob_is_relative_with_the_ref_once_in_its_last_part() {
+        for good in [
+            "{home}",
+            "{home}/.claude",
+            "/opt/vendor",
+            "C:\\vendor\\data",
+            "{home}/.fake/",
+        ] {
+            assert!(valid_transcript_dir(good), "{good}");
+        }
+        for bad in [
+            "relative",
+            "{home}/../elsewhere",
+            "{home}/./x",
+            "{home}//abs",
+            "/opt/../etc",
+            "{home}/C:/x",
+            "C:\\a\\..\\b",
+        ] {
+            assert!(!valid_transcript_dir(bad), "{bad}");
+        }
         for good in ["{ref}.jsonl", "projects/*/{ref}.jsonl", "a/b/{ref}"] {
             assert!(valid_transcript_glob(good), "{good}");
         }
         for bad in [
             "",
             "/abs/{ref}",
+            "C:/abs/{ref}",
             "projects/*",
             "{ref}/x.jsonl",
             "a/../{ref}",
