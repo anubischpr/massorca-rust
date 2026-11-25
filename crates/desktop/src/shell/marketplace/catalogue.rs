@@ -7,6 +7,7 @@ use super::installed::installed_rows;
 use super::item::problem_banner;
 use super::item_images;
 use super::more_menu::{self, MoreMenu};
+use super::skills;
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
@@ -322,15 +323,19 @@ pub(super) fn catalogue_view(
             _ => card_grid(frame, &items, cx),
         }
     };
-    div()
+    let column = div()
         .flex()
         .flex_col()
         .gap(px(SPACE_6))
         .min_w_0()
         .child(header)
-        .child(toolbar)
-        .child(body)
-        .into_any_element()
+        .child(toolbar);
+    let column = if page == MarketplacePage::Category(ItemKind::Skill) {
+        column.child(skills::skills_section(frame, cx))
+    } else {
+        column
+    };
+    column.child(body).into_any_element()
 }
 
 /// The Add extension split button: its main part opens the folder dialog, and its chevron opens More ways to add. The

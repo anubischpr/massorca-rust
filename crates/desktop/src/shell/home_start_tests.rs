@@ -1,14 +1,17 @@
 //! Element tests of the start page with no workspace: "+ Create" opens it, and Send creates a
 //! workspace then starts the agent in it. A scripted handle stands in for the service.
 
+use std::collections::BTreeMap;
+
 use super::home_start::home_project_menu;
 use super::service_tests::{Rig, click, draw, rig};
 use super::workspace_dialogs::ProjectMenuChoice;
 use super::*;
 use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
+use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
-use crate::service::{Command, Refusal, Script, StoreUpdate};
+use crate::service::{Command, KindChat, Refusal, Script, StoreUpdate};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
@@ -31,6 +34,25 @@ fn home_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     cx.run_until_parked();
     click(cx, "button:sidebar-create");
     (rig, cx)
+}
+
+/// The service offers chat sessions and Claude can run one, as a newer service reports on connect (`agent-chat/1`).
+fn offer_chat(rig: &Rig) {
+    rig.updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    let claude = KindChat {
+        supported: true,
+        reason: None,
+        version: None,
+        range: None,
+    };
+    rig.updates
+        .send(StoreUpdate::AgentKindChatResync(BTreeMap::from([(
+            "claude".to_owned(),
+            claude,
+        )])))
+        .expect("the store listens");
 }
 
 fn home_composer(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
@@ -97,6 +119,38 @@ fn expect_start(script: &mut Script) -> StartCall {
 }
 
 #[gpui::test]
+fn a_new_workspace_shows_a_placeholder_row_until_its_session_replaces_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (_, reply) = expect_create(&mut rig.script);
+    let created = workspace("w9", "p1", "fix-the-login-bug", 9);
+    reply
+        .send(Ok(created.clone()))
+        .expect("the shell waits for the create");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-placeholder-w9").is_some(),
+        "the workspace shows its row while the agent starts"
+    );
+    let (_, reply) = expect_start(&mut rig.script);
+    let session = agent("s9", "w9", 9);
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell waits for the start");
+    rig.updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w9").is_none());
+    assert!(cx.debug_bounds("sidebar-session-s9").is_some());
+}
+
+#[gpui::test]
 fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
     draw(cx);
@@ -108,6 +162,20 @@ fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("home-start-column").is_some());
     assert!(cx.debug_bounds("home-start-project").is_some());
+}
+
+#[gpui::test]
+fn the_home_page_starts_on_terminal_until_the_service_offers_chat(cx: &mut TestAppContext) {
+    let (rig, cx) = home_rig(cx);
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode(HOME_START, app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    offer_chat(&rig);
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(mode(&rig, cx), StartMode::Chat);
 }
 
 #[gpui::test]
@@ -161,6 +229,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = home_rig(cx);
+    offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
     let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
@@ -541,6 +610,7 @@ fn no_project_once_offered_starts_the_agent_with_no_workspace_and_opens_it(
     rig.updates
         .send(StoreUpdate::AgentNoProjectOffered(true))
         .expect("the store listens");
+    offer_chat(&rig);
     cx.run_until_parked();
     choose_no_project(cx);
     rig.shell.read_with(cx, |shell, _| {

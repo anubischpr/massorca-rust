@@ -8,20 +8,30 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use massorca_core_store::{AgentSessionRow, now_ms};
+use massorca_core_store::{AgentSessionRow, WorkspaceKind as StoredKind, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentSession,
-    AgentStartParams, AgentTree, BringBackResult,
+    AgentStartParams, AgentTree, BringBackResult, DelegationOptions, WritingChild,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceKind};
 use serde_json::{Value, json};
 
 use super::{AgentError, Agents, Change, lock, tokens_match};
+use crate::instructions;
 use crate::launch;
 use crate::modes;
+use crate::paths;
 use crate::provided_env::SecretGrant;
+
+/// The delegation fields of a session view (decision 0161).
+#[derive(Debug, Clone, Default)]
+pub(super) struct DelegationView {
+    pub(super) options: Option<Box<DelegationOptions>>,
+    /// The folder note of a writing child of a plain folder, then why the current run got no instructions.
+    pub(super) notes: Vec<String>,
+}
 
 /// What a merge into the parent's worktree did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +58,8 @@ const MAX_CHILD_SUFFIX: u32 = 1000;
 const MAX_QUOTED_RESULT: usize = 4 * 1024;
 /// What the result of a writing child's delegation says (0055).
 const NOT_CARRIED_OVER: &str = "the child starts from the parent branch's last commit; uncommitted changes in the parent's worktree are not carried over";
+/// What the start result and the record of a writing child of a plain folder say (decision 0161).
+pub const FOLDER_CHILD_NOTE: &str = "This workspace has no Git, so the child works in this folder.";
 /// The setting that says how many levels deep agents may delegate (decision 0070).
 pub const DELEGATION_DEPTH_SETTING: &str = "agents.delegation_depth";
 /// The owner core settings are stored under.
@@ -94,10 +106,11 @@ pub fn delegation_depth_from_stored(stored: Option<&str>) -> i64 {
 }
 
 impl Agents {
-    /// Starts a child session of `params.parent` (0055). A writing child gets a new worktree workspace in the parent's
-    /// project, based on the parent workspace's branch; a read-only child runs in the parent's workspace. A child
-    /// goes no deeper than `agents.delegation_depth` (`agent.depth_exceeded` past it; the default of 1 means a child cannot
-    /// delegate), a writing child of a folder workspace is refused
+    /// Starts a child session of `params.parent` (0055). A writing child of a worktree workspace gets a new worktree
+    /// workspace in the parent's project, based on the parent workspace's branch; a writing child of a plain folder runs
+    /// in the parent's folder, where the parent's delegation tree counts as one writer (decision 0161); a read-only child
+    /// runs in the parent's workspace. A child goes no deeper than `agents.delegation_depth` (`agent.depth_exceeded` past
+    /// it; the default of 1 means a child cannot delegate), a writing child of a worktree with no branch is refused
     /// (`agent.delegate_needs_git`), and a token that does not match the parent's live run is refused
     /// (`agent.hook_refused`). A repeated `request_id` returns the first child.
     pub fn delegate(
@@ -172,6 +185,13 @@ impl Agents {
             .show_workspace(&parent.workspace_id)?;
         let (workspace, note, kept) = if params.read_only {
             (parent_workspace.id, None, None)
+        } else if parent_workspace.kind == WorkspaceKind::Folder {
+            // No Git: the child shares the parent's folder, with no copy (decision 0161).
+            (
+                parent_workspace.id,
+                Some(FOLDER_CHILD_NOTE.to_owned()),
+                None,
+            )
         } else {
             let child = self.child_workspace(
                 &parent_workspace,
@@ -578,8 +598,90 @@ impl Agents {
         Ok(delegation_depth_from_stored(stored.as_deref()))
     }
 
+    /// Whether a session at `depth` may delegate a child: the child's depth is within `agents.delegation_depth`.
+    pub(super) fn may_delegate_at(&self, depth: i64) -> Result<bool, AgentError> {
+        Ok(depth < self.delegation_depth_limit()?)
+    }
+
+    /// The id of the session at the top of `row`'s delegation chain: `row` itself for a root.
+    pub(super) fn tree_root_of(&self, row: &AgentSessionRow) -> Result<String, AgentError> {
+        let mut root = row.id.clone();
+        let mut parent = row.parent_id.clone();
+        let mut walked = 0;
+        while let Some(id) = parent {
+            walked += 1;
+            if walked > MAX_CHAIN_WALK {
+                return Err(chain_too_long(&row.id));
+            }
+            parent = self
+                .store()
+                .get_agent_session(&id)?
+                .and_then(|link| link.parent_id);
+            root = id;
+        }
+        Ok(root)
+    }
+
+    /// What children `row` could delegate now, where it works when it shares its parent's folder, and why its current
+    /// run got no instructions (decision 0161). A lookup that fails leaves its part absent rather than failing the view.
+    pub(super) fn delegation_view(&self, row: &AgentSessionRow) -> DelegationView {
+        let withheld = instructions::withheld(&paths::run_dir(self.profile_dir(), &row.id));
+        let Some(workspace) = self.store().get_workspace(&row.workspace_id).ok().flatten() else {
+            return DelegationView {
+                options: None,
+                notes: withheld.into_iter().collect(),
+            };
+        };
+        let notes: Vec<String> =
+            (row.parent_id.is_some() && !row.read_only && workspace.kind == StoredKind::Folder)
+                .then(|| FOLDER_CHILD_NOTE.to_owned())
+                .into_iter()
+                .chain(withheld)
+                .collect();
+        let (Ok(limit), Ok(depth)) = (self.delegation_depth_limit(), self.delegation_depth_of(row))
+        else {
+            return DelegationView {
+                options: None,
+                notes,
+            };
+        };
+        let options = if depth >= limit {
+            DelegationOptions {
+                writing_child: WritingChild::Unavailable,
+                read_only_child: false,
+                reason: Some(format!(
+                    "This session is at the delegation depth limit ({DELEGATION_DEPTH_SETTING} is {limit}), so it cannot start a child session."
+                )),
+            }
+        } else {
+            match (workspace.kind, workspace.branch.is_some()) {
+                (StoredKind::Folder, _) => DelegationOptions {
+                    writing_child: WritingChild::SharedFolder,
+                    read_only_child: true,
+                    reason: None,
+                },
+                (StoredKind::Worktree, true) => DelegationOptions {
+                    writing_child: WritingChild::OwnWorktree,
+                    read_only_child: true,
+                    reason: None,
+                },
+                (StoredKind::Worktree, false) => DelegationOptions {
+                    writing_child: WritingChild::Unavailable,
+                    read_only_child: true,
+                    reason: Some(
+                        "This worktree has no branch, so a writing child cannot get a worktree of its own.".to_owned(),
+                    ),
+                },
+            }
+        };
+        DelegationView {
+            options: Some(Box::new(options)),
+            notes,
+        }
+    }
+
     /// How many delegations lie above `row`: 0 for a root, 1 for its child, and so on.
-    fn delegation_depth_of(&self, row: &AgentSessionRow) -> Result<i64, AgentError> {
+    pub(super) fn delegation_depth_of(&self, row: &AgentSessionRow) -> Result<i64, AgentError> {
         let mut depth = 0;
         let mut parent = row.parent_id.clone();
         while let Some(id) = parent {

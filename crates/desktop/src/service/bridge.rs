@@ -42,6 +42,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
+use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -52,6 +54,7 @@ use massorca_core_remote::bootstrap::RemoteMachine;
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
+use super::skills;
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -98,6 +101,17 @@ pub(crate) enum Command {
         request: u64,
         command: ExtensionCommand,
     },
+    /// Discovers This computer's skills; the answer is a store update tagged with `request`.
+    Skills {
+        request: u64,
+        refresh: bool,
+    },
+    /// Discovers a paired host's skills on its own connection; the answer is a store update tagged with `request`.
+    HostSkills {
+        host: String,
+        request: u64,
+        refresh: bool,
+    },
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
@@ -132,6 +146,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -642,6 +661,20 @@ impl Link {
                 );
                 None
             }
+            Command::HostSkills {
+                host,
+                request,
+                refresh,
+            } => {
+                skills::spawn_host_read(
+                    self.profile.clone(),
+                    host,
+                    request,
+                    refresh,
+                    self.updates.clone(),
+                );
+                None
+            }
             other => Some(other),
         }
     }
@@ -733,11 +766,18 @@ impl Link {
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
+        self.emit(StoreUpdate::AgentChatOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
+        ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
+        self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
@@ -801,6 +841,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::Skills { request, refresh }) => {
+                                skills::spawn_read(client, request, refresh, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -904,6 +947,7 @@ impl Link {
                             &self.accounts_order,
                         );
                     }
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
                     self.emit(StoreUpdate::AgentKindsResync(kinds));
                     extensions::read(client, &self.extension_reads)
                         .await
@@ -1096,6 +1140,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1156,6 +1203,7 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1174,7 +1222,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

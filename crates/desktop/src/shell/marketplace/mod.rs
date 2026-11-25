@@ -23,12 +23,14 @@ mod package;
 mod review;
 mod rollback;
 mod sign_in;
+mod skills;
 #[cfg(test)]
 mod tests;
 
 use super::Shell;
 use crate::model::marketplace::{
-    AccountId, HostTarget, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
+    AccountId, HostTarget, ItemKind, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource,
+    SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
@@ -112,6 +114,8 @@ pub(super) struct MarketplaceFrame {
     host_picker: Entity<SelectView>,
     /// The status word beside the picker, for the host it shows.
     host_status: &'static str,
+    /// The Skills section's host and what it shows for that host (SKL-01).
+    skills: skills::SkillsSection,
     shell: WeakEntity<Shell>,
 }
 
@@ -142,6 +146,7 @@ pub(super) fn frame(
         host_note: shell.picked_note(cx),
         host_picker: shell.marketplace_host_select.clone(),
         host_status: shell.picker_status(cx),
+        skills: skills::section_of(shell, cx),
         shell: weak,
     }
 }
@@ -190,6 +195,10 @@ impl Shell {
     /// Opens a Marketplace view or an item's page from anywhere in the shell.
     pub(super) fn open_marketplace(&mut self, page: MarketplacePage, cx: &mut Context<Self>) {
         self.marketplace_error = None;
+        if page == MarketplacePage::Category(ItemKind::Skill) {
+            let target = self.shown_target();
+            self.read_skills(&target, false);
+        }
         self.model.open_page(Page::Marketplace(page));
         cx.notify();
     }

@@ -4,9 +4,13 @@
 use std::sync::Arc;
 
 use massorca_core_agents::Change;
-use massorca_core_store::{Store, StoreError, TaskOutcome, now_ms};
+use massorca_core_store::{
+    Store, StoreError, TaskOrigin, TaskOutcome, TaskRow, TeamRoomMessageRow, new_id, now_ms,
+};
 use massorca_protocol::ErrorBody;
-use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TASK_CHANGED};
+use massorca_protocol::methods::events::{
+    ChangeEvent, TOPIC_TASK_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
 
 use crate::context::AppState;
@@ -48,7 +52,7 @@ async fn react(state: &Arc<AppState>, change: Change) {
     })
     .await;
     match linked {
-        Ok(Some(task_id)) => publish_task(state, &task_id),
+        Ok(Some(linked)) => publish_linked(state, &linked),
         Ok(None) => {}
         Err(error) => report(&error),
     }
@@ -58,53 +62,111 @@ async fn react(state: &Arc<AppState>, change: Change) {
 async fn resync(state: &Arc<AppState>) {
     let linked = blocking_state(state, |store, agents| {
         let sessions = agents.list(None).map_err(ErrorBody::from)?;
-        let mut task_ids = Vec::new();
+        let mut linked = Vec::new();
         for session in &sessions {
-            task_ids.extend(
+            linked.extend(
                 latch_linked(store, &session.id, observed_outcome(session)).map_err(store_error)?,
             );
         }
-        Ok(task_ids)
+        Ok(linked)
     })
     .await;
     match linked {
-        Ok(task_ids) => task_ids
+        Ok(linked) => linked
             .iter()
-            .for_each(|task_id| publish_task(state, task_id)),
+            .for_each(|linked| publish_linked(state, linked)),
         Err(error) => report(&error),
     }
 }
 
-/// Latches `outcome` into the task linked to `session_id`, if there is one, and returns that task's id. A latched
-/// outcome is kept, so a later change of the same session changes nothing.
+/// The task a session change reached, and the team whose room heard about it.
+struct Linked {
+    task_id: String,
+    room_team: Option<String>,
+}
+
+/// Latches `outcome` into the task linked to `session_id`, if there is one, and returns that task. A latched outcome
+/// is kept, so a later change of the same session changes nothing. A room task's latch is told in its room by its bot.
 fn latch_linked(
     store: &Store,
     session_id: &str,
     outcome: Option<TaskOutcome>,
-) -> Result<Option<String>, StoreError> {
+) -> Result<Option<Linked>, StoreError> {
     let Some(task) = store.find_task_by_session(session_id)? else {
         return Ok(None);
     };
-    if let Some(outcome) = outcome {
-        store.latch_task_outcome(&task.id, session_id, outcome, now_ms())?;
+    let mut room_team = None;
+    if let Some(outcome) = outcome
+        && store.latch_task_outcome(&task.id, session_id, outcome, now_ms())?
+    {
+        room_team = tell_room(store, &task, outcome)?;
     }
-    Ok(Some(task.id))
+    Ok(Some(Linked {
+        task_id: task.id,
+        room_team,
+    }))
 }
 
-/// Latches the outcome a loaded session already shows into `task_id`, for a task that was just linked to it. The
-/// listener finds a task by its session, so a Done that landed before the link would never latch otherwise.
+/// A room task's bot posts the outcome that just latched, once per run: only the latch that sets the outcome calls
+/// this. Returns the team whose room changed.
+fn tell_room(
+    store: &Store,
+    task: &TaskRow,
+    outcome: TaskOutcome,
+) -> Result<Option<String>, StoreError> {
+    if task.origin != TaskOrigin::Room {
+        return Ok(None);
+    }
+    store.insert_team_room_message(&TeamRoomMessageRow {
+        id: new_id(),
+        team_id: task.team_id.clone(),
+        author: "bot".to_owned(),
+        bot_id: task.bot_id.clone(),
+        text: format!("{}: {}", outcome_word(outcome), task.title),
+        task_id: Some(task.id.clone()),
+        created_at: now_ms(),
+    })?;
+    Ok(Some(task.team_id.clone()))
+}
+
+/// The word a room line opens with for a latched outcome, as the Board's card states read.
+fn outcome_word(outcome: TaskOutcome) -> &'static str {
+    match outcome {
+        TaskOutcome::Success => "Done",
+        TaskOutcome::Failure => "Stuck",
+        TaskOutcome::Cancelled => "Stopped",
+        TaskOutcome::Interrupted => "Interrupted",
+    }
+}
+
+fn publish_linked(state: &AppState, linked: &Linked) {
+    publish_task(state, &linked.task_id);
+    if let Some(team) = &linked.room_team {
+        state.events.publish(ChangeEvent {
+            topic: TOPIC_TEAM_ROOM_CHANGED.to_owned(),
+            id: team.clone(),
+        });
+    }
+}
+
+/// Latches the outcome a loaded session already shows into `task`, which was just linked to it. The listener finds a
+/// task by its session, so a Done that landed before the link would never latch otherwise. Returns whether it latched,
+/// and the team whose room heard about it.
 pub(crate) fn latch_at_link(
     store: &Store,
-    task_id: &str,
+    task: &TaskRow,
     session: &Session,
-) -> Result<bool, StoreError> {
+) -> Result<(bool, Option<String>), StoreError> {
     let Session::Known(session) = session else {
-        return Ok(false);
+        return Ok((false, None));
     };
     let Some(outcome) = observed_outcome(session) else {
-        return Ok(false);
+        return Ok((false, None));
     };
-    store.latch_task_outcome(task_id, &session.id, outcome, now_ms())
+    if !store.latch_task_outcome(&task.id, &session.id, outcome, now_ms())? {
+        return Ok((false, None));
+    }
+    Ok((true, tell_room(store, task, outcome)?))
 }
 
 fn publish_task(state: &AppState, task_id: &str) {
@@ -133,6 +195,10 @@ mod tests {
     use super::{Session, latch_at_link, latch_linked};
 
     fn store_with_task(session_id: &str) -> (Store, TaskRow) {
+        store_with_origin(session_id, TaskOrigin::Cli)
+    }
+
+    fn store_with_origin(session_id: &str, origin: TaskOrigin) -> (Store, TaskRow) {
         let store = Store::open_in_memory().expect("in-memory store opens");
         let team = TeamRow {
             id: new_id(),
@@ -151,7 +217,7 @@ mod tests {
             bot_id: None,
             title: "parse".to_owned(),
             body: String::new(),
-            origin: TaskOrigin::Cli,
+            origin,
             session_id: Some(session_id.to_owned()),
             outcome: None,
             error: None,
@@ -202,6 +268,9 @@ mod tests {
             pending_permission_mode: None,
             retained: false,
             released: false,
+            resume: None,
+            delegation: None,
+            notes: Vec::new(),
         }))
     }
 
@@ -222,8 +291,34 @@ mod tests {
             ActivityState::Done,
             Some(Outcome::Success),
         );
-        assert!(latch_at_link(&store, &task.id, &finished).unwrap());
+        assert!(latch_at_link(&store, &task, &finished).unwrap().0);
         assert_eq!(latched(&store, &task), Some(TaskOutcome::Success));
+    }
+
+    #[test]
+    fn a_room_task_finished_before_its_link_still_tells_its_room() {
+        let (store, task) = store_with_origin("session-1", TaskOrigin::Room);
+        let finished = session(
+            "session-1",
+            TerminalState::Live,
+            ActivityState::Done,
+            Some(Outcome::Success),
+        );
+        let (did_latch, room) = latch_at_link(&store, &task, &finished).unwrap();
+        assert!(did_latch);
+        assert_eq!(room.as_deref(), Some(task.team_id.as_str()));
+        // The listener's later change of the same session posts nothing more.
+        let again = latch_linked(&store, "session-1", Some(TaskOutcome::Success))
+            .unwrap()
+            .expect("the task is linked");
+        assert_eq!(again.room_team, None);
+        let texts: Vec<String> = store
+            .list_team_room(&task.team_id, None)
+            .unwrap()
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(texts, ["Done: parse"]);
     }
 
     #[test]
@@ -241,30 +336,55 @@ mod tests {
             ActivityState::Working,
             None,
         );
-        assert!(!latch_at_link(&store, &task.id, &unverifiable).unwrap());
-        assert!(!latch_at_link(&store, &task.id, &working).unwrap());
-        assert!(!latch_at_link(&store, &task.id, &Session::Forgotten).unwrap());
+        assert!(!latch_at_link(&store, &task, &unverifiable).unwrap().0);
+        assert!(!latch_at_link(&store, &task, &working).unwrap().0);
+        assert!(!latch_at_link(&store, &task, &Session::Forgotten).unwrap().0);
         assert_eq!(latched(&store, &task), None);
     }
 
     #[test]
     fn a_change_latches_only_the_task_its_session_is_linked_to_and_keeps_the_first_outcome() {
         let (store, task) = store_with_task("session-1");
+        let linked = |session: &str, outcome| {
+            latch_linked(&store, session, Some(outcome))
+                .unwrap()
+                .map(|linked| linked.task_id)
+        };
+        assert_eq!(linked("session-9", TaskOutcome::Failure), None);
         assert_eq!(
-            latch_linked(&store, "session-9", Some(TaskOutcome::Failure)).unwrap(),
-            None
-        );
-        assert_eq!(
-            latch_linked(&store, "session-1", Some(TaskOutcome::Failure)).unwrap(),
+            linked("session-1", TaskOutcome::Failure),
             Some(task.id.clone())
         );
         assert_eq!(latched(&store, &task), Some(TaskOutcome::Failure));
 
         // The task is still named by its session, and the outcome it latched first stands.
         assert_eq!(
-            latch_linked(&store, "session-1", Some(TaskOutcome::Success)).unwrap(),
+            linked("session-1", TaskOutcome::Success),
             Some(task.id.clone())
         );
         assert_eq!(latched(&store, &task), Some(TaskOutcome::Failure));
+        assert!(
+            store
+                .list_team_room(&task.team_id, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_room_task_tells_its_room_once_when_its_outcome_latches() {
+        let (store, task) = store_with_origin("session-1", TaskOrigin::Room);
+        let first = latch_linked(&store, "session-1", Some(TaskOutcome::Success))
+            .unwrap()
+            .expect("the task is linked");
+        assert_eq!(first.room_team.as_deref(), Some(task.team_id.as_str()));
+        let again = latch_linked(&store, "session-1", Some(TaskOutcome::Success))
+            .unwrap()
+            .expect("the task is linked");
+        assert_eq!(again.room_team, None, "a kept outcome is not told again");
+        let room = store.list_team_room(&task.team_id, None).unwrap();
+        let texts: Vec<&str> = room.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, ["Done: parse"]);
+        assert_eq!(room[0].task_id.as_deref(), Some(task.id.as_str()));
     }
 }
