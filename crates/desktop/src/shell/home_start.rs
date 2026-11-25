@@ -385,7 +385,7 @@ impl Shell {
             kind_name: kind.name,
         });
         let options = self.chosen_options(&composer, &kind.id, cx);
-        let grid = self.start_grid(mode, cx);
+        let grid = self.start_grid(cx);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {

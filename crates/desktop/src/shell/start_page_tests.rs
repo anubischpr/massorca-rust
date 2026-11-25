@@ -608,32 +608,13 @@ fn resize_calls(script: &mut Script) -> Vec<(String, u16, u16)> {
     resizes
 }
 
-/// A live terminal of workspace w1 at `cols` x `rows`, as the store lists it.
-fn live_terminal(id: &str, cols: u16, rows: u16) -> Terminal {
-    Terminal {
-        id: id.to_owned(),
-        workspace_id: "w1".to_owned(),
-        state: TerminalState::Live,
-        title: None,
-        cols,
-        rows,
-        pid: None,
-        shell: "/bin/zsh".to_owned(),
-        cwd: "/repos/fix-login".to_owned(),
-        created_at_ms: 1,
-        exit: None,
-        holds_secrets: false,
-    }
-}
-
 #[gpui::test]
 fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
-    // Chat is on, so the session opens in the session view, which applies the grid the start sent.
-    offer_chat(&rig, cx);
+    // Without the chat capability the start is a Terminal start, which opens the session view too.
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -646,9 +627,20 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
     session.terminal_id = Some(terminal.to_owned());
     // The service created the terminal at the start's grid, and the store lists it so.
     rig._updates
-        .send(StoreUpdate::TerminalChanged(live_terminal(
-            terminal, cols, rows,
-        )))
+        .send(StoreUpdate::TerminalChanged(Terminal {
+            id: terminal.to_owned(),
+            workspace_id: "w1".to_owned(),
+            state: TerminalState::Live,
+            title: None,
+            cols,
+            rows,
+            pid: None,
+            shell: "/bin/zsh".to_owned(),
+            cwd: "/repos/fix-login".to_owned(),
+            created_at_ms: 1,
+            exit: None,
+            holds_secrets: false,
+        }))
         .expect("the store listens");
     reply
         .send(Ok(session.clone()))

@@ -10,7 +10,6 @@ use massorca_ui::tokens::SPACE_2;
 use super::Shell;
 use super::session_view::SESSION_HEADER_HEIGHT;
 use crate::model::canvas::Canvas;
-use crate::model::start_page::{StartGrids, StartMode};
 
 /// The grid a terminal pane fits when it is `width` x `height` pixels: the terminal surface pads its grid by SPACE_2 on
 /// each side (`TerminalSurface::render`), so the pane's own size is not the grid's.
@@ -31,23 +30,15 @@ impl Shell {
         self.session_grid
     }
 
-    /// The grid a session started in `mode` opens its terminal at (`model::start_page::start_grid`). A Conversation takes
-    /// the session view's grid, else the Conversation fitted to the cells below the session header; a new run has no
-    /// ended bar, notice or queue dock, so those bands are not subtracted. A Terminal takes the Work panel's grid.
-    pub(crate) fn start_grid(&self, mode: StartMode, cx: &App) -> (u16, u16) {
+    /// The grid a session started now opens its terminal at (`model::start_page::start_grid`): the session view's grid,
+    /// else the Conversation fitted to the cells below the session header. A new run opens with no ended bar, notice
+    /// or queue dock, so those bands are not subtracted. The Work panel's size is the last fallback.
+    pub(crate) fn start_grid(&self, cx: &App) -> (u16, u16) {
         let fitted = self.conversation_size.get().and_then(|(width, height)| {
             let cell = grid_paint::cell_metrics(cx)?;
             Some(session_pane_grid(width, height, cell))
         });
-        crate::model::start_page::start_grid(
-            mode,
-            StartGrids {
-                shown: self.session_grid(),
-                fitted,
-                measured: self.work_panel_measured_grid(cx),
-                applied: self.work_panel_applied,
-            },
-        )
+        crate::model::start_page::start_grid(self.session_grid(), fitted)
     }
 
     /// Whether the service's record already holds `terminal` at this grid, so a pane fitting to it needs no resize request.

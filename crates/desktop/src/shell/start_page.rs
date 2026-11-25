@@ -755,8 +755,7 @@ impl Shell {
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
         let options = self.chosen_options(&composer, &kind.id, cx);
-        let mode = self.start_mode(workspace, cx);
-        let grid = self.start_grid(mode, cx);
+        let grid = self.start_grid(cx);
         let params = start_params(
             Some(workspace),
             &kind.id,
@@ -765,6 +764,7 @@ impl Shell {
             options,
             grid,
         );
+        let mode = self.start_mode(workspace, cx);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,

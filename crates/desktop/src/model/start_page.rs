@@ -8,7 +8,7 @@ use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::workspaces::WorkspaceState;
 
 use super::service_view::LOCAL_HOST;
-use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS, new_terminal_grid};
+use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
 use crate::service::{ChatUnsupportedReason, KindChat, StoreState};
 
 /// Why the page's actions that need git are off.
@@ -231,30 +231,12 @@ pub fn start_options(
     }
 }
 
-/// The grids a start can open at, one per source; `start_grid` reads the two of its mode's chain.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StartGrids {
-    /// The grid the session view last drew its terminal at.
-    pub shown: Option<(u16, u16)>,
-    /// The grid that fits the Conversation pane below its header.
-    pub fitted: Option<(u16, u16)>,
-    /// The grid the Work panel's pane fits now.
-    pub measured: Option<(u16, u16)>,
-    /// The grid a Work panel pane last applied.
-    pub applied: Option<(u16, u16)>,
-}
-
-/// The grid a session started in `mode` opens its terminal at. A Conversation's terminal is drawn by the session view,
-/// so it takes the grid that view shows, else the Conversation fitted; a Terminal's is drawn in the Work panel, so it
-/// takes the grid that pane fits, else the grid it last applied (`new_terminal_grid`). Both end at the fixed size.
-pub fn start_grid(mode: StartMode, grids: StartGrids) -> (u16, u16) {
-    match mode {
-        StartMode::Chat => grids
-            .shown
-            .or(grids.fitted)
-            .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)),
-        StartMode::Terminal => new_terminal_grid(grids.measured, grids.applied),
-    }
+/// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
+/// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
+pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
+    shown
+        .or(fitted)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
 }
 
 /// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, its
@@ -560,82 +542,16 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_start_opens_at_the_shown_grid_else_the_fitted_one_else_the_fixed_size() {
-        let chat = |shown, fitted| StartGrids {
-            shown,
-            fitted,
-            ..StartGrids::default()
-        };
+    fn a_new_session_starts_at_the_shown_grid_else_the_fitted_one_else_the_work_panel_size() {
         assert_eq!(
-            start_grid(StartMode::Chat, chat(Some((150, 70)), Some((100, 30)))),
+            start_grid(Some((150, 70)), Some((100, 30))),
             (150, 70),
             "the grid the session view last drew wins"
         );
+        assert_eq!(start_grid(None, Some((100, 30))), (100, 30));
         assert_eq!(
-            start_grid(StartMode::Chat, chat(None, Some((100, 30)))),
-            (100, 30)
-        );
-        assert_eq!(
-            start_grid(StartMode::Chat, chat(None, None)),
+            start_grid(None, None),
             (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
-        );
-    }
-
-    #[test]
-    fn a_terminal_start_opens_at_the_work_panel_pane_grid_else_the_applied_one_else_the_fixed_size()
-    {
-        let terminal = |measured, applied| StartGrids {
-            measured,
-            applied,
-            ..StartGrids::default()
-        };
-        assert_eq!(
-            start_grid(
-                StartMode::Terminal,
-                terminal(Some((100, 30)), Some((80, 24)))
-            ),
-            (100, 30),
-            "the grid the Work panel's pane fits wins"
-        );
-        assert_eq!(
-            start_grid(StartMode::Terminal, terminal(None, Some((80, 24)))),
-            (80, 24)
-        );
-        assert_eq!(
-            start_grid(StartMode::Terminal, terminal(None, None)),
-            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
-        );
-    }
-
-    #[test]
-    fn each_mode_reads_only_its_own_chain() {
-        let both = StartGrids {
-            shown: Some((10, 10)),
-            fitted: Some((11, 11)),
-            measured: Some((20, 20)),
-            applied: Some((21, 21)),
-        };
-        assert_eq!(start_grid(StartMode::Chat, both), (10, 10));
-        assert_eq!(start_grid(StartMode::Terminal, both), (20, 20));
-        let session_only = StartGrids {
-            shown: Some((10, 10)),
-            fitted: Some((11, 11)),
-            ..StartGrids::default()
-        };
-        assert_eq!(
-            start_grid(StartMode::Terminal, session_only),
-            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS),
-            "a Terminal start does not read the session view's grid"
-        );
-        let work_panel_only = StartGrids {
-            measured: Some((20, 20)),
-            applied: Some((21, 21)),
-            ..StartGrids::default()
-        };
-        assert_eq!(
-            start_grid(StartMode::Chat, work_panel_only),
-            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS),
-            "a Chat start does not read the Work panel's grid"
         );
     }
 
