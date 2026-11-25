@@ -236,3 +236,67 @@ fn a_line_goes_to_the_receiver_named_with_to_and_a_false_agent_token_is_refused(
     assert_eq!(refused["code"], "permission.denied", "{refused}");
     assert_eq!(room(&sandbox).len(), 2, "nothing was posted");
 }
+
+#[test]
+fn a_line_with_a_day_and_a_time_becomes_a_one_time_routine_instead_of_a_task() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    let posted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "room",
+            "post",
+            "alpha",
+            "Back up the docs on 2099-01-02 at 09:00",
+        ],
+    );
+    let lines = posted["messages"].as_array().expect("posted lines");
+    assert_eq!(lines.len(), 2, "{posted}");
+    let routine = &lines[1]["routine"];
+    assert_eq!(routine["cadence"], "once", "{posted}");
+    assert_eq!(routine["run_date"], "2099-01-02");
+    assert_eq!(routine["time"], "09:00");
+    assert!(lines[1].get("task").is_none(), "no task is made: {posted}");
+    assert_eq!(
+        lines[1]["text"],
+        "Routine created: Back up the docs on 2099-01-02 at 09:00. It runs once on 2099-01-02 at 09:00."
+    );
+
+    let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
+    assert_eq!(routines["routines"][0]["id"], routine["id"], "{routines}");
+    let board = sandbox.json_ok("default", &["task", "list", "--team", "alpha"]);
+    assert_eq!(board["tasks"].as_array().map(Vec::len), Some(0), "{board}");
+    sandbox
+        .run("default", &["team", "room", "list", "alpha"])
+        .success()
+        .stdout(predicates::str::contains(format!(
+            "routine {} (2099-01-02 09:00)",
+            routine["id"].as_str().expect("routine id")
+        )));
+}
+
+#[test]
+fn a_refused_routine_or_a_time_only_mentioned_leaves_the_line_a_task() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    for text in [
+        "Rotate the logs on 2000-01-01 at 09:00",
+        "The 5pm deploy today will break login, please fix now",
+    ] {
+        let posted = sandbox.json_ok("default", &["team", "room", "post", "alpha", text]);
+        let answer = &posted["messages"][1];
+        assert!(answer.get("routine").is_none(), "{posted}");
+        assert!(
+            answer["text"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("Added to the Board")),
+            "{posted}"
+        );
+        assert_eq!(answer["task"]["body"], text, "{posted}");
+    }
+    let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
+    assert_eq!(routines["routines"].as_array().map(Vec::len), Some(0));
+}

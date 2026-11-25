@@ -124,6 +124,7 @@ fn tell_room(
         bot_id: task.bot_id.clone(),
         text: format!("{}: {}", outcome_word(outcome), task.title),
         task_id: Some(task.id.clone()),
+        routine_id: None,
         created_at: now_ms(),
     })?;
     Ok(Some(task.team_id.clone()))
