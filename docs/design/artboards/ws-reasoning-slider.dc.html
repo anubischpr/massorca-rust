@@ -163,9 +163,10 @@ h2 { margin: 0; font: 600 15px/22px var(--font-sans); }
     <div class="note">
       <h3>Size and rules</h3>
       <ul>
-        <li>Fits the current column: 216 by 304 px, no growth needed. Five stops sit 48 px apart; two stops use the same bar with one gap.</li>
+        <li>Fits the current column: 216 by 304 px, no growth needed. Stop spacing is computed from the bar height: the end stops sit 14 px from the ends and the rest are spread evenly.</li>
         <li>One stop per level the model declares, 2 to 5, and the thumb snaps to them. A model with no levels shows "This model has no reasoning levels" and no slider.</li>
         <li>The top effect follows the model's last stop, whatever its name (Max, Extra High, High). A model with one level shows no slider.</li>
+        <li>Dragging or clicking the bar or a level changes the level and keeps the picker open; it closes on an outside click or Escape.</li>
         <li>Keyboard: Up and Right raise, Down and Left lower, Home and End jump to the ends. The slider reads as "Reasoning, Medium, 2 of 5".</li>
       </ul>
     </div>
@@ -251,7 +252,7 @@ h2 { margin: 0; font: 600 15px/22px var(--font-sans); }
         <div id="ticks"></div><span class="thumb" id="thumb"></span></div>
         <div class="labels" id="labels"></div></div>`;
     const lvname = $('lvname');
-    lvname.innerHTML = '<span id="lvtext"></span><svg class="spark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg>';
+    lvname.innerHTML = '<span id="lvtext"></span><svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" data-icon="lucide:sparkles"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>';
     const slider = $('slider'); fillEl = $('fill'); canvas = $('pc'); ctx = canvas.getContext('2d'); 
     requestAnimationFrame(() => {
       const H = slider.clientHeight; canvas.width = 28; canvas.height = H; canvas.style.height = H + 'px';

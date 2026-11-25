@@ -35,10 +35,10 @@ Inventory ID: X-AG-02. The access mode picker (D-AG-04) is the Composer's own ac
 
 - Header row: "Reasoning" (`label`, `text.secondary`) on the left and the current model's name (`caption`, `text.tertiary`) on the right, with a `border.subtle` underline.
 - **Reasoning slider (A98, approved 2026-11-25; artboard `ws-reasoning-slider`).** It replaces the list of effort rows. The column is 216 px wide and 304 px high, with padding 8 px top, 12 px sides and 10 px bottom; the popup does not grow.
-  - **Level name:** 8 px under the header, the selected level in `title` (16 / 24 / 600). Its colour is the agent brand colour that reads best on the surface (see Colour). At the top level a 14 px `sparkles` glyph follows it.
+  - **Level name:** 8 px under the header, the selected level in `title` (16 / 24 / 600). Its colour is the agent brand colour that reads best on the surface (see Colour). At the top level a 14 px Lucide `sparkles` glyph (stroke, `currentColor`) follows it; its paths are in the artboard `ws-reasoning-slider` (`data-icon="lucide:sparkles"`).
   - **Agent and model:** "Claude · Opus 5.5" in `caption`, `text.tertiary`.
   - **Bar:** 10 px below the name, a vertical track 28 px wide, filling the rest of the column (about 208 px), radius `radius.full`. Track: `surface.sunken` with a 1 px inner `border.subtle`. It is a slider (`role="slider"`, vertical) with one tab stop.
-  - **Stops:** one per declared level, 2 to 5. The first and last sit 14 px from the bar ends, the rest evenly between (48 px apart with 5 stops). Each stop is a 4 px dot in `text.tertiary` at 45 percent; stops at or below the selected one turn white at 70 percent.
+  - **Stops:** one per declared level, 2 to 5. The first and last sit 14 px from the bar ends, the rest evenly between. The spacing is computed from the track height that the 304 px column leaves, not fixed. Each stop is a 4 px dot in `text.tertiary` at 45 percent; stops at or below the selected one turn white at 70 percent.
   - **Fill:** from the bottom to the selected stop plus 14 px, radius `radius.full`. Linear gradient from bottom to top: the agent's first brand colour to its second.
   - **Thumb:** a 22 px circle centred on the selected stop, fill `slider.thumb`, a 1 px ring (`border.default` at 50 percent) and `shadow.e1`.
   - **Labels:** the level names to the right of the bar, 14 px from it, centred on their stops, in `body` `text.tertiary`; the selected one in `body-strong` `text.primary`. Each label is a click target.
@@ -52,16 +52,16 @@ Inventory ID: X-AG-02. The access mode picker (D-AG-04) is the Composer's own ac
     - **Shimmer:** a 46 px band of white at 55 percent (transparent at both ends) climbs the fill from bottom to top every 1.6 s, `ease.linear`, repeating while the picker is open.
     - **Sparkle:** the `sparkles` glyph fades in next to the level name.
     - **Fades:** the effects fade in over `duration.moderate` (200 ms) and the halo over `duration.slow` (300 ms).
-  - **Motion:** the thumb and the fill move to a new stop in 220 ms with `ease.standard`.
+  - **Motion:** after a change, the thumb and the fill move to the new stop in one bounded transition, `duration.slider-move` (220 ms) with `ease.standard`. Below the top level nothing loops: no particles, no shimmer and no other repeating animation run. The only looping animations are the particles and the shimmer at the top level.
   - **Reduced motion** (system setting or MassOrca's own):
     - The top level shows the same frame held still: particles drawn once where they are, the halo, the thumb ring and the sparkle, and the shimmer band resting at the top of the fill.
     - The thumb and fill jump to a new stop with no transition.
     - Below the top level nothing changes.
-  - **Input:** click or drag anywhere on the bar snaps to the nearest stop; a click on a label selects it. Up and Right raise the level, Down and Left lower it, Home and End jump to the ends, Page Up and Page Down jump to the ends. The value text is "Medium, 2 of 5".
+  - **Input:** click or drag anywhere on the bar snaps to the nearest stop; a click on a label selects it. None of these closes the popover. Up and Right raise the level, Down and Left lower it, Home and End jump to the ends, Page Up and Page Down jump to the ends. The value text is "Medium, 2 of 5".
   - **Tokens:**
     - Existing: `surface.sunken`, `border.subtle`, `border.default`, `radius.full`, `shadow.e1`, `title`, `body`, `body-strong`, `caption`, `text.primary`, `text.tertiary`, `accent.default`, `accent.fg`, `duration.moderate`, `duration.slow`, `ease.standard`, `ease.linear`.
-    - New (not yet in tokens.json; added by the session that builds it): `size.reasoning-slider.track` = 28 px, `size.reasoning-slider.thumb` = 22 px, `slider.thumb` = #f4f4f7 dark / #ffffff light, and `duration.slider-shimmer` = 1600 ms.
-  - **Android:** the same column inside the Model picker sheet. The bar is 32 dp wide, the thumb 26 dp, the stops 52 dp apart, and the labels in `body` (14 sp). The colours and effects are the same.
+    - New (not yet in tokens.json; added by the session that builds it): `size.reasoning-slider.track` = 28 px, `size.reasoning-slider.thumb` = 22 px, `slider.thumb` = #f4f4f7 dark / #ffffff light, `duration.slider-shimmer` = 1600 ms, and `duration.slider-move` = 220 ms (no existing duration is 220 ms; `duration.moderate` is 200 ms).
+  - **Android:** the same column inside the Model picker sheet. The bar is 32 dp wide, the thumb 26 dp, the stop spacing computed from the bar height as on desktop, and the labels in `body` (14 sp). The colours and effects are the same.
 
 **Footer** (height 44 = control height 28 + `space.2` above and below, top `border.subtle`)
 
@@ -111,7 +111,7 @@ Popover contents:
 
 ## Behaviour (handoff)
 
-- **Selection model.** Clicking a model row selects it: the chip updates, the reasoning column shows that model's levels and keeps the previous effort when the new model has it, otherwise the model's default. The popover stays open so the effort can be set. It closes on Escape, an outside click, or Enter on a row. Clicking an effort selects it and closes the popover. Standard or Fast applies immediately; the popover stays open for it.
+- **Selection model.** Clicking a model row selects it: the chip updates, the reasoning column shows that model's levels and keeps the previous effort when the new model has it, otherwise the model's default. The popover stays open so the effort can be set. It closes only on Escape or an outside click. Enter on a model row selects the model and keeps the popover open. Changing the level on the reasoning slider (drag, a click on the bar or on a level label, or the keys) keeps it open. Standard or Fast applies immediately; the popover stays open for it.
 - **Shortcuts `Mod+1` to `Mod+4`.** They exist only while the popover is open and select the first four rows of the current view (the Favourites view lists favourites in order; an agent view lists its featured models). They select exactly as a click does. Outside the popover the keys keep their normal meaning. Extensions cannot claim them.
 - **Open.** The chip opens on Enter, Space, Down arrow or click. A configurable shortcut (default `Mod+Shift+M`, rebindable in D-ST-04) opens it from the Composer.
 - **Keyboard inside.** Focus lands in the search field. Tab moves search, model list, reasoning column, speed control; Shift+Tab goes back. Arrows move inside a column (roving focus); Left from the model list goes to the agent rail and Right goes to the reasoning column. Typing any printable character while the list has focus moves it to the search field. `Alt+Enter` toggles the focused row as a favourite (also in the row's context menu). Escape closes and returns focus to the chip. The popover is not modal; it traps no focus beyond Tab order but closes when focus leaves it.
