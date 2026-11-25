@@ -14,6 +14,7 @@ mod home_start;
 mod marketplace;
 mod pairing;
 mod palette;
+mod path_field;
 mod project_sidebar;
 mod rail;
 mod resize_edges;
@@ -55,6 +56,7 @@ use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
+use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
 use crate::ui_state;
@@ -98,6 +100,8 @@ mod home_start_tests;
 mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
+#[cfg(test)]
+mod path_field_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
@@ -187,8 +191,10 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
-    /// The project the start page with no workspace creates in; `None` stands for the first one.
-    home_project: Option<String>,
+    /// The start page with no workspace's choice: a project or "No project"; `None` stands for the first project.
+    home_project: Option<ProjectChoice>,
+    /// The system's file or folder picker, which Browse asks; tests put a fake in its place.
+    path_picker: path_field::PathPicker,
     /// The last start-page call was refused because the data folder is not secured.
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
@@ -501,6 +507,7 @@ impl Shell {
             start_composers: HashMap::new(),
             start_pending: None,
             home_project: None,
+            path_picker: path_field::system_picker(),
             profile_unsafe: false,
             session_composers: HashMap::new(),
             session_calls: HashMap::new(),

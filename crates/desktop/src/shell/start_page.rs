@@ -660,7 +660,7 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let params = start_params(workspace, &kind.id, prompt, permission_mode);
+        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
