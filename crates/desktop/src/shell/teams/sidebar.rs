@@ -195,7 +195,7 @@ fn project_row(
     let icon = match row.kind {
         ProjectRowKind::Files => IconName::Folder,
         ProjectRowKind::Memory => IconName::Brain,
-        ProjectRowKind::Routines => IconName::CalendarClock,
+        ProjectRowKind::Routines => IconName::Repeat,
         ProjectRowKind::Project(_) => IconName::FolderTree,
     };
     let page = row.page;

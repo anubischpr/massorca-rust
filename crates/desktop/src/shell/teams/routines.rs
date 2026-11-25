@@ -65,7 +65,7 @@ pub(in crate::shell) fn routines_page(
         ));
     let routines = if team_data.routines.is_empty() {
         EmptyState::new("routines-empty", "No routines yet")
-            .icon(IconName::RefreshCw)
+            .icon(IconName::Repeat)
             .explanation(format!(
                 "A routine starts a task on a schedule, with one bot in {}. Each run is kept in its history.",
                 team_data.name
