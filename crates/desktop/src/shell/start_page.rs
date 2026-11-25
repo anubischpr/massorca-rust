@@ -18,7 +18,7 @@ use massorca_ui::components::model_picker::{
 };
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
-use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
+use massorca_ui::components::segmented_control::{Segment, SegmentedControl, SegmentedStyle};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
 use massorca_ui::tokens::{
@@ -327,6 +327,7 @@ fn start_mode_switch(
             ],
         )
         .selected(mode.index())
+        .style(SegmentedStyle::Sunken)
         .on_change(move |index, _, cx| {
             let _ = shell.update(cx, |shell, cx| {
                 shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
