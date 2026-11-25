@@ -5,10 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use massorca_client::Client;
 use massorca_desktop::service::{
     ExtensionsRead, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
+use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
     ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams, ExtensionState,
 };
@@ -309,5 +311,65 @@ async fn a_read_older_than_the_held_one_never_replaces_it() {
         Instant::now(),
     );
     assert_eq!(state.extensions.as_ref(), Some(&held));
+    stop_service(service).await;
+}
+
+/// The kind's package state in the store's agent kinds, if the store lists the kind.
+fn kind_state(state: &StoreState, id: &str) -> Option<PackageState> {
+    state
+        .agent_kinds
+        .iter()
+        .find(|kind| kind.id == id)
+        .map(|kind| kind.package.state)
+}
+
+#[tokio::test]
+async fn installing_a_built_in_agent_refreshes_the_agent_kinds_without_a_reconnect() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the agent kinds and lists",
+        |state| {
+            kind_state(state, "claude") == Some(PackageState::Available)
+                && state.extensions.is_some()
+        },
+    )
+    .await;
+
+    let source = "catalogue:massorca.claude".to_owned();
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the review is read");
+    handle
+        .install_extension(install_params(source, Some(review.consent.clone())))
+        .await
+        .expect("the built-in agent installs");
+    // The service's own answer, so a stale store is told apart from a wrong service.
+    let client = Client::connect(&profile(home.path()), connect_options(None))
+        .await
+        .expect("a client connects");
+    let direct = client
+        .agent_kinds()
+        .await
+        .expect("the service lists its kinds");
+    let claude = direct.kinds.iter().find(|kind| kind.id == "claude");
+    assert_eq!(
+        claude.map(|kind| kind.package.state),
+        Some(PackageState::Enabled),
+        "the service lists the installed agent as enabled"
+    );
+    until(
+        &mut updates,
+        &mut state,
+        "the installed agent's kind",
+        |state| kind_state(state, "claude") == Some(PackageState::Enabled),
+    )
+    .await;
+
     stop_service(service).await;
 }
