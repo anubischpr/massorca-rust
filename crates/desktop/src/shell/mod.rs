@@ -851,6 +851,10 @@ impl Render for Shell {
         self.sync_source_control(window, cx);
         let connected = self.store.read(cx).state().connection.is_connected();
         // The start page's composer is created before the frames below borrow the Shell's fields.
+        self.project_icon = self
+            .project_icon
+            .take()
+            .and_then(|popover| popover.while_shown(&self.model.canvas()));
         let start = self.model.selected_workspace().and_then(|id| {
             crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
         });

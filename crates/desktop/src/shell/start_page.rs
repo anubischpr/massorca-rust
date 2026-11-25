@@ -142,10 +142,12 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
             frame.project_icon.is_some(),
             move |open, _, cx| {
                 let _ = open_shell.update(cx, |shell, cx| {
+                    let canvas = shell.model.canvas();
                     shell.project_icon =
                         open.then(|| crate::model::project_icon::ProjectIconPopover {
                             project: open_project.clone(),
                             refusal: None,
+                            canvas,
                         });
                     cx.notify();
                 });

@@ -6,6 +6,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use massorca_protocol::methods::projects::{ProjectIcon, ProjectIconSource, ProjectUpdateParams};
 
+use crate::model::canvas::Canvas;
+
 /// What a project's icon draws. A project with no icon draws the folder glyph.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ProjectGlyph {
@@ -77,6 +79,15 @@ pub struct ProjectIconPopover {
     pub project: String,
     /// The reason the last change was refused, drawn under the grid until the next attempt.
     pub refusal: Option<String>,
+    /// The Canvas the popover opened on; it closes once the Canvas is another one.
+    pub canvas: Canvas,
+}
+
+impl ProjectIconPopover {
+    /// The popover while the Canvas is still the one it opened on.
+    pub fn while_shown(self, canvas: &Canvas) -> Option<Self> {
+        (self.canvas == *canvas).then_some(self)
+    }
 }
 
 /// The icon an uploaded file makes: a PNG of at most 256 KiB, checked here before the service sees it.
@@ -199,5 +210,25 @@ mod upload_tests {
     fn an_image_over_256_kib_is_refused_with_the_reason() {
         let reason = upload_icon(&png(256 * 1024 + 1), None).expect_err("too large");
         assert!(reason.contains("256 KiB"), "{reason}");
+    }
+}
+
+#[cfg(test)]
+mod canvas_tests {
+    use super::*;
+    use crate::model::navigation::Mode;
+
+    #[test]
+    fn a_popover_closes_once_the_canvas_is_another_page() {
+        let popover = ProjectIconPopover {
+            project: "oppm".into(),
+            refusal: None,
+            canvas: Canvas::Home(Mode::Workspaces),
+        };
+        assert_eq!(
+            popover.clone().while_shown(&Canvas::Home(Mode::Workspaces)),
+            Some(popover.clone())
+        );
+        assert_eq!(popover.while_shown(&Canvas::Session("Feed".into())), None);
     }
 }
