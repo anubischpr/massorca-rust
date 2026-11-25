@@ -340,6 +340,17 @@ mod tests {
     }
 
     #[test]
+    fn a_no_project_start_carries_the_picked_model_and_effort() {
+        let options = StartOptions {
+            model: Some("opus".to_owned()),
+            effort: Some("xhigh".to_owned()),
+        };
+        let params = no_project_start_params("claude", "fix it", None, options);
+        assert_eq!(params.workspace, None);
+        assert_eq!(params.model.as_deref(), Some("opus"));
+        assert_eq!(params.effort.as_deref(), Some("xhigh"));
+    }
+
     fn a_no_project_start_carries_no_workspace_and_a_blank_prompt_sends_none() {
         let params = no_project_start_params(
             "claude",

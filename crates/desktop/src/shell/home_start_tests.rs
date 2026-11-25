@@ -514,6 +514,26 @@ fn choose_no_project(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn no_project_sends_no_model_or_effort_while_the_kinds_declare_no_models(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    for update in [
+        StoreUpdate::AgentNoProjectOffered(true),
+        StoreUpdate::AgentOptionsOffered(true),
+    ] {
+        rig.updates.send(update).expect("the store listens");
+    }
+    cx.run_until_parked();
+    choose_no_project(cx);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (start, _reply) = match next_call(&mut rig.script) {
+        Some(Call::Start(call)) => call,
+        _ => panic!("an agent.start call was expected"),
+    };
+    assert_eq!(start.workspace, None);
+    assert_eq!((start.model, start.effort), (None, None));
+}
+
+#[gpui::test]
 fn no_project_once_offered_starts_the_agent_with_no_workspace_and_opens_it(
     cx: &mut TestAppContext,
 ) {
