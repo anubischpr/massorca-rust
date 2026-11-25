@@ -640,6 +640,7 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
             created_at_ms: 1,
             exit: None,
             holds_secrets: false,
+            git_credential_guard: false,
         }))
         .expect("the store listens");
     reply
