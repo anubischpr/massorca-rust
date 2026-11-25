@@ -27,7 +27,13 @@ rules of decision 0092 and about 20 runs, as the orchestrator set.
     `extension.consent_required` and its data carries the restored `version` and `consent`. A built-in needs none.
   - Nothing kept is refused with `extension.no_previous_version`. A kept folder that does not hash to the lockfile is
     refused as `extension.tampered`.
-  - The enabled state, install time, CLI registrations and unknown fields stay. Rollback never runs a vendor installer
+  - A kept version is bound to the version that replaced it: its `replaced_path` must equal the current path. An
+    older binary copies the unknown fields of an entry forward, so after a later update it can leave a kept version
+    beside the wrong version. Such a version, or one whose folder is missing, is refused as
+    `extension.no_previous_version`, with the lock unchanged.
+  - The restored entry takes the `adopted` flag of the version it restores, and that version's unknown fields win over
+    the entry's on a name clash. The entry keeps its enabled state, install time, CLI registrations and its other
+    unknown fields. Rollback never runs a vendor installer
     or uninstaller, and never touches the vendor CLI, accounts or `data/<id>`.
   - An agent run may not roll back, as for an update.
 - **Run log.** Each install, update, rollback and remove that changes a package adds one run to

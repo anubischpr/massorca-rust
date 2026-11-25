@@ -127,13 +127,20 @@ pub struct KeptVersion {
     pub consent: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_kinds: Vec<String>,
+    /// The path of the version that replaced this one. The kept version is a rollback target only while the current
+    /// version still has this path: an older binary can carry it forward past a later update.
+    #[serde(default)]
+    pub replaced_path: String,
+    /// Whether the version was registered without consent (decision 0063).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adopted: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 impl KeptVersion {
-    /// The files of an installed entry, as an update is about to replace them.
-    pub(crate) fn of(entry: &LockEntry) -> Self {
+    /// The files of `entry`, as the version that replaces it at `replaced_by` keeps them.
+    pub(crate) fn of(entry: &LockEntry, replaced_by: &str) -> Self {
         Self {
             version: entry.version.clone(),
             source: entry.source.clone(),
@@ -142,6 +149,8 @@ impl KeptVersion {
             path: entry.path.clone(),
             consent: entry.consent.clone(),
             agent_kinds: entry.agent_kinds.clone(),
+            replaced_path: replaced_by.to_owned(),
+            adopted: entry.adopted,
             extra: Map::new(),
         }
     }

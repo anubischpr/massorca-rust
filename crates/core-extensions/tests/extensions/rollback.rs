@@ -69,6 +69,7 @@ fn a_rollback_restores_the_previous_version_and_keeps_the_current_one_as_previou
     assert_eq!(entry["sha256"], before["sha256"]);
     assert_eq!(entry["consent"], consent);
     assert_eq!(entry["previous"]["version"], "1.3.0");
+    assert_eq!(entry["previous"]["replaced_path"], entry["path"]);
     assert_eq!(entry["enabled"], false);
     assert_eq!(entry["installed_at_ms"], before["installed_at_ms"]);
     assert_eq!(entry["cli"], before["cli"]);
@@ -167,4 +168,69 @@ fn a_tampered_previous_version_is_refused_and_nothing_changes() {
 
     assert_eq!(error.code(), codes::TAMPERED);
     assert_eq!(lock_bytes(&s), before);
+}
+
+#[test]
+fn a_kept_version_bound_to_another_path_is_stale_and_refused_with_the_lock_unchanged() {
+    let s = updated();
+    let mut lock = s.lock_json().expect("the lockfile");
+    lock["packages"][0]["previous"]["replaced_path"] = json!("pkgs/acme.kit/9.9.9-ffffffff");
+    fs::write(s.service.layout().lock_path(), lock.to_string()).expect("the lockfile");
+    let before = lock_bytes(&s);
+    let consent = consent_of(&s, "1.2.0");
+
+    let error = s
+        .service
+        .rollback("acme.kit", Some(&consent))
+        .expect_err("the kept version was kept beside another version");
+
+    assert_eq!(error.code(), codes::NO_PREVIOUS_VERSION);
+    assert_eq!(lock_bytes(&s), before);
+}
+
+#[test]
+fn a_kept_folder_that_is_missing_is_refused_cleanly_with_the_lock_unchanged() {
+    let s = updated();
+    let kept = first_entry(&s)["previous"]["path"]
+        .as_str()
+        .expect("a kept path")
+        .to_owned();
+    fs::remove_dir_all(s.service.layout().resolve(&kept)).expect("the kept folder is removed");
+    let before = lock_bytes(&s);
+    let consent = consent_of(&s, "1.2.0");
+
+    let error = s
+        .service
+        .rollback("acme.kit", Some(&consent))
+        .expect_err("there is no folder to restore");
+
+    assert_eq!(error.code(), codes::NO_PREVIOUS_VERSION, "{error}");
+    assert_eq!(lock_bytes(&s), before);
+}
+
+#[test]
+fn a_rollback_restores_the_adopted_flag_and_the_kept_versions_own_unknown_fields() {
+    let s = updated();
+    let mut lock = s.lock_json().expect("the lockfile");
+    lock["packages"][0]["x-note"] = json!("entry");
+    lock["packages"][0]["x-shared"] = json!("entry");
+    lock["packages"][0]["previous"]["adopted"] = json!(true);
+    lock["packages"][0]["previous"]["x-shared"] = json!("kept");
+    fs::write(s.service.layout().lock_path(), lock.to_string()).expect("the lockfile");
+    let consent = consent_of(&s, "1.2.0");
+
+    s.service
+        .rollback("acme.kit", Some(&consent))
+        .expect("rolls back");
+
+    let restored = first_entry(&s);
+    assert_eq!(restored["adopted"], true);
+    assert_eq!(
+        restored["x-note"], "entry",
+        "the entry's own unknown field stays"
+    );
+    assert_eq!(
+        restored["x-shared"], "kept",
+        "the restored version's value wins"
+    );
 }

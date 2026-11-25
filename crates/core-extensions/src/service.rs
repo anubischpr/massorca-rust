@@ -859,7 +859,7 @@ fn kept_after_update(current: &LockEntry, rel: &str) -> Option<Box<KeptVersion>>
     if current.path == rel {
         current.previous.clone()
     } else {
-        Some(Box::new(KeptVersion::of(current)))
+        Some(Box::new(KeptVersion::of(current, rel)))
     }
 }
 

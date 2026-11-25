@@ -19,11 +19,17 @@ impl Extensions {
             .cloned()
             .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
         self.refuse_if_busy(id)?;
+        // A kept version is a rollback target only while it names the path of the current version; otherwise an older
+        // binary carried it forward past a later update, and its folder may be gone.
         let kept = current
             .previous
             .as_deref()
+            .filter(|kept| kept.replaced_path == current.path)
             .cloned()
             .ok_or_else(|| Error::NoPreviousVersion(id.to_owned()))?;
+        if !self.layout.resolve(&kept.path).is_dir() {
+            return Err(Error::NoPreviousVersion(id.to_owned()));
+        }
         let target = restored(&current, &kept);
         // The kept folder must hash to what the lockfile records before its manifest is trusted.
         let manifest = self.installed_manifest(&target)?;
@@ -63,7 +69,7 @@ impl Extensions {
         };
         let fresh = LockEntry {
             consent: accepted,
-            previous: Some(Box::new(KeptVersion::of(&current))),
+            previous: Some(Box::new(KeptVersion::of(&current, &kept.path))),
             ..target
         };
         let mut lockfile = lockfile;
@@ -83,8 +89,11 @@ impl Extensions {
     }
 }
 
-/// The entry `current` becomes when `kept` is swapped back in: the files of `kept`, and everything else `current` keeps.
+/// The entry `current` becomes when `kept` is swapped back in. The files, the registration and the unknown fields the
+/// kept version names are its own; the entry keeps its other state and its unknown fields.
 fn restored(current: &LockEntry, kept: &KeptVersion) -> LockEntry {
+    let mut extra = current.extra.clone();
+    extra.extend(kept.extra.clone());
     LockEntry {
         version: kept.version.clone(),
         source: kept.source.clone(),
@@ -93,7 +102,9 @@ fn restored(current: &LockEntry, kept: &KeptVersion) -> LockEntry {
         path: kept.path.clone(),
         consent: kept.consent.clone(),
         agent_kinds: kept.agent_kinds.clone(),
+        adopted: kept.adopted,
         previous: None,
+        extra,
         ..current.clone()
     }
 }

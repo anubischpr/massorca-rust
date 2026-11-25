@@ -84,6 +84,7 @@ fn a_changed_folder_updates_in_place_and_keeps_its_state() {
     assert_eq!(entry["previous"]["version"], "1.2.0");
     assert_eq!(entry["previous"]["path"], old_path.as_str());
     assert_eq!(entry["previous"]["sha256"], before["sha256"]);
+    assert_eq!(entry["previous"]["replaced_path"], entry["path"]);
     assert_eq!(entry["previous"]["consent"], before["consent"]);
     assert!(s.host.runs().is_empty(), "no vendor command runs");
 }
