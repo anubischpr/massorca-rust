@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::codes;
 use crate::methods::agents::{Activity, AgentStartParams, Outcome};
 
 /// Params: [`AgentChatStartParams`]. Result: [`AgentSession`](crate::methods::agents::AgentSession). Refused with
@@ -24,16 +25,14 @@ pub const APPROVAL_ANSWER: &str = "agent.chat.approval.answer";
 /// Params: [`AgentSessionRef`](crate::methods::agents::AgentSessionRef). Result: [`ChatInterrupted`].
 pub const INTERRUPT: &str = "agent.chat.interrupt";
 
-/// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The
-/// error's `data` is the kind's [`KindChat`].
-pub const CHAT_UNSUPPORTED: &str = "agent.chat_unsupported";
-/// A chat method was called on a session that does not run as a chat.
-pub const NOT_CHAT: &str = "agent.not_chat";
-/// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (answered,
-/// cancelled, or its turn ended). The error's `data` is the approval item when it exists.
-pub const APPROVAL_SETTLED: &str = "agent.approval_settled";
-/// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes.
-pub const CURSOR_STALE: &str = "agent.cursor_stale";
+/// `agent.chat.start` refused; [`codes::AGENT_CHAT_UNSUPPORTED`], kept here beside its method.
+pub const CHAT_UNSUPPORTED: &str = codes::AGENT_CHAT_UNSUPPORTED;
+/// A chat method was called on a session that does not run as a chat; [`codes::AGENT_NOT_CHAT`].
+pub const NOT_CHAT: &str = codes::AGENT_NOT_CHAT;
+/// The approval is not pending; [`codes::AGENT_APPROVAL_SETTLED`].
+pub const APPROVAL_SETTLED: &str = codes::AGENT_APPROVAL_SETTLED;
+/// A cursor from another journal epoch; [`codes::AGENT_CURSOR_STALE`].
+pub const CURSOR_STALE: &str = codes::AGENT_CURSOR_STALE;
 
 /// Items a snapshot or a history page holds when the caller gives no limit.
 pub const DEFAULT_PAGE_ITEMS: u32 = 40;
@@ -55,6 +54,13 @@ pub enum RunType {
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
+}
+
+impl RunType {
+    /// Whether the value is the default, which a session record leaves out.
+    pub fn is_terminal(&self) -> bool {
+        *self == Self::Terminal
+    }
 }
 
 /// Whether a kind can run as a chat, as `agent.kinds` lists it in [`AgentKind`](crate::methods::agents::AgentKind)'s
