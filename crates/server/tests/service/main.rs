@@ -18,6 +18,7 @@ mod frames;
 mod git_branches;
 mod git_commit;
 mod git_diff;
+mod git_file_content;
 mod git_fixture;
 mod git_index;
 mod git_log;
