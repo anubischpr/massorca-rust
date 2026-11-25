@@ -115,6 +115,9 @@ pub fn project_details(project: &Project) -> Vec<String> {
         format!("path: {}", project.path),
         format!("workspaces root: {}", project.workspaces_root),
     ];
+    if let Some(owner) = &project.remote_owner {
+        lines.push(format!("owner: {owner}"));
+    }
     if let Some(base) = &project.base_ref {
         lines.push(format!("base: {base}"));
     }
@@ -137,11 +140,18 @@ pub fn project_table(projects: &[Project]) -> Vec<String> {
                     .map_or_else(|| "-".to_owned(), icon_text),
                 project_kind(project.kind).to_owned(),
                 project.base_ref.clone().unwrap_or_else(|| "-".to_owned()),
+                project
+                    .remote_owner
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
                 project.path.clone(),
             ]
         })
         .collect();
-    table(&["ID", "NAME", "ICON", "KIND", "BASE", "PATH"], rows)
+    table(
+        &["ID", "NAME", "ICON", "KIND", "BASE", "OWNER", "PATH"],
+        rows,
+    )
 }
 
 /// One line for a workspace that was just created.
