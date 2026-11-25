@@ -62,6 +62,9 @@ pub struct AppState {
     pub(crate) _kind_cleanup: massorca_core_extensions::hooks::HookHandle,
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
+    /// Every chat journal change (`Change::Chat`) and every forgotten session, for the chat streams (decision 0101). Apart
+    /// from `agent_changes`, so a fast stream of text never makes a session watcher fall behind.
+    pub chat_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,
     /// Listeners, pairing offers and open device connections; empty when the service is local only.
     pub network: NetworkState,
