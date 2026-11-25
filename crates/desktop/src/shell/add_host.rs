@@ -5,9 +5,7 @@
 use std::path::PathBuf;
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, Context, Entity, PathPromptOptions, Subscription, WeakEntity, div, px,
-};
+use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, div, px};
 use massorca_ui::assets::FONT_MONO;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -22,6 +20,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
+use super::path_field::PickKind;
 use crate::model::add_host::{
     Check, HostKind, Notice, SshTarget, Tone, can_add, key_choice_at, key_labels, list_key_files,
     program_for, test_notices,
@@ -178,17 +177,12 @@ impl Shell {
 
     /// "Choose program file" under Advanced options: the developer's override, picked with the system's dialog.
     pub(super) fn choose_add_host_program(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+        let picked = self.path_picker.pick(PickKind::File, cx);
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = picked.await {
+            if let Some(path) = picked.await {
                 let _ = this.update(cx, |shell, cx| {
                     if let Some(flow) = shell.add_host.as_mut() {
-                        flow.chosen_program = paths.into_iter().next();
+                        flow.chosen_program = Some(path);
                     }
                     cx.notify();
                 });

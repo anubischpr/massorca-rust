@@ -1,10 +1,11 @@
-//! The delegate form's rules without a window: the call a submit sends, the id that call carries and the agent the
-//! form starts on. A retry of one submit carries that submit's id, so the service answers with the child it made.
+//! The delegate form's rules without a window: the call a submit sends, the id that call carries, the agent the
+//! form starts on, and what the form says about its child: where a writing child runs and whether a read-only child
+//! can start. A retry of one submit carries that submit's id, so the service answers with the child it made.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use massorca_protocol::methods::agents::AgentDelegateParams;
+use massorca_protocol::methods::agents::{AgentDelegateParams, AgentSession};
 
 use super::agent_kinds::KindChoice;
 
@@ -13,6 +14,48 @@ pub const PROMPT_REQUIRED: &str = "Write what the child should do first.";
 
 /// Why the form does not send: the host offers no agent to start the child on.
 pub const NO_KIND: &str = "No agent kind is available on this host.";
+
+/// What a writing child under its own worktree is told before the person types.
+pub const OWN_WORKTREE_NOTICE: &str =
+    "The child works in its own copy of the project (a new worktree).";
+
+/// What a writing child in the parent's folder is told before the person types.
+pub const SHARED_FOLDER_NOTICE: &str =
+    "This workspace has no Git, so the child works in this folder.";
+
+/// What a session that starts no child says when the service gives no reason.
+pub const UNAVAILABLE_NOTICE: &str = "This session cannot start a child.";
+
+/// What a session that still starts read-only children says when the service gives no reason.
+pub const WRITER_UNAVAILABLE_NOTICE: &str = "This session cannot start a child that writes.";
+
+/// Where a writing child of a session runs, as the service declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WritingChild {
+    /// A new worktree of the project, so the child's changes stay apart from the parent's.
+    OwnWorktree,
+    /// The parent's own folder, with no isolation.
+    SharedFolder,
+    /// No writing child can start under this session.
+    Unavailable,
+}
+
+/// The `delegation` a session declares: where its writing child runs, whether a read-only child can start, and the
+/// reason the service gives when a child cannot start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionDelegation {
+    pub writing_child: WritingChild,
+    /// Whether a read-only child can start under this session; false means no child can start at all.
+    pub read_only_child: bool,
+    pub reason: Option<String>,
+}
+
+/// The line the Delegate form states before the person types, and whether it keeps Delegate off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacementNotice {
+    pub text: String,
+    pub blocks_send: bool,
+}
 
 /// What the delegate form holds when its person sends it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +118,53 @@ pub fn starting_kind(choices: &[KindChoice], parent_kind: &str) -> Option<usize>
         .or_else(|| (!choices.is_empty()).then_some(0))
 }
 
+/// Reads `AgentSession.delegation` once crates/protocol carries it; until then no session declares one.
+pub fn delegation_of(_session: &AgentSession) -> Option<SessionDelegation> {
+    None
+}
+
+/// What the form says about its child, and whether it keeps Delegate off. A session with no read-only child starts no
+/// child at all, so Delegate stays off and the reason shows, whatever its writing child says. Otherwise a writing child
+/// is described unless Read only is on, and an unavailable one keeps Delegate off unless Read only is on.
+pub fn placement_notice(
+    delegation: &SessionDelegation,
+    read_only: bool,
+) -> Option<PlacementNotice> {
+    if !delegation.read_only_child {
+        return Some(PlacementNotice {
+            text: reason_or(delegation, UNAVAILABLE_NOTICE),
+            blocks_send: true,
+        });
+    }
+    match delegation.writing_child {
+        WritingChild::Unavailable => Some(PlacementNotice {
+            text: reason_or(delegation, WRITER_UNAVAILABLE_NOTICE),
+            blocks_send: !read_only,
+        }),
+        WritingChild::OwnWorktree | WritingChild::SharedFolder if read_only => None,
+        WritingChild::OwnWorktree => Some(notice(OWN_WORKTREE_NOTICE)),
+        WritingChild::SharedFolder => Some(notice(SHARED_FOLDER_NOTICE)),
+    }
+}
+
+/// The reason the service gives, trimmed; without one, the fallback line for what the session cannot start.
+fn reason_or(delegation: &SessionDelegation, fallback: &'static str) -> String {
+    delegation
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
+fn notice(text: &str) -> PlacementNotice {
+    PlacementNotice {
+        text: text.to_owned(),
+        blocks_send: false,
+    }
+}
+
 fn optional(text: &str) -> Option<String> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
@@ -83,6 +173,7 @@ fn optional(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service::fixtures::agent;
 
     fn draft() -> DelegateDraft {
         DelegateDraft {
@@ -100,6 +191,18 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             unavailable: None,
+        }
+    }
+
+    fn declared(
+        writing_child: WritingChild,
+        read_only_child: bool,
+        reason: Option<&str>,
+    ) -> SessionDelegation {
+        SessionDelegation {
+            writing_child,
+            read_only_child,
+            reason: reason.map(str::to_owned),
         }
     }
 
@@ -166,5 +269,114 @@ mod tests {
     #[test]
     fn each_submit_gets_an_id_of_its_own() {
         assert_ne!(new_request_id(), new_request_id());
+    }
+
+    #[test]
+    fn an_own_worktree_child_is_told_it_gets_a_copy_of_the_project() {
+        let delegation = declared(WritingChild::OwnWorktree, true, None);
+        let notice = placement_notice(&delegation, false).expect("described");
+        assert_eq!(
+            (notice.text.as_str(), notice.blocks_send),
+            (
+                "The child works in its own copy of the project (a new worktree).",
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn a_shared_folder_child_is_told_the_workspace_has_no_git() {
+        let delegation = declared(WritingChild::SharedFolder, true, None);
+        let notice = placement_notice(&delegation, false).expect("described");
+        assert_eq!(
+            (notice.text.as_str(), notice.blocks_send),
+            (
+                "This workspace has no Git, so the child works in this folder.",
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn a_read_only_child_needs_no_isolation_line() {
+        for writing_child in [WritingChild::OwnWorktree, WritingChild::SharedFolder] {
+            let delegation = declared(writing_child, true, None);
+            assert_eq!(placement_notice(&delegation, true), None);
+        }
+    }
+
+    #[test]
+    fn an_unavailable_session_that_allows_read_only_children_sends_them_only_with_read_only_on() {
+        let reason = "Writing is paused in this session.";
+        let delegation = declared(WritingChild::Unavailable, true, Some(reason));
+        let read_only_off = placement_notice(&delegation, false).expect("the reason is shown");
+        assert_eq!(
+            (read_only_off.text.as_str(), read_only_off.blocks_send),
+            (reason, true)
+        );
+        let read_only_on = placement_notice(&delegation, true).expect("the reason is still shown");
+        assert_eq!(
+            (read_only_on.text.as_str(), read_only_on.blocks_send),
+            (reason, false)
+        );
+    }
+
+    #[test]
+    fn an_unavailable_session_without_read_only_children_keeps_delegate_off_whatever_read_only_says()
+     {
+        let reason = "This session has reached its delegation depth.";
+        let delegation = declared(WritingChild::Unavailable, false, Some(reason));
+        for read_only in [false, true] {
+            let notice = placement_notice(&delegation, read_only).expect("the reason is shown");
+            assert_eq!((notice.text.as_str(), notice.blocks_send), (reason, true));
+        }
+    }
+
+    #[test]
+    fn an_unavailable_session_without_a_reason_says_what_it_can_still_start() {
+        for reason in [None, Some("  ")] {
+            let writes = declared(WritingChild::Unavailable, true, reason);
+            let notice = placement_notice(&writes, false).expect("the fallback is shown");
+            assert_eq!(
+                (notice.text.as_str(), notice.blocks_send),
+                (WRITER_UNAVAILABLE_NOTICE, true)
+            );
+            let starts_nothing = declared(WritingChild::Unavailable, false, reason);
+            let notice = placement_notice(&starts_nothing, false).expect("the fallback is shown");
+            assert_eq!(
+                (notice.text.as_str(), notice.blocks_send),
+                (UNAVAILABLE_NOTICE, true)
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_that_starts_no_child_blocks_delegate_for_any_writing_child() {
+        let reason = "This session has reached its delegation depth.";
+        for writing_child in [
+            WritingChild::OwnWorktree,
+            WritingChild::SharedFolder,
+            WritingChild::Unavailable,
+        ] {
+            for read_only in [false, true] {
+                let with_reason = declared(writing_child, false, Some(reason));
+                let notice =
+                    placement_notice(&with_reason, read_only).expect("the reason is shown");
+                assert_eq!((notice.text.as_str(), notice.blocks_send), (reason, true));
+                let without_reason = declared(writing_child, false, None);
+                let notice =
+                    placement_notice(&without_reason, read_only).expect("the fallback is shown");
+                assert_eq!(
+                    (notice.text.as_str(), notice.blocks_send),
+                    (UNAVAILABLE_NOTICE, true)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_session_that_declares_no_delegation_gives_the_form_no_line() {
+        let session = agent("s", "w1", 10);
+        assert_eq!(delegation_of(&session), None);
     }
 }

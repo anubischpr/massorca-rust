@@ -13,6 +13,14 @@ use crate::service::StoreState;
 pub const NEW_TERMINAL_COLS: u16 = 120;
 pub const NEW_TERMINAL_ROWS: u16 = 40;
 
+/// The grid a new Work panel terminal opens at, from the first source that has one: the grid its pane fits now
+/// (`measured`), else the grid the last Work panel pane applied, else the fixed size.
+pub fn new_terminal_grid(measured: Option<(u16, u16)>, applied: Option<(u16, u16)>) -> (u16, u16) {
+    measured
+        .or(applied)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
+}
+
 /// Why the kinds of the empty state that have no layer yet are off (A43).
 pub const BROWSER_LATER: &str = "Browser tabs come later.";
 pub const MARKDOWN_LATER: &str = "Markdown tabs come later.";
@@ -127,6 +135,19 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn a_new_terminal_opens_at_the_grid_its_pane_fits_else_the_last_applied_else_the_fixed_size() {
+        assert_eq!(
+            new_terminal_grid(Some((100, 30)), Some((80, 24))),
+            (100, 30)
+        );
+        assert_eq!(new_terminal_grid(None, Some((80, 24))), (80, 24));
+        assert_eq!(
+            new_terminal_grid(None, None),
+            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
+        );
+    }
 
     fn terminal(id: &str, workspace: &str, state: TerminalState) -> Terminal {
         Terminal {

@@ -430,11 +430,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.start",
-            "Start an agent in a workspace",
+            "Start an agent in a workspace, or with no project in the conversations folder",
             "agent.start",
             json!({
                 "type": "object",
-                "required": ["workspace", "kind"],
+                "required": ["kind"],
                 "properties": {
                     "workspace": { "type": "string" },
                     "kind": { "type": "string" },
@@ -442,7 +442,9 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "args": { "type": "array", "items": { "type": "string" } },
                     "read_only": { "type": "boolean" },
                     "title": { "type": "string" },
-                    "request_id": { "type": "string" }
+                    "request_id": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" }
                 }
             }),
         ),
@@ -734,11 +736,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.accounts.import",
             json!({
                 "type": "object",
-                "required": ["kind", "from"],
+                "required": ["kind"],
                 "properties": {
                     "kind": { "type": "string" },
                     "from": { "type": "string" },
                     "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.candidates",
+            "Show where an import without a folder would copy each agent kind's login files from",
+            "agent.accounts.import_candidates",
+            json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string" }
                 }
             }),
         ),

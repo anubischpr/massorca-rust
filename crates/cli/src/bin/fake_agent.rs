@@ -4,7 +4,8 @@
 //! stdin, and reports its activity through `massorca agent hook` when `MASSORCA_BIN`
 //! names that program. It prints whether a credential file exists, never its contents, and whether the
 //! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values. It prints the permission mode it was started in
-//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it.
+//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it. It
+//! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160).
 
 use std::env;
 use std::ffi::OsString;
@@ -28,6 +29,12 @@ const CREDENTIAL_FILE: &str = "token.json";
 const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
 /// Names whose values the agent prints. Tests list non-secret variables only.
 const SHOW_ENV: &str = "FAKE_AGENT_SHOW_ENV";
+/// Comma-separated `NAME=VALUE` pairs: start prints `env NAME foreign` when the variable holds VALUE, else `env NAME own`
+/// (decision 0160), so a test can see that an inherited value did not reach the run. Never a value.
+const PROBE_FOREIGN_ENV: &str = "FAKE_AGENT_PROBE_FOREIGN";
+/// Set to `1`, a run started with `--resume <ID>` prints the vendor's "no conversation" line and exits 1, as a CLI whose
+/// saved conversation is gone (decision 0160).
+const RESUME_MISSING_ENV: &str = "FAKE_AGENT_RESUME_MISSING";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
@@ -35,6 +42,9 @@ const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
 /// extra.
 const PRINT_HOME_ENV: &str = "FAKE_AGENT_PRINT_HOME";
+/// Set to `<file>:<key>`, start prints `state <key> present` when `<home>/<file>` is a JSON object with that top-level
+/// key, else `state <key> absent` (decision 0099). Never the value.
+const PRINT_STATE_ENV: &str = "FAKE_AGENT_PRINT_STATE";
 /// Set to `1`, `login` exits 1 without writing the token (decision 0059).
 const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
 /// Set to `1`, `login` never finishes (decision 0059): the sign-in terminal stays open.
@@ -69,12 +79,19 @@ fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("login") => return login(),
         Some("whoami") => return whoami(),
+        Some("whoami-json") => return whoami_json(),
         Some("logout") => return logout(),
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
+    if let Some(id) = &arguments.resume
+        && env::var_os(RESUME_MISSING_ENV).is_some_and(|value| value == "1")
+    {
+        say(&format!("No conversation found with session ID: {id}"));
+        return ExitCode::from(1);
+    }
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
@@ -107,7 +124,8 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--query=<TEXT>] [PROMPT WORDS...]`. The flags
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>]
+/// [PROMPT WORDS...]`. The flags
 /// count only before the first prompt word; every later word belongs to the prompt. `--query=<TEXT>` is the startup
 /// query of a kind with the `startup-query` prompt mode (0054): the agent takes it as its prompt, as if it were typed.
 #[derive(Debug, Default)]
@@ -115,11 +133,17 @@ struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
     mode: Option<String>,
+    /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
+    model: Option<String>,
+    effort: Option<String>,
     prompt: Option<String>,
 }
 
 /// The prefix of the startup query argument.
 const QUERY_PREFIX: &str = "--query=";
+
+/// The `-c` setting codex reads the reasoning effort from (decision 0094).
+const REASONING_EFFORT_CONFIG: &str = "model_reasoning_effort=";
 
 impl Arguments {
     fn parse(mut args: impl Iterator<Item = String>) -> Self {
@@ -131,6 +155,19 @@ impl Arguments {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
+                "--model" if words.is_empty() => parsed.model = args.next(),
+                "--effort" if words.is_empty() => parsed.effort = args.next(),
+                // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
+                "-m" if words.is_empty() => parsed.model = args.next(),
+                "-c" if words.is_empty() => {
+                    if let Some(level) = args.next().and_then(|setting| {
+                        setting
+                            .strip_prefix(REASONING_EFFORT_CONFIG)
+                            .map(str::to_owned)
+                    }) {
+                        parsed.effort = Some(level);
+                    }
+                }
                 text if words.is_empty() && text.starts_with(QUERY_PREFIX) => {
                     query = Some(text[QUERY_PREFIX.len()..].to_owned());
                 }
@@ -185,6 +222,12 @@ impl Agent {
         if let Some(mode) = &arguments.mode {
             say(&format!("mode {mode}"));
         }
+        if let Some(model) = &arguments.model {
+            say(&format!("model {model}"));
+        }
+        if let Some(effort) = &arguments.effort {
+            say(&format!("effort {effort}"));
+        }
         say(if credentials_found() {
             "credentials found"
         } else {
@@ -193,11 +236,32 @@ impl Agent {
         if env::var_os(PRINT_HOME_ENV).is_some_and(|value| value == "1") {
             say(&format!("home {}", home_name()));
         }
+        if let Some((file, key)) = env::var(PRINT_STATE_ENV)
+            .ok()
+            .as_deref()
+            .and_then(|value| value.split_once(':'))
+        {
+            let present = credential_home()
+                .and_then(|home| fs::read(home.join(file)).ok())
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|state| state.get(key).is_some());
+            say(&format!(
+                "state {key} {}",
+                if present { "present" } else { "absent" }
+            ));
+        }
         for name in listed_env(PROBE_ENV) {
             say(&format!("env {name} {}", env_state(&name)));
         }
         for name in listed_env(SHOW_ENV) {
             say(&format!("value {name} {}", env_value(&name)));
+        }
+        for (name, foreign) in probed_foreign() {
+            let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
+            say(&format!(
+                "env {name} {}",
+                if held { "foreign" } else { "own" }
+            ));
         }
         self.hook("start", None);
     }
@@ -398,6 +462,34 @@ fn whoami() -> ExitCode {
     }
 }
 
+/// A JSON check, as `claude auth status --json` prints one (decision 0098): `{"loggedIn", "email", "orgName"}`. The email
+/// is the token's (or the default identity), the organisation its `"org"` field (or `null`); a token containing
+/// `"loggedOut":true` prints `{"loggedIn": false}` and still exits 0. No token prints `{"loggedIn": false}` and exits 1.
+fn whoami_json() -> ExitCode {
+    let token =
+        credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
+    let (status, code) = match token {
+        Some(text) if text.contains(r#""loggedOut":true"#) => {
+            (serde_json::json!({ "loggedIn": false }), ExitCode::SUCCESS)
+        }
+        Some(text) => {
+            let email = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
+            let org = text
+                .split("\"org\":\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned);
+            (
+                serde_json::json!({ "loggedIn": true, "email": email, "orgName": org }),
+                ExitCode::SUCCESS,
+            )
+        }
+        None => (serde_json::json!({ "loggedIn": false }), ExitCode::from(1)),
+    };
+    let _ = writeln!(io::stdout().lock(), "{status:#}");
+    code
+}
+
 /// The credential home, when the variable names one.
 fn credential_home() -> Option<PathBuf> {
     env::var_os(CREDENTIAL_HOME_ENV)
@@ -432,6 +524,17 @@ fn listed_env(variable: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
+        .collect()
+}
+
+/// The `NAME=VALUE` pairs of [`PROBE_FOREIGN_ENV`].
+fn probed_foreign() -> Vec<(String, String)> {
+    env::var(PROBE_FOREIGN_ENV)
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| (name.trim().to_owned(), value.to_owned()))
+        .filter(|(name, _)| !name.is_empty())
         .collect()
 }
 

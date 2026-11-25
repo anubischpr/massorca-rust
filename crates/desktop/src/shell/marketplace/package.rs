@@ -102,13 +102,20 @@ impl Shell {
             confirm.error = None;
         }
         cx.notify();
+        // A package that connects accounts takes them with it, so a reinstall starts without stale accounts.
+        let delete_agent_homes = self
+            .model
+            .marketplace()
+            .item(item)
+            .and_then(|found| found.extension.as_deref())
+            .is_some_and(|extension| !extension.listing.connections.is_empty());
         let host = self.paired_host_of(item);
         let request = self.marketplace_pick.request();
         let picked = self.marketplace_pick.target().clone();
         cx.spawn(async move |this, cx| {
             let params = ExtensionRemoveParams {
                 id: package,
-                delete_agent_homes: false,
+                delete_agent_homes,
                 uninstall_cli,
                 agent_token: None,
                 uninstall_consent: None,

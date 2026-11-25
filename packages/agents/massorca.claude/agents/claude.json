@@ -7,6 +7,14 @@
   "prompt": { "mode": "argv", "separator": false, "paste": "bracketed", "submit": "\r" },
   "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
   "resume": ["--resume", "{ref}"],
+  "resume_transcript": { "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude", "glob": "projects/*/{ref}.jsonl" },
+  "resume_not_found_pattern": "No conversation found with session ID",
+  "strip_inherited_env": [
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDECODE"
+  ],
   "status": {
     "mechanism": "claude-settings",
     "events": {
@@ -20,11 +28,27 @@
   "credentials": {
     "home_env": "CLAUDE_CONFIG_DIR",
     "files": [".credentials.json", ".claude.json"],
-    "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+    "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+    "optional": [".claude.json"],
+    "sources": [
+      { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
+      { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
+    ],
+    "state": {
+      "file": ".claude.json",
+      "keep": ["oauthAccount", "theme", "mcpServers"],
+      "set": { "hasCompletedOnboarding": true },
+      "max_source_bytes": 16777216
+    }
   },
   "accounts": {
     "login": ["auth", "login"],
-    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "check": {
+      "args": ["auth", "status", "--json"],
+      "signed_in_exit": 0,
+      "identity_json": ["email", "orgName"],
+      "signed_in_json": "loggedIn"
+    },
     "logout": ["auth", "logout"],
     "strip_env": [
       "ANTHROPIC_API_KEY",
@@ -88,5 +112,25 @@
       "bypass": true
     }
   ],
-  "default_permission_mode": "auto"
+  "default_permission_mode": "auto",
+  "model": {
+    "flag": "--model",
+    "choices": [
+      { "id": "fable", "label": "Fable" },
+      { "id": "opus", "label": "Opus" },
+      { "id": "sonnet", "label": "Sonnet", "default": true },
+      { "id": "haiku", "label": "Haiku", "efforts": [] }
+    ]
+  },
+  "effort": {
+    "flag": "--effort",
+    "levels": [
+      { "id": "low", "label": "Low" },
+      { "id": "medium", "label": "Medium" },
+      { "id": "high", "label": "High" },
+      { "id": "xhigh", "label": "Extra high" },
+      { "id": "max", "label": "Max" }
+    ],
+    "default": "high"
+  }
 }

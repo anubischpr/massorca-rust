@@ -19,7 +19,11 @@ terminals (TERM-17). This decision brings it forward for vendor programs, becaus
   typed.
 - Entries are trimmed and unquoted, empty ones are dropped, and a repeat is dropped by its first occurrence, compared
   without case and without trailing separators.
-- A vendor command runs with the same search path, so a `.cmd` shim finds the tools it calls.
+- A vendor command runs with the same search path, absolute entries only, so a `.cmd` shim finds the tools it calls. The
+  program is resolved on that path and the command's `PATH` is that same path, computed once.
+- The registry entries are the machine `Path` plus the user `Path` of the account the service runs under, not of the
+  person installing. If the service runs under another account, that account's user `Path` is read, because HKCU is
+  that account's environment.
 - `vendor_search_env` in `massorca-core-agents` returns the search path and where it came from, `process` or
   `registry`. Agent launch does not use it yet.
 - Terminals keep the inherited `PATH`. Unix keeps the process `PATH` alone.

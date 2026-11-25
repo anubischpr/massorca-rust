@@ -37,13 +37,30 @@ pub const AGENT_SEEN: &str = "agent-seen/1";
 /// Release and retain of an agent session, and its archived output (`agent.release`, `agent.retain`, `agent.archive`,
 /// decision 0090).
 pub const AGENT_RELEASE: &str = "agent-release/1";
+/// `agent.start` without a `workspace`: the session runs in the conversations folder, in a folder of its own (decision
+/// 0094).
+pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
+/// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
+pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
+/// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
+pub const AGENT_CHAT: &str = "agent-chat/1";
+/// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
+/// `from`, which copies each declared file from where the kind's CLI keeps it.
+pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
 pub const TEAMS: &str = "teams/1";
+/// A team's Conference room (`team.room_list`, `team.room_post`) and the `team.room_changed` topic (decision 0102).
+pub const TEAM_ROOM: &str = "team-room/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
+/// Rolling a package back to the version its update replaced (`extensions.rollback`).
+pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// The run log of a package (`extensions.log`).
+pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).

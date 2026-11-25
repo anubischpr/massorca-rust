@@ -89,6 +89,38 @@ impl Store {
         Ok(())
     }
 
+    /// Inserts the hidden project of a conversations folder (decision 0094). It is kept out of `list_projects`. A duplicate
+    /// id, name or path key is `StoreError::Conflict`.
+    pub fn insert_conversations_project(&self, row: &ProjectRow) -> Result<(), StoreError> {
+        self.lock().execute(
+            "INSERT INTO projects (id, kind, path, path_key, name, workspaces_root, added_at, base_ref, icon, conversations) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
+            params![
+                row.id,
+                row.kind,
+                row.path,
+                row.path_key,
+                row.name,
+                row.workspaces_root,
+                row.added_at,
+                row.base_ref,
+                row.icon
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The hidden project of the conversations folder whose path key is `path_key`, if one exists.
+    pub fn find_conversations_project(
+        &self,
+        path_key: &str,
+    ) -> Result<Option<ProjectRow>, StoreError> {
+        self.query_optional(
+            &format!("{SELECT_PROJECTS} WHERE path_key = ?1 AND conversations = 1"),
+            [path_key],
+            project_from_row,
+        )
+    }
+
     /// Sets or clears (`None`) a project's base. Returns whether a row was updated.
     pub fn set_project_base(&self, id: &str, base: Option<&str>) -> Result<bool, StoreError> {
         let updated = self.lock().execute(
@@ -115,29 +147,40 @@ impl Store {
         )
     }
 
+    /// The project with `id` that a person can name, leaving out the hidden projects of conversations folders.
+    pub fn get_listed_project(&self, id: &str) -> Result<Option<ProjectRow>, StoreError> {
+        self.query_optional(
+            &format!("{SELECT_PROJECTS} WHERE id = ?1 AND conversations = 0"),
+            [id],
+            project_from_row,
+        )
+    }
+
+    /// The project named `name`, leaving out the hidden projects of conversations folders.
     pub fn find_project_by_name(&self, name: &str) -> Result<Option<ProjectRow>, StoreError> {
         self.query_optional(
-            &format!("{SELECT_PROJECTS} WHERE name = ?1"),
+            &format!("{SELECT_PROJECTS} WHERE name = ?1 AND conversations = 0"),
             [name],
             project_from_row,
         )
     }
 
+    /// The project at `path_key`, leaving out the hidden projects of conversations folders.
     pub fn find_project_by_path_key(
         &self,
         path_key: &str,
     ) -> Result<Option<ProjectRow>, StoreError> {
         self.query_optional(
-            &format!("{SELECT_PROJECTS} WHERE path_key = ?1"),
+            &format!("{SELECT_PROJECTS} WHERE path_key = ?1 AND conversations = 0"),
             [path_key],
             project_from_row,
         )
     }
 
-    /// All projects ordered by name.
+    /// All projects ordered by name, without the hidden projects of conversations folders.
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, StoreError> {
         self.query_all(
-            &format!("{SELECT_PROJECTS} ORDER BY name"),
+            &format!("{SELECT_PROJECTS} WHERE conversations = 0 ORDER BY name"),
             [],
             project_from_row,
         )

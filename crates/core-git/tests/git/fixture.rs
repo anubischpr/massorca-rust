@@ -95,18 +95,34 @@ pub fn text(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
 
+/// Writes an executable file. On Unix the test process never holds it open for writing: a test thread forking
+/// meanwhile would hand that descriptor to its child until exec, and running the file would then fail with
+/// "Text file busy". A `cp` child writes it instead, from a sibling the test process wrote.
+pub fn write_executable(path: &Path, contents: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let source = path.with_extension("src");
+        std::fs::write(&source, contents).expect("write the executable's source");
+        let copied = massorca_process::command("cp")
+            .arg(&source)
+            .arg(path)
+            .status()
+            .expect("run cp");
+        assert!(copied.success(), "cp {} failed", source.display());
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make it executable");
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, contents).expect("write the executable");
+}
+
 /// Installs a `post-checkout` hook running `body` under `sh`, overriding any global hooks path.
 pub fn install_post_checkout_hook(repo: &Path, body: &str) {
     let hooks = repo.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).expect("create hooks dir");
     let hook = hooks.join("post-checkout");
-    std::fs::write(&hook, format!("#!/bin/sh\n{body}\n")).expect("write hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
-            .expect("make hook executable");
-    }
+    write_executable(&hook, &format!("#!/bin/sh\n{body}\n"));
     run_git(repo, &["config", "core.hooksPath", text(&hooks)]);
 }
 

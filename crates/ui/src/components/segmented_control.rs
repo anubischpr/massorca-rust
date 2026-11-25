@@ -9,6 +9,7 @@
 use crate::a11y;
 use crate::components::agent_icon::NameTooltip;
 use crate::components::button::StatePreview;
+use crate::components::tooltip::{Tooltip, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
@@ -169,6 +170,7 @@ pub struct Segment {
     label: Option<SharedString>,
     icon: Option<IconName>,
     disabled: bool,
+    tooltip: Option<SharedString>,
 }
 
 impl Segment {
@@ -180,6 +182,7 @@ impl Segment {
             label: Some(label),
             icon: None,
             disabled: false,
+            tooltip: None,
         }
     }
 
@@ -198,12 +201,28 @@ impl Segment {
             label: None,
             icon: Some(icon),
             disabled: false,
+            tooltip: None,
         }
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
+    }
+
+    /// A tooltip on hover and the segment's description, such as why a disabled segment is off. It replaces an
+    /// icon-only segment's name tooltip.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub fn tooltip_text(&self) -> Option<&SharedString> {
+        self.tooltip.as_ref()
     }
 }
 
@@ -453,7 +472,12 @@ impl RenderOnce for SegmentedControl {
                         });
                 }
             }
-            if segment.label.is_none() {
+            if let Some(text) = segment.tooltip.clone() {
+                element = element
+                    .aria_description(text.clone())
+                    .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
+                    .tooltip(tooltip_view(Tooltip::new(text)));
+            } else if segment.label.is_none() {
                 let name = segment.name.clone();
                 element = element
                     .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
@@ -664,6 +688,52 @@ mod tests {
             *log.borrow(),
             vec![2, 2],
             "left went back to the first segment"
+        );
+    }
+
+    #[test]
+    fn a_segment_keeps_its_disabled_state_and_its_tooltip() {
+        let chat = Segment::icon_text(IconName::MessageSquare, "Chat")
+            .disabled(true)
+            .tooltip("Chat sessions need a newer service.");
+        assert!(chat.is_disabled());
+        assert_eq!(
+            chat.tooltip_text().map(|text| text.as_ref()),
+            Some("Chat sessions need a newer service.")
+        );
+        let terminal = Segment::text("Terminal");
+        assert!(!terminal.is_disabled());
+        assert_eq!(terminal.tooltip_text(), None);
+    }
+
+    /// Hosts a control whose first segment is off, with the reason as its tooltip.
+    struct TooltipHarness;
+
+    impl Render for TooltipHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let segments = vec![
+                Segment::text("Chat")
+                    .disabled(true)
+                    .tooltip("Chat sessions need a newer service."),
+                Segment::text("Terminal"),
+            ];
+            div().child(SegmentedControl::new("mode", "Mode", segments).selected(1))
+        }
+    }
+
+    #[gpui::test]
+    fn a_disabled_segment_shows_its_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| TooltipHarness);
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("segment-0").expect("segment is drawn");
+        cx.simulate_mouse_move(bounds.center(), None, gpui::Modifiers::none());
+        cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the reason shows on hover over the disabled segment"
         );
     }
 }

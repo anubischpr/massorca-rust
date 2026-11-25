@@ -1,14 +1,17 @@
 //! Events: subscriptions receive what the bus publishes, cancelling stops them, and shutdown ends them with a reason.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::service;
-use massorca_protocol::{Message, codes};
+use massorca_protocol::{ErrorBody, Message, codes};
+use massorca_server::{Owner, Permission, RequestCtx};
 use serde_json::Value;
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
-use super::common::{Raw, connect, hello, request, start, stop, temp_home};
+use super::common::{Raw, connect, hello, hello_offering, request, start, stop, temp_home};
 
 #[tokio::test]
 async fn subscribers_receive_published_events() {
@@ -167,4 +170,88 @@ async fn answer_to(raw: &mut Raw, id: u64) -> Message {
             return message;
         }
     }
+}
+
+const HOLD: &str = "ext.holdtest.hold";
+const HOLD_CAPABILITY: &str = "holdtest/1";
+
+#[tokio::test]
+async fn shutting_down_ends_streams_before_in_flight_requests_finish() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let (entered_tx, entered) = oneshot::channel::<()>();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    let release = Arc::new(Notify::new());
+    let owner = Owner::Extension("holdtest".to_owned());
+    let _capability = running
+        .registries()
+        .capabilities
+        .register(HOLD_CAPABILITY, owner.clone())
+        .expect("the capability registers");
+    let held = Arc::clone(&release);
+    let _method = running
+        .registries()
+        .methods
+        .register(
+            owner,
+            HOLD,
+            HOLD_CAPABILITY,
+            Permission::HostAdmin,
+            move |_ctx: RequestCtx, _params: Value| {
+                let entered = entered_tx.lock().expect("not poisoned").take();
+                let held = Arc::clone(&held);
+                async move {
+                    if let Some(entered) = entered {
+                        let _ = entered.send(());
+                    }
+                    held.notified().await;
+                    Ok::<Value, ErrorBody>(Value::Null)
+                }
+            },
+        )
+        .expect("the method registers");
+
+    let mut raw = Raw::open(home.path(), "default").await;
+    raw.send(&hello_offering(&[HOLD_CAPABILITY])).await;
+    assert!(
+        matches!(raw.recv().await, Some(Message::Welcome { .. })),
+        "the welcome comes first"
+    );
+    raw.send(&request(1, events::SUBSCRIBE, Value::Null)).await;
+    let stream = subscribed_stream(&mut raw, 1).await;
+    raw.send(&request(2, HOLD, Value::Null)).await;
+    timeout(super::common::REPLY_WAIT, entered)
+        .await
+        .expect("the held request starts")
+        .expect("the handler signals");
+
+    let stopper = connect(home.path(), "default").await;
+    stopper
+        .shutdown()
+        .await
+        .expect("service.shutdown is answered");
+
+    // The request is still held, so the stream's end cannot wait for it.
+    loop {
+        match raw.recv().await.expect("the connection stays open") {
+            Message::End {
+                stream: ended,
+                error: Some(error),
+            } if ended == stream => {
+                assert_eq!(error.code, codes::SERVICE_SHUTTING_DOWN);
+                break;
+            }
+            Message::Response { id: 2, .. } => panic!("the held request answered first"),
+            _ => {}
+        }
+    }
+    release.notify_one();
+    assert!(
+        matches!(
+            answer_to(&mut raw, 2).await,
+            Message::Response { error: None, .. }
+        ),
+        "the in-flight request still finishes"
+    );
+    stop(running).await;
 }

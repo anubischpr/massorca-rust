@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use massorca_client::Client;
 use massorca_desktop::model::agent_sessions::bring_back_refusal;
+use massorca_desktop::model::session_ended::refusal_says_conversation_gone;
+use massorca_desktop::model::start_page::start_again_params;
 use massorca_desktop::service::{
     AttachRole, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, TerminalStream,
     TerminalStreamItem, connect_options, feed_events,
@@ -18,9 +20,12 @@ use massorca_protocol::methods::agents::{
     AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession, AgentStartParams,
     PackageState,
 };
+use massorca_protocol::methods::config::ConfigSet;
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::TerminalState;
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
+use massorca_protocol::methods::workspaces::{
+    Workspace, WorkspaceCreateParams, WorkspaceListParams,
+};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use massorca_ui::components::terminal_surface::feed::TerminalFeed;
 use tempfile::TempDir;
@@ -141,6 +146,31 @@ async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
         Instant::now(),
     );
     assert_eq!(store.agent_kinds, declared);
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_absent() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+
+    let offered = timeout(WAIT, async {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if let StoreUpdate::AgentChatOffered(flag) = update {
+                return flag;
+            }
+        }
+    })
+    .await
+    .expect("the offer arrives after the connect");
+    // No service ships chat sessions yet, so every start page stays on Terminal.
+    assert!(!offered);
 
     drop(bridge);
     stop_service(service).await;
@@ -379,7 +409,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
 async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
     handle
         .agent_start(AgentStartParams {
-            workspace: workspace.to_owned(),
+            workspace: Some(workspace.to_owned()),
             kind: "fake".to_owned(),
             prompt: None,
             args: Vec::new(),
@@ -390,9 +420,78 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             rows: Some(30),
             request_id: None,
             permission_mode: None,
+            model: None,
+            effort: None,
         })
         .await
         .expect("the session starts")
+}
+
+#[tokio::test]
+async fn an_agent_session_that_exits_is_ended_and_starts_again_in_its_workspace() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the declared kind is listed once the bridge connects");
+
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = start_fake(&handle, &workspace.id).await;
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    handle.send_terminal_input(&terminal, b"exit\r\n".to_vec());
+    let ended = timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentChanged(changed) =
+                updates.recv().await.expect("the bridge is alive")
+                && changed.id == session.id
+                && changed.execution.state == TerminalState::Exited
+            {
+                return changed;
+            }
+        }
+    })
+    .await
+    .expect("the exit of the run reaches the store");
+    assert_eq!(ended.execution.state, TerminalState::Exited);
+
+    // The fake kind declares no resume form, so the refusal carries a code the desktop reads as a missing conversation.
+    let refusal = handle
+        .agent_resume(&session.id, None, None)
+        .await
+        .expect_err("a kind without a resume form does not resume");
+    assert_eq!(refusal.code(), Some(codes::AGENT_RESUME_UNAVAILABLE));
+    assert!(refusal_says_conversation_gone(refusal.code()));
+
+    // The ended state's other action: the same workspace and agent, started again without the saved conversation.
+    let again = handle
+        .agent_start(start_again_params(&workspace.id, "fake", (120, 40)))
+        .await
+        .expect("the session starts again");
+    assert_eq!(again.kind, "fake");
+    assert_eq!(again.workspace_id, workspace.id);
+    assert_ne!(again.id, session.id);
+
+    drop(bridge);
+    stop_service(service).await;
 }
 
 /// A line the shell runs, and the sum it prints: only the run prints the sum, not the echo of the line.
@@ -503,6 +602,105 @@ async fn a_prompt_reaches_the_session_terminal_and_stop_ends_the_run() {
     .expect("the session's run ends after the stop");
 
     drop(stream);
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations_folder() {
+    let home = temp_home();
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        let (mut offered, mut listed) = (false, false);
+        while !(offered && listed) {
+            match updates.recv().await.expect("the bridge is alive") {
+                StoreUpdate::AgentNoProjectOffered(flag) => offered = flag,
+                StoreUpdate::AgentKindsResync(kinds) => {
+                    listed = kinds.iter().any(|kind| kind.id == "fake" && kind.detected);
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the service offers agent-no-project/1 and lists the fake kind after the connect");
+
+    // Without this setting the conversations folder is under the user's home, so the test points it into its own home.
+    let conversations = home.path().with_file_name("conversations");
+    handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: "conversations.folder".to_owned(),
+            value: conversations.to_string_lossy().into_owned().into(),
+        })
+        .await
+        .expect("the conversations folder is set");
+
+    let session = handle
+        .agent_start(AgentStartParams {
+            workspace: None,
+            kind: "fake".to_owned(),
+            prompt: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            read_only: false,
+            title: None,
+            cols: Some(100),
+            rows: Some(30),
+            request_id: None,
+            permission_mode: None,
+            model: None,
+            effort: None,
+        })
+        .await
+        .expect("the service starts a session with no workspace");
+    assert_eq!(session.kind, "fake");
+    assert!(
+        !session.workspace_id.is_empty(),
+        "the session has a folder of its own"
+    );
+    let folders = std::fs::read_dir(&conversations)
+        .expect("the conversations folder is in the throwaway home")
+        .count();
+    assert_eq!(folders, 1, "one conversation folder, made for this session");
+
+    let client = Client::connect(&profile(home.path()), connect_options(None))
+        .await
+        .expect("a client connects");
+    let projects = client
+        .project_list()
+        .await
+        .expect("the service lists projects")
+        .projects;
+    assert!(
+        projects.is_empty(),
+        "a session with no project adds no visible project: {projects:?}"
+    );
+    let workspaces = client
+        .workspace_list(&WorkspaceListParams { project: None })
+        .await
+        .expect("the service lists workspaces")
+        .workspaces;
+    assert!(
+        workspaces
+            .iter()
+            .any(|known| known.id == session.workspace_id),
+        "the conversation's folder is listed as a workspace, so the sidebar can group it"
+    );
+
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    handle
+        .close_terminal(&terminal)
+        .await
+        .expect("the session's terminal closes");
     drop(bridge);
     stop_service(service).await;
 }

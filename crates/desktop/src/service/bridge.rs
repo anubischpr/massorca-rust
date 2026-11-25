@@ -42,6 +42,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
+use super::agent_chat::kind_chats;
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -52,6 +53,7 @@ use massorca_core_remote::bootstrap::RemoteMachine;
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
+use super::skills;
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -97,6 +99,17 @@ pub(crate) enum Command {
         host: String,
         request: u64,
         command: ExtensionCommand,
+    },
+    /// Discovers This computer's skills; the answer is a store update tagged with `request`.
+    Skills {
+        request: u64,
+        refresh: bool,
+    },
+    /// Discovers a paired host's skills on its own connection; the answer is a store update tagged with `request`.
+    HostSkills {
+        host: String,
+        request: u64,
+        refresh: bool,
     },
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
@@ -642,6 +655,20 @@ impl Link {
                 );
                 None
             }
+            Command::HostSkills {
+                host,
+                request,
+                refresh,
+            } => {
+                skills::spawn_host_read(
+                    self.profile.clone(),
+                    host,
+                    request,
+                    refresh,
+                    self.updates.clone(),
+                );
+                None
+            }
             other => Some(other),
         }
     }
@@ -727,11 +754,21 @@ impl Link {
         self.emit(StoreUpdate::AgentSeenOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_SEEN),
         ));
+        self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
+            massorca_protocol::capabilities::AGENT_NO_PROJECT,
+        )));
+        self.emit(StoreUpdate::AgentOptionsOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
+        ));
+        self.emit(StoreUpdate::AgentChatOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
+        self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
@@ -795,6 +832,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::Skills { request, refresh }) => {
+                                skills::spawn_read(client, request, refresh, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -883,13 +923,29 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
-            // The events carry only the package id, so both lists are read again (decision 0062).
+            // The events carry only the package id, so both lists are read again (decision 0062). A package can
+            // carry an agent kind, and there is no kind event, so the kinds are read again too.
             TOPIC_EXTENSION_INSTALLED
             | TOPIC_EXTENSION_ENABLED
             | TOPIC_EXTENSION_DISABLED
-            | TOPIC_EXTENSION_REMOVED => extensions::read(client, &self.extension_reads)
-                .await
-                .map(StoreUpdate::Extensions),
+            | TOPIC_EXTENSION_REMOVED => match agents::list_kinds(client).await {
+                Ok(kinds) => {
+                    for kind in &kinds {
+                        accounts::refresh_in_background(
+                            client,
+                            &kind.id,
+                            &self.updates,
+                            &self.accounts_order,
+                        );
+                    }
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
+                    self.emit(StoreUpdate::AgentKindsResync(kinds));
+                    extensions::read(client, &self.extension_reads)
+                        .await
+                        .map(StoreUpdate::Extensions)
+                }
+                Err(error) => Err(error),
+            },
             // The event names `<owner>/<key>` and no value, so the changed setting is read again.
             TOPIC_CONFIG_CHANGED => {
                 let Some((owner, key)) = id.split_once('/') else {
@@ -1135,6 +1191,7 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }

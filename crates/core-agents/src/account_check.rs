@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use massorca_protocol::methods::agents::AccountState;
 
 use crate::kind::{CheckDecl, KindDecl};
+use crate::launch::RUN_IDENTITY_ENV;
 use crate::process_tree;
+use crate::provided_env::same_name;
 
 /// How long an account check may run before it is stopped; a check that does not finish has state `unknown`.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,8 +63,10 @@ pub(crate) fn unknown() -> Verdict {
 }
 
 /// Maps a check's exit code and output to a state (decision 0059). No exit means the check did not finish, so the state
-/// is unknown. A match of the expired pattern means `expired`, whatever the exit code. The signed-in exit means signed in,
-/// with the identity pattern's first group, or its whole match, as the identity. Any other exit needs a sign-in.
+/// is unknown. A match of the expired pattern means `expired`, whatever the exit code. A JSON output whose
+/// `signed_in_json` field is `false` needs a sign-in, whatever the exit code (decision 0098). The signed-in exit means
+/// signed in, with the identity from `identity_json` (the JSON's fields joined), or else the identity pattern's first
+/// group, or its whole match. Any other exit needs a sign-in.
 pub fn verdict(check: &CheckDecl, exit: Option<i32>, output: &str) -> Verdict {
     let Some(exit) = exit else {
         return unknown();
@@ -73,10 +77,24 @@ pub fn verdict(check: &CheckDecl, exit: Option<i32>, output: &str) -> Verdict {
             identity: None,
         };
     }
-    if exit == check.signed_in_exit {
+    let json = (check.identity_json.is_some() || check.signed_in_json.is_some())
+        .then(|| json_object(output))
+        .flatten();
+    let signed_out = check
+        .signed_in_json
+        .as_deref()
+        .zip(json.as_ref())
+        .is_some_and(|(field, object)| object.get(field) == Some(&serde_json::Value::Bool(false)));
+    if exit == check.signed_in_exit && !signed_out {
+        let identity = match &check.identity_json {
+            Some(fields) => json
+                .as_ref()
+                .and_then(|object| joined_identity(object, fields)),
+            None => capture(check.identity_pattern.as_deref(), output),
+        };
         return Verdict {
             state: AccountState::SignedIn,
-            identity: capture(check.identity_pattern.as_deref(), output),
+            identity,
         };
     }
     Verdict {
@@ -124,6 +142,35 @@ fn valid_identity(identity: &str) -> bool {
         && !identity.chars().any(char::is_control)
 }
 
+/// The JSON object a check printed: the whole output, or the first JSON value from its first `{` (the output is stdout
+/// then stderr, so a warning may follow). `None` when there is no object.
+fn json_object(output: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let start = output.find('{')?;
+    let value = serde_json::Deserializer::from_str(&output[start..])
+        .into_iter::<serde_json::Value>()
+        .next()?
+        .ok()?;
+    match value {
+        serde_json::Value::Object(object) => Some(object),
+        _ => None,
+    }
+}
+
+/// The identity `identity_json` names: the top-level string fields present and not blank, trimmed, joined with ` / `.
+fn joined_identity(
+    object: &serde_json::Map<String, serde_json::Value>,
+    fields: &[String],
+) -> Option<String> {
+    let parts: Vec<&str> = fields
+        .iter()
+        .filter_map(|field| object.get(field)?.as_str())
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    let identity = parts.join(" / ");
+    valid_identity(&identity).then_some(identity)
+}
+
 fn capture(pattern: Option<&str>, output: &str) -> Option<String> {
     let regex = regex::Regex::new(pattern?).ok()?;
     let captures = regex.captures(output)?;
@@ -146,21 +193,27 @@ pub(crate) struct RunOutput {
 const OUTPUT_GRACE: Duration = Duration::from_secs(1);
 
 /// The variables the account commands (check, sign-in, sign-out) remove from their environment: the credentials'
-/// `strip_env`, then the accounts' `strip_env`, each name once. Agent runs keep their environment (decision 0059, amended
+/// `strip_env`, the accounts' `strip_env`, the kind's `strip_inherited_env`, then the run identity the service may have
+/// inherited (decision 0160), each name once. Agent runs keep the rest of their environment (decision 0059, amended
 /// 2026-11-22).
 pub(crate) fn account_strip_names(decl: &KindDecl) -> Vec<String> {
     let credentials = decl
         .credentials
         .iter()
-        .flat_map(|credentials| credentials.strip_env.iter());
+        .flat_map(|credentials| credentials.strip_env.iter().map(String::as_str));
     let accounts = decl
         .accounts
         .iter()
-        .flat_map(|accounts| accounts.strip_env.iter());
+        .flat_map(|accounts| accounts.strip_env.iter().map(String::as_str));
+    let inherited = decl.strip_inherited_env.iter().map(String::as_str);
     let mut names: Vec<String> = Vec::new();
-    for name in credentials.chain(accounts) {
-        if !names.contains(name) {
-            names.push(name.clone());
+    for name in credentials
+        .chain(accounts)
+        .chain(inherited)
+        .chain(RUN_IDENTITY_ENV)
+    {
+        if !names.iter().any(|listed| same_name(listed, name)) {
+            names.push(name.to_owned());
         }
     }
     names
@@ -275,7 +328,56 @@ mod tests {
             signed_in_exit: 0,
             expired_pattern: expired.map(str::to_owned),
             identity_pattern: identity.map(str::to_owned),
+            identity_json: None,
+            signed_in_json: None,
         }
+    }
+
+    fn json_check() -> CheckDecl {
+        CheckDecl {
+            args: vec!["status".to_owned()],
+            signed_in_exit: 0,
+            expired_pattern: None,
+            identity_pattern: None,
+            identity_json: Some(vec!["email".to_owned(), "orgName".to_owned()]),
+            signed_in_json: Some("loggedIn".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_json_identity_joins_the_declared_top_level_fields_present() {
+        let output = r#"{"loggedIn":true,"email":"a@example.test","orgName":"Acme","nested":{"email":"x@example.test"}}"#;
+        let found = verdict(&json_check(), Some(0), output);
+        assert_eq!(found.state, AccountState::SignedIn);
+        assert_eq!(found.identity.as_deref(), Some("a@example.test / Acme"));
+        let no_org = verdict(
+            &json_check(),
+            Some(0),
+            "{\"loggedIn\":true,\"email\":\"a@example.test\",\"orgName\":null}\nwarning: something",
+        );
+        assert_eq!(no_org.identity.as_deref(), Some("a@example.test"));
+        let nested_only = verdict(
+            &json_check(),
+            Some(0),
+            r#"{"account":{"email":"x@example.test"}}"#,
+        );
+        assert_eq!(nested_only.state, AccountState::SignedIn);
+        assert_eq!(nested_only.identity, None, "only top-level fields count");
+        let not_json = verdict(&json_check(), Some(0), "signed in as a@example.test");
+        assert_eq!(not_json.identity, None);
+    }
+
+    #[test]
+    fn a_json_status_that_says_not_logged_in_needs_a_sign_in_even_on_the_signed_in_exit() {
+        let found = verdict(&json_check(), Some(0), r#"{"loggedIn":false}"#);
+        assert_eq!(found.state, AccountState::NeedsSignIn);
+        assert_eq!(found.identity, None);
+        let missing = verdict(&json_check(), Some(0), r#"{"email":"a@example.test"}"#);
+        assert_eq!(
+            missing.state,
+            AccountState::SignedIn,
+            "an absent field leaves the exit code to decide"
+        );
     }
 
     #[test]
@@ -384,10 +486,11 @@ mod tests {
     }
 
     #[test]
-    fn the_three_account_commands_apply_both_strip_lists() {
+    fn the_three_account_commands_apply_every_strip_list_and_the_run_identity() {
         let decl = KindDecl::from_json(
             r#"{
                 "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                "strip_inherited_env": ["PARENT_STAMP", "ACCOUNT_ONE"],
                 "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"], "strip_env": ["CRED_ONE"] },
                 "accounts": {
                     "login": ["login"], "check": { "args": ["whoami"] }, "logout": ["logout"],
@@ -397,7 +500,18 @@ mod tests {
         )
         .expect("parses");
         let names = account_strip_names(&decl);
-        assert_eq!(names, ["CRED_ONE", "ACCOUNT_ONE", "ACCOUNT_TWO"]);
+        assert_eq!(
+            names,
+            [
+                "CRED_ONE",
+                "ACCOUNT_ONE",
+                "ACCOUNT_TWO",
+                "PARENT_STAMP",
+                "MASSORCA_AGENT_SESSION",
+                "MASSORCA_AGENT_TOKEN",
+                "MASSORCA_AGENT_KIND"
+            ]
+        );
         let home = Path::new("account-home");
 
         // The check and the sign-out are plain processes: both names are removed from their environment.

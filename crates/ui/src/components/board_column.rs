@@ -3,21 +3,28 @@
 //! key handler to each card and draws the lifted card through `lifted`.
 
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
+use crate::components::badge::{Badge, BadgeTone};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
 use crate::tokens::{
-    LAYOUT_BOARD_COLUMN_WIDTH, RADIUS_LG, SIZE_CONTROL_COMFORTABLE, SPACE_1, SPACE_2, SPACE_HALF,
-    TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_TITLE_SM,
+    LAYOUT_BOARD_COLUMN_WIDTH, RADIUS_LG, RADIUS_SM, SIZE_CONTROL_COMFORTABLE, SPACE_1, SPACE_2,
+    SPACE_HALF, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_TITLE_SM,
 };
 use std::fmt;
 
 use gpui::{
-    App, ElementId, FocusHandle, IntoElement, KeyDownEvent, ParentElement, RenderOnce, Role,
-    SharedString, Styled, Window, div, prelude::*, px,
+    AnyElement, App, ElementId, FocusHandle, IntoElement, KeyDownEvent, ParentElement, RenderOnce,
+    Role, SharedString, Styled, Window, div, prelude::*, px,
 };
 
 /// The text of an empty column (BoardColumn.md, copy).
 pub const EMPTY_COLUMN_TEXT: &str = "No tasks";
+
+/// 10 px: no token gives it, so it is SPACE_2 + SPACE_HALF (bt-board `.bcard`).
+const CARD_PADDING: f32 = SPACE_2 + SPACE_HALF;
+
+/// 6 px: no token gives it, so it is SPACE_1 + SPACE_HALF (bt-board `.bcard`).
+const CARD_GAP: f32 = SPACE_1 + SPACE_HALF;
 
 /// A card's key handler, which the Board uses to move cards.
 type CardKeys = Box<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
@@ -29,6 +36,8 @@ pub struct BoardCard {
     title: SharedString,
     focus: FocusHandle,
     bot: Option<SharedString>,
+    /// No bot works on the card: its meta row shows the Unassigned chip.
+    unassigned: bool,
     status: Option<(AgentState, SharedString)>,
     time: Option<SharedString>,
     note: Option<SharedString>,
@@ -61,6 +70,7 @@ impl BoardCard {
             title: title.into(),
             focus,
             bot: None,
+            unassigned: false,
             status: None,
             time: None,
             note: None,
@@ -75,6 +85,12 @@ impl BoardCard {
     /// The bot's name, after the status.
     pub fn bot(mut self, name: impl Into<SharedString>) -> Self {
         self.bot = Some(name.into());
+        self
+    }
+
+    /// No bot works on the card: its meta row shows an "Unassigned" chip.
+    pub fn unassigned(mut self) -> Self {
+        self.unassigned = true;
         self
     }
 
@@ -125,6 +141,79 @@ impl BoardCard {
     pub fn title(&self) -> &SharedString {
         &self.title
     }
+
+    /// The lines under the card's border: the title, one meta row, then the note and the
+    /// unavailable line. The source slot draws the same lines, so it is as tall as the card.
+    fn lines(&self, theme: &Theme) -> Vec<AnyElement> {
+        let p = &theme.palette;
+        let mut lines = vec![
+            div()
+                .debug_selector(|| "board-card-title".into())
+                .text_style(TYPE_BODY_STRONG)
+                .text_color(p.text.primary)
+                .line_clamp(2)
+                .child(self.title.clone())
+                .into_any_element(),
+        ];
+        let mut meta_items = Vec::new();
+        // An unreachable card shows only its last known state, never a live status.
+        match (&self.status, &self.unreachable) {
+            (_, Some(last_known)) => {
+                meta_items.push(unreachable_line(last_known.clone(), theme).into_any_element());
+            }
+            (Some((state, word)), None) => {
+                meta_items.push(status_line(*state, word.clone(), theme).into_any_element());
+            }
+            (None, None) => {}
+        }
+        if let Some(bot) = &self.bot {
+            meta_items.push(
+                div()
+                    .debug_selector(|| "board-card-bot".into())
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.secondary)
+                    .child(bot.clone())
+                    .into_any_element(),
+            );
+        } else if self.unassigned {
+            meta_items.push(unassigned_chip(theme).into_any_element());
+        }
+        if let Some(time) = &self.time {
+            meta_items.push(
+                div()
+                    .debug_selector(|| "board-card-time".into())
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.tertiary)
+                    .child(time.clone())
+                    .into_any_element(),
+            );
+        }
+        // The status, the bot and the time share one row that wraps (bt-board `.bmeta`).
+        if !meta_items.is_empty() {
+            lines.push(
+                div()
+                    .debug_selector(|| "board-card-meta".into())
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(CARD_GAP))
+                    .children(meta_items)
+                    .into_any_element(),
+            );
+        }
+        if let Some(note) = &self.note {
+            lines.push(meta(note.clone(), theme).into_any_element());
+        }
+        if let Some(text) = &self.unavailable {
+            lines.push(
+                div()
+                    .debug_selector(|| "board-card-unavailable".into())
+                    .child(meta(text.clone(), theme))
+                    .into_any_element(),
+            );
+        }
+        lines
+    }
 }
 
 impl RenderOnce for BoardCard {
@@ -135,6 +224,9 @@ impl RenderOnce for BoardCard {
         if self.slot {
             return source_slot(self, &theme).into_any_element();
         }
+        // An unreachable card has a dashed `border.strong` outline (bt-board `.bcard.lost`).
+        let unreachable = self.unreachable.is_some();
+        let lines = self.lines(&theme);
         let mut card = div()
             .id(self.id.clone())
             .track_focus(&self.focus)
@@ -142,13 +234,18 @@ impl RenderOnce for BoardCard {
             .focus_ring(&theme)
             .role(Role::ListItem)
             .aria_label(self.title.clone())
+            .debug_selector(|| "board-card".into())
             .flex()
             .flex_col()
-            .gap(px(SPACE_HALF))
-            .p(px(SPACE_2))
+            .gap(px(CARD_GAP))
+            .p(px(CARD_PADDING))
             .rounded(px(RADIUS_LG))
             .border_1()
-            .border_color(p.border.default)
+            .border_color(if unreachable {
+                p.border.strong
+            } else {
+                p.border.default
+            })
             .bg(if self.lifted {
                 p.surface.overlay
             } else {
@@ -160,91 +257,30 @@ impl RenderOnce for BoardCard {
                 theme.shadows.e1
             }))
             .hover(move |style| style.bg(hover));
+        if unreachable {
+            card = card.border_dashed();
+        }
         if let Some(listener) = self.on_key {
             card = card.on_key_down(move |event, window, cx| listener(event, window, cx));
         }
-        card = card.child(
-            div()
-                .text_style(TYPE_BODY_STRONG)
-                .text_color(p.text.primary)
-                .line_clamp(2)
-                .child(self.title),
-        );
-        // An unreachable card shows only its last known state, never a live status.
-        if let (Some((state, word)), None) = (self.status, &self.unreachable) {
-            card = card.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_1))
-                    .child(AgentStatus::new(state).size(AgentStatusSize::XSmall))
-                    .child(
-                        div()
-                            .text_style(TYPE_CAPTION)
-                            .text_color(p.text.secondary)
-                            .child(word),
-                    ),
-            );
-        }
-        if let Some(bot) = self.bot {
-            card = card.child(meta(bot, &theme));
-        }
-        if let Some(note) = self.note {
-            card = card.child(meta(note, &theme));
-        }
-        if let Some(text) = self.unavailable {
-            card = card.child(
-                div()
-                    .debug_selector(|| "board-card-unavailable".into())
-                    .child(meta(text, &theme)),
-            );
-        }
-        if let Some(last_known) = self.unreachable {
-            card = card.child(unreachable_line(last_known, &theme));
-        }
-        if let Some(time) = self.time {
-            card = card.child(
-                div()
-                    .text_style(TYPE_CAPTION)
-                    .text_color(p.text.tertiary)
-                    .child(time),
-            );
-        }
-        card.into_any_element()
+        card.children(lines).into_any_element()
     }
 }
 
 /// The source slot of a lifted card: a dashed `border.strong` outline the card's height, with
-/// its content kept for size and hidden (BoardColumn.md States, selected).
+/// its lines kept for size and hidden (BoardColumn.md States, selected).
 fn source_slot(card: BoardCard, theme: &Theme) -> impl IntoElement {
     let p = &theme.palette;
-    let mut content = div()
+    let content = div()
         .invisible()
         .flex()
         .flex_col()
-        .gap(px(SPACE_HALF))
-        .child(
-            div()
-                .text_style(TYPE_BODY_STRONG)
-                .line_clamp(2)
-                .child(card.title),
-        );
-    if let Some((_, word)) = card.status {
-        content = content.child(div().text_style(TYPE_CAPTION).child(word));
-    }
-    for line in [card.bot, card.note, card.unavailable]
-        .into_iter()
-        .flatten()
-    {
-        content = content.child(div().text_style(TYPE_BODY_SM).child(line));
-    }
-    for line in [card.unreachable, card.time].into_iter().flatten() {
-        content = content.child(div().text_style(TYPE_CAPTION).child(line));
-    }
+        .gap(px(CARD_GAP))
+        .children(card.lines(theme));
     div()
         .id(card.id)
         .debug_selector(|| "board-source-slot".into())
-        .p(px(SPACE_2))
+        .p(px(CARD_PADDING))
         .rounded(px(RADIUS_LG))
         .border_1()
         .border_dashed()
@@ -257,6 +293,33 @@ fn meta(text: SharedString, theme: &Theme) -> impl IntoElement {
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.secondary)
         .child(text)
+}
+
+/// The agent's glyph and its word, the word in `caption` (bt-board `.stat`).
+fn status_line(state: AgentState, word: SharedString, theme: &Theme) -> impl IntoElement {
+    div()
+        .debug_selector(|| "board-card-status".into())
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .child(AgentStatus::new(state).size(AgentStatusSize::XSmall))
+        .child(
+            div()
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.secondary)
+                .child(word),
+        )
+}
+
+/// The "Unassigned" chip: the Badge's neutral tone in a `border.subtle` frame, because Badge has
+/// no bordered neutral tone (bt-board `.chip`).
+fn unassigned_chip(theme: &Theme) -> impl IntoElement {
+    div()
+        .debug_selector(|| "board-card-unassigned".into())
+        .rounded(px(RADIUS_SM))
+        .border_1()
+        .border_color(theme.palette.border.subtle)
+        .child(Badge::text("Unassigned").tone(BadgeTone::Neutral))
 }
 
 /// The unreachable glyph and the last known state of a card whose host cannot be reached.
@@ -379,12 +442,13 @@ impl RenderOnce for BoardColumn {
             .id(self.id.clone())
             .role(Role::List)
             .aria_label(Self::accessible_name(&self.title, count))
+            .debug_selector(|| "board-column".into())
             .flex()
             .flex_col()
             .flex_none()
             .w(px(LAYOUT_BOARD_COLUMN_WIDTH))
             .h_full()
-            .p(px(SPACE_1))
+            .p(px(SPACE_2))
             .gap(px(SPACE_2))
             .rounded(px(RADIUS_LG))
             .bg(p.surface.sunken)
@@ -395,6 +459,7 @@ impl RenderOnce for BoardColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::SIZE_BADGE_HEIGHT;
 
     #[test]
     fn the_accessible_name_counts_tasks_in_the_plural_except_for_one() {
@@ -457,5 +522,186 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.debug_bounds("board-source-slot").is_some());
         assert!(cx.debug_bounds("board-empty").is_none());
+    }
+
+    /// A window with one open column, built by `column` from the window's own focus handles.
+    struct Stage {
+        column: fn(&mut gpui::App) -> BoardColumn,
+    }
+
+    impl gpui::Render for Stage {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().h(gpui::px(400.)).child((self.column)(cx))
+        }
+    }
+
+    /// A running card with a bot and a time, whose status, bot and time share one row.
+    fn running_card(cx: &mut gpui::App) -> BoardColumn {
+        let card = BoardCard::new("card", "Write release notes", cx.focus_handle())
+            .status(AgentState::Running, "Running")
+            .bot("Nora")
+            .time("09:42");
+        BoardColumn::new("open", "Open").card(card)
+    }
+
+    /// An open card that no bot works on.
+    fn unassigned_card(cx: &mut gpui::App) -> BoardColumn {
+        let card = BoardCard::new("card", "Write release notes", cx.focus_handle()).unassigned();
+        BoardColumn::new("open", "Open").card(card)
+    }
+
+    /// A lifted card's source slot, beside the same card drawn in its place.
+    fn slot_beside_its_card(cx: &mut gpui::App) -> BoardColumn {
+        let slot = BoardCard::new("slot", "Write release notes", cx.focus_handle())
+            .status(AgentState::Running, "Running")
+            .bot("Nora")
+            .time("09:42");
+        let card = BoardCard::new("card", "Write release notes", cx.focus_handle())
+            .status(AgentState::Running, "Running")
+            .bot("Nora")
+            .time("09:42");
+        BoardColumn::new("open", "Open")
+            .source_slot(0, slot)
+            .card(card)
+    }
+
+    /// The edges and size of a measured box, in pixels.
+    fn left(bounds: gpui::Bounds<gpui::Pixels>) -> f32 {
+        f32::from(bounds.origin.x)
+    }
+
+    fn top(bounds: gpui::Bounds<gpui::Pixels>) -> f32 {
+        f32::from(bounds.origin.y)
+    }
+
+    fn width(bounds: gpui::Bounds<gpui::Pixels>) -> f32 {
+        f32::from(bounds.size.width)
+    }
+
+    fn height(bounds: gpui::Bounds<gpui::Pixels>) -> f32 {
+        f32::from(bounds.size.height)
+    }
+
+    /// The height of the middle of a measured box, in pixels.
+    fn middle(bounds: gpui::Bounds<gpui::Pixels>) -> f32 {
+        top(bounds) + height(bounds) / 2.
+    }
+
+    /// Asserts a measured length, in pixels, against the expected one within layout rounding.
+    fn assert_px(measured: f32, expected: f32, what: &str) {
+        assert!(
+            (measured - expected).abs() < 0.01,
+            "{what}: measured {measured} px, expected {expected} px"
+        );
+    }
+
+    #[gpui::test]
+    fn a_card_is_padded_ten_px_and_its_title_sits_six_px_above_the_meta_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_, _| Stage {
+            column: running_card,
+        });
+        cx.run_until_parked();
+        let card = cx.debug_bounds("board-card").expect("the card is drawn");
+        let title = cx
+            .debug_bounds("board-card-title")
+            .expect("the title is drawn");
+        let meta = cx
+            .debug_bounds("board-card-meta")
+            .expect("the meta row is drawn");
+        // The 1 px border and the 10 px padding inset the title from the card's left edge.
+        assert_px(
+            left(title) - left(card),
+            11.,
+            "the title's inset in the card",
+        );
+        assert_px(
+            top(meta) - (top(title) + height(title)),
+            6.,
+            "the gap under the title",
+        );
+    }
+
+    #[gpui::test]
+    fn a_column_pads_its_cards_eight_px(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Stage {
+            column: running_card,
+        });
+        cx.run_until_parked();
+        let column = cx
+            .debug_bounds("board-column")
+            .expect("the column is drawn");
+        let card = cx.debug_bounds("board-card").expect("the card is drawn");
+        assert_px(
+            left(card) - left(column),
+            8.,
+            "the card's inset in its column",
+        );
+    }
+
+    #[gpui::test]
+    fn the_status_bot_and_time_share_one_row_six_px_apart(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Stage {
+            column: running_card,
+        });
+        cx.run_until_parked();
+        let status = cx
+            .debug_bounds("board-card-status")
+            .expect("the status is drawn");
+        let bot = cx.debug_bounds("board-card-bot").expect("the bot is drawn");
+        let time = cx
+            .debug_bounds("board-card-time")
+            .expect("the time is drawn");
+        assert_px(
+            middle(bot),
+            middle(status),
+            "the bot is on the status's line",
+        );
+        assert_px(
+            middle(time),
+            middle(status),
+            "the time is on the status's line",
+        );
+        assert_px(
+            left(bot) - (left(status) + width(status)),
+            6.,
+            "the gap after the status",
+        );
+        assert_px(
+            left(time) - (left(bot) + width(bot)),
+            6.,
+            "the gap after the bot",
+        );
+    }
+
+    #[gpui::test]
+    fn a_card_no_bot_works_on_says_unassigned_in_a_framed_chip(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Stage {
+            column: unassigned_card,
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("board-card-bot").is_none(),
+            "no bot is named as plain text"
+        );
+        let chip = cx
+            .debug_bounds("board-card-unassigned")
+            .expect("the chip is drawn");
+        // The Badge is SIZE_BADGE_HEIGHT tall; the frame adds a 1 px border above and below.
+        assert_px(height(chip), SIZE_BADGE_HEIGHT + 2., "the chip's frame");
+    }
+
+    #[gpui::test]
+    fn a_source_slot_is_as_tall_as_the_card_it_stands_for(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Stage {
+            column: slot_beside_its_card,
+        });
+        cx.run_until_parked();
+        let slot = cx
+            .debug_bounds("board-source-slot")
+            .expect("the slot is drawn");
+        let card = cx.debug_bounds("board-card").expect("the card is drawn");
+        assert_px(height(slot), height(card), "the slot's height");
     }
 }

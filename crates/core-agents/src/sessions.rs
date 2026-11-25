@@ -27,7 +27,7 @@ use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
     AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind,
+    PromptReceipt, ReceiptKind, ResumeState,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -47,6 +47,7 @@ use crate::provided_env::{
     EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
 };
 use crate::resolve::{SearchEnv, resolve_first};
+use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
 mod delegation;
@@ -63,6 +64,34 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
 /// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
 pub const FIRST_PROMPT_WAIT: Duration = Duration::from_secs(120);
+
+/// The setting that names the folder conversations without a project are saved in (decision 0094), and its owner.
+const CONVERSATIONS_SETTING: &str = "conversations.folder";
+const CONVERSATIONS_OWNER: &str = "core";
+
+/// The workspace and folder a no-project start made (decision 0094), removed again unless the start succeeds, so a
+/// failed start leaves no empty conversation behind. The folder is removed only while it is still empty.
+struct MadeConversation<'a> {
+    agents: &'a Agents,
+    workspace_id: String,
+    folder: PathBuf,
+}
+
+impl MadeConversation<'_> {
+    fn keep(&mut self) {
+        self.workspace_id.clear();
+    }
+}
+
+impl Drop for MadeConversation<'_> {
+    fn drop(&mut self) {
+        if self.workspace_id.is_empty() {
+            return;
+        }
+        let _ = self.agents.store().delete_workspace(&self.workspace_id);
+        let _ = std::fs::remove_dir(&self.folder);
+    }
+}
 
 /// One applied status change, in the order the store applied it.
 #[derive(Debug, Clone, PartialEq)]
@@ -212,11 +241,16 @@ pub struct AgentsConfig {
     pub profile_dir: PathBuf,
     /// The `massorca` executable that runs the service; agents and their hooks call it.
     pub massorca_bin: PathBuf,
+    /// The conversations folder when `conversations.folder` is unset (decision 0094), `<home>/MassOrca/Conversations`.
+    pub conversations_default: PathBuf,
     /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
     pub env_provider: Option<EnvProvider>,
     /// The packages that provide kinds and their state (decision 0059); [`crate::BuiltInPackages`] until the extension
     /// runtime provides them.
     pub kind_packages: Arc<dyn KindPackages>,
+    /// The variables the vendor CLIs read, for the check that a session's saved conversation exists (decision 0160).
+    /// `None` checks only account homes in the profile.
+    pub vendor_env: Option<crate::VendorEnv>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -249,6 +283,8 @@ struct Inner {
     /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
     /// held.
     merging: Mutex<HashSet<String>>,
+    /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
+    found_transcripts: resume_state::FoundTranscripts,
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
@@ -330,6 +366,7 @@ impl Agents {
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
+                found_transcripts: resume_state::FoundTranscripts::default(),
                 sign_in_timeout: crate::sign_in::sign_in_timeout_from(
                     std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
                         .ok()
@@ -429,6 +466,60 @@ impl Agents {
         self.start_session(params, None, grant)
     }
 
+    /// The workspace a start that names one runs in, once the start may use it: not being removed, not merged into, and
+    /// its folder present.
+    fn started_workspace(&self, selector: &str) -> Result<Workspace, AgentError> {
+        let workspace = self.inner.config.workspaces.show_workspace(selector)?;
+        refuse_removing(&workspace)?;
+        self.refuse_while_merging(&workspace.id)?;
+        if workspace.missing {
+            return Err(AgentError::new(
+                codes::PATH_NOT_FOUND,
+                format!("the workspace directory is missing: {}", workspace.path),
+            ));
+        }
+        Ok(workspace)
+    }
+
+    /// The folder workspace of a session without a project (decision 0094): its own folder, named after the session, in
+    /// the conversations folder.
+    fn conversation_workspace(&self, session_id: &str) -> Result<Workspace, AgentError> {
+        let root = self.conversations_root()?;
+        Ok(self
+            .inner
+            .config
+            .workspaces
+            .conversation_workspace(&root, session_id)?)
+    }
+
+    /// The conversations folder: the stored `conversations.folder`, else the default. It must be an absolute path.
+    fn conversations_root(&self) -> Result<PathBuf, AgentError> {
+        let stored = self
+            .store()
+            .get_setting(CONVERSATIONS_OWNER, CONVERSATIONS_SETTING)?;
+        let root = match stored {
+            Some(text) => serde_json::from_str::<String>(&text)
+                .map(PathBuf::from)
+                .map_err(|_| {
+                    AgentError::new(
+                        codes::CONFIG_INVALID_VALUE,
+                        "conversations.folder is not a path",
+                    )
+                })?,
+            None => self.inner.config.conversations_default.clone(),
+        };
+        if !root.is_absolute() {
+            return Err(AgentError::new(
+                codes::CONFIG_INVALID_VALUE,
+                format!(
+                    "conversations.folder must be an absolute path: {}",
+                    root.display()
+                ),
+            ));
+        }
+        Ok(root)
+    }
+
     /// Starts a session, delegated from `parent` when one is given (0055); a child of a run holding secrets is marked
     /// as holding them too.
     pub(crate) fn start_session(
@@ -445,22 +536,19 @@ impl Agents {
         {
             return self.view(row);
         }
-        let workspace = self
-            .inner
-            .config
-            .workspaces
-            .show_workspace(&params.workspace)?;
-        refuse_removing(&workspace)?;
-        self.refuse_while_merging(&workspace.id)?;
-        if workspace.missing {
-            return Err(AgentError::new(
-                codes::PATH_NOT_FOUND,
-                format!("the workspace directory is missing: {}", workspace.path),
-            ));
-        }
+        let chosen = match params.workspace.as_deref() {
+            Some(selector) => Some(self.started_workspace(selector)?),
+            None => None,
+        };
         let (decl, program) = self.startable_kind(&params.kind)?;
         let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
             .with_caller_args(&params.args);
+        // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
+        let mode_args = [
+            mode.args.clone(),
+            decl.option_args(params.model.as_deref(), params.effort.as_deref())?,
+        ]
+        .concat();
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
@@ -474,6 +562,20 @@ impl Agents {
                 ));
             }
         }
+        let session_id = new_id();
+        // A session without a project gets its own folder once the start is valid (decision 0094).
+        let (workspace, mut made) = match chosen {
+            Some(workspace) => (workspace, None),
+            None => {
+                let workspace = self.conversation_workspace(&session_id)?;
+                let made = MadeConversation {
+                    agents: self,
+                    workspace_id: workspace.id.clone(),
+                    folder: PathBuf::from(&workspace.path),
+                };
+                (workspace, Some(made))
+            }
+        };
         if !params.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
@@ -489,12 +591,11 @@ impl Agents {
         // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
         let provided = self.provided_env(&workspace.project_id, grant)?;
         let holds_secrets = !provided.is_empty() || parent_holds;
-        let session_id = new_id();
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
         // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -507,7 +608,7 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
-            mode_args: &mode.args,
+            mode_args: &mode_args,
             caller_args: &params.args,
             provided_env: &provided,
             holds_secrets,
@@ -518,6 +619,11 @@ impl Agents {
         // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
+        resume_state::record_probe(&run_dir, &decl, None)
+            .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
+            .inspect_err(|_| remove_dir(&run_dir))?;
+        self.inner.found_transcripts.clear();
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -579,6 +685,10 @@ impl Agents {
             return Err(error.into());
         }
         clear_starting(&run_dir);
+        // The session row now owns its conversation folder.
+        if let Some(made) = made.as_mut() {
+            made.keep();
+        }
         let mut session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         session.secrets_withheld = withheld(grant);
@@ -599,6 +709,18 @@ impl Agents {
         selector: &str,
         permission_mode: Option<&str>,
         grant: SecretGrant,
+    ) -> Result<AgentSession, AgentError> {
+        self.resume_at(selector, permission_mode, grant, None, None)
+    }
+
+    /// `resume` with the terminal at `cols` x `rows`, each the default when absent: the size of the view that shows it.
+    pub fn resume_at(
+        &self,
+        selector: &str,
+        permission_mode: Option<&str>,
+        grant: SecretGrant,
+        cols: Option<u16>,
+        rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
@@ -621,6 +743,32 @@ impl Agents {
             .clone()
             .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
         let (decl, program) = self.resumable_kind(&row)?;
+        // The CLI saved no conversation for the ref, or a resume already found none (decision 0160): refused before a run
+        // that would only fail.
+        let state = resume_state::resume_state(&ResumeInputs {
+            decl: Ok(&decl),
+            agent_ref: Some(&agent_ref),
+            exited: true,
+            profile_dir: self.profile_dir(),
+            session_id: &row.id,
+            vendor_env: self.inner.config.vendor_env.as_ref(),
+            found: Some(&self.inner.found_transcripts),
+        });
+        if let (false, Some(code)) = (state.available, state.code.as_deref())
+            && code == codes::AGENT_RESUME_NOT_FOUND
+        {
+            return Err(AgentError::new(
+                codes::AGENT_RESUME_NOT_FOUND,
+                format!(
+                    "session {} cannot resume: {}",
+                    row.id,
+                    state
+                        .reason
+                        .as_deref()
+                        .unwrap_or(resume_state::NOT_FOUND_REASON)
+                ),
+            ));
+        }
         let (mode, still_pending) = modes::plan_resume(
             &decl,
             permission_mode,
@@ -666,7 +814,7 @@ impl Agents {
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -690,6 +838,11 @@ impl Agents {
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
+        // directory holds the earlier run's files, so it is kept on a failure here.
+        resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
+        resume_state::record_run_account(&run_dir, access.account.as_deref())?;
+        self.inner.found_transcripts.clear();
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -709,8 +862,8 @@ impl Agents {
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
+            cols: cols.unwrap_or(DEFAULT_COLS),
+            rows: rows.unwrap_or(DEFAULT_ROWS),
         };
         let terminal_id = self
             .spawn_run(plan, &workspace.id, &workspace.path, title, size)
@@ -1191,10 +1344,16 @@ impl Agents {
             Some(selector) => Some(self.inner.config.workspaces.show_workspace(selector)?.id),
             None => None,
         };
+        // One catalog for the whole list: each row's resume state reads its kind from it (decision 0160).
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         self.store()
             .list_agent_sessions(workspace_id.as_deref())?
             .into_iter()
-            .map(|row| self.view(row))
+            .map(|row| {
+                let mut live = lock(&self.inner.status);
+                let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
+                self.view_in(&mut live, row, Some(&catalog))
+            })
             .collect()
     }
 
@@ -1580,7 +1739,17 @@ impl Agents {
     fn view_with(
         &self,
         live: &mut LiveRuns,
+        row: AgentSessionRow,
+    ) -> Result<AgentSession, AgentError> {
+        self.view_in(live, row, None)
+    }
+
+    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one.
+    fn view_in(
+        &self,
+        live: &mut LiveRuns,
         mut row: AgentSessionRow,
+        catalog: Option<&Catalog>,
     ) -> Result<AgentSession, AgentError> {
         let execution = match (&row.exit, &row.terminal_id) {
             (Some(exit), _) => {
@@ -1609,7 +1778,42 @@ impl Agents {
                 }
             }
         };
-        Ok(record(row, execution))
+        let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
+        Ok(record(row, execution, resume))
+    }
+
+    /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
+    /// for this view. The transcript is looked for only once the run has exited, and a found one is kept in memory
+    /// until a run starts or exits.
+    fn resume_of(
+        &self,
+        row: &AgentSessionRow,
+        exited: bool,
+        catalog: Option<&Catalog>,
+    ) -> ResumeState {
+        let loaded;
+        let catalog = match catalog {
+            Some(catalog) => catalog,
+            None => {
+                loaded = Catalog::load(self.kind_packages(), self.profile_dir());
+                &loaded
+            }
+        };
+        let decl = match catalog.find(&row.kind) {
+            None => Err(format!("kind {} is no longer declared", row.kind)),
+            Some(entry) => entry
+                .valid()
+                .ok_or_else(|| format!("kind {} is invalid", row.kind)),
+        };
+        resume_state::resume_state(&ResumeInputs {
+            decl,
+            agent_ref: row.agent_ref.as_deref(),
+            exited,
+            profile_dir: self.profile_dir(),
+            session_id: &row.id,
+            vendor_env: self.inner.config.vendor_env.as_ref(),
+            found: Some(&self.inner.found_transcripts),
+        })
     }
 
     /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once. The end is
@@ -1625,12 +1829,26 @@ impl Agents {
         let changed = self
             .store()
             .set_agent_session_exit(&row.id, terminal, &exit)?;
-        if changed {
+        let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
+        if let Some(catalog) = &catalog {
             live.remove(&row.id);
+            self.inner.found_transcripts.clear();
             // The exit rule reads the activity and result as they are now, under the status lock.
             if let Some(fresh) = self.store().get_agent_session(&row.id)? {
                 *row = fresh;
             }
+            // A resumed run that failed early because its CLI found no conversation leaves the session unable to
+            // resume (decision 0160). A resume clears the activity, so one here means the run reported.
+            let facts = resume_state::ExitFacts {
+                failed: exit.code.is_some_and(|code| code != 0),
+                reported: row.activity.is_some(),
+            };
+            resume_state::classify_exit(
+                &paths::run_dir(self.profile_dir(), &row.id),
+                catalog.find(&row.kind).and_then(|entry| entry.valid()),
+                facts,
+                || self.inner.config.terminals.text(terminal).ok(),
+            );
             if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
                 self.store().set_agent_session_status(
                     &row.id,
@@ -1643,10 +1861,12 @@ impl Agents {
         }
         let execution = exited(&exit);
         row.exit = Some(exit);
-        if changed {
+        if let Some(catalog) = &catalog {
+            let resume = self.resume_of(row, true, Some(catalog));
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
+                resume,
             ))));
         }
         Ok(execution)
@@ -1654,7 +1874,7 @@ impl Agents {
 }
 
 /// The wire record of a row with its execution.
-fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
+fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> AgentSession {
     AgentSession {
         id: row.id,
         kind: row.kind,
@@ -1677,6 +1897,7 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         released: row.released_at.is_some(),
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
+        resume: Some(resume),
     }
 }
 
@@ -2010,8 +2231,10 @@ pub(crate) mod tests {
             )),
             profile_dir: profile.path().to_path_buf(),
             massorca_bin: PathBuf::from("massorca"),
+            conversations_default: std::env::temp_dir().join("MassOrca").join("Conversations"),
             env_provider: None,
             kind_packages: packages,
+            vendor_env: None,
         });
         (agents, workspace.id, profile)
     }

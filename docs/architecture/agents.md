@@ -78,6 +78,24 @@ program are checked, on `agent.start`, `agent.delegate` (and every other start t
 `agent.accounts.check`, `agent.accounts.remove`, and the vendor sign-out on removal or on a
 discarded sign-in keep working on a disabled kind.
 
+**Removal cleanup** (decision 0098). Next to the guard, the service registers the agents' remove
+cleanup, which runs only when a removal asks for `delete_agent_homes` (`extension remove
+--delete-agent-homes`). The cleanup runs after the package's files are deleted, so the extensions
+read the kinds the package provided from its manifest before deleting them, and pass them to the
+cleanup with the package id (`RemovedPackage`). A manifest that cannot be read gives no kinds, and
+the removal reports that their accounts were left; an unvouched first-party id gives none.
+`Agents::remove_package_accounts` then, for each of those kinds that no other installed package
+still provides, deletes under the homes gate every account row of the kind (with it, its active mark
+and project choices), its directory under `<profile>/agents/accounts/<kind>/`, any account directory
+left without a row, the hidden folders an interrupted import or replace left there, the
+`accounts/<kind>/` folder itself, and the kind's 0056 home with its hidden siblings. The deletions go
+through the account-home helpers, which refuse a link instead of following it. A package outside
+`massorca.*` never cleans a kind the built-in catalogue declares: that kind is skipped and reported.
+An account busy with a sign-in, a decision, a removal or a live run is left. What was not deleted is
+the cleanup's failure in the removal result, with the code of its first problem. No sign-out runs:
+an account a MassOrca sign-in made keeps its login valid at the vendor until the person signs out
+there.
+
 **Used kinds.** `used_kinds(&Store, profile_dir) -> Result<BTreeSet<String>, AgentError>` (public from core-agents)
 is every kind the profile has used, for the extension runtime's removal rules: the kinds of
 `agent_sessions`, `agent_accounts` (pending sign-ins included), `agent_account_history` and
@@ -124,13 +142,18 @@ directory that does not exist has no kinds.
 - `session_ref.assign`: args added at the first launch with a generated
   UUID as `{ref}`. `learn`: payload field that carries the agent's own id.
 - `resume`: args for a new run of an exited session; absent means not
-  resumable.
+  resumable. `resume_transcript` (`{ env?, dir, glob }`) says where the CLI saves one
+  conversation per ref, and `resume_not_found_pattern` is a regular expression over a failed
+  resumed run's output that means the CLI found none; both need `resume` (decision 0160).
+- `strip_inherited_env`: variable names, each once, that no run of the kind and none of its
+  account commands may inherit from the service (decision 0160).
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
-  import: the declaration has no optional flag.
+  import unless `optional` lists it (decision 0097). `state` declares how the CLI's own state
+  file is built and repaired (decision 0099).
 - `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
   mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
   kind's own `args`), an optional deterministic `live_switch` typed into a running session,
@@ -140,6 +163,21 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- `model` and `effort` (decisions 0094, 0096): optional. Each is `{ "flag": "--model" }` (the
+  value follows the flag) or `{ "args": ["-m", "{value}"] }` (`{value}` is replaced by the value
+  and appears exactly once in the arguments): exactly one of the two. A flag starts with `-` and
+  holds no spaces, `=` or control characters. A start's `model` or `effort` is passed after the
+  mode's `args` and before the caller's `args`. A kind without the option refuses it with
+  `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
+  `:` or `/`, never starting with `-`.
+- `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
+  efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
+  absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
+  one of the effort's levels. `effort.levels` lists `{ id, label }` in order and `effort.default`
+  is one of them. With levels declared, a start's effort must be one of them; with a model that
+  lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
+  Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
+  choice is the default, and no label is empty.
 
 ## Session record (`AgentSession`)
 
@@ -166,8 +204,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
-| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?` | `AgentSession` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
+| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
@@ -189,14 +227,15 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
-| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.import` | workspace | `kind`, `from?`, `label?` | `{ result: imported \| failed \| not_found, account?, reason?, updated? }`. `updated` names the existing account an import of the same login updated (decision 0098). An absent `from` copies each file from where the kind's CLI keeps it and needs capability `agent-import-detect/1`; the client refuses it before sending when the service does not offer it (decision 0097). |
+| `agent.accounts.import_candidates` | read | `kind?` | `{ candidates: [{ kind, ready, folder?, files: [{ name, required, found, path?, env? }] }] }`. Capability `agent-import-detect/1` (decision 0097). Below `workspace` scope `folder` and `path` are omitted. |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.hook_refused`,
+`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
@@ -247,13 +286,39 @@ the run gets the vendor's default and the bypass stays pending; else in the last
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
 
+## No project (decision 0094)
+
+A conversation without a project starts with `agent.start` and no `workspace`. Its folder is
+`<conversations folder>/<session id>`, where the conversations folder is the setting
+`conversations.folder` (default `<home>/MassOrca/Conversations`, made on first use and refused
+when it is not an absolute path). Each session gets a folder of its own because a vendor CLI
+keeps its history per folder, so two sessions must never share one.
+
+A folder workspace needs a project, so the conversations folder is registered under a hidden
+project (`projects.conversations = 1`, migration 0094 in `core-store`). `project list` and every
+other project listing leave it out, so a conversation is never a project. The workspace has no
+worktree and no branch. A conversation's folder is an ordinary folder workspace, so stop,
+resume, list and the rest of the session commands work as for any session.
+
+The folder is created when the first session starts in it. A start that fails after its folder
+was made keeps the folder, the same as a failed delegated start keeps its child workspace.
+
 ## Run environment
 
-On top of the terminal environment (0032): `MASSORCA_AGENT_SESSION`,
-`MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`, `MASSORCA_BIN`, the kind's
+On top of the terminal environment (0032): `MASSORCA_BIN`, the kind's
 home variable when the profile has a home for it (0056), minus the kind's
 `strip_env` in that case, then the profile vault's secrets for the workspace's
-project (0071), then the caller's `env`. A vault secret named `MASSORCA_*` or
+project (0071), then the caller's `env`, then the run's own identity,
+`MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN` and `MASSORCA_AGENT_KIND`, which
+the caller cannot override. The kind's `strip_inherited_env` names are stripped
+from every run, unless the launch sets them (decision 0160).
+
+The service builds every terminal's environment without the run identity it may
+have inherited (when the service was started from inside an agent run), so
+neither a plain terminal nor a run started directly carries another session's
+identity. The account commands (check, sign-in, sign-out) strip the
+credentials' and accounts' `strip_env`, the kind's `strip_inherited_env` and
+the run identity names (decision 0160). A vault secret named `MASSORCA_*` or
 like the home variable fails the launch with `agent.secrets_unavailable`; one
 named in `strip_env` is set, not emptied. Only a run whose caller holds HostAdmin gets
 vault variables; such a run and its children are marked `holds_secrets`, and
@@ -261,7 +326,7 @@ their terminals, prompts, resume and delegation then need HostAdmin (0071).
 
 Limitation: a terminal's environment (0032) can add variables but not remove
 inherited ones, and `core-terminal` is not changed in this phase. Until it can,
-a stripped variable is set to the empty string instead of removed. Agents treat
+a stripped variable (from `strip_env` or `strip_inherited_env`) is set to the empty string instead of removed. Agents treat
 an empty key as missing in practice, but a program that checks only for the
 variable's presence still sees it. Removing it belongs to the terminals chain.
 
@@ -328,9 +393,39 @@ resume arguments only. The run is registered under the status lock before its pr
 `agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
 `agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
 session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has
-no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
+no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_found` when the
+session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+### Resume state (decision 0160)
+
+Every session view carries `resume: { available, code?, reason? }`, set by the service
+(`core-agents::resume_state`); an older peer sends none.
+
+- `agent.resume_unavailable` when the kind is no longer declared, is invalid, declares no
+  resume form, or the session's ref is not known.
+- `agent.busy`, reason "the session is running", while its run is live.
+- `agent.resume_not_found`, reason "the agent saved no conversation for this session", when an
+  exited session's kind declares `resume_transcript` and no file matches its `glob` with the ref
+  in place of `{ref}`. The folder is the account home the last run used (recorded as
+  `run-account` in the run directory), else the `env` variable's value when it is an absolute
+  local path, else `dir` with `{home}` from `USERPROFILE` or `HOME`. Only metadata is read, and
+  links and junctions are followed. Only a search that completed and matched nothing counts as
+  missing: an unreadable folder, a folder of more than 10,000 entries, a ref that is not a plain
+  file name, or no home to look under leaves the session available. A found transcript is kept
+  in memory until a run starts or exits; a missing one is looked for at each view, and `agent
+  list` reads the kind catalog once. The built-in `claude` checks `projects/*/{ref}.jsonl` under
+  `CLAUDE_CONFIG_DIR` or `{home}/.claude`. `dir` and `glob` parts are plain names: `..`, `.`, a
+  second root or a drive is a declaration problem.
+- The same code when a resumed run exited early with a failure (before any hook report and
+  within 10 seconds of its start) and the last 4 KiB of its output match the kind's
+  `resume_not_found_pattern` (`claude`: "No conversation found with session ID"). A later exit
+  is never classified. The run directory keeps the ref (`resume-not-found`); the session stays
+  exited, and its exit is recorded as it was. A transcript check that finds the file drops the
+  mark.
+
+`agent.resume` refuses a session whose state is `agent.resume_not_found` before it starts a run.
 
 ### Crash-safe start
 
@@ -482,7 +577,7 @@ it was noticed.
 
 ```
 massorca agent kinds
-massorca agent start <kind> --workspace <ws> [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
+massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
 massorca agent list [--workspace <ws>]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
@@ -503,7 +598,8 @@ massorca agent credentials remove <kind>
 massorca agent accounts list <kind>
 massorca agent accounts add <kind> [--label <l>] [--no-attach]
 massorca agent accounts sign-in <kind> <account> [--no-attach]
-massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts import <kind> [--from <dir>] [--label <l>]
+massorca agent accounts candidates [<kind>]
 massorca agent accounts activate <kind> <account> [--project <p>]
 massorca agent accounts remove <kind> <account>
 massorca agent accounts check <kind> [<account>]
@@ -543,6 +639,69 @@ kind has a run that has not exited. Declared file names must also not be Windows
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
 
+## Import sources (decision 0097)
+
+`core-agents::sources`. A kind's `credentials` may declare, per file, where its CLI keeps it:
+
+```json
+"optional": [".claude.json"],
+"sources": [
+  { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
+  { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
+]
+```
+
+`dir` is the default folder template; `windows`, `macos` and `linux` replace it on that platform. The only
+placeholder is `{home}`, read from `USERPROFILE` on Windows and `HOME` elsewhere (what the vendor CLIs use), and from
+the platform when that variable is unset or not absolute. When `env` names a variable set to an absolute path in the
+service's environment, the file is looked for in that folder instead. A file not in `optional` is required; without
+`optional` every declared file is. The kind's problems list a source or optional entry that is not a declared file,
+a file named twice, an `env` that is not a variable name, and a template that neither starts with `{home}` nor is an
+absolute path. The built-in `claude` declares `.credentials.json` (required) in `{home}/.claude` and `.claude.json`
+(optional) in `{home}`, both moved by `CLAUDE_CONFIG_DIR`; `codex` declares `auth.json` (required) and `config.toml`
+(optional) in `{home}/.codex`, moved by `CODEX_HOME`.
+
+`agent.accounts.import_candidates` reports, per kind, each file's path and whether the import would accept it: a
+regular file, not a link, at most 1 MiB (a state file: its rule's `max_source_bytes`), judged from `symlink_metadata`
+alone. It never opens a file. `ready` means
+every required file was found. `agent.accounts.import` without `from` reads each file from its own path, with every
+check of Credential import; a folder import applies the same optional rule.
+
+## Account state file (decision 0099)
+
+`core-agents::state_file`. Some CLIs keep their own state beside the login in the folder the home variable names:
+with `CLAUDE_CONFIG_DIR` set, Claude Code reads `.claude.json` there too, and without `hasCompletedOnboarding` it opens
+its first-run setup, which ends in a browser sign-in, while `auth status` (which judges only the credentials) still
+says signed in. A kind's `credentials.state` declares how that file is made:
+
+```json
+"state": {
+  "file": ".claude.json",
+  "keep": ["oauthAccount", "theme", "mcpServers"],
+  "set": { "hasCompletedOnboarding": true },
+  "max_source_bytes": 16777216
+}
+```
+
+`file` is a declared file; `keep` and `set` name plain top-level keys (letters, digits, `_`, `-`, `.`), each once and in
+only one of them; `max_source_bytes` (default 1 MiB) is between 1 byte and 64 MiB. The kind's problems list each
+breach.
+
+- Import, from a folder or detected sources, builds the state file and never copies it raw. The source is read with
+  the checks of Credential import but with `max_source_bytes` as its cap, parsed, and only the `keep` keys present are
+  written, then the `set` keys. Everything else, project history included, stays behind. A missing source gives a file
+  with the `set` keys only. A source that is not a JSON object, or over its cap, refuses the import when the file is
+  required; when it is optional (Claude), the file gets the `set` keys only, and the import's `reason` and the file's
+  `reason` say why. A state file alone, built from nothing, is nothing to import.
+- Before every account check (`agent.accounts.check`, and the checks that decide an import or a sign-in) and before
+  every launch on an account home, the service puts the `set` keys back under `credentials::lock_homes`: it creates the
+  file when it is missing and merges the keys when they are absent or differ, keeping every other key, writing a new
+  owner-only sibling and renaming it over the file. A link or anything but a regular file is never followed or
+  written through. A state file that cannot be repaired (not a JSON object, over its cap, a link) is left as it is;
+  the check reports `needs_sign_in` and a launch is refused with `agent.credentials_invalid` naming the file, so the
+  check and the session never disagree. Existing accounts are repaired this way without a new import.
+- Only `claude` declares a rule. Folder trust prompts are out of scope.
+
 ## Accounts (decision 0059)
 
 A kind can have several accounts on one host, and one of them is active. An account is a
@@ -577,13 +736,22 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   an undecided account (its store mark is set) decides it the same way, as a sign-in's end does. An
   undecided account is not the kind's history until a decision keeps it (decision 0059). A row that
   is already gone is left alone, with no event.
-- **One account per login** (`Agents::duplicate_of`): a new account whose check reports an identity
-  another account of the kind already has (compared trimmed and without case, as pv96 compares a
-  duplicate add's email) is refused. An import fails with the reason naming the existing account,
-  and its copied files are deleted. A sign-in is deleted when its terminal ends, announced as
-  `conflict`, and never signed out: the vendor sign-out would end the session the existing account
-  shares. A sign-in again whose login turns out to be another account's is stored as `conflict`,
-  keeping its recorded identity. A kind's accounts in WSL are not told apart from the host's yet:
+- **One account per login** (`Agents::duplicate_of`, decision 0098): a new account whose check
+  reports an identity another account of the kind already has (compared trimmed and without case,
+  as pv96 compares a duplicate add's email) updates that account instead of adding one. Under the
+  homes gate, `credentials::update_account_files_locked` writes each declared credential file the
+  new account holds into the existing account's home, each to a new owner-only sibling renamed over
+  the old file (a link is refused). Nothing else in that home changes: an agent home also holds
+  transcripts, history and settings, and a declared file the new account lacks is kept. The new
+  account's home and row are then deleted, and the existing account's state and identity are
+  refreshed. The existing account keeps its id,
+  label, origin, active mark and project choices. An import answers `imported` with that account and
+  `updated: <its id>`; a sign-in's end announces both accounts. When the existing account is busy (a
+  live run, a removal, a sign-in or a decision of its own, or a sign-in undecided in the store), the
+  new account is deleted as before: an import fails naming the existing account, and a sign-in is
+  announced as `conflict`. Nothing is ever signed out here: the vendor sign-out would end the session
+  both accounts share. A sign-in again whose login turns out to be another account's is stored as
+  `conflict`, keeping its recorded identity. A kind's accounts in WSL are not told apart from the host's yet:
   there is no WSL account scope.
 - **Sign-in again** (`sign_in.rs`, `Agents::accounts_sign_in`, `agent.accounts.sign_in`): signs an
   existing account in once more, in its own home, with the same login and environment as a new
@@ -633,15 +801,19 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Import** copies the declared files into a new account (origin `import`), which stays undecided
   until its check decides it: a check that reports the login is not signed in deletes the new
   account without a sign-out, and the result is `failed`; any other result keeps it, and only then
-  does it count as the kind's history. `not_found` means none of the declared files is in the
-  source. An import a crash left undecided is decided at the next start, the same way.
+  does it count as the kind's history. `not_found` means a required file is missing; the reason
+  names each one and where it was looked for. A missing optional file (`credentials.optional`) is
+  skipped. Without `from`, each file is read from where the kind's CLI keeps it (see Import sources). An import a crash left undecided is decided at the next start, the same way.
 - **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
   already running) is refused, and the account is marked removing. Outside the gate, the kind's
   `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
   is the person's, so the service never signs it out; its files are only deleted. Under the gate
   again, the home and the row are deleted. A sign-in the service discards (see Sign-in) is signed out
   the same way before its home is deleted, since the service made that login.
-- **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
+- **Migration and startup**: `startup_sweep` runs once before requests are served. It first settles
+  the old homes a replace set aside (`.<name>.old-<id>` in `homes/` and `accounts/<kind>/`, decision
+  0098): one whose home is missing, because a crash came between the two renames, is renamed back,
+  and one whose home exists is deleted. Then it deletes a
   `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
   the row and moving the home); moves 0056's home of each kind into an account; adopts an account
   directory that has no row as `migrated` (active only when its kind has no active account); and
@@ -698,7 +870,7 @@ under an empty temporary home.
 
 | Kind | Program | Home variable | Login | Check | Logout |
 | :- | :- | :- | :- | :- | :- |
-| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status`, exit 0 signed in, 1 not (confirmed) | `claude auth logout` (confirmed) |
+| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status --json`, exit 0 signed in, 1 not (confirmed); `loggedIn: false` needs a sign-in, identity from `email` and `orgName` (decision 0098) | `claude auth logout` (confirmed) |
 | `codex` | `codex` | `CODEX_HOME` (documented for file storage only) | `codex login` exists; not confirmed to honour `CODEX_HOME` | `codex login status` exists; exit code and output not documented | `codex logout` exists; not confirmed to honour `CODEX_HOME` |
 | `antigravity` | `agy` | none; credentials are in the OS keyring | no `login` subcommand; sign-in runs when `agy` is first launched | none; no non-interactive status | `/logout` inside the prompt only |
 | `gentle-shell` | `gentle-shell` | `PI_CODING_AGENT_DIR` (as declared today) | `/login` slash command inside its terminal UI; no command-line form | none | none |
@@ -726,10 +898,17 @@ Sources:
   no command-line form, and the credential variable in the launch specs. The binary is not
   installed on this machine, so it was not run.
 
-Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status"],
-signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `identity_pattern` is
-declared, because neither is documented. Without an `expired_pattern`, an expired login probably
-reads as `needs_sign_in`, not `expired`; this is not verified.
+Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status",
+"--json"], signed_in_exit: 0, identity_json: ["email", "orgName"], signed_in_json: "loggedIn" }` and
+`logout: ["auth", "logout"]` (decision 0098). A check's `identity_json` reads its output as a JSON
+object and joins the listed top-level string fields that are present with ` / `, so one email in
+two organisations is two logins; it is declared instead of `identity_pattern`. `signed_in_json`
+names a top-level field whose `false` means the check needs a sign-in, whatever its exit code. The
+previous app reads `claude auth status --json` and its `email` field; the fields were not run
+here.
+Below `workspace` scope the identity is masked, as every account identity is. No `expired_pattern`
+is declared, because none is documented. Without it, an expired login probably reads as
+`needs_sign_in`, not `expired`; this is not verified.
 
 `claude` also declares `accounts.strip_env` (decision 0059, amendment 2026-11-22). The check, the
 sign-out and the sign-in terminal judge the account's home only, so these variables are removed from

@@ -1,5 +1,6 @@
 //! Typed helpers over the methods of the core features.
 
+use massorca_protocol::capabilities;
 use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
@@ -9,8 +10,8 @@ use massorca_protocol::methods::agents::{
     AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
     AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
     AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
-    QueuedPrompt,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
@@ -35,6 +36,19 @@ use crate::client::Client;
 use crate::error::ClientError;
 use crate::subscription::Subscription;
 use crate::terminal_attach::TerminalAttachment;
+
+/// Refuses a request the service cannot read: it offers no `capability`, so the request is never sent (decision 0094). A
+/// peer that predates the capability would misread the request, so the client does not send it at all.
+fn require_offered(offered: bool, capability: &str, what: &str) -> Result<(), ClientError> {
+    if offered {
+        Ok(())
+    } else {
+        Err(ClientError::CapabilityMissing {
+            what: what.to_owned(),
+            capability: capability.to_owned(),
+        })
+    }
+}
 
 impl Client {
     /// `service.info`: the service's identity, protocol version, capabilities and process.
@@ -241,11 +255,27 @@ impl Client {
         self.call(agents::KINDS, &()).await
     }
 
-    /// `agent.start`: starts an agent session in a workspace.
+    /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
+    /// 0094). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
+    /// `agent-options/1`; a service that offers neither is refused before anything is sent.
     pub async fn agent_start(
         &self,
         params: &AgentStartParams,
     ) -> Result<AgentSession, ClientError> {
+        if params.workspace.is_none() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_NO_PROJECT),
+                capabilities::AGENT_NO_PROJECT,
+                "a session with no project",
+            )?;
+        }
+        if params.model.is_some() || params.effort.is_some() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_OPTIONS),
+                capabilities::AGENT_OPTIONS,
+                "a model or an effort",
+            )?;
+        }
         self.call(agents::START, params).await
     }
 
@@ -475,12 +505,39 @@ impl Client {
         self.call(agents::ACCOUNTS_SIGN_IN, params).await
     }
 
-    /// `agent.accounts.import`: imports the kind's declared files into a new account.
+    /// `agent.accounts.import`: imports the kind's declared files into a new account. Without `from`, each file comes from
+    /// where the kind's CLI keeps it, which needs capability `agent-import-detect/1` (decision 0097); a service that does
+    /// not offer it is refused before anything is sent.
     pub async fn agent_accounts_import(
         &self,
         params: &AccountsImportParams,
     ) -> Result<AccountsImported, ClientError> {
+        if params.from.is_none() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_IMPORT_DETECT),
+                capabilities::AGENT_IMPORT_DETECT,
+                "an import without a folder",
+            )?;
+        }
         self.call(agents::ACCOUNTS_IMPORT, params).await
+    }
+
+    /// `agent.accounts.import_candidates`: where an import without a folder would copy each kind's files from (decision
+    /// 0097). Needs capability `agent-import-detect/1`; a service that does not offer it is refused before anything is
+    /// sent.
+    pub async fn agent_accounts_import_candidates(
+        &self,
+        kind: Option<&str>,
+    ) -> Result<ImportCandidates, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_IMPORT_DETECT),
+            capabilities::AGENT_IMPORT_DETECT,
+            "import source detection",
+        )?;
+        let params = ImportCandidatesParams {
+            kind: kind.map(str::to_owned),
+        };
+        self.call(agents::ACCOUNTS_IMPORT_CANDIDATES, &params).await
     }
 
     /// `agent.accounts.activate`: makes an account the kind's active one, or a project's choice.
@@ -523,5 +580,31 @@ fn session_ref(session: &str) -> AgentSessionRef {
 fn terminal_ref(terminal: &str) -> TerminalRef {
     TerminalRef {
         terminal: terminal.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod require_offered_tests {
+    use massorca_protocol::capabilities;
+
+    use super::require_offered;
+    use crate::error::ClientError;
+
+    #[test]
+    fn a_request_is_sent_only_when_the_service_offers_its_capability() {
+        assert!(require_offered(true, capabilities::AGENT_NO_PROJECT, "x").is_ok());
+        let refused = require_offered(
+            false,
+            capabilities::AGENT_NO_PROJECT,
+            "a session with no project",
+        )
+        .expect_err("refused without the capability");
+        match refused {
+            ClientError::CapabilityMissing { what, capability } => {
+                assert_eq!(what, "a session with no project");
+                assert_eq!(capability, "agent-no-project/1");
+            }
+            other => panic!("unexpected refusal: {other}"),
+        }
     }
 }

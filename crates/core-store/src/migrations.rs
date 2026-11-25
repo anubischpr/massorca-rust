@@ -495,6 +495,30 @@ ALTER TABLE projects ADD COLUMN icon TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // The project a conversations folder is registered under (decision 0094): a conversation without a project is a
+    // folder workspace of its own in that folder. The flag keeps the project out of every project list.
+    Migration {
+        sql: r#"
+ALTER TABLE projects ADD COLUMN conversations INTEGER NOT NULL DEFAULT 0 CHECK(conversations IN (0,1));
+"#,
+        foreign_keys_off: false,
+    }, // A team's Conference room (decision 0102): the lines a person and the team's bots post, each optionally about a task.
+    // A team's removal removes its room; a bot's removal keeps its lines, unnamed.
+    Migration {
+        sql: r#"
+CREATE TABLE team_room_messages (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    author TEXT NOT NULL CHECK(author IN ('person','bot')),
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    text TEXT NOT NULL,
+    task_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_room_by_team ON team_room_messages(team_id, created_at);
+"#,
+        foreign_keys_off: false,
+    },
     // Trusted repository scripts (decision 0095): per project and script kind, the SHA-256 of the one content the owner
     // trusted. A changed script has another hash, so it needs trust again.
     Migration {

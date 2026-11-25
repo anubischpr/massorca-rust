@@ -5,6 +5,8 @@
 mod harness;
 
 use harness::{Sandbox, eventually, single_document, stdout_text, with_json};
+use std::path::{Path, PathBuf};
+
 use predicates::str::contains;
 use serde_json::{Value, json};
 
@@ -231,7 +233,7 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
     assert_eq!(shown["execution"]["state"], "exited");
     assert_eq!(shown["execution"]["exit"]["reason"], "service_stopped");
     // Either service may record the end: the stopping one with the program's exit code when it saw the program end
-    // (on Windows the stop's console interrupt, 0xC000013A), the next one with no code. Both read "service stopped".
+    // with one, the next one with no code. Both read "service stopped".
     let listed = sandbox.run("default", &["agent", "list"]).success();
     let line = stdout_text(&listed)
         .lines()
@@ -244,6 +246,32 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
         None => "exited (service stopped)".to_owned(),
     };
     assert!(line.contains(&expected), "{line}");
+}
+
+#[test]
+fn a_plain_stop_reads_as_a_signal_with_no_exit_code_on_every_platform() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let started = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
+    );
+    let session = text(&started, "id").to_owned();
+    wait_for_line(&sandbox, text(&started, "terminal_id"), "fake-agent: ready");
+
+    sandbox.json_ok("default", &["agent", "stop", &session]);
+    let exit = eventually("the stopped run to exit", || {
+        let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+        (shown["execution"]["state"] == "exited").then(|| shown["execution"]["exit"].clone())
+    });
+    assert_eq!(exit["reason"], "killed", "{exit}");
+    // Unix records the hangup's signal; Windows the console event's, rather than the code 3221225786.
+    assert!(exit["code"].is_null(), "a stop has no exit code: {exit}");
+    assert!(
+        exit["signal"].is_string(),
+        "a stop names its signal: {exit}"
+    );
 }
 
 /// Starts a fake agent in `main`, waits for its answer, and stops its run; returns the session id and its terminal.
@@ -372,6 +400,280 @@ fn an_explicit_release_of_a_retained_session_clears_the_retain_and_releases_it()
         error_code(&sandbox, &["terminal", "screen", &terminal]),
         "terminal.not_found"
     );
+}
+
+/// Declares kind `tuned`: the fake agent, declaring the flags a model and an effort pass to (decision 0094).
+fn declare_tuned(sandbox: &Sandbox) {
+    let kind = json!({
+        "id": "tuned",
+        "name": "Tuned agent",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "prompt": { "mode": "argv" },
+        "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
+        "resume": ["--resume", "{ref}"],
+        "status": {
+            "mechanism": "env-command",
+            "events": { "start": "idle", "prompt": "working", "stop": "done", "fail": "done:failure" },
+            "result_field": "result"
+        },
+        "model": { "flag": "--model" },
+        "effort": { "flag": "--effort" }
+    });
+    write_kind(sandbox, "tuned.json", &kind);
+}
+
+/// Sets `conversations.folder` through `config set`, which refuses a relative path.
+fn set_conversations_folder(sandbox: &Sandbox, folder: &Path) {
+    let text = folder.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "conversations.folder", text.as_str()],
+    );
+}
+
+/// Starts a session with no workspace and no prompt; returns its id, its terminal and its workspace id.
+fn start_without_project(sandbox: &Sandbox, title: &str) -> (String, String, String) {
+    let started = sandbox.json_ok("default", &["agent", "start", "fake", "--title", title]);
+    (
+        text(&started, "id").to_owned(),
+        text(&started, "terminal_id").to_owned(),
+        text(&started, "workspace_id").to_owned(),
+    )
+}
+
+/// The canonical folder a workspace is in, so tests compare paths as the operating system stores them.
+fn canonical_folder_of(sandbox: &Sandbox, workspace_id: &str) -> PathBuf {
+    let shown = sandbox.json_ok("default", &["workspace", "show", workspace_id]);
+    std::fs::canonicalize(text(&shown, "path")).expect("the workspace folder exists")
+}
+
+#[test]
+fn a_session_without_a_project_runs_in_its_own_folder_of_the_conversations_folder() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let conversations = sandbox.home().join("Conversations");
+    set_conversations_folder(&sandbox, &conversations);
+    assert!(!conversations.exists(), "the folder is made on first use");
+
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--prompt",
+            "hello loose",
+            "--title",
+            "loose",
+        ],
+    );
+    let session = text(&started, "id").to_owned();
+    let terminal = text(&started, "terminal_id").to_owned();
+    let workspace_id = text(&started, "workspace_id").to_owned();
+    assert_eq!(started["title"], "loose");
+    assert_eq!(started["execution"]["state"], "live");
+    wait_for_line(&sandbox, &terminal, "fake-agent: done hello loose");
+
+    // A folder with no branch: no worktree, and the conversations folder holds the session's own subfolder.
+    let shown = sandbox.json_ok("default", &["workspace", "show", &workspace_id]);
+    assert_eq!(shown["kind"], "folder", "{shown}");
+    assert!(shown["branch"].is_null(), "no branch: {shown}");
+    let folder = canonical_folder_of(&sandbox, &workspace_id);
+    let root = std::fs::canonicalize(&conversations).expect("the conversations folder was made");
+    assert_eq!(folder.parent(), Some(root.as_path()));
+
+    // The session is not a project: the project list stays empty.
+    sandbox
+        .run("default", &["project", "list"])
+        .success()
+        .stdout(contains("no projects"));
+
+    // Listed without a workspace filter, stopped, and resumed in the same folder.
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"][0]["id"], session.as_str());
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+    // Resumed at the size of the view that will show it.
+    let resumed = sandbox.json_ok(
+        "default",
+        &["agent", "resume", &session, "--cols", "150", "--rows", "60"],
+    );
+    assert_eq!(resumed["id"], session.as_str());
+    assert_eq!(resumed["workspace_id"], workspace_id.as_str());
+    assert_eq!(resumed["execution"]["state"], "live");
+    let shown = sandbox.json_ok(
+        "default",
+        &["terminal", "show", text(&resumed, "terminal_id")],
+    );
+    assert_eq!(shown["cols"], 150, "{shown}");
+    assert_eq!(shown["rows"], 60, "{shown}");
+    assert_eq!(canonical_folder_of(&sandbox, &workspace_id), folder);
+}
+
+#[test]
+fn each_session_without_a_project_gets_a_folder_of_its_own() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    set_conversations_folder(&sandbox, &sandbox.home().join("Conversations"));
+
+    let (_, _, first) = start_without_project(&sandbox, "first");
+    let (_, _, second) = start_without_project(&sandbox, "second");
+    assert_ne!(first, second);
+    assert_ne!(
+        canonical_folder_of(&sandbox, &first),
+        canonical_folder_of(&sandbox, &second)
+    );
+}
+
+#[test]
+fn the_conversations_folder_setting_moves_new_sessions_and_a_relative_path_is_refused() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let first_root = sandbox.home().join("First");
+    let second_root = sandbox.home().join("Second");
+
+    set_conversations_folder(&sandbox, &first_root);
+    let (_, _, first) = start_without_project(&sandbox, "first");
+    set_conversations_folder(&sandbox, &second_root);
+    let (_, _, second) = start_without_project(&sandbox, "second");
+
+    let first_root = std::fs::canonicalize(&first_root).expect("the first folder was made");
+    let second_root = std::fs::canonicalize(&second_root).expect("the second folder was made");
+    assert_eq!(
+        canonical_folder_of(&sandbox, &first).parent(),
+        Some(first_root.as_path())
+    );
+    assert_eq!(
+        canonical_folder_of(&sandbox, &second).parent(),
+        Some(second_root.as_path())
+    );
+
+    sandbox
+        .run(
+            "default",
+            &["config", "set", "conversations.folder", "relative/path"],
+        )
+        .code(1)
+        .stderr(contains("config.invalid_value"));
+    let got = sandbox.json_ok("default", &["config", "get", "conversations.folder"]);
+    assert_eq!(
+        got["is_default"], false,
+        "the refused value changed nothing"
+    );
+}
+
+#[test]
+fn the_hidden_project_of_the_conversations_folder_cannot_be_named_or_added() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let conversations = sandbox.home().join("Conversations");
+    set_conversations_folder(&sandbox, &conversations);
+    let (_, _, workspace_id) = start_without_project(&sandbox, "loose");
+    let shown = sandbox.json_ok("default", &["workspace", "show", &workspace_id]);
+    let hidden = text(&shown, "project_id").to_owned();
+
+    // No command acts on the hidden project, by id or by path.
+    let root = conversations.to_string_lossy().into_owned();
+    for selector in [hidden.as_str(), root.as_str()] {
+        assert_eq!(
+            error_code(&sandbox, &["project", "show", selector]),
+            "project.not_found"
+        );
+        assert_eq!(
+            error_code(
+                &sandbox,
+                &["project", "rm", selector, "--forget-workspaces"]
+            ),
+            "project.not_found"
+        );
+        assert_eq!(
+            error_code(&sandbox, &["workspace", "create", selector, "shared"]),
+            "project.not_found"
+        );
+    }
+    let inspected = sandbox.json_ok("default", &["project", "inspect", root.as_str()]);
+    assert!(inspected["registered"].is_null(), "{inspected}");
+
+    // Adding the conversations folder as a project is refused by name, and the session is still there.
+    assert_eq!(
+        error_code(&sandbox, &["project", "add", root.as_str(), "--folder"]),
+        "project.exists"
+    );
+    sandbox.json_ok("default", &["workspace", "show", &workspace_id]);
+}
+
+#[test]
+fn a_project_at_the_conversations_folder_refuses_a_start_without_a_project() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let conversations = sandbox.home().join("Conversations");
+    std::fs::create_dir_all(&conversations).expect("create the folder");
+    let root = conversations.to_string_lossy().into_owned();
+    sandbox.json_ok("default", &["project", "add", root.as_str(), "--folder"]);
+    set_conversations_folder(&sandbox, &conversations);
+
+    let outcome = sandbox
+        .run("default", &["--json", "agent", "start", "fake"])
+        .failure();
+    let document = single_document(&outcome);
+    assert_eq!(
+        document["error"]["code"], "config.invalid_value",
+        "{document}"
+    );
+    let message = document["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Conversations"),
+        "names the project: {message}"
+    );
+}
+
+#[test]
+fn a_model_and_an_effort_reach_the_flags_the_kind_declares() {
+    let sandbox = Sandbox::new();
+    declare_tuned(&sandbox);
+    folder_workspace(&sandbox);
+
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "tuned",
+            "--workspace",
+            "main",
+            "--model",
+            "fast-model",
+            "--effort",
+            "high",
+            "--prompt",
+            "hi",
+        ],
+    );
+    let terminal = text(&started, "terminal_id").to_owned();
+    wait_for_line(&sandbox, &terminal, "fake-agent: model fast-model");
+    wait_for_line(&sandbox, &terminal, "fake-agent: effort high");
+}
+
+#[test]
+fn a_model_or_an_effort_the_kind_does_not_declare_is_refused_and_names_the_kind() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+
+    for args in [vec!["--model", "fast-model"], vec!["--effort", "high"]] {
+        let mut command = vec!["--json", "agent", "start", "fake", "--workspace", "main"];
+        command.extend(args);
+        let outcome = sandbox.run("default", &command).failure();
+        let document = single_document(&outcome);
+        assert_eq!(
+            document["error"]["code"], "agent.option_unsupported",
+            "{document}"
+        );
+        let message = document["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("fake"),
+            "the message names the kind: {message}"
+        );
+    }
 }
 
 #[test]

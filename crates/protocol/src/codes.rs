@@ -201,6 +201,8 @@ pub const AGENT_BUSY: &str = "agent.busy";
 /// A prompt over the size limit or with a NUL.
 pub const AGENT_PROMPT_INVALID: &str = "agent.prompt_invalid";
 pub const AGENT_RESUME_UNAVAILABLE: &str = "agent.resume_unavailable";
+/// The kind keeps a saved conversation per agent ref, and none exists for the session's ref: a resume would fail.
+pub const AGENT_RESUME_NOT_FOUND: &str = "agent.resume_not_found";
 pub const AGENT_HOOK_REFUSED: &str = "agent.hook_refused";
 pub const AGENT_DELEGATE_NEEDS_GIT: &str = "agent.delegate_needs_git";
 pub const AGENT_DEPTH_EXCEEDED: &str = "agent.depth_exceeded";
@@ -218,6 +220,8 @@ pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 pub const AGENT_MODE_UNKNOWN: &str = "agent.mode_unknown";
 /// The mode has no launch arguments and its live switch cannot be sent at start, because the kind reports no idle state.
 pub const AGENT_MODE_UNAVAILABLE: &str = "agent.mode_unavailable";
+/// The kind declares no flag for a `model` or `effort` the start asked for (decision 0094); the message names the kind.
+pub const AGENT_OPTION_UNSUPPORTED: &str = "agent.option_unsupported";
 /// The session's kind has no status mechanism, so it has no prompt queue (decision 0084).
 pub const AGENT_QUEUE_UNAVAILABLE: &str = "agent.queue_unavailable";
 /// The session's queue already holds the most prompts it may (decision 0084).
@@ -314,3 +318,5 @@ pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_ref
 pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
 /// `extensions.update` found the installed package already in place: nothing changed.
 pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
+/// `extensions.rollback` found no version kept for the package: nothing changed.
+pub const EXTENSION_NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";
