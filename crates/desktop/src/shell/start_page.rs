@@ -150,6 +150,7 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
         page.branch
             .clone()
             .unwrap_or_else(|| "No branch".to_owned()),
+        None,
         GIT_LATER,
         &theme,
         pill_focus("start-branch", window, cx),

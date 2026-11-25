@@ -22,11 +22,12 @@ use super::Shell;
 use super::start_page::{
     key_hints, profile_banner, project_title_link, refuse_send, starting_line,
 };
-use super::start_placement::{host_pill, pill, pill_focus, placement_card};
+use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
-    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails, branch_pill,
-    create_params, home_choice, home_start_params, no_project_branch_pill, no_project_start_params,
+    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails,
+    branch_pill, create_params, home_choice, home_start_params, no_project_branch_pill,
+    no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
@@ -182,20 +183,34 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
     let branch = {
         let shell = frame.shell.clone();
         let no_project = frame.no_project;
-        let trigger = pill(
-            "home-start-branch",
-            IconName::GitBranch,
-            labels.label,
-            Some(labels.detail),
-            !no_project,
-            &theme,
-            pill_focus("home-start-branch", window, cx),
-        )
-        .when(!no_project, |pill| {
-            pill.on_click(move |_, _, cx| {
+        let focus = pill_focus("home-start-branch", window, cx);
+        let trigger = if no_project {
+            // Off with "No project": the pill names why on hover and on keyboard focus.
+            off_pill(
+                "home-start-branch",
+                IconName::GitBranch,
+                labels.label,
+                Some(labels.detail),
+                NO_WORKTREE_REASON,
+                &theme,
+                focus,
+            )
+            .into_any_element()
+        } else {
+            pill(
+                "home-start-branch",
+                IconName::GitBranch,
+                labels.label,
+                Some(labels.detail),
+                true,
+                &theme,
+                focus,
+            )
+            .on_click(move |_, _, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.toggle_branch_menu(cx));
             })
-        });
+            .into_any_element()
+        };
         let dismiss = frame.shell.clone();
         Popover::new("home-start-branch-menu", trigger)
             .open(frame.details.branch_menu && !no_project)

@@ -17,6 +17,10 @@ pub const NEEDS_NEWER_SERVICE: &str = "Needs a newer service.";
 /// Why "No project" is off until the service can start an agent without a workspace (A95).
 pub const NO_PROJECT_NEEDS_SERVICE: &str = NEEDS_NEWER_SERVICE;
 
+/// Why the branch pill is off with "No project": the conversation runs in the conversations folder, with no worktree.
+pub const NO_WORKTREE_REASON: &str =
+    "A conversation with no project runs in the conversations folder, with no worktree.";
+
 /// Send's reason while "Use an existing branch" has no branch name to reuse.
 pub const NAME_THE_BRANCH: &str = "Name the branch to reuse.";
 

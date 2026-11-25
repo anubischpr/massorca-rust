@@ -693,6 +693,30 @@ fn no_project_turns_the_branch_pill_off_and_its_menu_stays_shut(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn the_branch_pill_off_with_no_project_says_why_on_hover(cx: &mut TestAppContext) {
+    use massorca_ui::tokens::DURATION_TOOLTIP_DELAY;
+    let (rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::AgentNoProjectOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    choose_no_project(cx);
+    draw(cx);
+    let center = cx
+        .debug_bounds("home-start-branch")
+        .expect("the branch pill is drawn")
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the disabled branch pill names its reason on hover"
+    );
+}
+
+#[gpui::test]
 fn no_project_sends_even_while_the_branch_to_reuse_is_unnamed(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     rig.updates
