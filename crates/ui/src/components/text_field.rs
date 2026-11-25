@@ -2683,6 +2683,18 @@ mod tests {
     }
 
     #[test]
+    fn a_forward_delete_run_undoes_as_one_step() {
+        let mut buffer = TextBuffer::new("abc");
+        buffer.move_home();
+        buffer.delete();
+        buffer.delete();
+        assert_eq!(buffer.text(), "c");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "abc");
+        assert_eq!(buffer.cursor(), 0);
+    }
+
+    #[test]
     fn a_double_click_selects_a_word_or_a_run_of_separators() {
         let mut buffer = TextBuffer::new("hello world");
         buffer.select_word_at(7);
@@ -2759,6 +2771,20 @@ mod tests {
         assert_eq!(caret_of(&field, cx), 0);
         cx.simulate_keystrokes(platform_keys("cmd-down", "ctrl-end"));
         assert_eq!(caret_of(&field, cx), 3);
+    }
+
+    #[gpui::test]
+    fn forward_word_delete_and_shift_word_right_work_in_a_field(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("one two three"));
+        focus_and_draw(&field, cx);
+        cx.simulate_keystrokes("home");
+        cx.simulate_keystrokes(platform_keys("alt-shift-right", "ctrl-shift-right"));
+        assert_eq!(selection_of(&field, cx), 0..3);
+        cx.simulate_keystrokes(platform_keys("alt-delete", "ctrl-delete"));
+        assert_eq!(text_of(&field, cx), " two three");
+        cx.simulate_keystrokes(platform_keys("alt-delete", "ctrl-delete"));
+        assert_eq!(text_of(&field, cx), " three");
     }
 
     #[gpui::test]

@@ -571,6 +571,18 @@ mod tests {
     }
 
     #[gpui::test]
+    fn forward_word_delete_and_shift_word_right_work_in_the_area(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).with_text("one two three"));
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes(platform_keys("cmd-up", "ctrl-home"));
+        cx.simulate_keystrokes(platform_keys("alt-shift-right", "ctrl-shift-right"));
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 0..3);
+        cx.simulate_keystrokes(platform_keys("alt-delete", "ctrl-delete"));
+        assert_eq!(text_of(&area, cx), " two three");
+    }
+
+    #[gpui::test]
     fn a_double_click_selects_a_word_and_a_triple_click_its_line(cx: &mut TestAppContext) {
         cx.update(bind_keys);
         let (area, cx) =
