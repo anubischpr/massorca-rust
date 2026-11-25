@@ -82,6 +82,8 @@ pub const ACCOUNTS_IMPORT_CANDIDATES: &str = "agent.accounts.import_candidates";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
+/// Names a chat from its first prompt and reply by a one-shot run of its kind (decision 0167, capability `agent-title/1`).
+pub const GENERATE_TITLE: &str = "agent.generate_title";
 
 /// Params: [`AgentQueueParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
 pub const QUEUE: &str = "agent.queue";
@@ -1199,6 +1201,28 @@ pub struct AccountsCheckParams {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+}
+
+/// Params of `agent.generate_title` (capability `agent-title/1`, decision 0167): the first prompt of a chat and, once the
+/// agent has answered, its first reply. Without `account`, the kind's active account runs the one-shot form; `model` is
+/// passed only by a kind that reuses its model flag for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateTitleParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+/// Result of `agent.generate_title`: at most four lowercase words joined by `-`, at most 48 characters of `a-z`, `0-9` and
+/// `-`. Never empty: a run that names no usable title is `agent.oneshot_failed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateTitleResult {
+    pub slug: String,
 }
 
 /// Payload of the `agent.accounts_changed` event, whose id is the kind.

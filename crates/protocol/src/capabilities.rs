@@ -49,6 +49,9 @@ pub const AGENT_CHAT: &str = "agent-chat/1";
 /// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
+/// Chat titles (`agent.generate_title`, decision 0167): a short title named from a chat's first prompt and reply by a
+/// one-shot run of the kind.
+pub const AGENT_TITLE: &str = "agent-title/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
