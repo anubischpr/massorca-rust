@@ -305,6 +305,11 @@ pub enum ProjectCommand {
         #[arg(long)]
         clear_icon: bool,
     },
+    /// Turns a folder project into a git project: `git init` and an empty first commit in its folder. Its folder workspaces stay.
+    InitGit {
+        /// Project id, name or path.
+        project: String,
+    },
 }
 
 #[derive(Debug, Args)]

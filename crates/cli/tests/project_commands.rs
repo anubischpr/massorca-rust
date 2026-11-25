@@ -342,3 +342,49 @@ fn adding_a_plain_folder_without_a_kind_warns_on_stderr_in_text_mode_only() {
         .success()
         .stderr(contains(warning).not());
 }
+
+#[test]
+fn init_git_turns_a_folder_project_into_a_git_project_and_refuses_it_again() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    std::fs::write(notes.join("notes.txt"), "keep me").expect("write notes");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+
+    let initialized = sandbox.json_ok("default", &["project", "init-git", "notes"]);
+
+    assert_eq!(initialized["kind"], "git");
+    assert_eq!(initialized["name"], "notes");
+    assert!(notes.join(".git").is_dir());
+    assert!(notes.join("notes.txt").is_file(), "the folder's files stay");
+    let again = sandbox
+        .run("default", &with_json(&["project", "init-git", "notes"]))
+        .code(1);
+    assert_eq!(
+        single_document(&again)["error"]["code"],
+        "project.already_git"
+    );
+}
+
+#[test]
+fn init_git_names_the_new_git_project_in_text_output() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox
+        .run(
+            "default",
+            &["project", "add", notes_text.as_str(), "--folder"],
+        )
+        .success();
+
+    sandbox
+        .run("default", &["project", "init-git", "notes"])
+        .success()
+        .stdout(contains("initialized Git for project notes (git)"));
+}

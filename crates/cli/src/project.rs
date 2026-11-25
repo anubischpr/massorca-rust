@@ -1,4 +1,4 @@
-//! `massorca project add|list|show|inspect|rm|set-base`: registering, unregistering, inspecting and setting the base of projects through the service.
+//! `massorca project add|list|show|inspect|rm|set-base|init-git`: registering, unregistering, inspecting, setting the base of, and initialising git in projects through the service.
 
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
@@ -109,6 +109,19 @@ pub async fn execute(
                 .call(projects::UPDATE, &ProjectUpdateParams { project, icon })
                 .await?;
             output.success(&updated, &[workspace_text::project_icon_line(&updated)]);
+        }
+        ProjectCommand::InitGit { project } => {
+            let project = paths.selector(&project)?;
+            let initialized: Project = client
+                .call(projects::INIT_GIT, &ProjectRef { project })
+                .await?;
+            output.success(
+                &initialized,
+                &[workspace_text::project_line(
+                    &initialized,
+                    "initialized Git for",
+                )],
+            );
         }
     }
     Ok(())
