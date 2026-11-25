@@ -10,6 +10,8 @@ mod extension_tests;
 mod extension_updates;
 mod host_pick;
 mod import;
+#[cfg(test)]
+mod import_tests;
 mod item;
 mod item_images;
 #[cfg(test)]

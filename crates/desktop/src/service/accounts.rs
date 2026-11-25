@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
+use crate::model::marketplace::ImportCandidates;
 
 /// Orders the account reads of one bridge, per kind. A read takes a number when it starts, and its answer reaches
 /// the store only if no newer read of the same kind has delivered already, so a stale list never wins.
@@ -118,6 +119,12 @@ impl ServiceHandle {
     ) -> Result<AccountsImported, Refusal> {
         self.ask(|reply| Command::Account(AccountCommand::Import { params, reply }))
             .await
+    }
+
+    /// `agent.accounts.import_candidates` (capability `agent-import-detect/1`); `None` until the service offers it.
+    pub async fn accounts_import_candidates(&self, _kind: &str) -> Option<ImportCandidates> {
+        // TODO(agent-import-detect/1): ask the service once `agent.accounts.import_candidates` lands.
+        None
     }
 
     /// `agent.accounts.activate`: makes an account the kind's active one, or a project's choice.

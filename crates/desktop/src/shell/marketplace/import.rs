@@ -2,14 +2,20 @@
 //! into a new account. The folder is only read, and the answer never carries a secret.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, WeakEntity, div};
+use gpui::{
+    AnyElement, App, Context, Entity, PathPromptOptions, Subscription, WeakEntity, div, px,
+};
 use massorca_protocol::methods::agents::AccountsImportParams;
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::TYPE_BODY_SM;
+use massorca_ui::tokens::{SPACE_1, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
-use crate::model::marketplace::import_outcome;
+use crate::model::marketplace::{
+    FolderField, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
+    import_outcome,
+};
 use crate::shell::Shell;
 
 /// Said when Import is pressed with no folder.
@@ -19,12 +25,30 @@ const NO_FOLDER: &str = "Enter the folder that holds the login files.";
 pub(in crate::shell) struct ImportDialog {
     kind: String,
     field: Entity<TextField>,
+    /// The placeholder the field shows while empty: the folder the import expects, else the manual prompt.
+    placeholder: String,
+    /// What the service detected for the kind; `None` while the capability is absent or not yet answered.
+    detection: Option<ImportCandidates>,
     error: Option<String>,
     /// An import is running, so Import waits for its answer.
     running: bool,
+    /// Redraws the dialog as the folder changes, so its status line follows what is typed.
+    _changes: Subscription,
 }
 
 impl ImportDialog {
+    /// The candidate the service listed for this kind.
+    fn candidate(&self) -> Option<&ImportCandidate> {
+        self.detection
+            .as_ref()
+            .and_then(|found| found.for_kind(&self.kind))
+    }
+
+    /// What the dialog shows for the folder `edited` holds: `None` when it opens, the typed text afterwards.
+    fn folder(&self, edited: Option<&str>) -> FolderField {
+        folder_field(self.detection.is_some(), self.candidate(), edited)
+    }
+
     #[cfg(test)]
     pub(in crate::shell) fn field(&self) -> &Entity<TextField> {
         &self.field
@@ -34,24 +58,50 @@ impl ImportDialog {
     pub(in crate::shell) fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
+
+    #[cfg(test)]
+    pub(in crate::shell) fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    #[cfg(test)]
+    pub(in crate::shell) fn detection(&self) -> Option<&ImportCandidates> {
+        self.detection.as_ref()
+    }
+}
+
+/// The folder field holding `text`, showing `placeholder` while empty, with the subscription that redraws the dialog.
+fn folder_entity(
+    cx: &mut Context<Shell>,
+    placeholder: &str,
+    text: &str,
+) -> (Entity<TextField>, Subscription) {
+    let field = cx.new(|cx| {
+        TextField::new(cx)
+            .label("Folder")
+            .placeholder(placeholder.to_owned())
+            .with_text(text)
+            .mono()
+    });
+    let changes = cx.observe(&field, |_, _, cx| cx.notify());
+    (field, changes)
 }
 
 impl Shell {
-    /// Opens the import dialog of `kind`, with an empty folder field.
+    /// Opens the import dialog of `kind`; its folder field fills in once the service answers what it detects.
     pub(super) fn open_account_import(&mut self, kind: &str, cx: &mut Context<Self>) {
-        let field = cx.new(|cx| {
-            TextField::new(cx)
-                .label("Folder")
-                .placeholder("Folder that holds the login files")
-                .mono()
-        });
+        let (field, changes) = folder_entity(cx, MANUAL_PLACEHOLDER, "");
         self.marketplace_accounts.import = Some(ImportDialog {
             kind: kind.to_owned(),
             field,
+            placeholder: MANUAL_PLACEHOLDER.to_owned(),
+            detection: None,
             error: None,
             running: false,
+            _changes: changes,
         });
         cx.notify();
+        self.detect_account_import(kind, cx);
     }
 
     pub(super) fn close_account_import(&mut self, cx: &mut Context<Self>) {
@@ -59,8 +109,82 @@ impl Shell {
         cx.notify();
     }
 
-    /// Imports from the folder the field holds. The dialog stays open with the reason when nothing was kept, and the
-    /// rows follow the read the answer triggers.
+    /// Asks the service what it detects for `kind`. Without the capability the answer is none and the field stays manual.
+    fn detect_account_import(&self, kind: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let kind = kind.to_owned();
+        cx.spawn(async move |this, cx| {
+            let detection = service.accounts_import_candidates(&kind).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.finish_account_detection(&kind, detection, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Prefills the folder from what the service detected, unless the person has typed into the field already.
+    pub(in crate::shell) fn finish_account_detection(
+        &mut self,
+        kind: &str,
+        detection: Option<ImportCandidates>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.marketplace_accounts.import.as_mut() else {
+            return;
+        };
+        if dialog.kind != kind || detection.is_none() {
+            return;
+        }
+        dialog.detection = detection;
+        let shown = dialog.folder(None);
+        let typed = dialog.field.read(cx).text().to_owned();
+        let text = if typed.is_empty() { shown.value } else { typed };
+        let (field, changes) = folder_entity(cx, &shown.placeholder, &text);
+        dialog.field = field;
+        dialog._changes = changes;
+        dialog.placeholder = shown.placeholder;
+        cx.notify();
+    }
+
+    /// "Browse": the folder the system's dialog picks goes into the field, as the Add host program picker does.
+    pub(super) fn browse_account_import(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                let _ = this.update(cx, |shell, cx| {
+                    if let Some(folder) = paths.first() {
+                        shell.set_account_import_folder(&folder.to_string_lossy(), cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Puts `folder` in the field and keeps its placeholder; a running import is not changed.
+    fn set_account_import_folder(&mut self, folder: &str, cx: &mut Context<Self>) {
+        let Some(dialog) = self.marketplace_accounts.import.as_mut() else {
+            return;
+        };
+        if dialog.running {
+            return;
+        }
+        let (field, changes) = folder_entity(cx, &dialog.placeholder, folder);
+        dialog.field = field;
+        dialog._changes = changes;
+        dialog.error = None;
+        cx.notify();
+    }
+
+    /// Imports from the folder the field holds, or from the detected folder while it is kept. The dialog stays open
+    /// with the reason when nothing was kept, and the rows follow the read the answer triggers.
     pub(super) fn submit_account_import(&mut self, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
@@ -71,7 +195,12 @@ impl Shell {
         if dialog.running {
             return;
         }
-        let from = dialog.field.read(cx).text().trim().to_owned();
+        let typed = dialog.field.read(cx).text().to_owned();
+        // TODO(agent-import-detect/1): send `folder.from` as optional once the protocol makes `from` optional.
+        let from = dialog
+            .folder(Some(typed.as_str()))
+            .from
+            .unwrap_or_else(|| typed.trim().to_owned());
         if from.is_empty() {
             dialog.error = Some(NO_FOLDER.to_owned());
             cx.notify();
@@ -121,7 +250,30 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
         .find(|item| item.agent_kind.as_deref() == Some(import.kind.as_str()))
         .map_or_else(|| import.kind.clone(), |item| item.name.clone());
     let theme = *cx.theme();
-    let (submit, dismiss) = (weak.clone(), weak.clone());
+    let typed = import.field.read(cx).text().to_owned();
+    let folder = import.folder(Some(typed.as_str()));
+    let (submit, dismiss, browse) = (weak.clone(), weak.clone(), weak.clone());
+    let mut folder_section = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_1))
+        .child(import.field.clone());
+    if let Some(status) = folder.status {
+        folder_section = folder_section.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(status),
+        );
+    }
+    folder_section = folder_section.child(
+        Button::new("marketplace-import-browse", "Browse")
+            .variant(ButtonVariant::Secondary)
+            .disabled(import.running)
+            .on_click(move |_, cx| {
+                let _ = browse.update(cx, |shell, cx| shell.browse_account_import(cx));
+            }),
+    );
     let mut dialog = Dialog::new("marketplace-import", format!("Import account to {agent}"))
         .open(true)
         .child(
@@ -132,7 +284,7 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
                     "Copies the agent's login files from a folder where the service runs into a new account. The folder is only read.",
                 ),
         )
-        .child(import.field.clone())
+        .child(folder_section)
         .action(if import.running { "Importing..." } else { "Import" })
         .action_disabled(import.running)
         .cancel_label("Cancel")
