@@ -90,7 +90,8 @@
       "id": "default",
       "label": "Manual",
       "description": "Asks before file edits and commands; reads in the working directories run without asking.",
-      "args": ["--permission-mode", "default"],
+      "args": ["--permission-mode", "{value}"],
+      "launch_values": ["default", "manual"],
       "icon": "hand",
       "tone": "normal"
     },

@@ -666,6 +666,14 @@ mod tests {
         let claude = &kinds[0];
         // The vendor's own default (decision 0083): `auto` from 2.1.283, `default` before.
         assert_eq!(claude.default_permission_mode.as_deref(), Some("auto"));
+        // Manual passes the value its CLI's help lists (decision 0164): `manual` where only that is listed.
+        assert_eq!(
+            claude
+                .permission_mode("default")
+                .expect("Manual is declared")
+                .launch_values,
+            ["default", "manual"]
+        );
         assert_eq!(
             modes_of(claude),
             [
@@ -679,7 +687,7 @@ mod tests {
                 (
                     "default",
                     "Manual",
-                    vec!["--permission-mode", "default"],
+                    vec!["--permission-mode", "{value}"],
                     None,
                     false
                 ),

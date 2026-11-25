@@ -177,7 +177,7 @@ impl Agents {
             ));
         }
         let (decl, _) = self.startable_kind(&kind)?;
-        modes::plan_start(&decl, params.permission_mode.as_deref())?;
+        modes::plan_start(&decl, params.permission_mode.as_deref(), None)?;
         let parent_workspace = self
             .inner
             .config

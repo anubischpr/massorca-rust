@@ -47,6 +47,11 @@ const DELEGATE_COMMAND: &str = "massorca agent delegate";
 const HELP_WITHOUT_INSTRUCTIONS_ENV: &str = "FAKE_AGENT_HELP_WITHOUT_INSTRUCTIONS";
 /// Names a file `--help` appends a line to on each run.
 const HELP_MARKER_ENV: &str = "FAKE_AGENT_HELP_MARKER";
+/// Comma-separated values `--help` lists as the choices of `--permission-mode`, the way the vendor's help does. Unset, the
+/// option is not listed (decision 0164).
+const HELP_PERMISSION_CHOICES_ENV: &str = "FAKE_AGENT_HELP_PERMISSION_CHOICES";
+/// Set to `1`, `--help` exits 1 and prints nothing, as a CLI whose help cannot be read (decision 0164).
+const HELP_FAILS_ENV: &str = "FAKE_AGENT_HELP_FAILS";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
@@ -174,7 +179,7 @@ impl Arguments {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
-                "--mode" if words.is_empty() => parsed.mode = args.next(),
+                "--mode" | "--permission-mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
                 "--instructions" if words.is_empty() => parsed.instructions = args.next(),
@@ -559,6 +564,9 @@ fn help() -> ExitCode {
     {
         let _ = writeln!(file, "help");
     }
+    if env::var_os(HELP_FAILS_ENV).is_some_and(|value| value == "1") {
+        return ExitCode::from(1);
+    }
     let mut text = String::from(
         "Usage: massorca-fake-agent [OPTIONS] [PROMPT]
   --session-id <ID>
@@ -571,6 +579,17 @@ fn help() -> ExitCode {
             "  --instructions <TEXT>
 ",
         );
+    }
+    if let Some(choices) = env::var_os(HELP_PERMISSION_CHOICES_ENV) {
+        let listed: Vec<String> = choices
+            .to_string_lossy()
+            .split(',')
+            .map(|choice| format!("\"{}\"", choice.trim()))
+            .collect();
+        text.push_str(&format!(
+            "  --permission-mode <MODE>  Permission mode (choices: {})\n",
+            listed.join(", ")
+        ));
     }
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());

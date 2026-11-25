@@ -200,9 +200,14 @@ pub struct PermissionModeDecl {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Launch arguments that select the mode, after the kind's own. Empty means the mode has no launch flag.
+    /// Launch arguments that select the mode, after the kind's own. Empty means the mode has no launch flag. With
+    /// `launch_values`, `args` holds [`VALUE_PLACEHOLDER`] once, right after its flag (decision 0164).
     #[serde(default)]
     pub args: Vec<String>,
+    /// The vendor's spellings of the mode's launch value, in preference order (decision 0164). The launch passes the first
+    /// one the CLI's `--help` lists for the flag before the placeholder, else the first one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_values: Vec<String>,
     /// How a running session switches to the mode, when the vendor documents a deterministic way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_switch: Option<LiveSwitchDecl>,
@@ -224,6 +229,23 @@ pub struct PermissionModeDecl {
     /// shows its name, and a caller naming it is still served.
     #[serde(default = "offered", skip_serializing_if = "is_offered")]
     pub selectable: bool,
+}
+
+impl PermissionModeDecl {
+    /// The launch arguments with the mode's placeholder replaced by `value` (decision 0164). A mode without launch values
+    /// passes `args` as declared.
+    pub(crate) fn args_for(&self, value: &str) -> Vec<String> {
+        launch_args(None, Some(self.args.as_slice()), value)
+    }
+
+    /// The flag the launch value follows in `args`, when the mode declares a placeholder for it (decision 0164).
+    pub(crate) fn value_flag(&self) -> Option<&str> {
+        let index = self
+            .args
+            .iter()
+            .position(|arg| arg.as_str() == VALUE_PLACEHOLDER)?;
+        self.args.get(index.checked_sub(1)?).map(String::as_str)
+    }
 }
 
 /// The tone of an ordinary mode.
@@ -972,7 +994,7 @@ impl KindDecl {
             if mode.label.trim().is_empty() {
                 problems.push(format!("{field}: label must not be empty"));
             }
-            no_placeholder(&format!("{field}.args"), &mode.args, problems);
+            launch_values_problems(&field, mode, problems);
             if let Some(switch) = &mode.live_switch
                 && (switch.text.trim().is_empty() || switch.text.chars().any(char::is_control))
             {
@@ -1433,6 +1455,48 @@ fn needs_placeholder(field: &str, args: &[String], problems: &mut Vec<String>) {
 fn no_placeholder(field: &str, args: &[String], problems: &mut Vec<String>) {
     if args.iter().any(|arg| arg.contains(['{', '}'])) {
         problems.push(format!("{field} may not use placeholders"));
+    }
+}
+
+/// The rules of a permission mode's `launch_values` (decision 0164). Without values, `args` holds no placeholder. With
+/// values, `args` holds [`VALUE_PLACEHOLDER`] exactly once, right after a flag, and the values are valid and distinct.
+fn launch_values_problems(field: &str, mode: &PermissionModeDecl, problems: &mut Vec<String>) {
+    if mode.launch_values.is_empty() {
+        no_placeholder(&format!("{field}.args"), &mode.args, problems);
+        return;
+    }
+    let placeholders: usize = mode
+        .args
+        .iter()
+        .map(|arg| arg.matches(VALUE_PLACEHOLDER).count())
+        .sum();
+    let after_flag = mode.args.iter().enumerate().any(|(index, arg)| {
+        arg.as_str() == VALUE_PLACEHOLDER && index > 0 && valid_option_flag(&mode.args[index - 1])
+    });
+    if placeholders != 1 || !after_flag {
+        problems.push(format!(
+            "{field}.args must hold {VALUE_PLACEHOLDER} exactly once, right after its flag"
+        ));
+    }
+    if mode
+        .args
+        .iter()
+        .any(|arg| arg.replace(VALUE_PLACEHOLDER, "").contains(['{', '}']))
+    {
+        problems.push(format!(
+            "{field}.args may use {VALUE_PLACEHOLDER} as its only placeholder"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for value in &mode.launch_values {
+        if !valid_option_value(value) {
+            problems.push(format!(
+                "{field}.launch_values {value:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
+            ));
+        }
+        if !seen.insert(value.as_str()) {
+            problems.push(format!("{field}.launch_values repeats {value:?}"));
+        }
     }
 }
 

@@ -48,7 +48,7 @@ use crate::prompt;
 use crate::provided_env::{
     EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
 };
-use crate::resolve::{SearchEnv, resolve_first};
+use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
@@ -262,6 +262,9 @@ pub struct AgentsConfig {
     /// The variables the vendor CLIs read, for the check that a session's saved conversation exists (decision 0160).
     /// `None` checks only account homes in the profile.
     pub vendor_env: Option<crate::VendorEnv>,
+    /// The search path agent programs are found on when kinds are listed and started: the host's, as the extension
+    /// install check searches it (decision 0164).
+    pub vendor_search: VendorSearch,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -445,11 +448,16 @@ impl Agents {
         self.inner.config.kind_packages.as_ref()
     }
 
-    /// Every declared kind, read again from the profile, with programs resolved on the service's `PATH`.
+    /// The search path agent programs are found on: the host's, or the one the config names (decision 0164).
+    pub(crate) fn program_search(&self) -> SearchEnv {
+        self.inner.config.vendor_search.env()
+    }
+
+    /// Every declared kind, read again from the profile, with programs resolved on the program search (decision 0164).
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
         let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
-            .views(profile_dir, &SearchEnv::current());
+            .views(profile_dir, &self.program_search());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
@@ -579,8 +587,12 @@ impl Agents {
             None => None,
         };
         let (decl, program) = self.startable_kind(&params.kind)?;
-        let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
-            .with_caller_args(&params.args);
+        let mode = modes::plan_start(
+            &decl,
+            params.permission_mode.as_deref(),
+            Some(program.as_path()),
+        )?
+        .with_caller_args(&params.args);
         // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
         let mode_args = [
             mode.args.clone(),
@@ -889,6 +901,7 @@ impl Agents {
             permission_mode,
             &row.mode,
             row.pending_permission_mode.as_deref(),
+            Some(program.as_path()),
         )?;
         let workspace = self
             .inner
@@ -1088,7 +1101,7 @@ impl Agents {
                 &format!("kind {} declares no resume form", row.kind),
             ));
         }
-        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
                 format!(
@@ -1376,7 +1389,7 @@ impl Agents {
         let decl = self.declared_kind(id).ok()?;
         decl.permission_modes
             .iter()
-            .find(|mode| mode.bypass && modes::plan(&decl, mode).is_ok())
+            .find(|mode| mode.bypass && modes::plan(&decl, mode, None).is_ok())
             .map(|mode| mode.id.clone())
     }
 
@@ -1806,7 +1819,7 @@ impl Agents {
                 format!("agent kind {id} is invalid: {}", entry.problems.join("; ")),
             )
         })?;
-        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
                 format!("agent kind {id} is not installed: none of its programs was found"),
@@ -2413,9 +2426,17 @@ pub(crate) mod tests {
         service_with(Arc::new(crate::BuiltInPackages))
     }
 
-    /// [`service`], with kinds from `packages`.
+    /// [`service`], with kinds from `packages`, and the process `PATH` as the program search.
     pub(crate) fn service_with(
         packages: Arc<dyn KindPackages>,
+    ) -> (Agents, String, tempfile::TempDir) {
+        service_searching(packages, VendorSearch::fixed(SearchEnv::current()))
+    }
+
+    /// [`service_with`], with the programs searched for on `vendor_search`.
+    pub(crate) fn service_searching(
+        packages: Arc<dyn KindPackages>,
+        vendor_search: VendorSearch,
     ) -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
@@ -2461,6 +2482,7 @@ pub(crate) mod tests {
             env_provider: None,
             kind_packages: packages,
             vendor_env: None,
+            vendor_search,
         });
         (agents, workspace.id, profile)
     }
@@ -2881,5 +2903,74 @@ mod not_enabled_tests {
             error.message,
             "Antigravity is turned off; install or enable it in the Marketplace."
         );
+    }
+
+    /// A Gentle Shell that only the registry's user `Path` lists (the bundled install, decision 0092) is listed as detected
+    /// and starts on its launcher, as the extension's install check finds it (decision 0164). Without that folder it is
+    /// neither detected nor startable.
+    #[cfg(windows)]
+    #[test]
+    fn a_launcher_only_on_the_registry_user_path_is_listed_detected_and_started() {
+        use std::ffi::OsString;
+
+        use super::tests::service_searching;
+        use crate::resolve::merge_search_path;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle").join("bin");
+        let process = dir.path().join("process");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&process).unwrap();
+        let launcher = bundle.join("gentle-shell.cmd");
+        std::fs::write(&launcher, "@echo off\r\n").unwrap();
+        let process_text = process.display().to_string();
+        let user = bundle.display().to_string();
+        let pathext = Some(".COM;.EXE;.BAT;.CMD".to_owned());
+        let process_only = SearchEnv {
+            path: Some(OsString::from(&process_text)),
+            pathext: pathext.clone(),
+        };
+        let with_user_path = SearchEnv {
+            path: Some(OsString::from(merge_search_path(
+                &process_text,
+                None,
+                Some(&user),
+            ))),
+            pathext,
+        };
+        let is_launcher = |found: &str| found.eq_ignore_ascii_case(&launcher.to_string_lossy());
+
+        let (without, _, _profile) = service_searching(
+            Arc::new(crate::BuiltInPackages),
+            VendorSearch::fixed(process_only),
+        );
+        let listed = without.kinds();
+        let gentle = listed
+            .kinds
+            .iter()
+            .find(|kind| kind.id == "gentle-shell")
+            .expect("the built-in kind is listed");
+        assert!(!gentle.detected, "{gentle:?}");
+        assert!(without.startable_kind("gentle-shell").is_err());
+
+        let (with, _, _profile) = service_searching(
+            Arc::new(crate::BuiltInPackages),
+            VendorSearch::fixed(with_user_path),
+        );
+        let listed = with.kinds();
+        let gentle = listed
+            .kinds
+            .iter()
+            .find(|kind| kind.id == "gentle-shell")
+            .expect("the built-in kind is listed");
+        assert!(gentle.detected, "{gentle:?}");
+        assert!(
+            gentle.program_path.as_deref().is_some_and(is_launcher),
+            "{gentle:?}"
+        );
+        let (_, program) = with
+            .startable_kind("gentle-shell")
+            .expect("it starts on its launcher");
+        assert!(is_launcher(&program.to_string_lossy()), "{program:?}");
     }
 }
