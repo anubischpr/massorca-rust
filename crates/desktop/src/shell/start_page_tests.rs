@@ -185,6 +185,34 @@ fn the_start_page_places_its_host_project_and_branch_in_one_card(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn the_placement_card_sits_on_the_composer_inset_twelve_px_from_each_side(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    let card = cx
+        .debug_bounds("start-placement")
+        .expect("the placement card is drawn");
+    let column = cx
+        .debug_bounds("composer-column")
+        .expect("the composer column is drawn");
+    let inset_left = f32::from(card.origin.x) - f32::from(column.origin.x);
+    let inset_right =
+        f32::from(column.origin.x + column.size.width) - f32::from(card.origin.x + card.size.width);
+    let gap_above = f32::from(column.origin.y) - f32::from(card.origin.y + card.size.height);
+    assert!(
+        (inset_left - 12.0).abs() <= EDGE_TOLERANCE,
+        "the card starts {inset_left} px inside the composer's left edge, not 12 px"
+    );
+    assert!(
+        (inset_right - 12.0).abs() <= EDGE_TOLERANCE,
+        "the card ends {inset_right} px inside the composer's right edge, not 12 px"
+    );
+    assert!(
+        gap_above.abs() <= EDGE_TOLERANCE,
+        "the card sits {gap_above} px above the composer, not on its top edge"
+    );
+}
+
+#[gpui::test]
 fn the_chosen_agent_stays_chosen_when_the_installed_kinds_are_listed_again(
     cx: &mut TestAppContext,
 ) {

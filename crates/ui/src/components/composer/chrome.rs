@@ -625,13 +625,15 @@ impl Render for Composer {
         bottom = bottom.child(self.primary_button(action, cx));
 
         let mut column = div()
+            .debug_selector(|| "composer-column".to_owned())
             .w_full()
             .max_w(px(LAYOUT_CONVERSATION_READING))
             .flex()
             .flex_col()
             .gap(px(SPACE_2))
             .p(px(SPACE_3))
-            .rounded(px(RADIUS_XL))
+            .rounded_t(px(top_corner_radius(self.joined_top)))
+            .rounded_b(px(RADIUS_XL))
             .bg(p.surface.raised)
             .border_1()
             .border_color(p.border.default)
@@ -683,13 +685,18 @@ impl Render for Composer {
             .w_full()
             .flex()
             .justify_center()
-            .px(px(SPACE_4))
+            .when(!self.joined_top, |root| root.px(px(SPACE_4)))
             .child(column);
         for (menu, bounds) in menus.into_iter().flatten() {
             root = root.child(menu_overlay(&menu, MenuOrigin::Below(bounds), cx));
         }
         root
     }
+}
+
+/// The composer's top corner radius: square under a placement card that joins its top edge.
+fn top_corner_radius(joined_top: bool) -> f32 {
+    if joined_top { 0.0 } else { RADIUS_XL }
 }
 
 /// The microphone of the bottom row: disabled with its reason while voice input is not there yet.
@@ -720,5 +727,11 @@ mod tests {
         .expect("reported");
         assert!(node.is_disabled());
         assert_eq!(node.description(), Some("Voice input comes later."));
+    }
+
+    #[test]
+    fn a_composer_under_a_placement_card_has_square_top_corners_only() {
+        assert_eq!(top_corner_radius(true), 0.0);
+        assert_eq!(top_corner_radius(false), RADIUS_XL);
     }
 }

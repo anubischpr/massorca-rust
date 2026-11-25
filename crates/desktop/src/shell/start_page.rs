@@ -513,6 +513,7 @@ impl Shell {
                             .leading_control(switch)
                             .voice_unavailable(VOICE_LATER)
                             .sends_empty()
+                            .joined_top(true)
                     });
                     let events = cx.subscribe(
                         &entity,

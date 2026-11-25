@@ -131,6 +131,8 @@ pub struct Composer {
     enter_inserts_newline: bool,
     /// Send works with a blank draft (the start page creates a workspace with no prompt).
     sends_empty: bool,
+    /// A placement card joins the top edge: square top corners, and the composer spans the card's column.
+    joined_top: bool,
     /// A control shown after the access chip (the start page's Chat / Terminal switch).
     leading: Option<LeadingControl>,
     /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
@@ -199,6 +201,7 @@ impl Composer {
             error: None,
             enter_inserts_newline: false,
             sends_empty: false,
+            joined_top: false,
             leading: None,
             send_unavailable: None,
             voice_unavailable: None,
@@ -320,6 +323,13 @@ impl Composer {
         self.set_disabled_reason(reason, cx);
         self.sign_in = signed_out;
         cx.notify();
+    }
+
+    /// A placement card joins the top edge: the top corners are square, and the composer spans the card's column so
+    /// the card's inset lines up with its sides.
+    pub fn joined_top(mut self, joined: bool) -> Self {
+        self.joined_top = joined;
+        self
     }
 
     /// Lets Send and Enter go through with a blank draft.
