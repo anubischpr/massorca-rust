@@ -7,6 +7,7 @@ mod catalogue;
 mod extension_items;
 mod extension_refusals;
 mod host_target;
+mod hosted_services;
 mod install_review;
 mod item_images;
 mod item_page;
@@ -26,6 +27,10 @@ pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;
+pub use hosted_services::{
+    ConnectFields, HostedServicesView, ServiceAction, ServiceRow, ServicesState, connect_fields,
+    service_row,
+};
 pub use install_review::{
     install_button_label, installer_runs, review_details, review_lines, shown_risk,
 };
