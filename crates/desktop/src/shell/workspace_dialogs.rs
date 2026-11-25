@@ -2,6 +2,7 @@
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
+use super::project_mark::project_mark;
 use std::path::Path;
 
 use super::Shell;
@@ -50,12 +51,12 @@ pub(super) fn project_menu(
         choices.push(None);
     }
     for row in project_menu_rows(projects) {
-        entries.push(
-            MenuItem::new(row.label.clone())
-                .icon(icon_of(row.icon))
-                .checked(chosen == Some(&row.choice))
-                .into(),
-        );
+        let item = MenuItem::new(row.label.clone()).checked(chosen == Some(&row.choice));
+        let item = match row.glyph {
+            Some(glyph) => item.leading_element(move || project_mark(&glyph)),
+            None => item.icon(icon_of(row.icon)),
+        };
+        entries.push(item.into());
         choices.push(Some(ProjectMenuChoice::Project(row.choice)));
     }
     entries.push(MenuEntry::Separator);

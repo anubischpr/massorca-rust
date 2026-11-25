@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::Shell;
-use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
+use super::start_placement::{host_pill, off_pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
@@ -180,9 +180,9 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
     );
     let project = {
         let shell = frame.shell.clone();
-        pill(
+        super::start_placement::pill_with(
             "start-project",
-            IconName::Folder,
+            super::project_mark::project_mark(&page.icon),
             page.project.clone(),
             None,
             true,
