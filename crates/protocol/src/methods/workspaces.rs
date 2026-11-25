@@ -119,6 +119,10 @@ pub struct WorkspaceRemoveParams {
     /// Forgets a row whose directory git does not recognise as its worktree; the directory stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_orphan: bool,
+    /// Removes the workspaces of delegated children first, deepest first, each with the same checks and waivers
+    /// (decision 0110). Without it a workspace with child workspaces is refused with `workspace.has_children`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_children: bool,
 }
 
 /// Result of `workspace.remove`.
@@ -132,6 +136,9 @@ pub struct WorkspaceRemoved {
     /// git does not register as a worktree. Absent (false) when the directory was removed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub directory_kept: bool,
+    /// The delegated children's workspaces removed first under `with_children`, deepest first. Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_children: Vec<WorkspaceRemoved>,
 }
 
 /// Params of `workspace.update`. A field left out keeps its value; an empty `comment` clears it.

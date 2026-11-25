@@ -138,6 +138,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "git.patch",
             "git.pull",
             "git.push",
+            "git.show-file",
             "git.stage",
             "git.status",
             "git.switch",
