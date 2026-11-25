@@ -47,6 +47,12 @@ pub const WORKSPACE_NAME_NOT_GENERATED: &str = "workspace.name_not_generated";
 pub const WORKSPACE_BRANCH_CHANGED: &str = "workspace.branch_changed";
 /// The workspace's branch has an upstream or a remote copy, so renaming it would split it from what others see.
 pub const WORKSPACE_BRANCH_PUBLISHED: &str = "workspace.branch_published";
+/// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
+pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
+/// The project's `orca.yaml` defines no script of the kind asked for.
+pub const SCRIPT_NOT_FOUND: &str = "script.not_found";
+/// The script's content no longer has the hash the caller asked to trust.
+pub const SCRIPT_CHANGED: &str = "script.changed";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.

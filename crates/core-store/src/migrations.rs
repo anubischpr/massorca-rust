@@ -563,6 +563,28 @@ CREATE TABLE agent_chat_text_chunks (
 "#,
         foreign_keys_off: false,
     },
+    // Archive (hide) of an agent session (decision 0163): when it was archived; NULL when it is not. Archiving keeps the
+    // record, its terminal and its workspace; only lists leave it out.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN archived_at INTEGER;
+"#,
+        foreign_keys_off: false,
+    },
+    // Trusted repository scripts (decision 0095): per project and script kind, the SHA-256 of the one content the owner
+    // trusted. A changed script has another hash, so it needs trust again.
+    Migration {
+        sql: r#"
+CREATE TABLE script_trust (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    trusted_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind)
+);
+"#,
+        foreign_keys_off: false,
+    },
     // Whether the service chose a workspace's name (decision 0111): only such a name may be renamed for the person.
     Migration {
         sql: r#"

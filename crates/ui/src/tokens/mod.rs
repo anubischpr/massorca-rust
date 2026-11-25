@@ -101,6 +101,36 @@ pub enum Easing {
 mod tests {
     use super::*;
 
+    /// The banner palette and its end stop as Ruling R-IB1 gives them: name, dark and light.
+    const BANNER_TOKENS: [(&str, &str, &str); 9] = [
+        ("banner.palette.1", "#457255", "#cfe5d6"),
+        ("banner.palette.2", "#407071", "#cde4e4"),
+        ("banner.palette.3", "#4c6b97", "#d3deef"),
+        ("banner.palette.4", "#6462a4", "#dcdbf0"),
+        ("banner.palette.5", "#7d5d95", "#e5d9ee"),
+        ("banner.palette.6", "#935870", "#efd8e1"),
+        ("banner.palette.7", "#7d653d", "#ecdfc8"),
+        ("banner.palette.8", "#666c42", "#e2e5c9"),
+        ("banner.end", "#686a69", "#e4e5e4"),
+    ];
+
+    fn hex(text: &str) -> Color {
+        let byte = |at: usize| u8::from_str_radix(&text[at..at + 2], 16).unwrap();
+        Color::rgba8(byte(1), byte(3), byte(5), 1.0)
+    }
+
+    #[test]
+    fn banner_palette_tokens_hold_the_ruled_colours_in_both_themes() {
+        for (name, dark, light) in BANNER_TOKENS {
+            assert_eq!(Palette::DARK.get(name), Some(hex(dark)), "{name} in dark");
+            assert_eq!(
+                Palette::LIGHT.get(name),
+                Some(hex(light)),
+                "{name} in light"
+            );
+        }
+    }
+
     #[test]
     fn both_palettes_resolve_every_name_the_same_way() {
         for name in PALETTE_NAMES {

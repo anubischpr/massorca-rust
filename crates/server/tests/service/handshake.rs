@@ -27,6 +27,7 @@ async fn welcome_offers_the_registered_capabilities() {
     assert_eq!(
         welcome.capabilities,
         [
+            capabilities::AGENT_ARCHIVE,
             capabilities::AGENT_IMPORT_DETECT,
             capabilities::AGENT_MODES,
             capabilities::AGENT_NO_PROJECT,
@@ -48,6 +49,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::NETWORK,
             capabilities::PROJECT_UPDATE,
             capabilities::PROJECTS,
+            capabilities::SCRIPT_TRUST,
             capabilities::SECRETS,
             capabilities::SERVICE,
             capabilities::SERVICES,

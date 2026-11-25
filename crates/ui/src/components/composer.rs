@@ -531,6 +531,7 @@ mod tests {
                 kind: AgentKind::Claude,
                 availability: AgentAvailability::Ready,
                 list: ModelList::Loaded,
+                brand: None,
                 models: vec![ModelOption {
                     id: "opus".into(),
                     name: "Opus 5.5".into(),
@@ -815,6 +816,7 @@ mod tests {
             kind,
             availability: AgentAvailability::Ready,
             list: ModelList::Loaded,
+            brand: None,
             models: vec![ModelOption {
                 id: model.into(),
                 name: model.into(),

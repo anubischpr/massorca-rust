@@ -1,17 +1,22 @@
 //! Setup scripts on workspace create (decision 0086): the new worktree's `orca.yaml` setup runs in a service terminal in
-//! the workspace with the workspace's variables; `no_setup` and a project without a script start no terminal.
+//! the workspace with the workspace's variables; `no_setup` and a project without a script start no terminal. A script
+//! runs only once the owner trusts its exact content (decision 0095).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
-use massorca_protocol::methods::projects::{self, Project, ProjectAddParams};
+use massorca_protocol::codes;
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectScript, ProjectScripts, ProjectScriptsParams,
+    ProjectTrustScriptParams, ScriptKind,
+};
 use massorca_protocol::methods::terminals::{self, Terminal, TerminalList, TerminalListParams};
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceSetup,
 };
 
-use super::common::{connect, start, stop, temp_home};
+use super::common::{connect, remote_code, start, stop, temp_home};
 use super::git_fixture::git;
 
 const OUTPUT: &str = "setup-out.txt";
@@ -34,7 +39,7 @@ fn env_script() -> &'static str {
 }
 
 /// A repository whose committed `orca.yaml` holds `script` as `scripts.setup`, when given.
-fn repo_with_setup(dir: &Path, script: Option<&str>) {
+pub(super) fn repo_with_setup(dir: &Path, script: Option<&str>) {
     std::fs::create_dir_all(dir).expect("create repository dir");
     git(dir, &["init", "-q"]);
     std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
@@ -51,7 +56,7 @@ fn repo_with_setup(dir: &Path, script: Option<&str>) {
     git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
-async fn add_project(client: &Client, home: &Path, repo: &Path) -> Project {
+pub(super) async fn add_project(client: &Client, home: &Path, repo: &Path) -> Project {
     client
         .call(
             projects::ADD,
@@ -89,7 +94,47 @@ async fn create(client: &Client, project: &str, name: &str, no_setup: bool) -> W
         .expect("create")
 }
 
-async fn terminals_of(client: &Client, workspace: &str) -> Vec<Terminal> {
+/// The `kind` script `project.scripts` shows for `project`.
+pub(super) async fn shown_script(
+    client: &Client,
+    project: &str,
+    kind: ScriptKind,
+) -> ProjectScript {
+    let shown: ProjectScripts = client
+        .call(
+            projects::SCRIPTS,
+            &ProjectScriptsParams {
+                project: project.to_owned(),
+                workspace: None,
+            },
+        )
+        .await
+        .expect("show scripts");
+    shown
+        .scripts
+        .into_iter()
+        .find(|script| script.kind == kind)
+        .expect("the project defines the script")
+}
+
+/// Trusts the `kind` script `project.scripts` shows for `project`.
+pub(super) async fn trust(client: &Client, project: &str, kind: ScriptKind) -> ProjectScript {
+    let shown = shown_script(client, project, kind).await;
+    client
+        .call(
+            projects::TRUST_SCRIPT,
+            &ProjectTrustScriptParams {
+                project: project.to_owned(),
+                kind,
+                hash: shown.hash,
+                workspace: None,
+            },
+        )
+        .await
+        .expect("trust the script")
+}
+
+pub(super) async fn terminals_of(client: &Client, workspace: &str) -> Vec<Terminal> {
     let list: TerminalList = client
         .call(
             terminals::LIST,
@@ -102,7 +147,7 @@ async fn terminals_of(client: &Client, workspace: &str) -> Vec<Terminal> {
     list.terminals
 }
 
-async fn wait_for_exit(client: &Client, workspace: &str, terminal: &str) -> Terminal {
+pub(super) async fn wait_for_exit(client: &Client, workspace: &str, terminal: &str) -> Terminal {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let found = terminals_of(client, workspace)
@@ -126,6 +171,7 @@ async fn a_setup_script_runs_in_a_listed_terminal_in_the_workspace_with_its_vari
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Setup).await;
 
     let created = create(&client, &project.id, "feature", false).await;
     let Some(WorkspaceSetup::Started { terminal }) = created.setup.clone() else {
@@ -197,6 +243,7 @@ async fn a_shebang_script_on_windows_runs_through_git_bash_with_posix_paths() {
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Setup).await;
 
     let created = create(&client, &project.id, "feature", false).await;
     let Some(WorkspaceSetup::Started { terminal }) = created.setup.clone() else {
@@ -262,6 +309,7 @@ async fn a_repeated_create_starts_no_setup_and_leaves_the_runner_alone() {
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Setup).await;
     let first_params = WorkspaceCreateParams {
         request_id: Some("create-once".to_owned()),
         ..params(&project.id, "feature")
@@ -302,6 +350,7 @@ async fn a_cmd_runner_refuses_a_variable_cmd_would_reread() {
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Setup).await;
 
     let created: Workspace = client
         .call(
@@ -319,5 +368,82 @@ async fn a_cmd_runner_refuses_a_variable_cmd_would_reread() {
     assert!(reason.contains("MASSORCA_WORKSPACE_BRANCH"), "{reason}");
     assert!(terminals_of(&client, &created.id).await.is_empty());
     assert!(!runner_of(&repo, "feature").exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_untrusted_setup_script_is_skipped_and_the_reply_says_why() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, Some(env_script()));
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    let shown = shown_script(&client, &project.id, ScriptKind::Setup).await;
+    assert!(!shown.trusted);
+    assert!(!shown.changed);
+    assert_eq!(shown.script, env_script());
+
+    let created = create(&client, &project.id, "feature", false).await;
+    let Some(WorkspaceSetup::Untrusted { reason, hash }) = created.setup.clone() else {
+        panic!("an untrusted setup was not skipped: {:?}", created.setup);
+    };
+    assert_eq!(hash, shown.hash);
+    assert!(reason.contains("not trusted"), "{reason}");
+    assert!(
+        reason.contains("massorca project trust-scripts"),
+        "{reason}"
+    );
+    assert!(terminals_of(&client, &created.id).await.is_empty());
+    assert!(!Path::new(&created.path).join(OUTPUT).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_changed_setup_script_needs_trust_again() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, Some(env_script()));
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    let trusted = trust(&client, &project.id, ScriptKind::Setup).await;
+    assert!(trusted.trusted);
+
+    std::fs::write(
+        repo.join("orca.yaml"),
+        "scripts:
+  setup: echo changed>setup-out.txt
+",
+    )
+    .expect("change orca.yaml");
+    git(&repo, &["commit", "-q", "-am", "change setup"]);
+    let shown = shown_script(&client, &project.id, ScriptKind::Setup).await;
+    assert!(!shown.trusted);
+    assert!(shown.changed);
+    assert_ne!(shown.hash, trusted.hash);
+
+    let created = create(&client, &project.id, "feature", false).await;
+    let Some(WorkspaceSetup::Untrusted { reason, hash }) = created.setup.clone() else {
+        panic!("a changed setup was not skipped: {:?}", created.setup);
+    };
+    assert_eq!(hash, shown.hash);
+    assert!(reason.contains("changed"), "{reason}");
+    assert!(terminals_of(&client, &created.id).await.is_empty());
+
+    // The hash trusted before names the old content, so it cannot trust the new one.
+    let stale = client
+        .call::<_, ProjectScript>(
+            projects::TRUST_SCRIPT,
+            &ProjectTrustScriptParams {
+                project: project.id.clone(),
+                kind: ScriptKind::Setup,
+                hash: trusted.hash.clone(),
+                workspace: None,
+            },
+        )
+        .await
+        .expect_err("a stale hash is refused");
+    assert_eq!(remote_code(&stale), codes::SCRIPT_CHANGED);
     stop(running).await;
 }

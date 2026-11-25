@@ -33,5 +33,5 @@ pub use create::Created;
 pub use error::DomainError;
 pub use layout::WorkspaceLayout;
 pub use projects::RemovedProject;
-pub use remove::RemovalWaivers;
+pub use remove::{RemovalPreview, RemovalWaivers};
 pub use workspaces::Workspaces;

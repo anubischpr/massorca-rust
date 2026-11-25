@@ -26,32 +26,42 @@
       "id": "auto",
       "label": "Auto",
       "description": "The vendor's preset: the workspace-write sandbox, asking for approval when needed.",
-      "args": ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+      "args": ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"],
+      "icon": "sparkles",
+      "tone": "normal"
     },
     {
       "id": "read-only",
       "label": "Safe read-only browsing",
       "description": "The read-only sandbox, asking for approval when needed.",
-      "args": ["--sandbox", "read-only", "--ask-for-approval", "on-request"]
+      "args": ["--sandbox", "read-only", "--ask-for-approval", "on-request"],
+      "icon": "eye",
+      "tone": "normal"
     },
     {
       "id": "read-only-never",
       "label": "Read-only non-interactive (CI)",
       "description": "The read-only sandbox, never asking for approval.",
-      "args": ["--sandbox", "read-only", "--ask-for-approval", "never"]
+      "args": ["--sandbox", "read-only", "--ask-for-approval", "never"],
+      "icon": "lock",
+      "tone": "normal"
     },
     {
       "id": "auto-review",
       "label": "Auto-review mode",
       "description": "Approval requests go through automatic review, in the workspace-write sandbox.",
-      "args": ["--approve-for-me"]
+      "args": ["--approve-for-me"],
+      "icon": "scan-eye",
+      "tone": "normal"
     },
     {
       "id": "full-access",
       "label": "Dangerous full access",
       "description": "No sandbox and no approvals. The vendor says: only inside an externally hardened environment.",
       "args": ["--dangerously-bypass-approvals-and-sandbox"],
-      "bypass": true
+      "bypass": true,
+      "icon": "shield-alert",
+      "tone": "warning"
     }
   ],
   "default_permission_mode": "auto",

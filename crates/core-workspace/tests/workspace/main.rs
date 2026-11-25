@@ -25,3 +25,4 @@ mod rename;
 mod rollback;
 mod selectors;
 mod unique_names;
+mod unregistered_listing;

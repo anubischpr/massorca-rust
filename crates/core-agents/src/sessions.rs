@@ -52,6 +52,7 @@ use crate::resolve::{SearchEnv, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
+mod archive;
 mod chat;
 mod delegation;
 mod queue;
@@ -1023,6 +1024,8 @@ impl Agents {
             // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited terminal.
             let _ = self.inner.config.terminals.pin(previous, false);
         }
+        // A session run again is in use again: its archive is cleared, so lists show it (decision 0163).
+        self.store().set_agent_session_archived(&row.id, None)?;
         let fresh = self.reload(&row.id)?;
         if fresh.retained {
             // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
@@ -1635,9 +1638,16 @@ impl Agents {
     pub fn set_retained(&self, selector: &str, retained: bool) -> Result<AgentSession, AgentError> {
         let id = self.resolve(selector)?.id;
         let mut live = lock(&self.inner.status);
-        // Pinned before the flag is saved, so a failed pin leaves the session as it was.
+        // Pinned before the flag is saved, so a failed pin leaves the session as it was. An archived session keeps its
+        // terminal pinned whatever its retain says (decision 0163).
+        let archived = self.store().agent_session_archived_at(&id)?.is_some();
         if let Some(terminal) = &self.reload(&id)?.terminal_id {
-            match self.inner.config.terminals.pin(terminal, retained) {
+            match self
+                .inner
+                .config
+                .terminals
+                .pin(terminal, retained || archived)
+            {
                 // A terminal the manager no longer has has nothing left to keep.
                 Ok(()) | Err(TerminalError::NotFound) => {}
                 Err(error) => return Err(error.into()),
@@ -1946,7 +1956,8 @@ impl Agents {
         };
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
         let placement = self.delegation_view(&row);
-        Ok(record(row, execution, resume, placement, run))
+        let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
+        Ok(record(row, execution, resume, placement, run, archived))
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -2055,12 +2066,14 @@ impl Agents {
                 RunRef::Terminal(_) => RunType::Terminal,
                 RunRef::Chat(_) => RunType::Chat,
             };
+            let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
                 resume,
                 placement,
                 run_type,
+                archived,
             ))));
         }
         Ok(execution)
@@ -2074,13 +2087,15 @@ enum RunRef<'a> {
     Chat(&'a str),
 }
 
-/// The wire record of a row with its execution, its resume state and what it may delegate.
+/// The wire record of a row with its execution, its resume state, what it may delegate, its run type and whether it
+/// is archived.
 fn record(
     row: AgentSessionRow,
     execution: Execution,
     resume: ResumeState,
     placement: DelegationView,
     run: RunType,
+    archived: bool,
 ) -> AgentSession {
     AgentSession {
         id: row.id,
@@ -2103,6 +2118,7 @@ fn record(
         mode_confirmed: row.mode.confirmed,
         retained: row.retained,
         released: row.released_at.is_some(),
+        archived,
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
         resume: Some(resume),

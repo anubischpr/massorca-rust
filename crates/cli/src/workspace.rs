@@ -77,6 +77,7 @@ pub async fn execute(
             force,
             discard_ignored,
             forget_orphan,
+            allow_failed_archive,
         } => {
             let removed = client
                 .workspace_remove(&WorkspaceRemoveParams {
@@ -84,6 +85,7 @@ pub async fn execute(
                     force,
                     discard_ignored,
                     forget_orphan,
+                    allow_failed_archive,
                 })
                 .await?;
             output.success(&removed, &workspace_text::removal_lines(&removed));
@@ -166,6 +168,10 @@ fn setup_lines(setup: Option<&WorkspaceSetup>) -> Vec<String> {
             format!("watch it: massorca terminal attach {terminal}"),
         ],
         Some(WorkspaceSetup::Skipped) => vec!["setup skipped (--no-setup)".to_owned()],
+        Some(WorkspaceSetup::Untrusted { reason, hash }) => vec![
+            format!("setup skipped: {reason}"),
+            format!("script hash: {hash}"),
+        ],
         Some(WorkspaceSetup::Failed { reason }) => vec![format!("setup not started: {reason}")],
         Some(WorkspaceSetup::Unknown) => {
             vec!["setup: an outcome this client does not know".to_owned()]

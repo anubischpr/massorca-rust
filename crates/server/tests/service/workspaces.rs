@@ -72,6 +72,7 @@ fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
         force,
         discard_ignored: false,
         forget_orphan: false,
+        allow_failed_archive: false,
     }
 }
 
@@ -515,6 +516,7 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
                 force: true,
                 discard_ignored: true,
                 forget_orphan: false,
+                allow_failed_archive: false,
             },
         )
         .await

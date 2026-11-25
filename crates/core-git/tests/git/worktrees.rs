@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use massorca_core_git::{Git, GitError, GitVersion, WorktreeAdd, WorktreeEntry};
+use massorca_core_git::{Git, GitError, WorktreeAdd, WorktreeEntry};
 
 use crate::fixture::{Fixture, canonical, commit_file, commit_on_branch, rev, run_git, text};
 
@@ -15,17 +15,6 @@ fn entry_at<'a>(entries: &'a [WorktreeEntry], path: &Path) -> &'a WorktreeEntry 
         .iter()
         .find(|entry| canonical(&entry.path) == wanted)
         .unwrap_or_else(|| panic!("no worktree at {}", path.display()))
-}
-
-/// Git 2.31 added the `locked` and `prunable` lines to `worktree list --porcelain`; older
-/// git prints neither, so only newer git can report lock reasons or prune state.
-fn porcelain_reports_lock_and_prune_state(git: &Git) -> bool {
-    let since = GitVersion {
-        major: 2,
-        minor: 31,
-        patch: 0,
-    };
-    git.version().expect("git --version") >= since
 }
 
 fn add_new_branch(repo: &Path, path: &Path, branch: &str) {
@@ -363,13 +352,9 @@ fn list_reports_an_unlocked_worktree_whose_directory_is_gone_as_prunable() {
     add_new_branch(&repo, &linked, "gone");
     std::fs::remove_dir_all(&linked).expect("delete the directory behind git's back");
 
-    let git = git();
-    let entries = git.worktree_list(&repo).expect("list");
+    // Git before 2.31 prints no `prunable` line; the folder's absence fills it in on every version.
+    let entries = git().worktree_list(&repo).expect("list");
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[1].branch.as_deref(), Some("gone"));
-    if porcelain_reports_lock_and_prune_state(&git) {
-        assert!(entries[1].prunable.is_some());
-    } else {
-        assert_eq!(entries[1].prunable, None);
-    }
+    assert!(entries[1].prunable.is_some());
 }
