@@ -1,10 +1,35 @@
 //! `git.file_content` over the wire: each side's bytes, the caps, and the refusals.
 
+use std::path::Path;
+
 use massorca_protocol::codes;
 use massorca_protocol::methods::git::diff::{self, FileSide, GitFileContent, GitFileContentParams};
 
 use super::common::remote_code;
 use super::git_fixture::{GitService, git};
+
+/// Makes `link` a link to the directory `target`: a symlink on Unix, and a junction on Windows, which needs no
+/// privilege.
+fn link_directory(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("create symlink");
+    }
+    #[cfg(windows)]
+    {
+        let output = massorca_process::command("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        assert!(
+            output.status.success(),
+            "mklink /J failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
 
 fn params(side: FileSide, path: &str) -> GitFileContentParams {
     GitFileContentParams {
@@ -118,6 +143,29 @@ async fn a_directory_is_refused_and_a_dash_led_revision_is_not_a_revision() {
         .await
         .expect_err("an option is not a revision");
     assert_eq!(remote_code(&error), codes::GIT_REVISION_NOT_FOUND);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn a_link_out_of_the_workspace_is_refused_by_the_core_check_over_the_wire() {
+    let service = GitService::start().await;
+    let outside = service.home.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("create dir");
+    std::fs::write(outside.join("secret.txt"), "secret\n").expect("write");
+    let link = service.dir().join("link");
+    link_directory(&outside, &link);
+
+    let error = service
+        .client
+        .call::<_, GitFileContent>(
+            diff::FILE_CONTENT,
+            &params(FileSide::Worktree, "link/secret.txt"),
+        )
+        .await
+        .expect_err("a link out of the workspace is not a workspace file");
+    assert_eq!(remote_code(&error), codes::GIT_PATH_OUTSIDE_WORKTREE);
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).expect("remove the junction, not its target");
     service.stop().await;
 }
 

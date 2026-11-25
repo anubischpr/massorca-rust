@@ -8,6 +8,7 @@ mod config;
 mod diff;
 mod discovery;
 mod file_content;
+mod file_content_paths;
 mod fixture;
 mod index;
 mod log;
