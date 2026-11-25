@@ -356,3 +356,42 @@ async fn a_not_installed_built_in_agent_shows_its_example_prompts_and_colours() 
     assert_eq!(banner.colors.len(), 2, "its colours reach the page");
     stop_service(service).await;
 }
+
+#[tokio::test]
+async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
+    use massorca_desktop::model::marketplace::{
+        ItemKind, MarketplaceSource, ServiceMarketplace, listed,
+    };
+    use massorca_desktop::model::navigation::MarketplacePage;
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the kinds and packages",
+        |state| state.extensions.is_some() && !state.agent_kinds.is_empty(),
+    )
+    .await;
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let mut source = ServiceMarketplace::default();
+    source.follow_agent_kinds(&state.agent_kinds);
+    source.follow_extensions(
+        read.installed.as_ref().expect("the installed list"),
+        read.catalogue.as_ref().expect("the catalogue"),
+    );
+    let snapshot = source.snapshot();
+    let discover = listed(&snapshot, MarketplacePage::Discover, "");
+    let agents = discover
+        .iter()
+        .filter(|item| item.kind == ItemKind::Agent)
+        .count();
+    assert!(
+        discover.iter().all(|item| item.kind == ItemKind::Agent),
+        "a fresh profile's Discover has no other category, so no other section"
+    );
+    assert!(agents >= 4, "the built-in agents are one Agents group");
+    stop_service(service).await;
+}

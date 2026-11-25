@@ -23,7 +23,8 @@ use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::extension_card::{ExtensionAction, ExtensionCard, ExtensionState};
 use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::tokens::{
-    SPACE_1, SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING, TYPE_LABEL,
+    SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING, TYPE_LABEL,
+    TYPE_TITLE_SM,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
@@ -184,6 +185,82 @@ fn empty_copy(page: MarketplacePage, query: &str) -> (String, &'static str) {
     }
 }
 
+/// The cards of some items in a wrapping grid, each with the alert of its problem above it.
+fn card_grid(frame: &MarketplaceFrame, items: &[&MarketplaceItem], cx: &mut App) -> AnyElement {
+    let mut grid = div().flex().flex_wrap().gap(px(SPACE_4));
+    for item in items {
+        let key = item.id.0;
+        let mut cell = div()
+            .w(px(CARD_WIDTH))
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .debug_selector(move || format!("marketplace-item-{key}"));
+        if let Some(alert) = problem_alert(item) {
+            cell = cell.child(problem_banner(item.id, &alert));
+        }
+        grid = grid.child(cell.child(card(frame, item, cx)));
+    }
+    grid.into_any_element()
+}
+
+/// The order of Discover's sections: agents first, then the other categories.
+const DISCOVER_ORDER: [ItemKind; 5] = [
+    ItemKind::Agent,
+    ItemKind::Extension,
+    ItemKind::Skill,
+    ItemKind::Service,
+    ItemKind::Theme,
+];
+
+/// Discover's cards under one heading per category, with its count; a category with no items has no section.
+fn discover_groups(
+    frame: &MarketplaceFrame,
+    items: &[&MarketplaceItem],
+    cx: &mut App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let mut groups = div().flex().flex_col().gap(px(SPACE_6));
+    for kind in DISCOVER_ORDER {
+        let members: Vec<&MarketplaceItem> = items
+            .iter()
+            .copied()
+            .filter(|item| item.kind == kind)
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        let title = kind.plural();
+        let heading = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .child(
+                div()
+                    .id(SharedString::from(format!("marketplace-group-{title}")))
+                    .role(Role::Heading)
+                    .aria_label(title)
+                    .text_style(TYPE_TITLE_SM)
+                    .text_color(p.text.primary)
+                    .child(title),
+            )
+            .child(Badge::count(
+                u32::try_from(members.len()).unwrap_or(u32::MAX),
+            ));
+        groups = groups.child(
+            div()
+                .debug_selector(move || format!("marketplace-group-{title}"))
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_3))
+                .child(heading)
+                .child(card_grid(frame, &members, cx)),
+        );
+    }
+    groups.into_any_element()
+}
+
 /// The header, the search and the cards of one catalogue view.
 pub(super) fn catalogue_view(
     frame: &MarketplaceFrame,
@@ -233,21 +310,11 @@ pub(super) fn catalogue_view(
             .explanation(explanation)
             .into_any_element()
     } else {
-        let mut grid = div().flex().flex_wrap().gap(px(SPACE_4));
-        for item in items {
-            let key = item.id.0;
-            let mut cell = div()
-                .w(px(CARD_WIDTH))
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_2))
-                .debug_selector(move || format!("marketplace-item-{key}"));
-            if let Some(alert) = problem_alert(item) {
-                cell = cell.child(problem_banner(item.id, &alert));
-            }
-            grid = grid.child(cell.child(card(frame, item, cx)));
+        if page == MarketplacePage::Discover {
+            discover_groups(frame, &items, cx)
+        } else {
+            card_grid(frame, &items, cx)
         }
-        grid.into_any_element()
     };
     div()
         .flex()
@@ -314,7 +381,6 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     )
     .publisher(item.publisher.clone())
     .source("Marketplace")
-    .category(item.category.clone())
     .version(item.version.clone())
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
