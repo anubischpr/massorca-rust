@@ -420,7 +420,10 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.list",
             "List agent sessions",
             "agent.list",
-            json!({ "type": "object", "properties": { "workspace": { "type": "string" } } }),
+            json!({
+                "type": "object",
+                "properties": { "workspace": { "type": "string" }, "archived": { "type": "boolean" } }
+            }),
         ),
         command(
             "agent.status",
@@ -546,9 +549,39 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.forget",
-            "Forget an agent session whose run has ended",
+            "Forget an agent session whose run has ended; with remove_workspace, remove its workspace too, or preview that",
             "agent.forget",
-            selector("session"),
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "remove_workspace": { "type": "boolean" },
+                    "force": { "type": "boolean" },
+                    "discard_ignored": { "type": "boolean" },
+                    "preview": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.rename",
+            "Set an agent session's title",
+            "agent.rename",
+            json!({
+                "type": "object",
+                "required": ["session", "title"],
+                "properties": { "session": { "type": "string" }, "title": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.hide",
+            "Archive (hide) an exited agent session from agent lists, or show it again with archived false",
+            "agent.archive_session",
+            json!({
+                "type": "object",
+                "required": ["session", "archived"],
+                "properties": { "session": { "type": "string" }, "archived": { "type": "boolean" } }
+            }),
         ),
         command(
             "agent.release",
