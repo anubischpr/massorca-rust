@@ -19,6 +19,8 @@ pub mod provided_env;
 pub mod resolve;
 pub mod sessions;
 pub mod sign_in;
+pub mod sources;
+mod state_file;
 pub mod status;
 
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};

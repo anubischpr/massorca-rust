@@ -8,10 +8,12 @@ mod extension_items;
 mod extension_refusals;
 mod host_target;
 mod import_folder;
+mod install_details;
 mod install_review;
 mod item_images;
 mod item_page;
 mod package_problem;
+mod remove_review;
 mod sample;
 mod service_accounts;
 mod service_source;
@@ -30,9 +32,8 @@ pub use host_target::HostTarget;
 pub use import_folder::{
     CandidateFile, FolderField, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
 };
-pub use install_review::{
-    install_button_label, installer_runs, review_details, review_lines, shown_risk,
-};
+pub use install_details::review_details;
+pub use install_review::{ReviewOutcome, installer_runs, review_outcome};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_tag, information,
@@ -42,6 +43,7 @@ pub use item_page::{
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
 };
+pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};

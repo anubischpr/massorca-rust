@@ -61,7 +61,7 @@ fn import_without_the_capability_keeps_the_manual_folder_field(cx: &mut TestAppC
         "without the capability the folder field is the manual one"
     );
     assert!(
-        shown(cx, "button:marketplace-import-browse"),
+        shown(cx, "button:account-import-browse"),
         "Browse sits with the folder field"
     );
     assert!(
@@ -113,7 +113,8 @@ fn a_detected_folder_prefills_the_import_field_and_import_sends_it_as_before(
         panic!("an agent.accounts.import call was expected");
     };
     assert_eq!(
-        params.from, folder,
+        params.from,
+        Some(folder.to_owned()),
         "Import sends the detected folder until the protocol makes from optional"
     );
 }

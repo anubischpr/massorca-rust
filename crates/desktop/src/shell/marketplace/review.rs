@@ -80,9 +80,9 @@ impl Shell {
             source: source.clone(),
             review: None,
             run_installer: false,
+            details_open: false,
             sending: false,
             error: None,
-            details_open: false,
         });
         cx.notify();
         cx.spawn(async move |this, cx| {

@@ -5,10 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use massorca_client::Client;
 use massorca_desktop::service::{
     ExtensionsRead, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
+use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
     ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams, ExtensionState,
 };
@@ -309,5 +311,199 @@ async fn a_read_older_than_the_held_one_never_replaces_it() {
         Instant::now(),
     );
     assert_eq!(state.extensions.as_ref(), Some(&held));
+    stop_service(service).await;
+}
+
+/// The kind's package state in the store's agent kinds, if the store lists the kind.
+fn kind_state(state: &StoreState, id: &str) -> Option<PackageState> {
+    state
+        .agent_kinds
+        .iter()
+        .find(|kind| kind.id == id)
+        .map(|kind| kind.package.state)
+}
+
+const AGENT_PACKAGE: &str = "acme.shell";
+const AGENT_KIND: &str = "shell";
+
+/// The platform shell, which every OS has: the program of the fixture agent, so no vendor CLI is needed.
+fn shell_program() -> &'static str {
+    if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }
+}
+
+/// A folder package whose one agent kind runs the platform shell. It declares no vendor command, so no installer runs.
+fn write_agent_package(root: &Path) {
+    let program = shell_program();
+    fs::create_dir_all(root.join("agents")).expect("an agents folder");
+    let manifest = format!(
+        r#"{{
+  "id": "{AGENT_PACKAGE}", "name": "Shell agent", "version": "1.0.0", "publisher": "acme",
+  "description": "Runs the platform shell as an agent.", "api": "1.0",
+  "requires": {{ "massorca": ">=0.1.0" }}, "surfaces": ["desktop"], "modes": ["workspaces"],
+  "permissions": [{{ "kind": "process", "scope": {{ "programs": ["{program}"] }}, "reason": "Runs the platform shell." }}],
+  "contributes": {{ "agentAdapters": [{{ "id": "{AGENT_KIND}", "kind": "agents/{AGENT_KIND}.json" }}] }},
+  "listing": {{ "category": "agents" }}
+}}"#
+    );
+    fs::write(root.join("extension.json"), manifest).expect("the manifest is written");
+    let kind = format!(r#"{{ "id": "{AGENT_KIND}", "name": "Shell", "program": ["{program}"] }}"#);
+    fs::write(root.join("agents").join(format!("{AGENT_KIND}.json")), kind)
+        .expect("the kind is written");
+}
+
+#[tokio::test]
+async fn installing_an_agent_package_refreshes_the_agent_kinds_without_a_reconnect() {
+    let home = temp_home();
+    let package = home.path().join("package");
+    write_agent_package(&package);
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the agent kinds and lists",
+        |state| {
+            kind_state(state, "claude") == Some(PackageState::Available)
+                && state.extensions.is_some()
+        },
+    )
+    .await;
+    assert_eq!(
+        kind_state(&state, AGENT_KIND),
+        None,
+        "the agent kind is not listed before its package is installed"
+    );
+
+    let source = source_of(&package);
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the review is read");
+    handle
+        .install_extension(install_params(source, Some(review.consent.clone())))
+        .await
+        .expect("the reviewed agent package installs");
+    // The service's own answer, so a stale store is told apart from a wrong service.
+    let client = Client::connect(&profile(home.path()), connect_options(None))
+        .await
+        .expect("a client connects");
+    let direct = client
+        .agent_kinds()
+        .await
+        .expect("the service lists its kinds");
+    let shell = direct.kinds.iter().find(|kind| kind.id == AGENT_KIND);
+    assert_eq!(
+        shell.map(|kind| kind.package.state),
+        Some(PackageState::Enabled),
+        "the service lists the installed agent kind as enabled"
+    );
+    until(
+        &mut updates,
+        &mut state,
+        "the installed agent's kind",
+        |state| kind_state(state, AGENT_KIND) == Some(PackageState::Enabled),
+    )
+    .await;
+
+    handle
+        .set_extension_enabled(ExtensionSetEnabledParams {
+            id: AGENT_PACKAGE.to_owned(),
+            enabled: false,
+        })
+        .await
+        .expect("the agent package is disabled");
+    until(
+        &mut updates,
+        &mut state,
+        "the disabled agent's kind",
+        |state| kind_state(state, AGENT_KIND) == Some(PackageState::Disabled),
+    )
+    .await;
+
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_not_installed_built_in_agent_shows_its_example_prompts_and_colours() {
+    use massorca_desktop::model::marketplace::{MarketplaceSource, ServiceMarketplace};
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the kinds and packages",
+        |state| state.extensions.is_some() && !state.agent_kinds.is_empty(),
+    )
+    .await;
+
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let installed = read.installed.as_ref().expect("the installed list");
+    let catalogue = read.catalogue.as_ref().expect("the catalogue is listed");
+    let mut source = ServiceMarketplace::default();
+    source.follow_agent_kinds(&state.agent_kinds);
+    source.follow_extensions(installed, catalogue);
+
+    let snapshot = source.snapshot();
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some("antigravity"))
+        .expect("Antigravity is listed");
+    assert!(!item.state.is_installed(), "a fresh profile has no install");
+    assert_eq!(
+        item.examples.len(),
+        3,
+        "its three example prompts reach the page"
+    );
+    let package = item.extension.as_deref().expect("it carries its package");
+    let banner = package
+        .listing
+        .banner
+        .as_ref()
+        .expect("the service sends its banner");
+    assert_eq!(banner.colors.len(), 2, "its colours reach the page");
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
+    use massorca_desktop::model::marketplace::{
+        ItemKind, MarketplaceSource, ServiceMarketplace, listed,
+    };
+    use massorca_desktop::model::navigation::MarketplacePage;
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the kinds and packages",
+        |state| state.extensions.is_some() && !state.agent_kinds.is_empty(),
+    )
+    .await;
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let mut source = ServiceMarketplace::default();
+    source.follow_agent_kinds(&state.agent_kinds);
+    source.follow_extensions(
+        read.installed.as_ref().expect("the installed list"),
+        read.catalogue.as_ref().expect("the catalogue"),
+    );
+    let snapshot = source.snapshot();
+    let discover = listed(&snapshot, MarketplacePage::Discover, "");
+    let agents = discover
+        .iter()
+        .filter(|item| item.kind == ItemKind::Agent)
+        .count();
+    assert!(
+        discover.iter().all(|item| item.kind == ItemKind::Agent),
+        "a fresh profile's Discover has no other category, so no other section"
+    );
+    assert!(agents >= 4, "the built-in agents are one Agents group");
     stop_service(service).await;
 }

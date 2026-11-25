@@ -17,7 +17,7 @@ use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartPara
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::methods::workspaces::Workspace;
-use massorca_ui::components::composer::Composer;
+use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -468,7 +468,7 @@ fn sending_the_prompt_asks_the_service_to_start_the_chosen_kind_in_the_workspace
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!(params.workspace, "w1");
+    assert_eq!(params.workspace.as_deref(), Some("w1"));
     assert_eq!(params.kind, "claude");
     assert_eq!(params.prompt.as_deref(), Some("fix the login"));
 }
@@ -746,7 +746,10 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
 fn a_picked_mode_is_sent_with_the_start_and_stays_across_redraws(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
     let composer = composer_of(&rig, cx);
-    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    composer.update(cx, |composer, cx| {
+        composer.set_access(2, cx);
+        cx.emit(ComposerEvent::AccessChanged(2));
+    });
     draw(cx);
     assert_eq!(
         composer.read_with(cx, |composer, _| composer.access_index()),
@@ -767,4 +770,59 @@ fn a_kind_without_modes_shows_no_mode_chip(cx: &mut TestAppContext) {
     let composer = composer_of(&rig, cx);
     assert!(composer.read_with(cx, |composer, _| composer.access_modes().is_empty()));
     assert!(cx.debug_bounds("composer-access").is_none());
+}
+
+#[test]
+fn a_start_sends_only_the_mode_the_chip_shows_from_the_same_list() {
+    use super::start_page::{access_modes, sent_mode};
+    use crate::model::permission_modes::start_choices;
+    let choices = start_choices(&claude_with_modes());
+    let shown = access_modes(&choices);
+    assert_eq!(
+        sent_mode(&choices, &shown, 0),
+        None,
+        "the CLI's default sends no mode"
+    );
+    assert_eq!(sent_mode(&choices, &shown, 1).as_deref(), Some("plan"));
+    assert_eq!(
+        sent_mode(&choices, &shown, 9),
+        None,
+        "past the end sends no mode"
+    );
+    // A chip built from another list never lends its index to this one.
+    let other = access_modes(&choices[..1]);
+    assert_eq!(sent_mode(&choices, &other, 2), None);
+}
+
+#[gpui::test]
+fn a_chip_index_nobody_picked_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    // The index moves without the person choosing the entry: nothing is sent.
+    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn the_shown_mode_and_the_sent_mode_agree_for_every_entry(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    let expected = [None, Some("plan"), Some("bypassPermissions")];
+    for (index, want) in expected.into_iter().enumerate() {
+        composer.update(cx, |composer, cx| {
+            composer.set_access(index, cx);
+            cx.emit(ComposerEvent::AccessChanged(index));
+        });
+        draw(cx);
+        type_and_send(&rig, cx, "fix the login");
+        cx.run_until_parked();
+        let (params, _reply) =
+            start_call(&mut rig._script).expect("the start is sent to the service");
+        assert_eq!(params.permission_mode.as_deref(), want, "entry {index}");
+        rig.shell.update(cx, |shell, _| shell.start_pending = None);
+    }
 }

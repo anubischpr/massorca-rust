@@ -56,6 +56,8 @@ pub enum StoreUpdate {
     AgentQueueChanged(AgentQueueList),
     /// Whether the service offers seen state (`agent-seen/1`), read on each connect.
     AgentSeenOffered(bool),
+    /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
+    AgentNoProjectOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -235,6 +237,8 @@ pub struct StoreState {
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
     /// Whether the service offers seen state (`agent-seen/1`); without it no session is unread.
     pub agent_seen: bool,
+    /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
+    pub agent_no_project: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -265,6 +269,7 @@ impl Default for StoreState {
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
+            agent_no_project: false,
             config: Vec::new(),
         }
     }
@@ -346,6 +351,7 @@ impl StoreState {
                 });
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
+            StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -593,6 +599,8 @@ pub(crate) mod fixtures {
             problems: Vec::new(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            model: None,
+            effort: None,
         }
     }
 

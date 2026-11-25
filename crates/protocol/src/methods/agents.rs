@@ -62,6 +62,8 @@ pub const ACCOUNTS_ADD: &str = "agent.accounts.add";
 /// Params: [`AccountsSignInParams`]. Result: [`AccountsAdded`]. Signs an existing account in again (decision 0059).
 pub const ACCOUNTS_SIGN_IN: &str = "agent.accounts.sign_in";
 pub const ACCOUNTS_IMPORT: &str = "agent.accounts.import";
+/// Params: [`ImportCandidatesParams`]. Result: [`ImportCandidates`]. Capability `agent-import-detect/1` (decision 0097).
+pub const ACCOUNTS_IMPORT_CANDIDATES: &str = "agent.accounts.import_candidates";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
@@ -237,6 +239,53 @@ pub struct AgentKind {
     /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
+    /// The `model` the kind takes at start, with its choices (decisions 0094, 0096). Absent when the kind takes no model,
+    /// and from a peer that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<KindModel>,
+    /// The `effort` the kind takes at start, with its levels (decisions 0094, 0096). Absent when the kind takes no
+    /// effort, and from a peer that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<KindEffort>,
+}
+
+/// The `model` option of a kind (decision 0094), as `agent.kinds` lists it: the choices its picker shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindModel {
+    /// The choices in declared order. Empty when the list is account-scoped and the vendor CLI reports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<KindModelChoice>,
+}
+
+/// One model choice of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindModelChoice {
+    pub id: String,
+    pub label: String,
+    /// The model the picker preselects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels this model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+}
+
+/// The `effort` option of a kind (decision 0094), as `agent.kinds` lists it: the levels its picker shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindEffort {
+    /// The levels in declared order. Empty: the kind declares none, so any value a start names is passed on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<KindEffortLevel>,
+    /// The level the picker preselects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// One effort level of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindEffortLevel {
+    pub id: String,
+    pub label: String,
 }
 
 /// One permission mode of a kind, as `agent.kinds` lists it (decision 0083). How the mode is passed stays in the
@@ -285,6 +334,10 @@ struct AgentKindWire {
     permission_modes: Vec<PermissionMode>,
     #[serde(default)]
     default_permission_mode: Option<String>,
+    #[serde(default)]
+    model: Option<KindModel>,
+    #[serde(default)]
+    effort: Option<KindEffort>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -304,6 +357,8 @@ impl From<AgentKindWire> for AgentKind {
             problems: wire.problems,
             permission_modes: wire.permission_modes,
             default_permission_mode: wire.default_permission_mode,
+            model: wire.model,
+            effort: wire.effort,
         }
     }
 }
@@ -346,8 +401,10 @@ pub struct AgentKinds {
 /// Params of `agent.start`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStartParams {
-    /// Workspace id, name or path.
-    pub workspace: String,
+    /// Workspace id, name or path. Absent starts a session with no project (capability `agent-no-project/1`, decision
+    /// 0094): it runs in the conversations folder, in a folder of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     pub kind: String,
     /// The first prompt, at most [`MAX_PROMPT_BYTES`] and without NUL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -374,6 +431,14 @@ pub struct AgentStartParams {
     /// An id the kind does not declare is refused with `agent.mode_unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// The model the kind's `model` flag takes (capability `agent-options/1`, decision 0094). A kind that declares no
+    /// model flag refuses it with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The reasoning effort the kind's `effort` flag takes (capability `agent-options/1`, decision 0094). A kind that
+    /// declares no effort flag refuses it with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// Params of `agent.list`.
@@ -603,6 +668,9 @@ pub struct CredentialsImportParams {
 pub struct ImportedFile {
     pub name: String,
     pub bytes: u64,
+    /// Why a state file was built without its source (decision 0099), for example `the source is not a JSON object`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Result of `agent.credentials.import`.
@@ -877,12 +945,16 @@ pub struct AccountsSignInParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountsImportParams {
     pub kind: String,
-    pub from: String,
+    /// The folder holding every declared file. Absent copies each file from where the kind's CLI keeps it (capability
+    /// `agent-import-detect/1`, decision 0097).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
 
-/// What an import did: `imported`, `failed` (with a reason), or `not_found` (none of the declared files is in `from`).
+/// What an import did: `imported`, `failed` (with a reason), or `not_found` (a required file is missing; the reason names
+/// each one and where it was looked for).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportResult {
@@ -897,6 +969,52 @@ pub struct AccountsImported {
     pub result: ImportResult,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AccountSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Params of `agent.accounts.import_candidates` (decision 0097). Without `kind`, every kind that declares credential
+/// files.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportCandidatesParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// Result of `agent.accounts.import_candidates`. Names, flags and host paths only, never file contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportCandidates {
+    pub candidates: Vec<ImportCandidate>,
+}
+
+/// Where an import without `from` would copy one kind's declared files from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportCandidate {
+    pub kind: String,
+    /// Every required file was found.
+    pub ready: bool,
+    /// The folder of the first required file. Omitted below `workspace` scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub files: Vec<CandidateFile>,
+}
+
+/// One declared file of an [`ImportCandidate`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateFile {
+    pub name: String,
+    pub required: bool,
+    /// The import would accept it: a regular file, not a link, at most 1 MiB (a state file: its rule's cap, decision
+    /// 0099), judged from its metadata alone.
+    pub found: bool,
+    /// Where it was looked for. Omitted below `workspace` scope, and when the kind declares no location for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The vendor's override variable, when it was set and used. Omitted below `workspace` scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// Why the import would not use a file that is there (`a link`, `a directory`, `larger than 1 MiB`); absent when it
+    /// was found or is not there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

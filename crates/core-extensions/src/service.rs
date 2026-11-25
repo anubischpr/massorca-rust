@@ -19,6 +19,7 @@ use crate::catalogue;
 use crate::error::{Diagnosis, Error};
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
+use crate::install_log_tail::last_log_lines;
 use crate::layout::Layout;
 use crate::lockfile::{
     InstallerRun, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
@@ -738,22 +739,9 @@ impl Extensions {
     }
 }
 
-/// Lines of a vendor command's log that a failure carries, the last ones.
-const DIAGNOSIS_LINES: usize = 20;
-
 /// The program a command names: its first word.
 fn program_of(argv: &[String]) -> Vec<String> {
     argv.first().cloned().into_iter().collect()
-}
-
-/// The last lines of a command's log, for the person who asks why it failed.
-fn last_log_lines(log: &Path) -> Vec<String> {
-    let text = fs::read_to_string(log).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(DIAGNOSIS_LINES)..]
-        .iter()
-        .map(|line| (*line).to_owned())
-        .collect()
 }
 
 /// An install checked and unpacked, waiting for its vendor command. `_busy` keeps the package marked until it is

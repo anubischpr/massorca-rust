@@ -2,21 +2,19 @@
 //! into a new account. The folder is only read, and the answer never carries a secret.
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, Context, Entity, PathPromptOptions, Subscription, WeakEntity, div, px,
-};
+use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, div, px};
 use massorca_protocol::methods::agents::AccountsImportParams;
-use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{SPACE_1, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use crate::model::marketplace::{
-    FolderField, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
+    FolderField, HostTarget, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
     import_outcome,
 };
 use crate::shell::Shell;
+use crate::shell::path_field::{PickKind, path_field};
 
 /// Said when Import is pressed with no folder.
 const NO_FOLDER: &str = "Enter the folder that holds the login files.";
@@ -148,41 +146,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Browse": the folder the system's dialog picks goes into the field, as the Add host program picker does.
-    pub(super) fn browse_account_import(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = picked.await {
-                let _ = this.update(cx, |shell, cx| {
-                    if let Some(folder) = paths.first() {
-                        shell.set_account_import_folder(&folder.to_string_lossy(), cx);
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-
-    /// Puts `folder` in the field and keeps its placeholder; a running import is not changed.
-    fn set_account_import_folder(&mut self, folder: &str, cx: &mut Context<Self>) {
-        let Some(dialog) = self.marketplace_accounts.import.as_mut() else {
-            return;
-        };
-        if dialog.running {
-            return;
-        }
-        let (field, changes) = folder_entity(cx, &dialog.placeholder, folder);
-        dialog.field = field;
-        dialog._changes = changes;
-        dialog.error = None;
-        cx.notify();
-    }
-
     /// Imports from the folder the field holds, or from the detected folder while it is kept. The dialog stays open
     /// with the reason when nothing was kept, and the rows follow the read the answer triggers.
     pub(super) fn submit_account_import(&mut self, cx: &mut Context<Self>) {
@@ -210,7 +173,7 @@ impl Shell {
         dialog.error = None;
         let params = AccountsImportParams {
             kind: dialog.kind.clone(),
-            from,
+            from: Some(from),
             label: None,
         };
         cx.notify();
@@ -252,12 +215,20 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
     let theme = *cx.theme();
     let typed = import.field.read(cx).text().to_owned();
     let folder = import.folder(Some(typed.as_str()));
-    let (submit, dismiss, browse) = (weak.clone(), weak.clone(), weak.clone());
+    let (submit, dismiss) = (weak.clone(), weak.clone());
     let mut folder_section = div()
         .flex()
         .flex_col()
         .gap(px(SPACE_1))
-        .child(import.field.clone());
+        .child(path_field(
+            "account-import-browse",
+            "account-import-field",
+            weak.clone(),
+            &import.field,
+            PickKind::Folder,
+            matches!(shell.marketplace_pick.target(), HostTarget::Local),
+            !import.running,
+        ));
     if let Some(status) = folder.status {
         folder_section = folder_section.child(
             div()
@@ -266,14 +237,6 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
                 .child(status),
         );
     }
-    folder_section = folder_section.child(
-        Button::new("marketplace-import-browse", "Browse")
-            .variant(ButtonVariant::Secondary)
-            .disabled(import.running)
-            .on_click(move |_, cx| {
-                let _ = browse.update(cx, |shell, cx| shell.browse_account_import(cx));
-            }),
-    );
     let mut dialog = Dialog::new("marketplace-import", format!("Import account to {agent}"))
         .open(true)
         .child(
