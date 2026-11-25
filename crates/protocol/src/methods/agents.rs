@@ -977,6 +977,11 @@ pub struct AccountsImported {
     pub account: Option<AccountSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The existing account this import updated, when the login was already that account (decision 0098): it got the
+    /// imported files and kept its id, label, active mark and project choices. `account` is then that account. Absent for
+    /// a new account, so an older peer reads the result as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
 }
 
 /// Params of `agent.accounts.import_candidates` (decision 0097). Without `kind`, every kind that declares credential
