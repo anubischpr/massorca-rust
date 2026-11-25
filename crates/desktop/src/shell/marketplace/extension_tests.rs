@@ -26,6 +26,7 @@ pub(super) fn catalogue_package() -> ExtensionItem {
         name: "Notes".to_owned(),
         description: "Keeps notes beside the workspace.".to_owned(),
         version: "1.0.0".to_owned(),
+        previous_version: None,
         publisher: "acme".to_owned(),
         state: ExtensionState::Available,
         installed: None,

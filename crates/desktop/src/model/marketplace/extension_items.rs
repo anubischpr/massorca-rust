@@ -255,6 +255,7 @@ pub(super) mod tests {
             name: format!("Name of {id}"),
             description: "Keeps notes beside the workspace.".to_owned(),
             version: "1.0.0".to_owned(),
+            previous_version: None,
             publisher: "acme".to_owned(),
             state,
             installed: None,
