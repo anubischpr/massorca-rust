@@ -1,11 +1,9 @@
 //! `massorca host list|show|remove`: the hosts this client keeps, and forgetting one (decision 0046).
 
-use massorca_client::{Client, ClientError, HostRecord, Hosts};
+use massorca_client::{DeviceRevocation, HostRecord, Hosts};
 use massorca_core_remote::bootstrap::{self, DEFAULT_REMOTE_DIR};
 use massorca_core_remote::ssh::SystemSsh;
 use massorca_profile::Profile;
-use massorca_protocol::codes;
-use massorca_protocol::methods::devices::{self, DeviceInfo, DeviceRevokeParams};
 use serde::Serialize;
 
 use crate::args::HostRemoveArgs;
@@ -76,9 +74,9 @@ pub async fn remove(
     let device = if args.keep_device {
         DeviceOutcome::Kept
     } else {
-        match revoke_this_device(&hosts, &record).await {
-            None => DeviceOutcome::Revoked,
-            Some(reason) => DeviceOutcome::NotRevoked { reason },
+        match hosts.revoke_this_device(&record.name, &peer()).await {
+            DeviceRevocation::Revoked => DeviceOutcome::Revoked,
+            DeviceRevocation::NotRevoked(reason) => DeviceOutcome::NotRevoked { reason },
         }
     };
     // A failed uninstall returns before the host is forgotten, so the same command can be run again.
@@ -159,35 +157,6 @@ fn removal_lines(removal: &Removal) -> Vec<String> {
         ));
     }
     lines
-}
-
-/// Revokes this device on its host. Returns why it was not revoked, or `None` when it was.
-async fn revoke_this_device(hosts: &Hosts, record: &HostRecord) -> Option<String> {
-    let client = match Client::connect_host(hosts, &record.name, &peer()).await {
-        Ok(client) => client,
-        Err(error) => return Some(error.to_string()),
-    };
-    let params = DeviceRevokeParams {
-        device: record.device_id.clone(),
-    };
-    let answer: Result<DeviceInfo, ClientError> = client.call(devices::REVOKE, &params).await;
-    match answer {
-        Ok(_) => None,
-        // The service closes this device's connections as it revokes them, so the answer may never arrive.
-        Err(ClientError::Disconnected) => confirm_revoked(hosts, record).await,
-        Err(error) => Some(error.to_string()),
-    }
-}
-
-/// After a revoke that got no answer: a refusal with `auth.device_revoked` means it took effect.
-async fn confirm_revoked(hosts: &Hosts, record: &HostRecord) -> Option<String> {
-    match Client::connect_host(hosts, &record.name, &peer()).await {
-        Ok(_) => Some("the host still accepts this device".to_owned()),
-        Err(ClientError::Handshake { error, .. }) if error.code == codes::AUTH_DEVICE_REVOKED => {
-            None
-        }
-        Err(error) => Some(error.to_string()),
-    }
 }
 
 /// Stops the service on the SSH host and removes its install directory (decision 0045).
