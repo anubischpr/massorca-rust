@@ -226,6 +226,16 @@ pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
 /// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
 pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
+/// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The
+/// error's `data` is the kind's `KindChat` (decision 0101).
+pub const AGENT_CHAT_UNSUPPORTED: &str = "agent.chat_unsupported";
+/// A chat method was called on a session that does not run as a chat (decision 0101).
+pub const AGENT_NOT_CHAT: &str = "agent.not_chat";
+/// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (decision 0101).
+/// The error's `data` is the approval item when it exists.
+pub const AGENT_APPROVAL_SETTLED: &str = "agent.approval_settled";
+/// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes (decision 0101).
+pub const AGENT_CURSOR_STALE: &str = "agent.cursor_stale";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
@@ -265,6 +275,15 @@ pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
+
+/// `marketplace.service.*` names a service this build does not know.
+pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";
+/// The service cannot do this from here: a status-only row, GitLab without `glab`, or a GitLab disconnect.
+pub const SERVICE_UNAVAILABLE: &str = "marketplace.service_unavailable";
+/// The service's program refused the token. The message is a fixed sentence, never the program's output.
+pub const SERVICE_REJECTED: &str = "marketplace.service_rejected";
+/// The service's program could not be run or did not finish in time.
+pub const SERVICE_FAILED: &str = "marketplace.service_failed";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

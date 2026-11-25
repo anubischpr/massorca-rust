@@ -21,6 +21,7 @@ pub mod extension_text;
 pub mod git;
 pub mod host;
 pub mod logging;
+pub mod marketplace;
 pub mod open;
 pub mod output;
 pub mod pair;

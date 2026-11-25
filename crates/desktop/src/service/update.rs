@@ -652,6 +652,7 @@ pub(crate) mod fixtures {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: created,
             execution: Execution {
                 state: TerminalState::Live,

@@ -930,7 +930,10 @@ pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
 }
 
 /// Refuses a caller below host-admin scope when `session`'s run holds vault secrets (decision 0071).
-async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<(), ErrorBody> {
+pub(super) async fn require_admin_for_session(
+    ctx: &RequestCtx,
+    session: String,
+) -> Result<(), ErrorBody> {
     if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
         return Ok(());
     }
@@ -941,7 +944,7 @@ async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<
     Ok(())
 }
 
-async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+pub(super) async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,
     F: FnOnce(&Agents) -> Result<T, AgentError> + Send + 'static,

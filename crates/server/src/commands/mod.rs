@@ -3,6 +3,7 @@
 mod core_table;
 mod extension_table;
 mod git_table;
+mod hosted_service_table;
 mod secret_table;
 mod skill_table;
 mod team_table;
@@ -21,7 +22,7 @@ pub struct CommandDescriptor {
     pub args_schema: Value,
 }
 
-/// Every core command: the Phase 1 table, then the git, secret, Bot Teams, extension and skill commands.
+/// Every core command: the Phase 1 table, then the git, secret, Bot Teams, extension, skill and hosted-service commands.
 pub fn core_commands() -> Vec<CommandDescriptor> {
     let mut commands = core_table::core_commands();
     commands.extend(git_table::git_commands());
@@ -29,6 +30,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
     commands.extend(team_table::team_commands());
     commands.extend(extension_table::extension_commands());
     commands.extend(skill_table::skill_commands());
+    commands.extend(hosted_service_table::hosted_service_commands());
     commands
 }
 
