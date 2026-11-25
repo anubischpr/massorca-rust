@@ -7,6 +7,7 @@ mod dialogs;
 mod files;
 mod home;
 mod memory;
+mod memory_menu;
 mod new_project;
 mod project;
 mod routines;
@@ -37,6 +38,7 @@ pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog
 pub(super) use files::files_page;
 pub(super) use home::bot_teams_home;
 pub(super) use memory::memory_page;
+pub(super) use memory_menu::OpenMemoryMenu;
 pub(super) use project::project_page;
 pub(super) use routines::routines_page;
 pub(super) use sidebar::teams_list;
