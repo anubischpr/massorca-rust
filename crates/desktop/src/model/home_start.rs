@@ -30,30 +30,74 @@ pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
 /// The project button's text while there is none.
 pub const CHOOSE_A_PROJECT: &str = "Choose a project";
 
-/// How many of the prompt's words name the workspace, and the longest name they make.
-const SEED_WORDS: usize = 5;
+/// The longest name a prompt's words make: the name stops before the word that would pass it.
 const SEED_MAX: usize = 40;
 
-/// A workspace name from the prompt's first words: lowercase ASCII letters and digits joined by
-/// `-`. Empty when no word survives, which asks the service for a generated name.
+/// How many names a derived name is tried under when the service cannot make names unique: itself, then -2 to -9.
+pub const FREE_NAME_TRIES: usize = 9;
+
+/// Words a derived name never ends on: English and Spanish connectors and stop words.
+const CONNECTORS: &[&str] = &[
+    "a", "al", "an", "and", "as", "at", "be", "by", "con", "de", "del", "e", "el", "en", "for",
+    "from", "in", "is", "it", "la", "las", "lo", "los", "o", "of", "on", "or", "para", "por",
+    "que", "se", "su", "sus", "the", "to", "un", "una", "with", "y",
+];
+
+/// The plain ASCII letter a Latin letter with an accent reads as, so "qué" keeps its letters in a name.
+fn plain_letter(c: char) -> char {
+    match c {
+        'á' | 'à' | 'ä' | 'â' | 'Á' | 'À' | 'Ä' | 'Â' => 'a',
+        'é' | 'è' | 'ë' | 'ê' | 'É' | 'È' | 'Ë' | 'Ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' | 'Í' | 'Ì' | 'Ï' | 'Î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' | 'Ó' | 'Ò' | 'Ö' | 'Ô' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' | 'Ú' | 'Ù' | 'Ü' | 'Û' => 'u',
+        'ñ' | 'Ñ' => 'n',
+        'ç' | 'Ç' => 'c',
+        other => other,
+    }
+}
+
+/// A workspace name from the prompt's words: lowercase ASCII letters and digits joined by `-`, whole words only, within
+/// `SEED_MAX` characters, and never ending on a connector. Empty when no word survives, which asks the service for a
+/// generated name.
+// Interim until the core session's generated-name option lands on `workspace.create`; its flag name comes later.
 pub fn workspace_name_seed(prompt: &str) -> String {
-    let mut name = String::new();
-    let words = prompt
+    let folded: String = prompt.chars().map(plain_letter).collect();
+    let words = folded
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
-        .take(SEED_WORDS);
+        .map(str::to_ascii_lowercase);
+    let mut kept: Vec<String> = Vec::new();
+    let mut length = 0;
     for word in words {
-        let word = word.to_ascii_lowercase();
-        let extra = usize::from(!name.is_empty()) + word.len();
-        if name.len() + extra > SEED_MAX {
+        let extra = usize::from(!kept.is_empty()) + word.len();
+        if length + extra > SEED_MAX {
             break;
         }
-        if !name.is_empty() {
-            name.push('-');
-        }
-        name.push_str(&word);
+        length += extra;
+        kept.push(word);
     }
-    name
+    while kept
+        .last()
+        .is_some_and(|word| CONNECTORS.contains(&word.as_str()))
+    {
+        kept.pop();
+    }
+    kept.join("-")
+}
+
+/// The name a derived name is tried under on attempt `attempt` (counted from 1): the name, then `-2` after it.
+pub fn name_for_try(base: &str, attempt: usize) -> String {
+    if attempt <= 1 {
+        base.to_owned()
+    } else {
+        format!("{base}-{attempt}")
+    }
+}
+
+/// Whether the start page derives the workspace's name from the prompt: a name the person typed is never changed.
+pub fn name_is_derived(details: &WorkspaceDetails) -> bool {
+    details.name.trim().is_empty()
 }
 
 /// The project the page creates in: the chosen one while the service lists it, else the first.
@@ -213,9 +257,57 @@ mod tests {
         );
         assert_eq!(
             workspace_name_seed("  Add OAuth2: Google, GitHub & more providers now"),
-            "add-oauth2-google-github-more"
+            "add-oauth2-google-github-more-providers"
         );
-        assert_eq!(workspace_name_seed("¿Qué tal?"), "qu-tal");
+        assert_eq!(workspace_name_seed("¿Qué tal?"), "que-tal");
+    }
+
+    #[test]
+    fn the_name_never_ends_on_a_connector_in_english_or_spanish() {
+        assert_eq!(
+            workspace_name_seed("Explora el proyecto actual y"),
+            "explora-el-proyecto-actual"
+        );
+        assert_eq!(
+            workspace_name_seed("Migrate the authentication service to the new identity provider"),
+            "migrate-the-authentication-service"
+        );
+        assert_eq!(
+            workspace_name_seed(
+                "Implementar la paginación de resultados para el panel de administración"
+            ),
+            "implementar-la-paginacion-de-resultados"
+        );
+        assert_eq!(workspace_name_seed("Fix the bug in"), "fix-the-bug");
+        assert_eq!(workspace_name_seed("the a and o y"), "");
+    }
+
+    #[test]
+    fn the_name_keeps_whole_words_within_the_budget() {
+        let prompt = "Migrate the authentication service to the new identity provider";
+        let name = workspace_name_seed(prompt);
+        assert!(name.len() <= SEED_MAX);
+        let words: Vec<&str> = prompt.split(' ').collect();
+        assert!(
+            name.split('-')
+                .all(|part| words.iter().any(|word| word.eq_ignore_ascii_case(part))),
+            "every part of {name:?} is a whole word of the prompt"
+        );
+        assert_eq!(
+            workspace_name_seed("extraordinarilylongmodulenameherereallyverylongindeed"),
+            "",
+            "a single word past the budget is not cut"
+        );
+    }
+
+    #[test]
+    fn a_retry_adds_the_suffix_from_the_second_try_on() {
+        assert_eq!(name_for_try("fix-the-bug", 1), "fix-the-bug");
+        assert_eq!(name_for_try("fix-the-bug", 2), "fix-the-bug-2");
+        assert_eq!(
+            name_for_try("fix-the-bug", FREE_NAME_TRIES),
+            "fix-the-bug-9"
+        );
     }
 
     #[test]
@@ -229,7 +321,7 @@ mod tests {
         let name = workspace_name_seed(
             "refactor everything inside the extraordinarilylongmodulenameherereally",
         );
-        assert_eq!(name, "refactor-everything-inside-the");
+        assert_eq!(name, "refactor-everything-inside");
         assert!(name.len() <= SEED_MAX);
     }
 
