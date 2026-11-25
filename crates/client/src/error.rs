@@ -38,6 +38,12 @@ pub enum ClientError {
     },
     #[error("{} ({})", .0.message, .0.code)]
     Remote(ErrorBody),
+    /// The service does not offer the capability the request needs, so nothing was sent (decision 0092). Update the
+    /// service to a build that offers it.
+    #[error(
+        "the service does not support {what}: it offers no {capability} capability; update the service"
+    )]
+    CapabilityMissing { what: String, capability: String },
     #[error("the connection to the service was lost")]
     Disconnected,
     #[error("unexpected data from the service: {0}")]
@@ -134,7 +140,8 @@ impl ClientError {
             | Self::HostsBusy(_)
             | Self::InvalidHostName(_)
             | Self::StartRefused(_)
-            | Self::ProfileRefused(_) => 1,
+            | Self::ProfileRefused(_)
+            | Self::CapabilityMissing { .. } => 1,
             Self::Unavailable(_)
             | Self::StartFailed(_)
             | Self::UntrustedEndpoint(_)

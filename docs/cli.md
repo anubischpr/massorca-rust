@@ -89,7 +89,7 @@ machine.
 | `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Then one `modes:` line per kind that declares permission modes: each mode's id and label, marked `default` (the vendor CLI's own default), `bypass` (lifts the vendor's prompts or sandbox), `live` (switches in a running session) and `may fall back` (the vendor may start in another mode without failing). Problems follow. |
-| `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
+| `agent start <KIND> [--workspace <WS>] [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [--model MODEL] [--effort EFFORT] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own; without `--workspace`, in a folder of its own in the conversations folder (see the notes below). `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
@@ -195,6 +195,15 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
   never detected, and never started. `--json` prints the `agent.kinds` result, where
   `installed` is deprecated and equals `detected`.
+- `agent start` without `--workspace` starts a session with no project (decision 0092). It
+  runs in its own folder, named after the session, inside the conversations folder
+  (`conversations.folder`, default `~/MassOrca/Conversations`, made on first use). The session
+  has no worktree and no branch, and `project list` does not show it. A start that fails
+  leaves no folder or workspace behind. If the conversations folder is itself a project, the
+  start fails with `config.invalid_value`. `--model` and `--effort`
+  pass their values to the kind's declared `model` and `effort` flags; a kind that declares no
+  such flag refuses the option with `agent.option_unsupported`. A resumed run keeps the kind's
+  default model and effort.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
   shell in between), with the first prompt as the kind declares. A workspace holds one live
   session that is not `--read-only`; a second writing start fails with

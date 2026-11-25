@@ -140,6 +140,11 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- `model` and `effort` (decision 0092): optional, each `{ "flag": "--model" }`. The flag starts
+  with `-` and holds no spaces, `=` or control characters. A start's `model` or `effort` is
+  passed as the flag and its value, after the mode's `args` and before the caller's `args`.
+  A kind without the flag refuses the option with `agent.option_unsupported`, naming the kind.
+  A value is 1 to 128 letters, digits, `-`, `_`, `.`, `:` or `/`, never starting with `-`.
 
 ## Session record (`AgentSession`)
 
@@ -167,7 +172,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | Method | Permission | Params | Result |
 |---|---|---|---|
 | `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
-| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?` | `AgentSession` |
+| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
@@ -246,6 +251,23 @@ that is a bypass mode: a pending bypass is used only by a resume that names it, 
 the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
+
+## No project (decision 0092)
+
+A conversation without a project starts with `agent.start` and no `workspace`. Its folder is
+`<conversations folder>/<session id>`, where the conversations folder is the setting
+`conversations.folder` (default `<home>/MassOrca/Conversations`, made on first use and refused
+when it is not an absolute path). Each session gets a folder of its own because a vendor CLI
+keeps its history per folder, so two sessions must never share one.
+
+A folder workspace needs a project, so the conversations folder is registered under a hidden
+project (`projects.conversations = 1`, migration 0092 in `core-store`). `project list` and every
+other project listing leave it out, so a conversation is never a project. The workspace has no
+worktree and no branch. A conversation's folder is an ordinary folder workspace, so stop,
+resume, list and the rest of the session commands work as for any session.
+
+The folder is created when the first session starts in it. A start that fails after its folder
+was made keeps the folder, the same as a failed delegated start keeps its child workspace.
 
 ## Run environment
 
@@ -482,7 +504,7 @@ it was noticed.
 
 ```
 massorca agent kinds
-massorca agent start <kind> --workspace <ws> [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
+massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
 massorca agent list [--workspace <ws>]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
