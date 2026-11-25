@@ -74,7 +74,10 @@ pub(super) fn item_page(
     for part in PARTS {
         let section = match part {
             Part::Logo | Part::Name | Part::Host => continue,
-            Part::Banner => banner(frame, item, cx),
+            Part::Banner => match banner(frame, item, cx) {
+                Some(section) => section,
+                None => continue,
+            },
             Part::Connection => connection(frame, item, cx),
             Part::Information => information_section(item, cx),
             Part::Settings => settings_section(frame, item, cx),
@@ -186,14 +189,11 @@ fn banner_image(picture: ImageSource) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 4: the example prompts, each a pill that opens a new chat with it, and how to ask the item in any chat; or why
-/// there are none.
-fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
-    if let Some(reason) = absent_reason(item, Part::Banner) {
-        return div()
-            .debug_selector(|| "marketplace-part-banner".to_owned())
-            .child(absent_note(reason, cx))
-            .into_any_element();
+/// Part 4: the example prompts, each a pill that opens a new chat with it, and how to ask the item in any chat. The
+/// part is left out when the item has no example prompts.
+fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Option<AnyElement> {
+    if item.examples.is_empty() {
+        return None;
     }
     let mention = item
         .extension
@@ -220,10 +220,12 @@ fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
     for example in &item.examples {
         banner = banner.example(example.clone());
     }
-    div()
-        .debug_selector(|| "marketplace-part-banner".to_owned())
-        .child(banner)
-        .into_any_element()
+    Some(
+        div()
+            .debug_selector(|| "marketplace-part-banner".to_owned())
+            .child(banner)
+            .into_any_element(),
+    )
 }
 
 /// Where the banner's gradient starts: the listing's own colours, or else the palette colour of the item's slot.

@@ -50,12 +50,10 @@ pub const PARTS: [Part; 9] = [
     Part::DangerZone,
 ];
 
-/// Why a part does not apply to the item, in one sentence; None when it applies.
+/// Why a part does not apply to the item, in one sentence; None when it applies. The banner has no sentence: with
+/// no example prompts it is left out of the page.
 pub fn absent_reason(item: &MarketplaceItem, part: Part) -> Option<&'static str> {
     match part {
-        Part::Banner if item.examples.is_empty() => {
-            Some("This item lists no example prompts, so there is nothing to invoke.")
-        }
         Part::Connection if item.agent_kind.is_none() => {
             Some("Only agents connect to accounts, so this item has no connection.")
         }
@@ -326,18 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn the_banner_says_why_an_item_with_no_examples_has_none() {
-        let mut item = find(&sample(), 8);
+    fn the_banner_has_no_sentence_when_an_item_has_no_examples() {
+        let item = find(&sample(), 8);
         assert!(
             item.examples.is_empty(),
             "the sample item lists no examples"
         );
         assert_eq!(
             absent_reason(&item, Part::Banner),
-            Some("This item lists no example prompts, so there is nothing to invoke.")
+            None,
+            "the banner is left out, with no sentence"
         );
-        item.examples = vec!["@Notes".to_owned()];
-        assert_eq!(absent_reason(&item, Part::Banner), None);
     }
 
     #[test]

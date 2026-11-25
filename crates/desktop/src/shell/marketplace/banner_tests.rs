@@ -49,6 +49,13 @@ fn the_banner_takes_its_listed_colours_or_else_the_palette_colour_of_its_slot() 
 }
 
 #[gpui::test]
+fn an_item_with_no_example_prompts_has_no_banner_part(cx: &mut TestAppContext) {
+    let (_, cx, _) = open_listed(cx, Vec::new(), vec![catalogue_package()]);
+    let shown = cx.debug_bounds("marketplace-part-banner").is_some();
+    assert!(!shown, "the page goes straight on from the host line");
+}
+
+#[gpui::test]
 fn a_banner_pill_opens_a_new_chat_with_its_prompt_in_the_composer(cx: &mut TestAppContext) {
     let (rig, cx, _) = open_listed(cx, Vec::new(), vec![banner_package()]);
     let key = rig.shell.read_with(cx, |shell, _| {
