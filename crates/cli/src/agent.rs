@@ -291,6 +291,10 @@ pub struct AgentStartArgs {
     /// The reasoning effort, passed to the kind's effort flag; a kind that declares no effort flag refuses it.
     #[arg(long, value_name = "EFFORT")]
     pub effort: Option<String>,
+    /// Fast mode: passed to the settings the kind declares for it. Needs a kind and a model that offer it; a kind that
+    /// declares no fast mode, or a model that does not take it, refuses the start.
+    #[arg(long)]
+    pub fast: bool,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
@@ -462,6 +466,7 @@ pub async fn execute(
                     permission_mode: args.mode,
                     model: args.model,
                     effort: args.effort,
+                    fast: args.fast.then_some(true),
                 })
                 .await?;
             output.success(&started, &agent_text::session_details(&started));

@@ -199,6 +199,16 @@ directory that does not exist has no kinds.
   lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
   Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
   choice is the default, and no label is empty.
+- `fast` (decision 0165): optional, `{ "settings": {...}, "settings_flag"?: "--settings", "live"?:
+  "/fast", "toggle"?: true }`. `settings` is a non-empty object that may not set `hooks`;
+  `settings_flag` (default `--settings`) is a flag. A start with fast mode passes `settings` on that
+  flag as one JSON argument. A `claude-settings` run whose hook settings file already goes on
+  `--settings` gets the keys merged into that file instead. `live` and `toggle` are declared for the
+  live switch of a later change; nothing sends them. A `model.choices` entry takes `"fast": true`
+  only when the kind declares `fast`. A start with fast mode is refused with
+  `agent.option_unsupported`, naming the kind and model, unless the kind declares `fast` and, when
+  the kind lists model choices, the named model (the default choice when none is named) is marked
+  `fast: true`. A kind with no model choices passes fast mode on for any model.
 
 ## Session record (`AgentSession`)
 
@@ -218,6 +228,7 @@ directory that does not exist has no kinds.
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 
@@ -228,8 +239,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
-| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts?, fast? }] }, effort?: { levels?: [{ id, label }], default? }, fast?: { supported, reason? } }] }` |
+| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?`, `fast?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`; `fast` needs `agent-fast/1` (decision 0165). The client refuses each before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?`, `include_archived?` | `{ sessions }`, newest first; archived sessions only with `include_archived` (capability `agent-archive/1`) |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
@@ -669,7 +680,7 @@ it was noticed.
 
 ```
 massorca agent kinds
-massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
+massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--fast] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
 massorca agent list [--workspace <ws>] [--archived]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]

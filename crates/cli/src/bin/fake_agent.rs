@@ -161,6 +161,8 @@ struct Arguments {
     effort: Option<String>,
     /// `--instructions <TEXT>`, the channel a test kind declares for MassOrca's per-launch instructions (decision 0161).
     instructions: Option<String>,
+    /// `--settings <TEXT>`, the settings object a kind declares for fast mode (decision 0165), read as JSON.
+    settings: Option<String>,
     prompt: Option<String>,
 }
 
@@ -183,6 +185,7 @@ impl Arguments {
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
                 "--instructions" if words.is_empty() => parsed.instructions = args.next(),
+                "--settings" if words.is_empty() => parsed.settings = args.next(),
                 // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
                 "-m" if words.is_empty() => parsed.model = args.next(),
                 "-c" if words.is_empty() => {
@@ -207,6 +210,14 @@ impl Arguments {
         };
         parsed
     }
+}
+
+/// Whether a `--settings` object turns `fastMode` on (decision 0165).
+fn fast_mode_on(text: &str) -> bool {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|settings| settings.get("fastMode").and_then(Value::as_bool))
+        == Some(true)
 }
 
 /// What the agent does after a prompt: keep reading input, or finish with an exit code.
@@ -253,6 +264,9 @@ impl Agent {
         }
         if let Some(effort) = &arguments.effort {
             say(&format!("effort {effort}"));
+        }
+        if arguments.settings.as_deref().is_some_and(fast_mode_on) {
+            say("fast mode on");
         }
         if let Some(text) = &arguments.instructions {
             say(if text.contains(DELEGATE_COMMAND) {
