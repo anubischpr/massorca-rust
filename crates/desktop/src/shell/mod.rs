@@ -55,9 +55,10 @@ use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use std::collections::BTreeSet;
+
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -118,7 +119,7 @@ mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
-mod sidebar_fold_tests;
+mod sidebar_session_rows_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -225,6 +226,8 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
+    filter_menu: Option<teams::OpenFilterMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -259,8 +262,18 @@ pub struct Shell {
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
+    /// The request number of the newest skills read; only its answer is shown.
+    marketplace_skills_request: u64,
+    /// Whether the Skills section's "Where MassOrca looked" report is open.
+    marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
+    work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
+    /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
+    work_panel_applied: Option<(u16, u16)>,
+    /// New terminals waiting for the Work panel's pane to paint its size (`create_terminal`).
+    pane_waits: usize,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
     /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
@@ -269,6 +282,8 @@ pub struct Shell {
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
+    focus_started_terminal: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -279,8 +294,8 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
-    sidebar_folds: SidebarFolds,
+    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    collapsed_projects: BTreeSet<String>,
 }
 
 impl Shell {
@@ -539,6 +554,7 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            filter_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -559,17 +575,23 @@ impl Shell {
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
+            marketplace_skills_request: 0,
+            marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
+            work_panel_size: Rc::default(),
+            work_panel_applied: None,
+            pane_waits: 0,
             session_grid: None,
             conversation_size: Rc::default(),
             stop_prompt: None,
             terminal_notice: None,
+            focus_started_terminal: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
-            sidebar_folds: SidebarFolds::default(),
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -730,6 +752,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -763,7 +786,7 @@ impl Render for Shell {
                 .as_ref()
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
-            let mode = self.start_mode(&page.id);
+            let mode = self.start_mode(&page.id, cx);
             start_page::StartFrame {
                 profile_unsafe: self.profile_unsafe,
                 page,
@@ -897,7 +920,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -923,7 +946,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         true,
                         self.rail.morph_generation(),
@@ -976,6 +999,10 @@ impl Render for Shell {
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
         let team_menu = self
             .team_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let filter_menu = self
+            .filter_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
@@ -1062,6 +1089,7 @@ impl Render for Shell {
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
@@ -1073,5 +1101,21 @@ impl Render for Shell {
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
             .when_some(close_dialog, |el, dialog| el.child(dialog))
+    }
+}
+
+impl Shell {
+    /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
+    /// composer can never start a second session.
+    fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.focus_started_terminal.as_deref() else {
+            return;
+        };
+        let Some(view) = self.terminal_views.get(terminal) else {
+            return;
+        };
+        let focus = view.surface.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.focus_started_terminal = None;
     }
 }

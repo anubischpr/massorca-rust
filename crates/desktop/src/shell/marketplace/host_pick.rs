@@ -240,9 +240,12 @@ impl Shell {
     }
 
     /// Aims the Marketplace at `target`. A paired host is read under a new request number, so an answer to an earlier one
-    /// is no longer awaited.
+    /// is no longer awaited; the Skills section reads the new host too while it is on screen.
     fn read_picked_host(&mut self, target: HostTarget) {
         let request = self.marketplace_pick.aim(target.clone());
+        if self.on_skills_page() {
+            self.read_skills(&target, false);
+        }
         if let (HostTarget::Paired(name), Some(service)) = (target, self.service.clone()) {
             service.read_host_marketplace(name, request);
         }

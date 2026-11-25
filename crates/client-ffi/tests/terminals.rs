@@ -185,7 +185,7 @@ struct Seen {
     events: Vec<TerminalEvent>,
     /// The output bytes read so far, in order.
     output: Vec<u8>,
-    /// Cursor answers the link refused while it was down; written once it is back.
+    /// Cursor queries read and not yet answered.
     unanswered: usize,
     /// The view reported the link lost and not yet back; a write now could wait on the reconnect.
     link_down: bool,
@@ -205,6 +205,9 @@ impl Seen {
         }
         if is_lost(&event) {
             self.link_down = true;
+            // Once this view detaches, the service answers what it held for it (0036); a late answer would reach the
+            // shell as a key (`CSI 1;1R` is F3 to PSReadLine, which then swallows the next typed character).
+            self.unanswered = 0;
         } else if is_back(&event) {
             self.link_down = false;
         }
@@ -246,8 +249,10 @@ impl Seen {
                 Ok(()) => {}
                 // A query that comes after the process ended has no one left to answer it.
                 Err(FfiError::Remote { code, .. }) if code == "terminal.exited" => {}
+                // The service answers it once the cut is noticed, as above.
                 Err(FfiError::Unreachable { .. }) => {
                     self.link_down = true;
+                    self.unanswered = 0;
                     return;
                 }
                 Err(error) => panic!("the answer is written: {error:?}"),

@@ -38,11 +38,10 @@ use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
-use crate::model::regions::Region;
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartOptions,
-    StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_options,
-    start_params,
+    CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
+    StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason,
+    start_options, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -91,6 +90,8 @@ pub(super) struct StartComposer {
     pub mode: StartMode,
     /// The (kind, mode) the person last picked on the chip; the only mode a start can send.
     pub picked: Option<(String, String)>,
+    /// Whether Chat is available for the picked agent, as the page's last frame read it (decision 0101, D11).
+    pub chat: ChatAvailability,
     _events: Subscription,
 }
 
@@ -362,28 +363,40 @@ fn start_mode_switch(
     workspace: String,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_: &mut Window, cx: &mut App| -> AnyElement {
-        let mode = shell
+        let (mode, chat) = shell
             .upgrade()
-            .map(|shell| shell.read(cx).start_mode(&workspace))
-            .unwrap_or_default();
+            .map(|shell| {
+                let shell = shell.read(cx);
+                (
+                    shell.start_mode(&workspace, cx),
+                    shell.chat_availability(&workspace, cx),
+                )
+            })
+            .unwrap_or((StartMode::Terminal, ChatAvailability::new(false, None)));
         let (shell, workspace) = (shell.clone(), workspace.clone());
-        SegmentedControl::new(
-            "start-mode",
-            "start-mode-group",
-            vec![
-                Segment::icon_text(IconName::MessageSquare, "Chat"),
-                Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-            ],
-        )
-        .selected(mode.index())
-        .style(SegmentedStyle::Sunken)
-        .on_change(move |index, _, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
-            });
-        })
-        .into_any_element()
+        SegmentedControl::new("start-mode", "start-mode-group", mode_segments(&chat))
+            .selected(mode.index())
+            .style(SegmentedStyle::Sunken)
+            .on_change(move |index, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
+                });
+            })
+            .into_any_element()
     }
+}
+
+/// The switch's two segments. Chat is off, with the reason `chat` gives, while Chat is not available.
+pub(super) fn mode_segments(chat: &ChatAvailability) -> Vec<Segment> {
+    let segment = Segment::icon_text(IconName::MessageSquare, "Chat");
+    let segment = match chat.reason() {
+        Some(reason) => segment.disabled(true).tooltip(reason.to_owned()),
+        None => segment,
+    };
+    vec![
+        segment,
+        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+    ]
 }
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
@@ -576,6 +589,11 @@ impl Shell {
                                 shell.record_start_pick(&workspace, *index, composer.clone(), cx);
                                 shell.remember_start_mode(&composer, *index, cx);
                             }
+                            ComposerEvent::ModelChanged(_) => {
+                                // Chat follows the picked agent: the page refreshes it, the composer redraws.
+                                composer.update(cx, |_, cx| cx.notify());
+                                cx.notify();
+                            }
                             _ => {}
                         },
                     );
@@ -583,6 +601,8 @@ impl Shell {
                         entity,
                         mode: StartMode::default(),
                         picked: None,
+                        // Set by `refresh_start_composer`, which runs right after this composer is created.
+                        chat: ChatAvailability::Available,
                         _events: events,
                     }
                 })
@@ -592,12 +612,22 @@ impl Shell {
         entity
     }
 
-    /// Where a session started from `workspace`'s page opens; Chat until the switch says otherwise.
-    pub(super) fn start_mode(&self, workspace: &str) -> StartMode {
+    /// Whether Chat is available for `workspace`'s picked agent, as the page's last frame read it (decision 0101).
+    pub(super) fn chat_availability(&self, workspace: &str, cx: &App) -> ChatAvailability {
+        self.start_composers.get(workspace).map_or_else(
+            || ChatAvailability::new(self.store.read(cx).state().agent_chat, None),
+            |start| start.chat.clone(),
+        )
+    }
+
+    /// Where a session started from `workspace`'s page opens: the switch's choice (Chat until it says otherwise),
+    /// or Terminal while Chat is not available for the picked agent.
+    pub(super) fn start_mode(&self, workspace: &str, cx: &App) -> StartMode {
         self.start_composers
             .get(workspace)
             .map(|composer| composer.mode)
             .unwrap_or_default()
+            .offered(self.chat_availability(workspace, cx).is_available())
     }
 
     /// The switch's choice for `workspace`, kept with its composer so it survives redraws.
@@ -674,6 +704,21 @@ impl Shell {
         if changed && let Some(start) = self.start_composers.get_mut(workspace_id) {
             start.picked = remembered.map(|(_, picked)| picked);
         }
+        // Chat follows the picked agent: its chat support, or no agent picked yet.
+        let chat = {
+            let state = self.store.read(cx).state();
+            let agent = state
+                .agent_kinds
+                .iter()
+                .find(|kind| kind.id.as_str() == chosen.as_ref());
+            ChatAvailability::new(
+                state.agent_chat,
+                agent.map(|kind| (kind.name.as_str(), state.agent_kind_chat.get(&kind.id))),
+            )
+        };
+        if let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.chat = chat;
+        }
         let kind_chosen = choices
             .iter()
             .any(|choice| choice.id.as_str() == chosen.as_ref());
@@ -719,7 +764,7 @@ impl Shell {
             options,
             grid,
         );
-        let mode = self.start_mode(workspace);
+        let mode = self.start_mode(workspace, cx);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,
@@ -871,9 +916,9 @@ impl Shell {
         }
     }
 
-    /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
-    /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
-    /// back to the composer with its sentence.
+    /// The service's answer to a start. The session opens in the Canvas once the Sidebar lists it, and in
+    /// Terminal its terminal then takes the keyboard. A refusal gives the prompt back to the composer with its
+    /// sentence.
     pub(super) fn finish_start(
         &mut self,
         prompt: &str,
@@ -887,15 +932,12 @@ impl Shell {
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
-                match mode {
-                    StartMode::Chat => self.model.open_started_session(session.id),
-                    StartMode::Terminal => {
-                        self.model.show_region(Region::WorkPanel);
-                        if let Some(terminal) = &session.terminal_id {
-                            self.reveal_terminal(&session.workspace_id, terminal, cx);
-                        }
-                    }
+                // Both arms open the started session in the Canvas (owner ruling 2026-11-25): the session the person
+                // started is what they see. A terminal session's terminal takes the keyboard once drawn.
+                if mode == StartMode::Terminal {
+                    self.focus_started_terminal = session.terminal_id.clone();
                 }
+                self.model.open_started_session(session.id);
             }
             Err(refusal) => composer.update(cx, |composer, cx| {
                 composer.set_draft(prompt, cx);

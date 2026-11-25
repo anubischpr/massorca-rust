@@ -78,6 +78,24 @@ program are checked, on `agent.start`, `agent.delegate` (and every other start t
 `agent.accounts.check`, `agent.accounts.remove`, and the vendor sign-out on removal or on a
 discarded sign-in keep working on a disabled kind.
 
+**Removal cleanup** (decision 0098). Next to the guard, the service registers the agents' remove
+cleanup, which runs only when a removal asks for `delete_agent_homes` (`extension remove
+--delete-agent-homes`). The cleanup runs after the package's files are deleted, so the extensions
+read the kinds the package provided from its manifest before deleting them, and pass them to the
+cleanup with the package id (`RemovedPackage`). A manifest that cannot be read gives no kinds, and
+the removal reports that their accounts were left; an unvouched first-party id gives none.
+`Agents::remove_package_accounts` then, for each of those kinds that no other installed package
+still provides, deletes under the homes gate every account row of the kind (with it, its active mark
+and project choices), its directory under `<profile>/agents/accounts/<kind>/`, any account directory
+left without a row, the hidden folders an interrupted import or replace left there, the
+`accounts/<kind>/` folder itself, and the kind's 0056 home with its hidden siblings. The deletions go
+through the account-home helpers, which refuse a link instead of following it. A package outside
+`massorca.*` never cleans a kind the built-in catalogue declares: that kind is skipped and reported.
+An account busy with a sign-in, a decision, a removal or a live run is left. What was not deleted is
+the cleanup's failure in the removal result, with the code of its first problem. No sign-out runs:
+an account a MassOrca sign-in made keeps its login valid at the vendor until the person signs out
+there.
+
 **Used kinds.** `used_kinds(&Store, profile_dir) -> Result<BTreeSet<String>, AgentError>` (public from core-agents)
 is every kind the profile has used, for the extension runtime's removal rules: the kinds of
 `agent_sessions`, `agent_accounts` (pending sign-ins included), `agent_account_history` and
@@ -205,7 +223,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
-| `agent.accounts.import` | workspace | `kind`, `from?`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }`. An absent `from` copies each file from where the kind's CLI keeps it and needs capability `agent-import-detect/1`; the client refuses it before sending when the service does not offer it (decision 0097). |
+| `agent.accounts.import` | workspace | `kind`, `from?`, `label?` | `{ result: imported \| failed \| not_found, account?, reason?, updated? }`. `updated` names the existing account an import of the same login updated (decision 0098). An absent `from` copies each file from where the kind's CLI keeps it and needs capability `agent-import-detect/1`; the client refuses it before sending when the service does not offer it (decision 0097). |
 | `agent.accounts.import_candidates` | read | `kind?` | `{ candidates: [{ kind, ready, folder?, files: [{ name, required, found, path?, env? }] }] }`. Capability `agent-import-detect/1` (decision 0097). Below `workspace` scope `folder` and `path` are omitted. |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
@@ -675,13 +693,22 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   an undecided account (its store mark is set) decides it the same way, as a sign-in's end does. An
   undecided account is not the kind's history until a decision keeps it (decision 0059). A row that
   is already gone is left alone, with no event.
-- **One account per login** (`Agents::duplicate_of`): a new account whose check reports an identity
-  another account of the kind already has (compared trimmed and without case, as pv96 compares a
-  duplicate add's email) is refused. An import fails with the reason naming the existing account,
-  and its copied files are deleted. A sign-in is deleted when its terminal ends, announced as
-  `conflict`, and never signed out: the vendor sign-out would end the session the existing account
-  shares. A sign-in again whose login turns out to be another account's is stored as `conflict`,
-  keeping its recorded identity. A kind's accounts in WSL are not told apart from the host's yet:
+- **One account per login** (`Agents::duplicate_of`, decision 0098): a new account whose check
+  reports an identity another account of the kind already has (compared trimmed and without case,
+  as pv96 compares a duplicate add's email) updates that account instead of adding one. Under the
+  homes gate, `credentials::update_account_files_locked` writes each declared credential file the
+  new account holds into the existing account's home, each to a new owner-only sibling renamed over
+  the old file (a link is refused). Nothing else in that home changes: an agent home also holds
+  transcripts, history and settings, and a declared file the new account lacks is kept. The new
+  account's home and row are then deleted, and the existing account's state and identity are
+  refreshed. The existing account keeps its id,
+  label, origin, active mark and project choices. An import answers `imported` with that account and
+  `updated: <its id>`; a sign-in's end announces both accounts. When the existing account is busy (a
+  live run, a removal, a sign-in or a decision of its own, or a sign-in undecided in the store), the
+  new account is deleted as before: an import fails naming the existing account, and a sign-in is
+  announced as `conflict`. Nothing is ever signed out here: the vendor sign-out would end the session
+  both accounts share. A sign-in again whose login turns out to be another account's is stored as
+  `conflict`, keeping its recorded identity. A kind's accounts in WSL are not told apart from the host's yet:
   there is no WSL account scope.
 - **Sign-in again** (`sign_in.rs`, `Agents::accounts_sign_in`, `agent.accounts.sign_in`): signs an
   existing account in once more, in its own home, with the same login and environment as a new
@@ -740,7 +767,10 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   is the person's, so the service never signs it out; its files are only deleted. Under the gate
   again, the home and the row are deleted. A sign-in the service discards (see Sign-in) is signed out
   the same way before its home is deleted, since the service made that login.
-- **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
+- **Migration and startup**: `startup_sweep` runs once before requests are served. It first settles
+  the old homes a replace set aside (`.<name>.old-<id>` in `homes/` and `accounts/<kind>/`, decision
+  0098): one whose home is missing, because a crash came between the two renames, is renamed back,
+  and one whose home exists is deleted. Then it deletes a
   `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
   the row and moving the home); moves 0056's home of each kind into an account; adopts an account
   directory that has no row as `migrated` (active only when its kind has no active account); and
@@ -797,7 +827,7 @@ under an empty temporary home.
 
 | Kind | Program | Home variable | Login | Check | Logout |
 | :- | :- | :- | :- | :- | :- |
-| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status`, exit 0 signed in, 1 not (confirmed) | `claude auth logout` (confirmed) |
+| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status --json`, exit 0 signed in, 1 not (confirmed); `loggedIn: false` needs a sign-in, identity from `email` and `orgName` (decision 0098) | `claude auth logout` (confirmed) |
 | `codex` | `codex` | `CODEX_HOME` (documented for file storage only) | `codex login` exists; not confirmed to honour `CODEX_HOME` | `codex login status` exists; exit code and output not documented | `codex logout` exists; not confirmed to honour `CODEX_HOME` |
 | `antigravity` | `agy` | none; credentials are in the OS keyring | no `login` subcommand; sign-in runs when `agy` is first launched | none; no non-interactive status | `/logout` inside the prompt only |
 | `gentle-shell` | `gentle-shell` | `PI_CODING_AGENT_DIR` (as declared today) | `/login` slash command inside its terminal UI; no command-line form | none | none |
@@ -825,10 +855,17 @@ Sources:
   no command-line form, and the credential variable in the launch specs. The binary is not
   installed on this machine, so it was not run.
 
-Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status"],
-signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `identity_pattern` is
-declared, because neither is documented. Without an `expired_pattern`, an expired login probably
-reads as `needs_sign_in`, not `expired`; this is not verified.
+Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status",
+"--json"], signed_in_exit: 0, identity_json: ["email", "orgName"], signed_in_json: "loggedIn" }` and
+`logout: ["auth", "logout"]` (decision 0098). A check's `identity_json` reads its output as a JSON
+object and joins the listed top-level string fields that are present with ` / `, so one email in
+two organisations is two logins; it is declared instead of `identity_pattern`. `signed_in_json`
+names a top-level field whose `false` means the check needs a sign-in, whatever its exit code. The
+previous app reads `claude auth status --json` and its `email` field; the fields were not run
+here.
+Below `workspace` scope the identity is masked, as every account identity is. No `expired_pattern`
+is declared, because none is documented. Without it, an expired login probably reads as
+`needs_sign_in`, not `expired`; this is not verified.
 
 `claude` also declares `accounts.strip_env` (decision 0059, amendment 2026-11-22). The check, the
 sign-out and the sign-in terminal judge the account's home only, so these variables are removed from
