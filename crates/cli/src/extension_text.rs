@@ -35,12 +35,15 @@ pub fn item_rows(items: &[ExtensionItem], none: &str) -> Vec<String> {
     lines
 }
 
-/// What detection sees for each agent CLI: the path found, or that none was found, and the PATH it searched.
+/// What detection sees for each agent CLI and host program: the path found, or that none was found, and the PATH it
+/// searched.
 pub fn doctor_lines(item: &ExtensionItem) -> Vec<String> {
     let mut lines = vec![format!("{} ({})", item.name, item.id)];
-    for agent in &item.agents {
+    let agents = item.agents.iter().map(|agent| ("agent", agent));
+    let programs = item.programs.iter().map(|program| ("program", program));
+    for (label, agent) in agents.chain(programs) {
         let Some(cli) = &agent.cli else {
-            lines.push(format!("agent {}: no CLI declared", agent.id));
+            lines.push(format!("{label} {}: no CLI declared", agent.id));
             continue;
         };
         let found = match (agent.detected, &agent.program_path) {
@@ -50,7 +53,7 @@ pub fn doctor_lines(item: &ExtensionItem) -> Vec<String> {
         };
         let source = agent.path_source.as_deref().unwrap_or("unknown");
         lines.push(format!(
-            "agent {}: {} {found}; PATH source: {source}",
+            "{label} {}: {} {found}; PATH source: {source}",
             agent.id, cli.binary
         ));
     }
@@ -76,7 +79,9 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
     for permission in &item.permissions {
         lines.push(permission_line(permission));
     }
-    for agent in &item.agents {
+    let agents = item.agents.iter().map(|agent| ("agent", agent));
+    let programs = item.programs.iter().map(|program| ("program", program));
+    for (label, agent) in agents.chain(programs) {
         let found = match &agent.program_path {
             Some(path) if agent.detected => format!("detected at {path}"),
             _ => "not detected".to_owned(),
@@ -86,7 +91,7 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
         } else {
             ""
         };
-        lines.push(format!("agent {}: {found}{by_package}", agent.id));
+        lines.push(format!("{label} {}: {found}{by_package}", agent.id));
         if let Some(cli) = &agent.cli {
             let checked = cli
                 .source_checked

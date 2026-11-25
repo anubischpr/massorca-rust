@@ -123,6 +123,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "extension.enable",
             "extension.inspect",
             "extension.log",
+            "extension.program-update",
             "extension.install",
             "extension.list",
             "extension.remove",
