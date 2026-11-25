@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use crate::credentials;
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
-    now_ms,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, SessionDetails, SessionOrigin, Store,
+    StoreError, StoredActivity, new_id, now_ms,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
@@ -26,8 +26,8 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
-    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind, ResumeState,
+    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, MAX_PREVIEW_CHARS,
+    ModeApplied, ModeSource, PromptReceipt, ReceiptKind, ResumeState, SessionMeta,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -700,6 +700,11 @@ impl Agents {
             rows: params.rows.unwrap_or(DEFAULT_ROWS),
         };
         let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
+        let origin = SessionOrigin {
+            model: params.model.clone(),
+            effort: params.effort.clone(),
+            forked_from: None,
+        };
         let started = match run {
             RunStart::Terminal => self
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
@@ -738,12 +743,13 @@ impl Agents {
             retained: false,
             released_at: None,
         };
-        let inserted = match &started {
-            Started::Terminal(_) => self.store().insert_agent_session(&row),
-            Started::Chat(chat_run) => self
-                .store()
-                .insert_chat_agent_session(&row, &chat_run.run_id),
+        let chat_run = match &started {
+            Started::Terminal(_) => None,
+            Started::Chat(chat_run) => Some(chat_run.run_id.as_str()),
         };
+        let inserted = self
+            .store()
+            .insert_agent_session_with_origin(&row, &origin, chat_run);
         if let Err(error) = inserted {
             live.remove(&session_id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -1514,7 +1520,7 @@ impl Agents {
             .map(|row| {
                 let mut live = lock(&self.inner.status);
                 let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
-                self.view_in(&mut live, row, Some(&catalog))
+                self.view_in(&mut live, row, Some(&catalog), true)
             })
             .collect()
     }
@@ -1933,28 +1939,36 @@ impl Agents {
         live: &mut LiveRuns,
         row: AgentSessionRow,
     ) -> Result<AgentSession, AgentError> {
-        self.view_in(live, row, None)
+        self.view_in(live, row, None, true)
     }
 
-    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one.
+    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one. `full` also reads what a caller
+    /// shows beside the record: the start options, lineage, branch and preview, and the notes of the run (decision 0168).
+    /// The exit sweep passes `false` on every tick and reads the execution alone.
     fn view_in(
         &self,
         live: &mut LiveRuns,
         mut row: AgentSessionRow,
         catalog: Option<&Catalog>,
+        full: bool,
     ) -> Result<AgentSession, AgentError> {
         let run = self.run_of(&row)?;
         let execution = self.execution_in(live, &mut row, run)?;
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
         let placement = self.delegation_view(&row);
-        let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
-        let shared_folder_with = if execution.state == TerminalState::Exited {
+        // The archived flag and the folder writers are read for the views a caller sees; the sweep reads the execution alone.
+        let archived = full && self.store().agent_session_archived_at(&row.id)?.is_some();
+        let shared_folder_with = if !full || execution.state == TerminalState::Exited {
             Vec::new()
         } else {
             self.shared_folder_with(live, &row)?
         };
         let mut session = record(row, execution, resume, placement, run, archived);
         session.shared_folder_with = shared_folder_with;
+        if full {
+            let details = self.store().agent_session_details(&session.id)?;
+            with_details(&mut session, details.unwrap_or_default());
+        }
         Ok(session)
     }
 
@@ -2203,6 +2217,7 @@ fn record(
         delegation: placement.options,
         notes: placement.notes,
         shared_folder_with: Vec::new(),
+        meta: Default::default(),
     }
 }
 
@@ -2214,6 +2229,39 @@ fn keeps_one_writer(kind: WorkspaceKind) -> bool {
         WorkspaceKind::Worktree | WorkspaceKind::Unknown => true,
         WorkspaceKind::Folder => false,
     }
+}
+
+/// Sets what a session view shows beside its row (decision 0168): its start options, its lineage, its workspace's
+/// branch, and a preview, which is a chat's newest message or a terminal session's result.
+fn with_details(session: &mut AgentSession, details: SessionDetails) {
+    let source = match session.run {
+        RunType::Chat => details.last_message,
+        _ => session.result.clone(),
+    };
+    session.meta = SessionMeta {
+        model: details.origin.model,
+        effort: details.origin.effort,
+        branch: details.branch,
+        preview: source.as_deref().and_then(preview_of),
+        forked_from: details.origin.forked_from,
+    };
+}
+
+/// At most [`MAX_PREVIEW_CHARS`] characters of `text`, its line breaks and runs of white space made single spaces;
+/// `None` when nothing is left.
+fn preview_of(text: &str) -> Option<String> {
+    let mut preview = String::new();
+    for word in text.split_whitespace() {
+        if !preview.is_empty() {
+            preview.push(' ');
+        }
+        preview.push_str(word);
+        if preview.chars().count() >= MAX_PREVIEW_CHARS {
+            break;
+        }
+    }
+    let preview: String = preview.chars().take(MAX_PREVIEW_CHARS).collect();
+    (!preview.is_empty()).then_some(preview)
 }
 
 /// Why `run` takes no input now, if it does not (decisions 0058, 0083): a mode switch is being typed into it, whatever
@@ -2969,6 +3017,29 @@ mod not_enabled_tests {
         assert_eq!(
             error.message,
             "Antigravity is turned off; install or enable it in the Marketplace."
+        );
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn a_preview_is_one_line_of_at_most_its_limit_and_absent_when_blank() {
+        assert_eq!(
+            preview_of("  done:\n  all   good \n"),
+            Some("done: all good".to_owned())
+        );
+        assert_eq!(preview_of(" \n\t "), None);
+        let long = "word ".repeat(100);
+        let preview = preview_of(&long).unwrap();
+        assert_eq!(preview.chars().count(), MAX_PREVIEW_CHARS);
+        assert!(long.starts_with(&preview));
+        let wide = "é".repeat(MAX_PREVIEW_CHARS + 5);
+        assert_eq!(
+            preview_of(&wide).unwrap().chars().count(),
+            MAX_PREVIEW_CHARS
         );
     }
 }

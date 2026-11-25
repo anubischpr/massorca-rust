@@ -192,6 +192,8 @@ pub struct AgentQueueList {
 
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;
+/// Most characters of a session's `preview` (decision 0168).
+pub const MAX_PREVIEW_CHARS: usize = 200;
 /// Most bytes of a session's result text (0052).
 pub const MAX_RESULT_BYTES: usize = 16 * 1024;
 /// Most bytes of a hook payload (0053).
@@ -923,7 +925,8 @@ pub struct AgentSession {
     pub delegation: Option<Box<DelegationOptions>>,
     /// Notes on the session in plain words (decision 0161): that a writing child of a plain folder shares its parent's
     /// folder, and that the current run got no delegation instructions because its CLI does not take them. Empty
-    /// (absent) otherwise, and from an older peer.
+    /// (absent) otherwise, and from an older peer. The current run's notes also say what a resume or fork left out of the
+    /// stored options, and that a first input the agent never took (decision 0168).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// The other live writing sessions in the folder workspace this live session writes in (decision 0169). Empty
@@ -931,6 +934,32 @@ pub struct AgentSession {
     /// shows that another session also writes in the folder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shared_folder_with: Vec<String>,
+    /// Start options, lineage, branch and preview (decision 0168), flat on the wire.
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+}
+
+/// What a session view shows beside its record for a list (decision 0168). Every field is optional and flat on the
+/// wire of [`AgentSession`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMeta {
+    /// The model the session's latest run used (decision 0168): the one it was started with, kept across resumes and
+    /// forks while the kind still takes it. Absent when none was named, or the kind no longer takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The reasoning effort the session was started with (decision 0168), kept across resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// The branch of the session's workspace now (decision 0168). Absent for a plain folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// A short text for a session list (decision 0168), at most [`MAX_PREVIEW_CHARS`] characters: a chat's newest user or
+    /// assistant message, or a terminal session's `result`. Withheld as `result` is from a run holding secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// The session this one was forked from with `agent.fork` (decision 0168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
 }
 
 /// The children a session could delegate now (decision 0161).

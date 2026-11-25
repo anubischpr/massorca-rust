@@ -225,6 +225,7 @@ mod tests {
             delegation: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
+            meta: Default::default(),
         }
     }
 

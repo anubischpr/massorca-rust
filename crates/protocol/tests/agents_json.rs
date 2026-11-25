@@ -65,6 +65,7 @@ fn live_session() -> AgentSession {
         delegation: None,
         notes: Vec::new(),
         shared_folder_with: Vec::new(),
+        meta: Default::default(),
     }
 }
 
@@ -1248,4 +1249,28 @@ fn shared_folder_with_lists_the_other_writers_and_is_absent_when_empty() {
     assert!(alone.get("shared_folder_with").is_none(), "{alone}");
     let older: AgentSession = serde_json::from_value(alone).expect("an older record decodes");
     assert!(older.shared_folder_with.is_empty());
+}
+
+/// The metadata of decision 0168 is flat on the wire, and a record from an older peer reads with none of it.
+#[test]
+fn session_metadata_is_flat_on_the_wire() {
+    let mut session = live_session();
+    session.meta = massorca_protocol::methods::agents::SessionMeta {
+        model: Some("m-1".to_owned()),
+        effort: Some("high".to_owned()),
+        branch: Some("feature".to_owned()),
+        preview: Some("done: hello".to_owned()),
+        forked_from: Some("s-0".to_owned()),
+    };
+    let mut expected = serde_json::to_value(live_session()).unwrap();
+    for (key, value) in [
+        ("model", "m-1"),
+        ("effort", "high"),
+        ("branch", "feature"),
+        ("preview", "done: hello"),
+        ("forked_from", "s-0"),
+    ] {
+        expected[key] = json!(value);
+    }
+    assert_wire(&session, &expected);
 }

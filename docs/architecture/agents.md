@@ -217,6 +217,10 @@ directory that does not exist has no kinds.
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
+| `model?`, `effort?` | the model and the reasoning effort the start named (decision 0168) |
+| `branch?` | the branch of the session's workspace now; absent for a plain folder (decision 0168) |
+| `preview?` | at most 200 characters on one line (decision 0168): a chat's newest user or assistant message, or a terminal session's `result`. Read from the store with the view's details, no file per row; the exit sweep does not read it. Withheld as `result` is from a run holding secrets |
+| `forked_from?` | the session this one was forked from with `agent.fork` (decision 0168) |
 
 ## Wire
 
