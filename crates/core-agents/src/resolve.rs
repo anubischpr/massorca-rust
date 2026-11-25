@@ -2,6 +2,7 @@
 //!
 //! The search inputs are passed in, so tests can use their own `PATH` and `PATHEXT`.
 
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,220 @@ impl SearchEnv {
             path: std::env::var_os("PATH"),
             pathext: std::env::var("PATHEXT").ok(),
         }
+    }
+}
+
+/// Where a vendor program's search path came from (decision 0092).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathSource {
+    /// The service's own `PATH`.
+    Process,
+    /// The service's `PATH` with the registry's machine and user `Path` values merged in.
+    Registry,
+}
+
+impl PathSource {
+    /// The word shown to a person: `process` or `registry`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Registry => "registry",
+        }
+    }
+}
+
+/// The search path of vendor programs (decision 0092): on Windows the process `PATH` with the registry's machine and
+/// user `Path` values merged in; elsewhere the process `PATH`.
+pub fn vendor_search_env() -> (SearchEnv, PathSource) {
+    let process = std::env::var_os("PATH");
+    let pathext = std::env::var("PATHEXT").ok();
+    let merged = if process_path_only() {
+        None
+    } else {
+        registry_merged_path(process.as_deref())
+    };
+    match merged {
+        Some(merged) => (
+            SearchEnv {
+                path: Some(OsString::from(merged)),
+                pathext,
+            },
+            PathSource::Registry,
+        ),
+        None => (
+            SearchEnv {
+                path: process,
+                pathext,
+            },
+            PathSource::Process,
+        ),
+    }
+}
+
+/// Whether vendor programs use the service's own `PATH` alone: `MASSORCA_VENDOR_PATH=process`, for tests and support.
+fn process_path_only() -> bool {
+    std::env::var_os("MASSORCA_VENDOR_PATH").is_some_and(|value| value.to_str() == Some("process"))
+}
+
+/// The process `PATH`, then the machine and user `Path` values (decision 0092). Entries are trimmed and unquoted, empty
+/// ones are dropped, and a repeat is dropped by its first occurrence, compared without case and trailing separators as
+/// Windows compares directories. The registry values must already have their `%NAME%` names expanded.
+pub fn merge_search_path(process: &str, machine: Option<&str>, user: Option<&str>) -> String {
+    let mut seen = HashSet::new();
+    let mut kept = Vec::new();
+    let entries = process
+        .split(';')
+        .chain(machine.unwrap_or_default().split(';'))
+        .chain(user.unwrap_or_default().split(';'));
+    for entry in entries {
+        let entry = entry.trim().trim_matches('"').trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let key = entry.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        if seen.insert(key) {
+            kept.push(entry);
+        }
+    }
+    kept.join(";")
+}
+
+/// Replaces each `%NAME%` that `lookup` knows with its value. A name it does not know, or a lone `%`, stays as typed.
+pub fn expand_env_vars(value: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%').filter(|end| *end > 0) else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let name = &after[..end];
+        match lookup(name) {
+            Some(found) => out.push_str(&found),
+            None => out.push_str(&rest[start..start + end + 2]),
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The process `PATH` merged with the registry's `Path` values, or `None` when the registry has neither value, or the
+/// process `PATH` is not text.
+#[cfg(windows)]
+fn registry_merged_path(process: Option<&OsStr>) -> Option<String> {
+    let process = process?.to_str()?;
+    let machine = registry::path_value(registry::MACHINE_PATH);
+    let user = registry::path_value(registry::USER_PATH);
+    if machine.is_none() && user.is_none() {
+        return None;
+    }
+    Some(merge_search_path(
+        process,
+        machine.as_deref(),
+        user.as_deref(),
+    ))
+}
+
+#[cfg(not(windows))]
+fn registry_merged_path(_process: Option<&OsStr>) -> Option<String> {
+    None
+}
+
+/// The machine and user `Path` values, read through the Windows registry API: no `reg.exe` and no PowerShell.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod registry {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_EXPAND_SZ, REG_VALUE_TYPE,
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
+    };
+
+    use super::expand_env_vars;
+
+    /// The `Path` value of the machine's environment.
+    pub(super) const MACHINE_PATH: (HKEY, &str) = (
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+    );
+    /// The `Path` value of the signed-in user's environment.
+    pub(super) const USER_PATH: (HKEY, &str) = (HKEY_CURRENT_USER, "Environment");
+
+    /// The `Path` value under `root` and `subkey`, with `%NAME%` expanded when it is `REG_EXPAND_SZ`; `None` if missing.
+    pub(super) fn path_value((root, subkey): (HKEY, &str)) -> Option<String> {
+        let subkey = wide(subkey);
+        let name = wide("Path");
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: `subkey` is NUL-terminated and lives across the call; on success `key` is open until `Key` closes it.
+        let status = unsafe { RegOpenKeyExW(root, subkey.as_ptr(), 0, KEY_READ, &mut key) };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let key = Key(key);
+        let mut kind: REG_VALUE_TYPE = 0;
+        let mut bytes: u32 = 0;
+        // SAFETY: with no data buffer the call only reports the size of the value into `bytes`.
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                std::ptr::null_mut(),
+                &mut bytes,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let mut units = vec![0_u16; (bytes as usize).div_ceil(2)];
+        let mut size = bytes;
+        // SAFETY: `units` holds `size` bytes or more, and the call writes no more than `size` bytes into it.
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                units.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let used = (size as usize).div_ceil(2).min(units.len());
+        let text = String::from_utf16_lossy(&units[..used]);
+        let text = text.trim_end_matches('\0');
+        Some(if kind == REG_EXPAND_SZ {
+            expand_env_vars(text, &|name: &str| std::env::var(name).ok())
+        } else {
+            text.to_owned()
+        })
+    }
+
+    /// An open registry key, closed when dropped.
+    struct Key(HKEY);
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from a successful `RegOpenKeyExW` and is closed only here.
+            unsafe {
+                RegCloseKey(self.0);
+            }
+        }
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        OsStr::new(text)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 }
 
@@ -223,5 +438,38 @@ mod tests {
             file_names("tool.v2", Some(".EXE")),
             vec![OsString::from("tool.v2"), OsString::from("tool.v2.EXE")]
         );
+    }
+
+    #[test]
+    fn expansion_replaces_known_names_and_keeps_the_rest_as_typed() {
+        let lookup = |name: &str| (name == "ROOT").then(|| "C:\\Root".to_owned());
+        assert_eq!(
+            expand_env_vars("%ROOT%\\bin;%MISSING%\\x", &lookup),
+            "C:\\Root\\bin;%MISSING%\\x"
+        );
+        assert_eq!(expand_env_vars("100% sure", &lookup), "100% sure");
+        assert_eq!(expand_env_vars("%ROOT", &lookup), "%ROOT");
+    }
+
+    #[test]
+    fn the_merge_keeps_process_then_machine_then_user_and_drops_repeats() {
+        let merged = merge_search_path(
+            "C:\\Tools;C:\\Node\\",
+            Some("C:\\Windows;c:\\tools;C:\\Node"),
+            Some("C:\\Users\\me\\npm;C:\\Windows"),
+        );
+        assert_eq!(
+            merged,
+            "C:\\Tools;C:\\Node\\;C:\\Windows;C:\\Users\\me\\npm"
+        );
+    }
+
+    #[test]
+    fn the_merge_skips_empty_entries_and_unquotes_quoted_ones() {
+        assert_eq!(
+            merge_search_path("", Some("\"C:\\Program Files\\nodejs\";;"), None),
+            "C:\\Program Files\\nodejs"
+        );
+        assert_eq!(merge_search_path("C:\\a", None, None), "C:\\a");
     }
 }

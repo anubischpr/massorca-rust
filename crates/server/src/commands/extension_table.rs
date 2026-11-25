@@ -19,6 +19,12 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             args(&["id"], json!({ "id": { "type": "string" } })),
         ),
         command(
+            "extension.doctor",
+            "Show what detection sees for a package's CLIs, and the PATH it searched",
+            "extensions.get",
+            args(&["id"], json!({ "id": { "type": "string" } })),
+        ),
+        command(
             "extension.catalogue",
             "List the built-in catalogue",
             "extensions.catalogue",

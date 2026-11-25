@@ -28,6 +28,7 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 massorca-profile.workspace = true
 win32job.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
 
 [features]
 # Test-only crash points (`MASSORCA_TEST_CRASH_AT`). Only test builds enable it, through the CLI's dev-dependencies; a

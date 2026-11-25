@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AccountsImported, ImportResult};
 
-use super::types::{AccountId, AccountState, MarketplaceSnapshot};
+use super::types::{AccountId, AccountState, ItemState, MarketplaceItem, MarketplaceSnapshot};
 use crate::service::Refusal;
 
 /// Whether a refusal says the account is busy: its sign-in is open or being decided, or it is still undecided after
@@ -44,6 +44,22 @@ pub struct AccountActivity<'a> {
 /// The accounts of one agent, in the order the source lists them.
 pub fn account_views(snapshot: &MarketplaceSnapshot, agent_kind: &str) -> Vec<AccountView> {
     connection_rows(snapshot, agent_kind, AccountActivity::default())
+}
+
+/// Why Add account and Import wait: the agent's package is not installed yet or is off (decision 0059). `None` when
+/// they may be pressed.
+pub fn account_block(item: &MarketplaceItem) -> Option<String> {
+    let name = item.name.as_str();
+    match &item.state {
+        ItemState::NotInstalled | ItemState::Failed { .. } => {
+            Some(format!("{name} is not installed yet. Install it first."))
+        }
+        ItemState::Installing { .. } => Some(format!("{name} is still installing.")),
+        ItemState::Installed { enabled: false, .. } => {
+            Some(format!("{name} is turned off. Turn it on first."))
+        }
+        ItemState::Installed { enabled: true, .. } | ItemState::Incompatible { .. } => None,
+    }
 }
 
 /// The accounts of one agent with what this desktop knows of them. A busy account offers no change; once its

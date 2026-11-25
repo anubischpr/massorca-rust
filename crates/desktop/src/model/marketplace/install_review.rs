@@ -1,14 +1,18 @@
 //! The install review of a catalogue package: the lines that say exactly what the service reported (decision 0062).
 //! Permissions, the agent programs, the vendor commands and the fingerprint are shown as the service sent them.
 
-use massorca_protocol::methods::extensions::{CliPlan, CliPlanState, ExtensionReview, KindView};
+use massorca_protocol::methods::extensions::{
+    CliPlan, CliPlanState, ExtensionReview, KindView, RiskLevel,
+};
 
 use super::extension_items::{permission_word, risk_word, source_word};
 
 /// The review, one line per fact, in the order the person reads it: what the package is, its risk and permissions,
 /// what each agent runs, each vendor command, and the consent the person accepts.
 pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
-    let mut lines = vec![
+    let (level, reasons) = shown_risk(review);
+    let mut lines: Vec<String> = outcome_line(review).into_iter().collect();
+    lines.extend([
         format!(
             "{} ({}) {} by {}",
             review.name, review.id, review.version, review.publisher
@@ -19,10 +23,9 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
             source_word(review.source.kind),
             review.source.reference
         ),
-        format!("SHA-256: {}", review.sha256),
-        format!("Risk: {}", risk_word(review.risk.level)),
-    ];
-    lines.extend(review.risk.reasons.iter().map(|reason| reason.copy.clone()));
+        format!("Risk: {}", risk_word(level)),
+    ]);
+    lines.extend(reasons);
     if review.permissions.is_empty() {
         lines.push("Permissions: none".to_owned());
     } else {
@@ -43,9 +46,111 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
             server.command.join(" ")
         )
     }));
-    lines.extend(review.cli.iter().flat_map(cli_lines));
-    lines.push(format!("Consent: {}", review.consent));
+    // A CLI that is already here has no lines of its own: the outcome line says it is found and not installed.
+    lines.extend(
+        review
+            .cli
+            .iter()
+            .filter(|plan| !matches!(plan.state, CliPlanState::Detected { .. }))
+            .flat_map(cli_lines),
+    );
     lines
+}
+
+/// The fingerprints of the review, shown under Details with what each one is.
+pub fn review_details(review: &ExtensionReview) -> Vec<String> {
+    vec![
+        format!("Package SHA-256: {}", review.sha256),
+        format!(
+            "Consent fingerprint (this review, as accepted): {}",
+            review.consent
+        ),
+    ]
+}
+
+/// Whether this computer runs a vendor installer: a CLI plan that will run its command.
+pub fn installer_runs(review: &ExtensionReview) -> bool {
+    review
+        .cli
+        .iter()
+        .any(|plan| matches!(plan.state, CliPlanState::WillRun { .. }))
+}
+
+/// The button that finishes the review: Allow and install when an installer runs, else Add to MassOrca.
+pub fn install_button_label(review: &ExtensionReview) -> &'static str {
+    if installer_runs(review) {
+        "Allow and install"
+    } else {
+        "Add to MassOrca"
+    }
+}
+
+/// The first line: what installing does on this computer, in plain words.
+fn outcome_line(review: &ExtensionReview) -> Option<String> {
+    let commands: Vec<String> = review
+        .cli
+        .iter()
+        .filter_map(|plan| match &plan.state {
+            CliPlanState::WillRun { command, .. } => Some(command.join(" ")),
+            _ => None,
+        })
+        .collect();
+    if !commands.is_empty() {
+        return Some(format!(
+            "MassOrca will run the vendor's installer: {}.",
+            commands.join("; ")
+        ));
+    }
+    review
+        .cli
+        .iter()
+        .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }))
+        .then(|| {
+            format!(
+                "{} is already on this computer. MassOrca will only add it to the model picker; nothing is downloaded or installed.",
+                review.name
+            )
+        })
+}
+
+/// How high a risk level is, to pick the highest of a review's reasons.
+fn rank(level: RiskLevel) -> u8 {
+    match level {
+        RiskLevel::High => 2,
+        RiskLevel::Medium => 1,
+        _ => 0,
+    }
+}
+
+/// The risk this computer shows: the highest level of the reasons that apply here, and their copy with repeats
+/// dropped. An installer reason applies only when the agent's CLI plan runs its command.
+pub fn shown_risk(review: &ExtensionReview) -> (RiskLevel, Vec<String>) {
+    let applies = |subject: &str| {
+        let installer = subject
+            .strip_prefix("agentAdapters:")
+            .and_then(|rest| rest.strip_suffix(":install"));
+        installer.is_none_or(|agent| {
+            review.cli.iter().any(|plan| {
+                plan.agent == agent && matches!(plan.state, CliPlanState::WillRun { .. })
+            })
+        })
+    };
+    let mut level = RiskLevel::Low;
+    let mut copies: Vec<String> = Vec::new();
+    for reason in review
+        .risk
+        .reasons
+        .iter()
+        .filter(|reason| applies(&reason.subject))
+    {
+        if rank(reason.level) > rank(level) {
+            level = reason.level;
+        }
+        if !copies.contains(&reason.copy) {
+            copies.push(reason.copy.clone());
+        }
+    }
+    (level, copies)
 }
 
 /// An agent kind's program and the names of what it reads; values are never shown.
@@ -114,7 +219,8 @@ fn cli_lines(plan: &CliPlan) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use massorca_protocol::methods::extensions::{
-        CliPlanState, KindView, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
+        CliPlanState, KindView, Listing, Permission, Risk, RiskLevel, RiskReason, SourceKind,
+        SourceRef,
     };
 
     use super::*;
@@ -230,10 +336,120 @@ mod tests {
             lines.contains(&"Verify after the install: claude --version".to_owned()),
             "{lines:?}"
         );
-        assert!(lines.contains(&"SHA-256: abc123".to_owned()), "{lines:?}");
+    }
+
+    /// The review of a CLI already on this computer: the installer is skipped.
+    fn detected_review() -> ExtensionReview {
+        let mut found = review();
+        found.cli[0].state = CliPlanState::Detected { path: None };
+        found.runs_installer = false;
+        found
+    }
+
+    /// The review with the risk reasons the service gives an agent that starts a program and has an installer.
+    fn with_installer_risk(mut risky: ExtensionReview) -> ExtensionReview {
+        let program = "Runs a program on this computer with your rights.";
+        risky.risk = Risk {
+            level: RiskLevel::High,
+            reasons: vec![
+                RiskReason {
+                    level: RiskLevel::High,
+                    subject: "permission:process".to_owned(),
+                    copy: program.to_owned(),
+                },
+                RiskReason {
+                    level: RiskLevel::High,
+                    subject: "agentAdapters:claude".to_owned(),
+                    copy: program.to_owned(),
+                },
+                RiskReason {
+                    level: RiskLevel::High,
+                    subject: "agentAdapters:claude:install".to_owned(),
+                    copy: "Runs the vendor's installer on this computer.".to_owned(),
+                },
+            ],
+        };
+        risky
+    }
+
+    #[test]
+    fn a_cli_already_here_is_said_plainly_and_nothing_is_installed() {
+        let lines = review_lines(&detected_review());
         assert_eq!(
-            lines.last().map(String::as_str),
-            Some("Consent: fingerprint-1")
+            lines[0],
+            "Claude is already on this computer. MassOrca will only add it to the model picker; nothing is downloaded or installed.",
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_cli_names_the_installer_that_will_run() {
+        let lines = review_lines(&review());
+        assert_eq!(
+            lines[0],
+            "MassOrca will run the vendor's installer: winget install Anthropic.ClaudeCode.",
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_button_adds_to_massorca_unless_an_installer_runs() {
+        assert_eq!(install_button_label(&detected_review()), "Add to MassOrca");
+        assert_eq!(install_button_label(&review()), "Allow and install");
+    }
+
+    #[test]
+    fn a_skipped_installer_adds_no_installer_risk() {
+        let (_, copies) = shown_risk(&with_installer_risk(detected_review()));
+        assert!(
+            !copies
+                .iter()
+                .any(|copy| copy == "Runs the vendor's installer on this computer."),
+            "{copies:?}"
+        );
+    }
+
+    #[test]
+    fn an_installer_that_runs_keeps_its_risk() {
+        let (level, copies) = shown_risk(&with_installer_risk(review()));
+        assert!(
+            copies
+                .iter()
+                .any(|copy| copy == "Runs the vendor's installer on this computer."),
+            "{copies:?}"
+        );
+        assert_eq!(level, RiskLevel::High);
+    }
+
+    #[test]
+    fn a_program_line_is_listed_once() {
+        let (_, copies) = shown_risk(&with_installer_risk(detected_review()));
+        let program = "Runs a program on this computer with your rights.";
+        assert_eq!(
+            copies
+                .iter()
+                .filter(|copy| copy.as_str() == program)
+                .count(),
+            1,
+            "{copies:?}"
+        );
+    }
+
+    #[test]
+    fn the_hashes_sit_under_details_with_their_labels() {
+        let summary = review_lines(&review());
+        assert!(
+            !summary
+                .iter()
+                .any(|line| line.contains("SHA-256") || line.starts_with("Consent")),
+            "{summary:?}"
+        );
+        assert_eq!(
+            review_details(&review()),
+            vec![
+                "Package SHA-256: abc123".to_owned(),
+                "Consent fingerprint (this review, as accepted): fingerprint-1".to_owned(),
+            ]
         );
     }
 

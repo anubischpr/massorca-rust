@@ -7,9 +7,9 @@ use super::host_pick::host_picker_row;
 use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
-    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, advanced_rows, banner_tag,
-    connection_rows, information, information_links, problem_alert, settings_rows, state_chip,
-    uninstall_body,
+    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, account_block, advanced_rows,
+    banner_tag, connection_rows, information, information_links, problem_alert, settings_rows,
+    state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -36,6 +36,14 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 /// The height of an item's banner image; its width is the page's.
 const BANNER_IMAGE_HEIGHT: f32 = 180.0;
+
+/// Turns a button off with `reason` as its tooltip, when there is a reason.
+fn gated(button: Button, reason: Option<&str>) -> Button {
+    match reason {
+        Some(reason) => button.disabled(true).tooltip(reason.to_owned()),
+        None => button,
+    }
+}
 
 /// The page of one item, or a note when the catalogue has no item with that id.
 pub(super) fn item_page(
@@ -218,12 +226,16 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
         );
     }
     let kind = item.agent_kind.clone().unwrap_or_default();
-    let add = shell_button(
-        &frame.shell,
-        "marketplace-add-account",
-        "Add account",
-        ButtonVariant::Secondary,
-        move |shell, cx| shell.add_marketplace_account(&kind, cx),
+    let block = account_block(item);
+    let add = gated(
+        shell_button(
+            &frame.shell,
+            "marketplace-add-account",
+            "Add account",
+            ButtonVariant::Secondary,
+            move |shell, cx| shell.add_marketplace_account(&kind, cx),
+        ),
+        block.as_deref(),
     );
     let mut list = AccountConnectionList::new(SharedString::from(format!(
         "marketplace-connection-{}",
@@ -233,13 +245,14 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     .add_account(add);
     if frame.live_accounts {
         let kind = item.agent_kind.clone().unwrap_or_default();
-        list = list.import(shell_button(
+        let import = shell_button(
             &frame.shell,
             "marketplace-import-account",
             "Import",
             ButtonVariant::Ghost,
             move |shell, cx| shell.open_account_import(&kind, cx),
-        ));
+        );
+        list = list.import(gated(import, block.as_deref()));
     }
     let agent = item.agent_kind.clone().unwrap_or_default();
     let activity = AccountActivity {
