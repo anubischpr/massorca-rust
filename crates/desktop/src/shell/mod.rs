@@ -268,6 +268,10 @@ pub struct Shell {
     marketplace_skills_request: u64,
     /// Whether the Skills section's "Where MassOrca looked" report is open.
     marketplace_roots_open: bool,
+    /// The request number of the newest placement call; only its answer is shown.
+    marketplace_placement_request: u64,
+    /// The placement the owner must confirm in the Skills section, if one is open.
+    marketplace_placement_review: Option<marketplace::PlacementReview>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
@@ -579,6 +583,8 @@ impl Shell {
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
             marketplace_roots_open: false,
+            marketplace_placement_request: 0,
+            marketplace_placement_review: None,
             terminal_views: BTreeMap::new(),
             work_panel_size: Rc::default(),
             work_panel_applied: None,

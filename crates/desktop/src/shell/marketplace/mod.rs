@@ -30,6 +30,7 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use skills::PlacementReview;
 use std::collections::BTreeSet;
 
 use gpui::{
