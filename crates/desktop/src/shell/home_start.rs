@@ -26,7 +26,7 @@ use super::start_placement::{host_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails, branch_pill,
-    create_params, home_project, home_start_params,
+    create_params, home_choice, home_start_params, no_project_branch_pill, no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
@@ -36,8 +36,10 @@ use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 pub(super) struct HomeFrame {
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
-    /// The project's name, or `None` while there is no project.
+    /// The project's name, "No project" when the person chose it, or `None` while there is none to create in.
     pub project: Option<String>,
+    /// Whether "No project" is chosen: the title names no project, and the branch pill names no worktree.
+    pub no_project: bool,
     /// The project's base branch, which a new worktree starts from when the branch menu names none.
     pub project_base: Option<String>,
     /// The start in flight from this page, shown under the composer.
@@ -95,14 +97,17 @@ impl HomeDetails {
     }
 }
 
-/// The project menu of this page: the shared rows, with "No project" off until the service can
-/// start an agent without a workspace (A95). Its choice is `None`, so it can never be chosen.
+/// The project menu of this page: the shared rows. "No project" is chosen only once the service can start an agent
+/// without a workspace (A95); until then it is off with its reason, and its row stands for nothing.
 pub(super) fn home_project_menu(
     projects: &[Project],
-    chosen: Option<&str>,
+    chosen: Option<&ProjectChoice>,
+    no_project_offered: bool,
 ) -> (Vec<MenuEntry>, Vec<Option<ProjectMenuChoice>>) {
-    let chosen = chosen.map(|id| ProjectChoice::Project(id.to_owned()));
-    let (mut entries, mut choices) = project_menu(projects, chosen.as_ref());
+    let (mut entries, mut choices) = project_menu(projects, chosen);
+    if no_project_offered {
+        return (entries, choices);
+    }
     for (entry, choice) in entries.iter_mut().zip(choices.iter_mut()) {
         if *choice == Some(ProjectMenuChoice::Project(ProjectChoice::NoProject)) {
             *entry = MenuItem::new(NO_PROJECT_LABEL)
@@ -130,7 +135,7 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
             .text_style(TYPE_HEADING)
             .text_color(p.text.primary);
         match frame.project.clone() {
-            Some(name) => heading
+            Some(name) if !frame.no_project => heading
                 .child("What should we work on in ")
                 .child(project_title_link(
                     "home-start-project-link",
@@ -142,10 +147,14 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
                     },
                 ))
                 .child("?"),
-            None => heading.child("What should we work on?"),
+            _ => heading.child("What should we work on?"),
         }
     };
-    let labels = branch_pill(&frame.details.values(cx), frame.project_base.as_deref());
+    let labels = if frame.no_project {
+        no_project_branch_pill()
+    } else {
+        branch_pill(&frame.details.values(cx), frame.project_base.as_deref())
+    };
     let host = host_pill(
         "home-start-host",
         LOCAL_HOST,
@@ -172,21 +181,24 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
     };
     let branch = {
         let shell = frame.shell.clone();
+        let no_project = frame.no_project;
         let trigger = pill(
             "home-start-branch",
             IconName::GitBranch,
             labels.label,
             Some(labels.detail),
-            true,
+            !no_project,
             &theme,
             pill_focus("home-start-branch", window, cx),
         )
-        .on_click(move |_, _, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.toggle_branch_menu(cx));
+        .when(!no_project, |pill| {
+            pill.on_click(move |_, _, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.toggle_branch_menu(cx));
+            })
         });
         let dismiss = frame.shell.clone();
         Popover::new("home-start-branch-menu", trigger)
-            .open(frame.details.branch_menu)
+            .open(frame.details.branch_menu && !no_project)
             .variant(PopoverVariant::Form)
             .width(PopoverWidth::Medium)
             .placement(PopoverPlacement::Below)
@@ -293,11 +305,15 @@ impl Shell {
     pub(super) fn home_frame(&mut self, cx: &mut Context<Self>) -> Option<HomeFrame> {
         self.service.as_ref()?;
         let composer = self.start_composer(HOME_START, cx);
-        let (project, project_base) = {
+        let (project, project_base, no_project) = {
             let projects = &self.store.read(cx).state().projects;
-            match home_project(projects, self.home_project.as_deref()) {
-                Some(project) => (Some(project.name.clone()), project.base_ref.clone()),
-                None => (None, None),
+            match home_choice(projects, self.home_project.as_ref()) {
+                Some(ProjectChoice::NoProject) => (Some(NO_PROJECT_LABEL.to_owned()), None, true),
+                Some(ProjectChoice::Project(id)) => match projects.iter().find(|p| p.id == id) {
+                    Some(project) => (Some(project.name.clone()), project.base_ref.clone(), false),
+                    None => (None, None, false),
+                },
+                None => (None, None, false),
             }
         };
         let starting = self
@@ -308,6 +324,7 @@ impl Shell {
         Some(HomeFrame {
             shell: cx.entity().downgrade(),
             project,
+            no_project,
             project_base,
             starting,
             mode: self.start_mode(HOME_START),
@@ -317,11 +334,14 @@ impl Shell {
         })
     }
 
-    /// The project pill's menu, with the page's project checked. It opens where the pointer is.
+    /// The project pill's menu, with the page's choice checked. It opens where the pointer is.
     pub(super) fn open_home_project_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let projects = self.store.read(cx).state().projects.clone();
-        let chosen = home_project(&projects, self.home_project.as_deref()).map(|p| p.id.clone());
-        let (entries, choices) = home_project_menu(&projects, chosen.as_deref());
+        let (projects, offered) = {
+            let state = self.store.read(cx).state();
+            (state.projects.clone(), state.agent_no_project)
+        };
+        let chosen = home_choice(&projects, self.home_project.as_ref());
+        let (entries, choices) = home_project_menu(&projects, chosen.as_ref(), offered);
         self.open_menu(
             entries,
             MenuTarget::HomeProject(choices),
@@ -332,8 +352,9 @@ impl Shell {
         );
     }
 
-    /// Send: `workspace.create` in the page's project, then `agent.start` in the new workspace with
-    /// the chosen kind and mode. Either refusal gives the prompt back with the service's sentence.
+    /// Send: with a project, `workspace.create` in it and then `agent.start` in the new workspace; with "No project",
+    /// `agent.start` alone. The chosen kind and mode go with it. A refusal gives the prompt back with the service's
+    /// sentence.
     pub(super) fn start_from_home(
         &mut self,
         prompt: &str,
@@ -343,11 +364,10 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let Some(project) = home_project(
+        let Some(choice) = home_choice(
             &self.store.read(cx).state().projects,
-            self.home_project.as_deref(),
-        )
-        .map(|project| project.id.clone()) else {
+            self.home_project.as_ref(),
+        ) else {
             return;
         };
         let (kind, permission_mode) = match self.chosen_start(&composer, cx) {
@@ -355,7 +375,8 @@ impl Shell {
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
         let details = self.home_details.values(cx);
-        if let Some(reason) = details.send_block() {
+        // The branch menu names a worktree, so "No project" never waits on it.
+        if let (ProjectChoice::Project(_), Some(reason)) = (&choice, details.send_block()) {
             return refuse_send(prompt, &composer, reason.to_owned(), cx);
         }
         let mode = self.start_mode(HOME_START);
@@ -364,22 +385,33 @@ impl Shell {
             kind_name: kind.name,
         });
         let options = self.chosen_options(&composer, &kind.id, cx);
-        let create = create_params(&project, prompt, &details);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = match service.create_workspace(create).await {
-                Ok(workspace) => {
-                    let params = home_start_params(
-                        &workspace.id,
-                        &kind.id,
-                        &prompt,
-                        permission_mode,
-                        options,
-                    );
+            let answer = match choice {
+                ProjectChoice::NoProject => {
+                    let params =
+                        no_project_start_params(&kind.id, &prompt, permission_mode, options);
                     service.agent_start(params).await
                 }
-                Err(refusal) => Err(refusal),
+                ProjectChoice::Project(project) => {
+                    match service
+                        .create_workspace(create_params(&project, &prompt, &details))
+                        .await
+                    {
+                        Ok(workspace) => {
+                            let params = home_start_params(
+                                &workspace.id,
+                                &kind.id,
+                                &prompt,
+                                permission_mode,
+                                options,
+                            );
+                            service.agent_start(params).await
+                        }
+                        Err(refusal) => Err(refusal),
+                    }
+                }
             };
             let _ = shell.update(cx, |shell, cx| {
                 shell.finish_start(&prompt, composer, mode, answer, cx);

@@ -727,6 +727,9 @@ impl Link {
         self.emit(StoreUpdate::AgentSeenOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_SEEN),
         ));
+        self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
+            massorca_protocol::capabilities::AGENT_NO_PROJECT,
+        )));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));

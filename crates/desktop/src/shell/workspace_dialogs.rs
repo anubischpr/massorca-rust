@@ -281,7 +281,7 @@ impl Shell {
         match result {
             Ok(project) => {
                 self.dialogs.add_project = None;
-                self.home_project = Some(project.id);
+                self.home_project = Some(ProjectChoice::Project(project.id));
             }
             Err(refusal) => {
                 if let Some(dialog) = self.dialogs.add_project.as_mut() {
@@ -388,12 +388,10 @@ impl Shell {
                 None => {}
             },
             MenuTarget::HomeProject(choices) => match choices.get(row).cloned().flatten() {
-                Some(ProjectMenuChoice::Project(ProjectChoice::Project(id))) => {
-                    self.home_project = Some(id);
-                }
+                Some(ProjectMenuChoice::Project(choice)) => self.home_project = Some(choice),
                 Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
-                // "No project" is off on this page, so its row stands for nothing.
-                Some(ProjectMenuChoice::Project(ProjectChoice::NoProject)) | None => {}
+                // A row that is off, such as "No project" before the service offers it, stands for nothing.
+                None => {}
             },
         }
     }

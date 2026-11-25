@@ -162,17 +162,18 @@ pub fn start_options(
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` with `prompt`, at the Work panel's terminal size. A
-/// `permission_mode` is sent only when the person picked one; without it the vendor CLI starts in its own default.
+/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, at the
+/// Work panel's terminal size. A `permission_mode` is sent only when the person picked one; without it the vendor CLI
+/// starts in its own default.
 pub fn start_params(
-    workspace: &str,
+    workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
 ) -> AgentStartParams {
     AgentStartParams {
-        workspace: Some(workspace.to_owned()),
+        workspace: workspace.map(str::to_owned),
         kind: kind.to_owned(),
         prompt: Some(prompt.to_owned()),
         args: Vec::new(),
@@ -350,7 +351,7 @@ mod tests {
     #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
         let params = start_params(
-            "w1",
+            Some("w1"),
             "claude",
             "fix the login",
             None,
@@ -385,7 +386,7 @@ mod tests {
     fn without_the_capability_neither_model_nor_effort_is_sent() {
         let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
         assert_eq!(options, StartOptions::default());
-        let params = start_params("w1", "claude", "hi", None, options);
+        let params = start_params(Some("w1"), "claude", "hi", None, options);
         assert_eq!((params.model, params.effort), (None, None));
     }
 

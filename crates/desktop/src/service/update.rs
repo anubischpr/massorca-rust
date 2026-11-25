@@ -56,6 +56,8 @@ pub enum StoreUpdate {
     AgentQueueChanged(AgentQueueList),
     /// Whether the service offers seen state (`agent-seen/1`), read on each connect.
     AgentSeenOffered(bool),
+    /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
+    AgentNoProjectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
@@ -237,6 +239,8 @@ pub struct StoreState {
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
     /// Whether the service offers seen state (`agent-seen/1`); without it no session is unread.
     pub agent_seen: bool,
+    /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
+    pub agent_no_project: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// The settings the service declares with their values, as the last read or change left them.
@@ -269,6 +273,7 @@ impl Default for StoreState {
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
+            agent_no_project: false,
             agent_options: false,
             config: Vec::new(),
         }
@@ -351,6 +356,7 @@ impl StoreState {
                 });
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
+            StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
