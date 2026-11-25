@@ -81,6 +81,11 @@ pub(crate) enum Command {
         unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
     },
+    /// `git.branches` for one workspace: the local branch names, the current one first.
+    GitBranches {
+        workspace: String,
+        reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
+    },
     Remove {
         params: WorkspaceRemoveParams,
         reply: oneshot::Sender<Result<WorkspaceRemoved, Refusal>>,
@@ -325,6 +330,13 @@ impl ServiceHandle {
             reply,
         })
         .await
+    }
+
+    /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
+    /// repository, so any workspace of the project lists them all.
+    pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
+        self.ask(|reply| Command::GitBranches { workspace, reply })
+            .await
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -1050,6 +1062,22 @@ fn spawn_call(
 ) {
     let client = client.clone();
     match command {
+        Command::GitBranches { workspace, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .await
+                    .map(|listed| {
+                        listed
+                            .branches
+                            .into_iter()
+                            .map(|branch| branch.name)
+                            .collect()
+                    })
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::Create {
             params,
             unique_name,
@@ -1209,6 +1237,9 @@ fn refuse_while_down(command: Command) {
     let refusal = Refusal::unavailable("The service is not connected.");
     match command {
         Command::Create { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitBranches { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Remove { reply, .. } => {

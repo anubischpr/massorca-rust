@@ -70,6 +70,8 @@ pub(super) struct HomeDetails {
     pub branch_menu: bool,
     /// The branch the new worktree starts from, once picked; `None` takes the project's base.
     pub base: Option<String>,
+    /// The branches a workspace of the project listed, with the project they belong to.
+    pub listed: Option<(String, Vec<String>)>,
     pub search: Entity<TextField>,
     /// Redraws the popover as the search changes.
     _search_events: Rc<Subscription>,
@@ -87,6 +89,7 @@ impl HomeDetails {
         Self {
             branch_menu: false,
             base: None,
+            listed: None,
             search,
             _search_events: Rc::new(events),
         }
@@ -387,6 +390,9 @@ impl Shell {
     /// Opens or closes the branch pill's menu. It starts closed.
     pub(super) fn toggle_branch_menu(&mut self, cx: &mut Context<Self>) {
         self.home_details.branch_menu = !self.home_details.branch_menu;
+        if self.home_details.branch_menu {
+            self.list_home_branches(cx);
+        }
         cx.notify();
     }
 
@@ -394,6 +400,62 @@ impl Shell {
     pub(super) fn close_branch_menu(&mut self, cx: &mut Context<Self>) {
         self.home_details.branch_menu = false;
         cx.notify();
+    }
+
+    /// Lists the project's branches for the popover through one of its workspaces: branches belong to the repository,
+    /// so any workspace of the project lists them all. Without a workspace the popover keeps the project's base.
+    fn list_home_branches(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let Some(ProjectChoice::Project(project)) = home_choice(
+            &self.store.read(cx).state().projects,
+            self.home_project.as_ref(),
+        ) else {
+            return;
+        };
+        let workspace = self
+            .store
+            .read(cx)
+            .state()
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.project_id == project)
+            .map(|workspace| workspace.id.clone());
+        let Some(workspace) = workspace else {
+            return;
+        };
+        cx.spawn(async move |shell, cx| {
+            if let Ok(names) = service.git_branches(workspace).await {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.home_details.listed = Some((project, names));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// The branches the popover lists: the project's base first, then the branches a workspace of the project listed.
+    fn home_branch_list(&self, project_base: Option<&str>, cx: &App) -> Vec<String> {
+        let chosen = match home_choice(
+            &self.store.read(cx).state().projects,
+            self.home_project.as_ref(),
+        ) {
+            Some(ProjectChoice::Project(id)) => Some(id),
+            _ => None,
+        };
+        let listed: &[String] = match (&self.home_details.listed, chosen) {
+            (Some((id, names)), Some(chosen)) if *id == chosen => names.as_slice(),
+            _ => &[],
+        };
+        let mut branches: Vec<String> = project_base.map(str::to_owned).into_iter().collect();
+        for name in listed {
+            if !branches.contains(name) {
+                branches.push(name.clone());
+            }
+        }
+        branches
     }
 
     /// Picks the branch the new worktree starts from and closes the popover; `None` takes the project's base.
@@ -425,7 +487,7 @@ impl Shell {
                 None => (None, None, false, false),
             }
         };
-        let branches: Vec<String> = project_base.iter().cloned().collect();
+        let branches = self.home_branch_list(project_base.as_deref(), cx);
         let starting = self
             .start_pending
             .as_ref()

@@ -12,12 +12,13 @@ use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{Command, KindChat, Refusal, Script, StoreUpdate};
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::MenuEntry;
+use massorca_ui::components::text_field::TextField;
 use tokio::sync::oneshot;
 
 /// A connected shell with projects alpha and beta that declares Claude, on the page "+ Create" opens.
@@ -65,6 +66,15 @@ fn type_and_send(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
     cx.run_until_parked();
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
+/// Types into one of the section's fields: focuses it, then sends the keys.
+fn type_into(cx: &mut VisualTestContext, field: &Entity<TextField>, text: &str) {
+    draw(cx);
+    let focus = field.read_with(cx, |field, cx| field.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.simulate_input(text);
     cx.run_until_parked();
 }
 
@@ -344,6 +354,40 @@ fn without_the_unique_name_capability_a_refusal_that_is_not_a_taken_name_is_show
 }
 
 #[gpui::test]
+fn the_placement_card_has_the_host_project_and_branch_pills_and_the_host_opens_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = home_rig(cx);
+    draw(cx);
+    for selector in [
+        "start-placement",
+        "home-start-host",
+        "home-start-project",
+        "home-start-branch",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is drawn");
+    }
+    click(cx, "home-start-host");
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.dialogs.menu.is_none());
+        assert!(!shell.home_details.branch_menu);
+    });
+}
+
+/// Takes the `git.branches` call the popover sends, answering with the workspace it named.
+fn expect_git_branches(
+    script: &mut Script,
+) -> (String, oneshot::Sender<Result<Vec<String>, Refusal>>) {
+    loop {
+        match script.next() {
+            Some(Command::GitBranches { workspace, reply }) => return (workspace, reply),
+            Some(_) => {}
+            None => panic!("a git.branches call was expected"),
+        }
+    }
+}
+
+#[gpui::test]
 fn the_branch_popover_starts_closed_and_opens_with_the_new_worktree_switch(
     cx: &mut TestAppContext,
 ) {
@@ -365,6 +409,91 @@ fn the_branch_popover_starts_closed_and_opens_with_the_new_worktree_switch(
     draw(cx);
     rig.shell
         .read_with(cx, |shell, _| assert!(!shell.home_details.branch_menu));
+}
+
+#[gpui::test]
+fn the_branch_popover_lists_the_projects_branches_and_the_search_filters_them(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    // Branches belong to the repository, so a workspace of the project lists them.
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(workspace(
+            "w1",
+            "p1",
+            "alpha-work",
+            1,
+        )))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "home-start-branch");
+    draw(cx);
+    let (workspace_id, reply) = expect_git_branches(&mut rig.script);
+    assert_eq!(workspace_id, "w1");
+    reply
+        .send(Ok(vec![
+            "main".to_owned(),
+            "feature/map".to_owned(),
+            "release".to_owned(),
+        ]))
+        .expect("the shell waits for the branches");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-row-2").is_some(),
+        "every branch the service lists is in the list"
+    );
+    let search = rig
+        .shell
+        .read_with(cx, |shell, _| shell.home_details.search.clone());
+    type_into(cx, &search, "rel");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-row-0").is_some(),
+        "the search keeps the matching branch"
+    );
+    assert!(
+        cx.debug_bounds("home-start-branch-row-1").is_none(),
+        "and drops the rest"
+    );
+}
+
+#[gpui::test]
+fn picking_a_branch_starts_the_new_worktree_from_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(workspace(
+            "w1",
+            "p1",
+            "alpha-work",
+            1,
+        )))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "home-start-branch");
+    draw(cx);
+    let (_, reply) = expect_git_branches(&mut rig.script);
+    reply
+        .send(Ok(vec!["main".to_owned(), "release".to_owned()]))
+        .expect("the shell waits for the branches");
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "home-start-branch-row-1");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-popover").is_none(),
+        "picking a branch closes the popover"
+    );
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        create.base.as_deref(),
+        Some("release"),
+        "the new worktree starts from the picked branch"
+    );
+    assert_eq!(create.branch, None);
+    assert!(!create.existing_branch);
 }
 
 #[gpui::test]
