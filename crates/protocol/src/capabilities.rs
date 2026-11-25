@@ -36,13 +36,16 @@ pub const AGENT_SEEN: &str = "agent-seen/1";
 /// decision 0090).
 pub const AGENT_RELEASE: &str = "agent-release/1";
 /// `agent.start` without a `workspace`: the session runs in the conversations folder, in a folder of its own (decision
-/// 0092).
+/// 0094).
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
-/// `model` and `effort` on `agent.start` (decision 0092): passed to the flags the kind declares for them.
+/// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
 /// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
 /// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
 pub const AGENT_CHAT: &str = "agent-chat/1";
+/// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
+/// `from`, which copies each declared file from where the kind's CLI keeps it.
+pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";

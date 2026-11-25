@@ -704,11 +704,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.accounts.import",
             json!({
                 "type": "object",
-                "required": ["kind", "from"],
+                "required": ["kind"],
                 "properties": {
                     "kind": { "type": "string" },
                     "from": { "type": "string" },
                     "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.candidates",
+            "Show where an import without a folder would copy each agent kind's login files from",
+            "agent.accounts.import_candidates",
+            json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string" }
                 }
             }),
         ),

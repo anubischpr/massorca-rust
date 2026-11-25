@@ -64,11 +64,11 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
 pub const FIRST_PROMPT_WAIT: Duration = Duration::from_secs(120);
 
-/// The setting that names the folder conversations without a project are saved in (decision 0092), and its owner.
+/// The setting that names the folder conversations without a project are saved in (decision 0094), and its owner.
 const CONVERSATIONS_SETTING: &str = "conversations.folder";
 const CONVERSATIONS_OWNER: &str = "core";
 
-/// The workspace and folder a no-project start made (decision 0092), removed again unless the start succeeds, so a
+/// The workspace and folder a no-project start made (decision 0094), removed again unless the start succeeds, so a
 /// failed start leaves no empty conversation behind. The folder is removed only while it is still empty.
 struct MadeConversation<'a> {
     agents: &'a Agents,
@@ -240,7 +240,7 @@ pub struct AgentsConfig {
     pub profile_dir: PathBuf,
     /// The `massorca` executable that runs the service; agents and their hooks call it.
     pub massorca_bin: PathBuf,
-    /// The conversations folder when `conversations.folder` is unset (decision 0092), `<home>/MassOrca/Conversations`.
+    /// The conversations folder when `conversations.folder` is unset (decision 0094), `<home>/MassOrca/Conversations`.
     pub conversations_default: PathBuf,
     /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
     pub env_provider: Option<EnvProvider>,
@@ -474,7 +474,7 @@ impl Agents {
         Ok(workspace)
     }
 
-    /// The folder workspace of a session without a project (decision 0092): its own folder, named after the session, in
+    /// The folder workspace of a session without a project (decision 0094): its own folder, named after the session, in
     /// the conversations folder.
     fn conversation_workspace(&self, session_id: &str) -> Result<Workspace, AgentError> {
         let root = self.conversations_root()?;
@@ -536,7 +536,7 @@ impl Agents {
         let (decl, program) = self.startable_kind(&params.kind)?;
         let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
             .with_caller_args(&params.args);
-        // The model and effort the kind's declared flags take (decision 0092), after the mode's own arguments.
+        // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
         let mode_args = [
             mode.args.clone(),
             decl.option_args(params.model.as_deref(), params.effort.as_deref())?,
@@ -556,7 +556,7 @@ impl Agents {
             }
         }
         let session_id = new_id();
-        // A session without a project gets its own folder once the start is valid (decision 0092).
+        // A session without a project gets its own folder once the start is valid (decision 0094).
         let (workspace, mut made) = match chosen {
             Some(workspace) => (workspace, None),
             None => {
@@ -588,7 +588,7 @@ impl Agents {
         let new_ref = uuid::Uuid::new_v4().to_string();
         // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -698,6 +698,18 @@ impl Agents {
         permission_mode: Option<&str>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        self.resume_at(selector, permission_mode, grant, None, None)
+    }
+
+    /// `resume` with the terminal at `cols` x `rows`, each the default when absent: the size of the view that shows it.
+    pub fn resume_at(
+        &self,
+        selector: &str,
+        permission_mode: Option<&str>,
+        grant: SecretGrant,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
@@ -764,7 +776,7 @@ impl Agents {
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -807,8 +819,8 @@ impl Agents {
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
+            cols: cols.unwrap_or(DEFAULT_COLS),
+            rows: rows.unwrap_or(DEFAULT_ROWS),
         };
         let terminal_id = self
             .spawn_run(plan, &workspace.id, &workspace.path, title, size)

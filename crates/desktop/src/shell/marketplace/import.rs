@@ -82,7 +82,7 @@ impl Shell {
         dialog.error = None;
         let params = AccountsImportParams {
             kind: dialog.kind.clone(),
-            from,
+            from: Some(from),
             label: None,
         };
         cx.notify();

@@ -5,7 +5,7 @@ use std::path::Path;
 use massorca_core_git::{CommitError, CommitRequest, Git, GitError, failure_code};
 use massorca_protocol::codes;
 
-use crate::fixture::{Fixture, commit_file, rev, run_git, text};
+use crate::fixture::{Fixture, commit_file, rev, run_git, text, write_executable};
 
 fn git() -> Git {
     Git::discover().expect("git is installed")
@@ -140,20 +140,10 @@ fn a_failing_hook_fails_the_commit_with_its_message() {
     let repo = fixture.repo();
     let hooks = repo.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).expect("hooks dir");
-    std::fs::write(
-        hooks.join("pre-commit"),
+    write_executable(
+        &hooks.join("pre-commit"),
         "#!/bin/sh\necho blocked by hook >&2\nexit 1\n",
-    )
-    .expect("hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            hooks.join("pre-commit"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .expect("chmod");
-    }
+    );
     run_git(&repo, &["config", "core.hooksPath", text(&hooks)]);
     stage(&repo, "a.txt", "a\n");
     let error = git()
