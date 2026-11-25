@@ -4,7 +4,7 @@
 use super::{InstallReview, UninstallConfirm};
 use crate::model::marketplace::{
     CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, SignInFlow, SignInStep,
-    offers_cli_removal, review_details, review_outcome, uninstall_body_for,
+    offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -252,17 +252,19 @@ fn uninstall(
     let item = snapshot.item(confirm.item)?;
     let theme = *cx.theme();
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
-    let mut dialog = Dialog::new("marketplace-uninstall", format!("Uninstall {}?", item.name))
+    let outcome = remove_outcome(item, confirm.remove_cli);
+    let (toggle, open) = (weak.clone(), confirm.details_open);
+    let mut dialog = Dialog::new("marketplace-uninstall", outcome.title)
         .variant(DialogVariant::Destructive)
         .open(true)
         .busy(confirm.sending)
         .child(
             div()
-                .text_style(TYPE_BODY_SM)
-                .text_color(theme.palette.text.secondary)
-                .child(uninstall_body_for(item, confirm.remove_cli)),
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(outcome.sentence),
         )
-        .action("Uninstall")
+        .action(outcome.button)
         .cancel_label("Cancel")
         .on_action(move |_, cx| {
             let _ = ok.update(cx, |shell, cx| shell.confirm_marketplace_uninstall(cx));
@@ -296,6 +298,15 @@ fn uninstall(
                 ),
         );
     }
+    dialog = dialog.child(details(
+        "marketplace-uninstall-details",
+        open,
+        remove_details(item, confirm.remove_cli),
+        move |cx| {
+            let _ = toggle.update(cx, |shell, cx| shell.set_uninstall_details(!open, cx));
+        },
+        cx,
+    ));
     if let Some(error) = &confirm.error {
         dialog = dialog.error(error.clone());
     }

@@ -54,6 +54,8 @@ pub(super) struct UninstallConfirm {
     pub sending: bool,
     /// The person's tick for removing the CLI the package installed too; only offered when the package installed one.
     pub remove_cli: bool,
+    /// Whether Show details is open; it starts closed.
+    pub details_open: bool,
 }
 
 /// The install review on screen for one package, from the catalogue or a folder. What the service reported is shown
@@ -322,7 +324,15 @@ impl Shell {
             error: None,
             sending: false,
             remove_cli: false,
+            details_open: false,
         });
+        cx.notify();
+    }
+
+    pub(super) fn set_uninstall_details(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.details_open = open;
+        }
         cx.notify();
     }
 

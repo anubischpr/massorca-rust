@@ -233,7 +233,12 @@ Linux only. No automated run opens a visible window.
   step above the rest of the dialog. Show details, collapsed by default, holds every technical line
   (`model/marketplace/install_details.rs`): the package, source, risk and its reasons, permissions, what each agent
   starts and where it keeps its sign-in, the installer line when it runs, the verify and uninstall commands, and the
-  labelled SHA-256 and consent fingerprint. The consent fingerprint, sha256 and request sent are unchanged. A git URL is listed as
+  labelled SHA-256 and consent fingerprint. The consent fingerprint, sha256 and request sent are unchanged.
+- The remove confirm (`model/marketplace/remove_review.rs`) reads "Remove <name> from MassOrca?" with one sentence: an
+  agent stops being offered and its accounts added here are forgotten, and a CLI MassOrca did not install stays
+  installed. A CLI MassOrca installed keeps the opt-in to uninstall it, and the button becomes "Remove and uninstall"
+  when it is ticked. Show details lists the exact effects. A package whose vendor program stays is never said to be
+  removed from this computer. A git URL is listed as
   not available yet, because the service's sources are `catalogue:`, `dir:` and `file:` only.
 - Update checks (`shell/marketplace/extension_updates.rs`): each installed folder or archive package is inspected once
   per read of the lists, never per draw. A review whose sha256 differs from the installed one lists the package on

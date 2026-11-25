@@ -12,6 +12,7 @@ mod install_review;
 mod item_images;
 mod item_page;
 mod package_problem;
+mod remove_review;
 mod sample;
 mod service_accounts;
 mod service_source;
@@ -38,6 +39,7 @@ pub use item_page::{
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
 };
+pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
