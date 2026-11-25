@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::home_start::home_project_menu;
-use super::service_tests::{Rig, click, draw, rig};
+use super::service_tests::{Rig, click, draw, inspection, rig};
 use super::workspace_dialogs::ProjectMenuChoice;
 use super::*;
 use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
@@ -14,7 +14,7 @@ use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{Command, KindChat, Refusal, Script, StoreUpdate};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
-use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::MenuEntry;
@@ -485,6 +485,11 @@ fn a_project_added_from_the_page_menu_becomes_the_pages_project(cx: &mut TestApp
     cx.run_until_parked();
     let reply = loop {
         match rig.script.next() {
+            // The dialog asks first what the path is; a repository goes on to the add.
+            Some(Command::InspectProject { reply, .. }) => {
+                let _ = reply.send(Ok(inspection(ProjectKind::Git, "/repos/gamma", None)));
+                cx.run_until_parked();
+            }
             Some(Command::AddProject { reply, .. }) => break reply,
             Some(_) => {}
             None => panic!("a project.add call was expected"),
@@ -545,6 +550,11 @@ fn an_unsafe_data_folder_refusal_of_add_project_shows_the_banner_too(cx: &mut Te
     cx.run_until_parked();
     let reply = loop {
         match rig.script.next() {
+            // The dialog asks first what the path is; a repository goes on to the add.
+            Some(Command::InspectProject { reply, .. }) => {
+                let _ = reply.send(Ok(inspection(ProjectKind::Git, "/repos/gamma", None)));
+                cx.run_until_parked();
+            }
             Some(Command::AddProject { reply, .. }) => break reply,
             Some(_) => {}
             None => panic!("a project.add call was expected"),

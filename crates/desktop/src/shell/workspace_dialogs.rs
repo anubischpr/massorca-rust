@@ -20,7 +20,7 @@ use crate::service::Refusal;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
-use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
@@ -412,7 +412,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Sends the path. The dialog stays open and busy until the service answers.
+    /// Sends the path. The service says first whether it is a Git repository: a plain folder waits for the
+    /// warning (WS-31), anything else goes to `project.add`. The dialog stays open and busy until then.
     pub(super) fn submit_add_project(&mut self, cx: &mut Context<Self>) {
         let (Some(handle), Some(dialog)) =
             (self.service.clone(), self.dialogs.add_project.as_mut())
@@ -425,11 +426,55 @@ impl Shell {
         dialog.form.begin();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            match handle.inspect_project(params.path.clone()).await {
+                Ok(found) if found.kind == ProjectKind::Folder && found.registered.is_none() => {
+                    this.update(cx, |shell, cx| shell.warn_about_plain_folder(params.path, cx))
+                        .ok();
+                }
+                // A repository, a folder already added, or an answer this build cannot read: `project.add` decides.
+                _ => {
+                    let result = handle.add_project(params).await;
+                    this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
+                        .ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The folder is not a Git repository: the add waits on the warning, and nothing is added yet (WS-31).
+    fn warn_about_plain_folder(&mut self, path: String, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.hold_plain_folder(path);
+        }
+        cx.notify();
+    }
+
+    /// Continue without Git: the held folder is added as a plain folder, the one add the warning allows (WS-31).
+    pub(super) fn continue_add_project_without_git(&mut self, cx: &mut Context<Self>) {
+        let (Some(handle), Some(dialog)) =
+            (self.service.clone(), self.dialogs.add_project.as_mut())
+        else {
+            return;
+        };
+        let Some(params) = dialog.form.continue_without_git() else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
             let result = handle.add_project(params).await;
             this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
                 .ok();
         })
         .detach();
+    }
+
+    /// Cancel on the warning: nothing is added, and the path form comes back with the path still typed (WS-31).
+    pub(super) fn cancel_plain_folder(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.cancel_plain_folder();
+        }
+        cx.notify();
     }
 
     /// A new project closes the dialog and becomes the project of the page with no workspace. A
