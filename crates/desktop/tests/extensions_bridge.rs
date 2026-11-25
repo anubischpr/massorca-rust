@@ -8,12 +8,15 @@ use std::time::{Duration, Instant};
 
 use massorca_client::Client;
 use massorca_desktop::service::{
-    ExtensionsRead, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
+    ExtensionsRead, Refusal, RollbackAnswer, ServiceBridge, ServiceHandle, StoreState, StoreUpdate,
+    connect_options,
 };
 use massorca_profile::Profile;
+use massorca_protocol::codes;
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
-    ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams, ExtensionState,
+    ExtensionInstallParams, ExtensionRemoveParams, ExtensionRollbackParams, ExtensionRunAction,
+    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -308,6 +311,7 @@ async fn a_read_older_than_the_held_one_never_replaces_it() {
             number: held.number - 1,
             installed: Err(Refusal::unavailable("stale")),
             catalogue: Err(Refusal::unavailable("stale")),
+            history: Default::default(),
         }),
         Instant::now(),
     );
@@ -666,5 +670,127 @@ async fn a_zip_package_goes_through_inspect_and_installs_from_its_file_source() 
         installed_state(state, PACKAGE) == Some(ExtensionState::Enabled)
     })
     .await;
+    stop_service(service).await;
+}
+
+/// The installed version of a package in the store, if the store lists it.
+fn installed_version(state: &StoreState, id: &str) -> Option<String> {
+    let read = state.extensions.as_ref()?;
+    let installed = read.installed.as_ref().ok()?;
+    installed
+        .iter()
+        .find(|item| item.id == id)
+        .map(|item| item.version.clone())
+}
+
+#[tokio::test]
+async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_the_runs() {
+    let home = temp_home();
+    let package = home.path().join("package");
+    write_package(&package, "1.0.0");
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the extension lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+
+    let first = handle
+        .inspect_extension(source_of(&package))
+        .await
+        .expect("the first review is read");
+    handle
+        .install_extension(install_params(
+            source_of(&package),
+            Some(first.consent.clone()),
+        ))
+        .await
+        .expect("the first version installs");
+    let refusal = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("an install keeps no version to roll back to");
+    assert_eq!(refusal.code(), Some(codes::EXTENSION_NO_PREVIOUS_VERSION));
+
+    write_package(&package, "2.0.0");
+    let second = handle
+        .inspect_extension(source_of(&package))
+        .await
+        .expect("the second review is read");
+    handle
+        .update_extension(ExtensionUpdateParams {
+            id: PACKAGE.to_owned(),
+            consent: Some(second.consent.clone()),
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("the update installs");
+    until(&mut updates, &mut state, "the updated package", |state| {
+        installed_version(state, PACKAGE).as_deref() == Some("2.0.0")
+            && state
+                .extensions
+                .as_ref()
+                .is_some_and(|read| read.history.runs.get(PACKAGE).map(Vec::len) == Some(2))
+    })
+    .await;
+    let offered = state.extensions.as_ref().map(|read| &read.history);
+    assert!(offered.is_some_and(|history| history.rollback_offered && history.log_offered));
+
+    let log = handle
+        .extension_log(PACKAGE.to_owned())
+        .await
+        .expect("the run log is read");
+    assert_eq!(log.runs.len(), 2, "the install and the update: {log:?}");
+    assert_eq!(log.runs[1].action, ExtensionRunAction::Update);
+    assert_eq!(log.runs[1].from_version.as_deref(), Some("1.0.0"));
+    assert_eq!(log.runs[1].to_version.as_deref(), Some("2.0.0"));
+
+    let asked = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect("the service asks for the restored version's consent");
+    let RollbackAnswer::ConsentNeeded { version, consent } = asked else {
+        panic!("a rollback without consent asks first: {asked:?}");
+    };
+    assert_eq!(version, "1.0.0");
+    assert_eq!(
+        consent, first.consent,
+        "the restored review is the first one"
+    );
+
+    let restored = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: Some(consent),
+            agent_token: None,
+        })
+        .await
+        .expect("the reviewed version is restored");
+    let RollbackAnswer::Restored(restored) = restored else {
+        panic!("a rollback with the consent restores: {restored:?}");
+    };
+    assert_eq!(restored.version, "1.0.0");
+    until(&mut updates, &mut state, "the restored version", |state| {
+        installed_version(state, PACKAGE).as_deref() == Some("1.0.0")
+    })
+    .await;
+
+    let log = handle
+        .extension_log(PACKAGE.to_owned())
+        .await
+        .expect("the run log is read again");
+    assert_eq!(log.runs.len(), 3, "the rollback is logged: {log:?}");
+    assert_eq!(log.runs[2].action, ExtensionRunAction::Rollback);
+    assert_eq!(log.runs[2].from_version.as_deref(), Some("2.0.0"));
     stop_service(service).await;
 }
