@@ -1,16 +1,21 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
+use std::collections::BTreeMap;
+
 use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::regions::Region;
-use crate::model::start_page::{CHAT_NEEDS_NEWER_SERVICE, StartMode, StartOptions};
+use crate::model::start_page::{
+    CHAT_NEEDS_NEWER_SERVICE, ChatAvailability, StartMode, StartOptions,
+};
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
-    Command, ConnectionState, Refusal, Script, StoreUpdate, TerminalCommand, TerminalStreamItem,
+    ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
+    TerminalCommand, TerminalStreamItem,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
@@ -482,11 +487,77 @@ fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut 
     (rig, cx)
 }
 
-/// The service offers chat sessions, as a newer service does on connect (`agent-chat/1`).
+/// The service offers chat sessions and Claude can run one, as a newer service reports on connect (`agent-chat/1`).
 fn offer_chat(rig: &Rig, cx: &mut VisualTestContext) {
     rig._updates
         .send(StoreUpdate::AgentChatOffered(true))
         .expect("the store listens");
+    report_kind_chats(rig, cx, vec![("claude", supported_chat())]);
+}
+
+/// Replaces the chat support the service reports for each kind, as `agent.kinds` lists it (decision 0101, D10).
+fn report_kind_chats(rig: &Rig, cx: &mut VisualTestContext, chats: Vec<(&str, KindChat)>) {
+    let chats: BTreeMap<String, KindChat> = chats
+        .into_iter()
+        .map(|(id, chat)| (id.to_owned(), chat))
+        .collect();
+    rig._updates
+        .send(StoreUpdate::AgentKindChatResync(chats))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+fn supported_chat() -> KindChat {
+    KindChat {
+        supported: true,
+        reason: None,
+        version: Some("2.2.0".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    }
+}
+
+fn unsupported_chat(reason: Option<ChatUnsupportedReason>) -> KindChat {
+    KindChat {
+        supported: false,
+        reason,
+        version: None,
+        range: None,
+    }
+}
+
+/// The Chat availability the page holds for `w1`, as its switch draws it.
+fn chat_availability(rig: &Rig, cx: &mut VisualTestContext) -> ChatAvailability {
+    rig.shell
+        .read_with(cx, |shell, app| shell.chat_availability("w1", app))
+}
+
+fn mode_of(rig: &Rig, cx: &mut VisualTestContext) -> StartMode {
+    rig.shell
+        .read_with(cx, |shell, app| shell.start_mode("w1", app))
+}
+
+/// Moves the pointer onto `selector` and waits out the tooltip delay, so its tooltip draws.
+fn hover(cx: &mut VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element with selector {selector}"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+}
+
+/// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
+/// highlighted row with Enter.
+fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
+    click(cx, "model-picker-trigger");
+    for _ in 0..8 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input(agent);
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     draw(cx);
 }
@@ -878,16 +949,128 @@ fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
     assert_eq!(attach.terminal, terminal);
 }
 
+#[gpui::test]
+fn a_kind_that_cannot_chat_turns_chat_off_with_its_reason_and_starts_on_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let outside_range = KindChat {
+        supported: false,
+        reason: Some(ChatUnsupportedReason::VersionOutsideRange),
+        version: Some("2.4.1".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    };
+    let cases = [
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            "Claude was not found on this computer.",
+        ),
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::VersionUnknown)),
+            "Claude's version could not be read.",
+        ),
+        (
+            outside_range,
+            "Chat needs Claude >=2.1.0, <2.3.0; this computer has 2.4.1.",
+        ),
+        (unsupported_chat(None), "Claude cannot run chat sessions."),
+    ];
+    for (chat, reason) in cases {
+        report_kind_chats(&rig, cx, vec![("claude", chat)]);
+        assert_eq!(mode_of(&rig, cx), StartMode::Terminal, "{reason}");
+        assert_eq!(chat_availability(&rig, cx).reason(), Some(reason));
+        assert!(cx.debug_bounds("start-terminal-note").is_some());
+        hover(cx, "segment-0");
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the off Chat segment shows why it is off: {reason}"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_pick_change_between_two_agents_turns_chat_on_and_off(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ],
+    );
+    report_kind_chats(
+        &rig,
+        cx,
+        vec![
+            ("claude", supported_chat()),
+            (
+                "codex",
+                unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            ),
+        ],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Claude is the picked agent and can chat"
+    );
+
+    pick_agent(cx, "Codex");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Terminal,
+        "Codex cannot chat, so Terminal is selected"
+    );
+    assert_eq!(
+        chat_availability(&rig, cx).reason(),
+        Some("Codex was not found on this computer.")
+    );
+    hover(cx, "segment-0");
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the drawn Chat segment turns off with the pick, and says why"
+    );
+
+    pick_agent(cx, "Claude");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Chat comes back with an agent that can chat"
+    );
+}
+
 #[test]
-fn the_chat_segment_is_off_with_its_reason_until_the_service_offers_chat() {
-    let off = mode_segments(false);
+fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
+    let off = mode_segments(&ChatAvailability::new(false, None));
     assert!(off[0].is_disabled());
     assert_eq!(
         off[0].tooltip_text().map(|text| text.as_ref()),
         Some(CHAT_NEEDS_NEWER_SERVICE)
     );
     assert!(!off[1].is_disabled(), "Terminal is always on");
-    let on = mode_segments(true);
+    let not_detected = unsupported_chat(Some(ChatUnsupportedReason::NotDetected));
+    let for_agent = mode_segments(&ChatAvailability::new(
+        true,
+        Some(("Claude", Some(&not_detected))),
+    ));
+    assert!(for_agent[0].is_disabled());
+    assert_eq!(
+        for_agent[0].tooltip_text().map(|text| text.as_ref()),
+        Some("Claude was not found on this computer.")
+    );
+    let on = mode_segments(&ChatAvailability::new(true, None));
     assert!(!on[0].is_disabled());
     assert_eq!(on[0].tooltip_text(), None);
 }

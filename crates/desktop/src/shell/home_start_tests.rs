@@ -1,6 +1,8 @@
 //! Element tests of the start page with no workspace: "+ Create" opens it, and Send creates a
 //! workspace then starts the agent in it. A scripted handle stands in for the service.
 
+use std::collections::BTreeMap;
+
 use super::home_start::home_project_menu;
 use super::service_tests::{Rig, click, draw, rig};
 use super::workspace_dialogs::ProjectMenuChoice;
@@ -9,7 +11,7 @@ use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
 use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
-use crate::service::{Command, Refusal, Script, StoreUpdate};
+use crate::service::{Command, KindChat, Refusal, Script, StoreUpdate};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
@@ -32,6 +34,25 @@ fn home_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     cx.run_until_parked();
     click(cx, "button:sidebar-create");
     (rig, cx)
+}
+
+/// The service offers chat sessions and Claude can run one, as a newer service reports on connect (`agent-chat/1`).
+fn offer_chat(rig: &Rig) {
+    rig.updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    let claude = KindChat {
+        supported: true,
+        reason: None,
+        version: None,
+        range: None,
+    };
+    rig.updates
+        .send(StoreUpdate::AgentKindChatResync(BTreeMap::from([(
+            "claude".to_owned(),
+            claude,
+        )])))
+        .expect("the store listens");
 }
 
 fn home_composer(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
@@ -119,9 +140,7 @@ fn the_home_page_starts_on_terminal_until_the_service_offers_chat(cx: &mut TestA
             .read_with(cx, |shell, app| shell.start_mode(HOME_START, app))
     };
     assert_eq!(mode(&rig, cx), StartMode::Terminal);
-    rig.updates
-        .send(StoreUpdate::AgentChatOffered(true))
-        .expect("the store listens");
+    offer_chat(&rig);
     cx.run_until_parked();
     draw(cx);
     assert_eq!(mode(&rig, cx), StartMode::Chat);
@@ -178,9 +197,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = home_rig(cx);
-    rig.updates
-        .send(StoreUpdate::AgentChatOffered(true))
-        .expect("the store listens");
+    offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
     let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
@@ -561,9 +578,7 @@ fn no_project_once_offered_starts_the_agent_with_no_workspace_and_opens_it(
     rig.updates
         .send(StoreUpdate::AgentNoProjectOffered(true))
         .expect("the store listens");
-    rig.updates
-        .send(StoreUpdate::AgentChatOffered(true))
-        .expect("the store listens");
+    offer_chat(&rig);
     cx.run_until_parked();
     choose_no_project(cx);
     rig.shell.read_with(cx, |shell, _| {

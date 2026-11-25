@@ -42,6 +42,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
+use super::agent_chat::kind_chats;
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -743,6 +744,7 @@ impl Link {
         for kind in &kinds {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
+        self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
@@ -909,6 +911,7 @@ impl Link {
                             &self.accounts_order,
                         );
                     }
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
                     self.emit(StoreUpdate::AgentKindsResync(kinds));
                     extensions::read(client, &self.extension_reads)
                         .await
