@@ -73,7 +73,7 @@ impl Workspaces {
     }
 
     /// Returns workspace `id` from `removing` to `ready` after [`Workspaces::begin_remove`], when a step before git
-    /// acts refuses the removal, such as a failed archive script (decision 0092). A row in any other state is left.
+    /// acts refuses the removal, such as a failed archive script (decision 0095). A row in any other state is left.
     pub fn cancel_remove(&self, id: &str) -> Result<(), DomainError> {
         let _guard = self.lock_mutations();
         if let Some(row) = self.store.get_workspace(id)?

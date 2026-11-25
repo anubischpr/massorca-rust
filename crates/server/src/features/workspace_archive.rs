@@ -1,4 +1,4 @@
-//! Runs a worktree's archive script before the worktree is removed (decision 0092), as the reference does: the
+//! Runs a worktree's archive script before the worktree is removed (decision 0095), as the reference does: the
 //! project's `orca.yaml` `scripts.archive`, in the worktree, before anything in it is stopped or removed. It runs in a
 //! service terminal titled `Archive`, so every client can watch it, and the removal waits for its exit. A failure or a
 //! timeout refuses the removal unless the caller waives it; an untrusted script does not run and the removal goes on.

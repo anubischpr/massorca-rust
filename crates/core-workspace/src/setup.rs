@@ -1,5 +1,5 @@
 //! A project's `orca.yaml` scripts: `scripts.setup` of the new worktree's copy (decision 0086) and `scripts.archive`
-//! of the project's copy (decision 0092). The runner that a service terminal starts is in `setup_runner`.
+//! of the project's copy (decision 0095). The runner that a service terminal starts is in `setup_runner`.
 
 use std::fmt;
 use std::path::Path;
@@ -17,7 +17,7 @@ pub fn read_setup_script(workspace_dir: &Path) -> Result<Option<String>, SetupFi
 
 /// The key of the setup script under `scripts:`.
 pub const SETUP_KEY: &str = "setup";
-/// The key of the archive script under `scripts:` (decision 0092).
+/// The key of the archive script under `scripts:` (decision 0095).
 pub const ARCHIVE_KEY: &str = "archive";
 
 /// `scripts.<key>` of the `orca.yaml` in `dir`, or `None` when it has none; errors as [`read_setup_script`].

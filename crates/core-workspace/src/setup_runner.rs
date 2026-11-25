@@ -1,5 +1,5 @@
 //! The runner file of a setup or archive script and the program a service terminal starts to run it (decisions 0086,
-//! 0092).
+//! 0095).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -94,7 +94,7 @@ impl fmt::Display for RunnerRefusal {
 
 /// The runner file stem of a setup script.
 pub const SETUP_RUNNER: &str = "setup-runner";
-/// The runner file stem of an archive script (decision 0092).
+/// The runner file stem of an archive script (decision 0095).
 pub const ARCHIVE_RUNNER: &str = "archive-runner";
 
 /// Chooses and writes out the setup runner for `script` in `runner_dir`. On Windows it is a `.cmd` unless the script

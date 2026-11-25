@@ -1,4 +1,4 @@
-# 0092: Script trust and archive scripts
+# 0095: Script trust and archive scripts
 
 Status: accepted, 2026-11-24. Extends 0086 (inventory CUS-01).
 

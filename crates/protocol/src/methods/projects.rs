@@ -17,9 +17,9 @@ pub const INSPECT: &str = "project.inspect";
 pub const SET_BASE: &str = "project.set_base";
 /// Params: [`ProjectUpdateParams`]. Result: [`Project`]. Capability `project-update/1`.
 pub const UPDATE: &str = "project.update";
-/// Params: [`ProjectScriptsParams`]. Result: [`ProjectScripts`]. Capability `script-trust/1` (decision 0092).
+/// Params: [`ProjectScriptsParams`]. Result: [`ProjectScripts`]. Capability `script-trust/1` (decision 0095).
 pub const SCRIPTS: &str = "project.scripts";
-/// Params: [`ProjectTrustScriptParams`]. Result: [`ProjectScript`]. Capability `script-trust/1` (decision 0092).
+/// Params: [`ProjectTrustScriptParams`]. Result: [`ProjectScript`]. Capability `script-trust/1` (decision 0095).
 pub const TRUST_SCRIPT: &str = "project.trust_script";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,7 +306,7 @@ fn check_image_src(src: &str, source: ProjectIconSource) -> Result<(), String> {
     Ok(())
 }
 
-/// An `orca.yaml` script kind that runs only once its owner trusts its content (decision 0092).
+/// An `orca.yaml` script kind that runs only once its owner trusts its content (decision 0095).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptKind {

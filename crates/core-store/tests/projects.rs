@@ -138,7 +138,7 @@ fn a_project_icon_round_trips_and_can_be_set_and_cleared() {
     assert!(!store.set_project_icon("missing", None).unwrap());
 }
 
-// Trusted orca.yaml scripts (decision 0092).
+// Trusted orca.yaml scripts (decision 0095).
 
 #[test]
 fn a_trusted_script_hash_is_kept_per_project_and_kind() {

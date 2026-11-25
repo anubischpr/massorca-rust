@@ -1,6 +1,6 @@
 //! Setup scripts on workspace create (decision 0086): the new worktree's `orca.yaml` setup runs in a service terminal in
 //! the workspace with the workspace's variables; `no_setup` and a project without a script start no terminal. A script
-//! runs only once the owner trusts its exact content (decision 0092).
+//! runs only once the owner trusts its exact content (decision 0095).
 
 use std::path::Path;
 use std::time::{Duration, Instant};

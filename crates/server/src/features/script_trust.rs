@@ -1,4 +1,4 @@
-//! Per-script trust of a project's `orca.yaml` scripts (decision 0092): `project.scripts` and `project.trust_script`
+//! Per-script trust of a project's `orca.yaml` scripts (decision 0095): `project.scripts` and `project.trust_script`
 //! (capability `script-trust/1`), and the check a setup or archive script passes before it runs. A script runs only
 //! when the owner trusted its exact content: the store keeps one SHA-256 per project and kind, so changed content needs
 //! trust again.

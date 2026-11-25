@@ -2,7 +2,7 @@
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086); a removal runs the project's
-//! archive script in the worktree first (decision 0092).
+//! archive script in the worktree first (decision 0095).
 
 use std::sync::Arc;
 

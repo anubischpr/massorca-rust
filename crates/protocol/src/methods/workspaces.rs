@@ -120,7 +120,7 @@ pub struct WorkspaceRemoveParams {
     /// Forgets a row whose directory git does not recognise as its worktree; the directory stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_orphan: bool,
-    /// Removes the worktree even when its archive script fails or times out (decision 0092).
+    /// Removes the worktree even when its archive script fails or times out (decision 0095).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_failed_archive: bool,
 }
@@ -136,7 +136,7 @@ pub struct WorkspaceRemoved {
     /// git does not register as a worktree. Absent (false) when the directory was removed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub directory_kept: bool,
-    /// What became of the project's archive script; absent when there is none or the workspace is a folder (0092).
+    /// What became of the project's archive script; absent when there is none or the workspace is a folder (0095).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<WorkspaceArchive>,
 }
@@ -234,7 +234,7 @@ pub enum WorkspaceSetup {
     Started { terminal: String },
     /// The create asked for `no_setup`.
     Skipped,
-    /// The script's content is not trusted, so it did not run (decision 0092). `hash` is what `project.trust_script`
+    /// The script's content is not trusted, so it did not run (decision 0095). `hash` is what `project.trust_script`
     /// takes once the owner has read the script.
     Untrusted { reason: String, hash: String },
     /// The script could not be started; the workspace exists without it.

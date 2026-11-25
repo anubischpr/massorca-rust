@@ -495,7 +495,7 @@ ALTER TABLE projects ADD COLUMN icon TEXT;
 "#,
         foreign_keys_off: false,
     },
-    // Trusted repository scripts (decision 0092): per project and script kind, the SHA-256 of the one content the owner
+    // Trusted repository scripts (decision 0095): per project and script kind, the SHA-256 of the one content the owner
     // trusted. A changed script has another hash, so it needs trust again.
     Migration {
         sql: r#"

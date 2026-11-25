@@ -1,6 +1,6 @@
 //! Runs a new worktree's setup script in a service terminal (decision 0086): every client can list and attach to it, so
 //! the script never runs unseen. Only `workspace.create`, which needs the `workspace` permission, calls this, and only a
-//! script whose exact content the owner trusted runs (decision 0092).
+//! script whose exact content the owner trusted runs (decision 0095).
 
 use std::path::{Path, PathBuf};
 

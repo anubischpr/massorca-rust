@@ -1,4 +1,4 @@
-//! Trusted repository scripts (decision 0092): per project and script kind, the hash of the content the owner trusted.
+//! Trusted repository scripts (decision 0095): per project and script kind, the hash of the content the owner trusted.
 
 use rusqlite::params;
 

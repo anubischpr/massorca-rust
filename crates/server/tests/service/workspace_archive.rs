@@ -1,4 +1,4 @@
-//! Archive scripts on workspace removal (decision 0092): the project's `orca.yaml` archive script runs in the worktree
+//! Archive scripts on workspace removal (decision 0095): the project's `orca.yaml` archive script runs in the worktree
 //! before anything is stopped or removed, only once its content is trusted. A failure refuses the removal unless it is
 //! waived; a folder workspace has no archive script.
 

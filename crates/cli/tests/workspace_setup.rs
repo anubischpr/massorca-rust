@@ -1,6 +1,6 @@
 //! `workspace create` with a setup script (decision 0086): it prints the setup terminal and how to attach to it, and
 //! `--no-setup` skips the script. `project trust-scripts` shows the scripts with their hashes and trusts one by its
-//! hash; an untrusted script is skipped (decision 0092).
+//! hash; an untrusted script is skipped (decision 0095).
 
 mod harness;
 

@@ -4,7 +4,7 @@ pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
-/// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0092).
+/// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0095).
 pub const SCRIPT_TRUST: &str = "script-trust/1";
 pub const WORKSPACES: &str = "workspaces/1";
 /// Renaming a workspace and setting its comment (`workspace.update`).
