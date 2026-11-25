@@ -13,11 +13,12 @@ use crate::service::{
     Command, ConnectionState, Refusal, Script, StoreUpdate, TerminalCommand, TerminalStreamItem,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
+use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::methods::workspaces::Workspace;
-use massorca_ui::components::composer::Composer;
+use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -749,10 +750,11 @@ fn claude_with_modes() -> AgentKind {
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![
+        mode("auto", "Auto", false),
         mode("plan", "Plan", false),
         mode("bypassPermissions", "Bypass permissions", true),
     ];
-    kind.default_permission_mode = Some("plan".into());
+    kind.default_permission_mode = Some("auto".into());
     kind
 }
 
@@ -770,10 +772,16 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
     assert_eq!(
         modes,
         [
-            ("The CLI's default".to_owned(), false),
+            ("The CLI's default (Auto)".to_owned(), false),
+            ("Auto".to_owned(), false),
             ("Plan".to_owned(), false),
             ("Bypass permissions".to_owned(), true),
         ]
+    );
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0,
+        "the CLI's default is selected"
     );
     draw(cx);
     assert!(cx.debug_bounds("composer-access").is_some());
@@ -784,19 +792,48 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn a_picked_mode_is_sent_with_the_start_and_stays_across_redraws(cx: &mut TestAppContext) {
+fn a_picked_mode_is_sent_and_remembered_per_kind_until_the_default_is_picked(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
     let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile.clone(), ui_state::UiState::default()));
     let composer = composer_of(&rig, cx);
-    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    composer.update(cx, |composer, cx| {
+        composer.set_access(2, cx);
+        cx.emit(ComposerEvent::AccessChanged(2));
+    });
     draw(cx);
+    cx.run_until_parked();
     assert_eq!(
-        composer.read_with(cx, |composer, _| composer.access_index()),
-        2
+        ui_state::load(&profile)
+            .start_permission_modes
+            .get("claude"),
+        Some(&"plan".to_owned()),
+        "the pick is remembered for its kind"
     );
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!(params.permission_mode.as_deref(), Some("bypassPermissions"));
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+
+    composer.update(cx, |composer, cx| {
+        composer.set_access(0, cx);
+        cx.emit(ComposerEvent::AccessChanged(0));
+    });
+    cx.run_until_parked();
+    assert!(
+        !ui_state::load(&profile)
+            .start_permission_modes
+            .contains_key("claude"),
+        "picking the CLI's default clears the remembered pick"
+    );
 }
 
 #[gpui::test]

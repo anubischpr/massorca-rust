@@ -65,13 +65,16 @@ pub fn start_choices(kind: &AgentKind) -> Vec<ModeChoice> {
     if kind.permission_modes.is_empty() {
         return Vec::new();
     }
-    // The start sends no mode for this entry, so the chip names no mode: the vendor default is not shown as one.
-    let default = ModeChoice {
-        id: None,
-        name: CLI_DEFAULT.to_owned(),
-        bypass: false,
-    };
-    std::iter::once(default).chain(declared(kind)).collect()
+    // The start sends no mode for this entry; it is named after the vendor default it runs in, as the session chip does.
+    std::iter::once(cli_default(kind))
+        .chain(declared(kind))
+        .collect()
+}
+
+/// The explicit mode the person last picked for a kind, if the kind still declares it; a pick it no longer declares
+/// is ignored.
+pub fn remembered_mode<'a>(kind: &AgentKind, remembered: Option<&'a str>) -> Option<&'a str> {
+    remembered.filter(|id| mode_label(kind, id).is_some())
 }
 
 /// A session's chip, or `None` when its kind declares no modes. A session in the vendor's default selects the CLI's
@@ -163,21 +166,47 @@ mod tests {
     }
 
     #[test]
-    fn the_start_chip_opens_on_the_clis_default_and_lists_every_declared_mode() {
+    fn the_start_chip_opens_on_the_clis_default_named_after_the_declared_default() {
         let choices = start_choices(&claude());
         assert_eq!(
             names(&choices),
             [
-                "The CLI's default",
+                "The CLI's default (Auto)",
                 "Manual",
                 "Plan",
                 "Auto",
                 "Bypass permissions"
             ]
         );
-        assert_eq!(choices[0].id, None);
+        assert_eq!(choices[0].id, None, "the default entry sends no mode");
         assert!(choices[4].bypass);
         assert!(choices[..4].iter().all(|choice| !choice.bypass));
+    }
+
+    #[test]
+    fn a_kind_without_a_declared_default_names_its_entry_the_clis_default() {
+        let mut kind = claude();
+        kind.default_permission_mode = None;
+        assert_eq!(names(&start_choices(&kind))[0], "The CLI's default");
+    }
+
+    #[test]
+    fn codex_names_its_entry_after_its_declared_auto_preset() {
+        let mut kind = agent_kind("codex", "Codex", PackageState::Enabled);
+        kind.permission_modes = vec![
+            mode("auto", "Auto", false),
+            mode("full-access", "Dangerous full access", true),
+        ];
+        kind.default_permission_mode = Some("auto".into());
+        assert_eq!(names(&start_choices(&kind))[0], "The CLI's default (Auto)");
+    }
+
+    #[test]
+    fn a_remembered_pick_counts_only_while_the_kind_still_declares_it() {
+        let kind = claude();
+        assert_eq!(remembered_mode(&kind, Some("plan")), Some("plan"));
+        assert_eq!(remembered_mode(&kind, Some("acceptEdits")), None);
+        assert_eq!(remembered_mode(&kind, None), None);
     }
 
     #[test]

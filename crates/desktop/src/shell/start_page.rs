@@ -46,6 +46,7 @@ use crate::model::start_page::{
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::Refusal;
+use crate::ui_state;
 use massorca_protocol::codes;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
@@ -526,6 +527,9 @@ impl Shell {
                             }
                             ComposerEvent::OpenMarketplace => shell
                                 .open_marketplace(MarketplacePage::Category(ItemKind::Agent), cx),
+                            ComposerEvent::AccessChanged(index) => {
+                                shell.remember_start_mode(&composer, *index, cx);
+                            }
                             _ => {}
                         },
                     );
@@ -652,6 +656,38 @@ impl Shell {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Remembers the explicit mode picked on the chip of `composer`'s kind; picking the CLI's default clears it.
+    fn remember_start_mode(
+        &self,
+        composer: &Entity<Composer>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let Some(declared) = self
+            .store
+            .read(cx)
+            .state()
+            .agent_kinds
+            .iter()
+            .find(|declared| declared.id == chosen)
+        else {
+            return;
+        };
+        let mode = start_choices(declared)
+            .get(index)
+            .and_then(|choice| choice.id.clone());
+        let kind = declared.id.clone();
+        ui_state::remember_start_mode(cx, &kind, mode.as_deref());
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send

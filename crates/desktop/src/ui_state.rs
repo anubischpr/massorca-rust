@@ -1,6 +1,7 @@
 //! The desktop's remembered UI state (SET-02): the theme last applied and the regions left open. It is saved in
 //! `desktop/state/ui-state.json` of the profile, so the first frame of a start already uses the saved theme.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
@@ -25,6 +26,8 @@ pub struct UiState {
     pub open_regions: Vec<Region>,
     /// The Marketplace host last picked; None until a pick, so the Marketplace opens on This computer.
     pub marketplace_host: Option<HostTarget>,
+    /// The explicit permission mode last picked on a start page, by agent kind id; picking the CLI's default clears it.
+    pub start_permission_modes: BTreeMap<String, String>,
 }
 
 impl Default for UiState {
@@ -33,6 +36,7 @@ impl Default for UiState {
             theme: Appearance::Dark,
             open_regions: RegionState::default().open().to_vec(),
             marketplace_host: None,
+            start_permission_modes: BTreeMap::new(),
         }
     }
 }
@@ -89,6 +93,21 @@ pub fn saved_marketplace_host(cx: &App) -> Option<HostTarget> {
         .flatten()
 }
 
+/// Remembers `mode` as the explicit pick of agent kind `kind` on a start page; `None` clears it. Does nothing when no
+/// profile is kept.
+pub fn remember_start_mode(cx: &mut App, kind: &str, mode: Option<&str>) {
+    let kind = kind.to_owned();
+    let mode = mode.map(str::to_owned);
+    remember(cx, move |state| match mode {
+        Some(mode) => {
+            state.start_permission_modes.insert(kind, mode);
+        }
+        None => {
+            state.start_permission_modes.remove(&kind);
+        }
+    });
+}
+
 fn save(profile: &Profile, state: &UiState) -> io::Result<()> {
     let folder = open_desktop_state_dir(profile).map_err(io::Error::other)?;
     folder.write_file(UI_STATE_FILE, encode(state).as_bytes())
@@ -119,6 +138,13 @@ struct Stored {
         skip_serializing_if = "Option::is_none"
     )]
     marketplace_host: Option<String>,
+    /// The start page's explicit mode pick per kind id; absent while none is picked.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    start_permission_modes: Option<BTreeMap<String, String>>,
 }
 
 /// A member of the wrong type reads as missing, so the others still apply.
@@ -143,6 +169,8 @@ fn encode(state: &UiState) -> String {
                 .collect(),
         ),
         marketplace_host: state.marketplace_host.as_ref().map(HostTarget::key),
+        start_permission_modes: (!state.start_permission_modes.is_empty())
+            .then(|| state.start_permission_modes.clone()),
     };
     let mut text = serde_json::to_string_pretty(&stored).unwrap_or_default();
     text.push('\n');
@@ -186,6 +214,7 @@ fn decode(text: &str) -> Option<UiState> {
         theme,
         open_regions,
         marketplace_host,
+        start_permission_modes: stored.start_permission_modes.unwrap_or_default(),
     })
 }
 
@@ -244,11 +273,30 @@ mod tests {
             theme: Appearance::Light,
             open_regions: vec![Region::WorkPanel, Region::Sidebar],
             marketplace_host: None,
+            start_permission_modes: BTreeMap::from([("claude".to_owned(), "plan".to_owned())]),
         };
 
         save(&profile, &state).expect("saved");
 
         assert_eq!(load(&profile), state);
+    }
+
+    #[test]
+    fn a_damaged_start_mode_map_gives_no_pick_and_the_others_still_apply() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "theme": "light", "start_permission_modes": "plan"}"#,
+        );
+        assert_eq!(
+            load(&profile),
+            UiState {
+                theme: Appearance::Light,
+                ..UiState::default()
+            }
+        );
     }
 
     #[test]
@@ -286,6 +334,7 @@ mod tests {
                 theme: Appearance::Light,
                 open_regions: UiState::default().open_regions,
                 marketplace_host: None,
+                start_permission_modes: BTreeMap::new(),
             }
         );
 
@@ -400,5 +449,33 @@ mod tests {
                 Some(HostTarget::Paired("vps".to_owned()))
             );
         });
+    }
+
+    #[gpui::test]
+    fn a_start_mode_pick_is_remembered_per_kind_and_cleared_by_the_default(
+        cx: &mut TestAppContext,
+    ) {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            install(cx, profile.clone(), UiState::default());
+            remember_start_mode(cx, "claude", Some("plan"));
+            remember_start_mode(cx, "codex", Some("read-only"));
+        });
+        assert_eq!(
+            load(&profile).start_permission_modes,
+            BTreeMap::from([
+                ("claude".to_owned(), "plan".to_owned()),
+                ("codex".to_owned(), "read-only".to_owned()),
+            ])
+        );
+
+        cx.update(|cx| remember_start_mode(cx, "claude", None));
+
+        assert_eq!(
+            load(&profile).start_permission_modes,
+            BTreeMap::from([("codex".to_owned(), "read-only".to_owned())])
+        );
     }
 }
