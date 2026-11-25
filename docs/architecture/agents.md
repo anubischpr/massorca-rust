@@ -190,6 +190,34 @@ directory that does not exist has no kinds.
   Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
   choice is the default, and no label is empty.
 
+## Model catalog (decision 0166)
+
+`agent.models { kind, account?, refresh? }` (capability `agent-models/1`) lists the models a kind's picker offers for an
+account. It merges the kind's declared `model.choices` (`source: declared`, first, in declared order, never dropped)
+with the models the kind's vendor CLI lists for the account (`source: discovered`, after them, never the default). It
+returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `not_signed_in`, `timed_out`, `failed` or
+`no_models`) when the latest listing failed. The declared models come back either way.
+
+- Declaration: `model.discover` holds `args` (after the kind's program), an optional `stdin` written then closed, and a
+  `format`. `lines` reads `id<TAB>label` per line (`agy models`); `claude-control` reads the stream-json
+  `control_response` to the `list_models` request that a `-p` run takes on stdin. Built-in discovery is declared by
+  `antigravity` and `claude`. Codex (an app-server JSON-RPC session) and Gentle Shell (no model option) do not list.
+- Run: the program resolves as a start resolves it. The account home is set in `credentials.home_env`, the names a
+  check strips and the run identity names are removed, and the process is started with `massorca_process::command`.
+  It runs under a 15 second limit (`MASSORCA_MODEL_LISTING_TIMEOUT_MS` for tests), its stdout is read to 8 MiB, and its
+  process tree is stopped before the call returns. A listing succeeds only at exit status 0 with at least one model.
+- Ids are option values: a listed id is kept only when a start would accept it as `--model` (decision 0094), so Claude's
+  bracketed ids, such as `opus[1m]`, are not offered.
+- Cache: in memory, per (kind, account id), with its own entry for the vendor's usual home. A fetched listing is served
+  for 10 minutes and a failure for 30 seconds, beside the last answer; `refresh` asks again; 256 entries at most. An
+  account's answer goes when it is signed in, imported, removed or discarded, and when the kind's active account
+  changes, which also drops the usual home's; a kind whose package is removed loses all its answers. Concurrent requests
+  for one listing share the running one, and waiters block on a condition variable rather than a thread each. A restart
+  empties the cache, and nothing is persisted yet.
+- Refusals: a kind that is not enabled is refused with `agent.kind_not_enabled`, as a start refuses it. An account of
+  another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
+  `agent.credentials_invalid`.
+
 ## Session record (`AgentSession`)
 
 | Field | Meaning |

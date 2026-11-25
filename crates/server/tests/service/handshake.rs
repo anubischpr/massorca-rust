@@ -28,6 +28,7 @@ async fn welcome_offers_the_registered_capabilities() {
         welcome.capabilities,
         [
             capabilities::AGENT_IMPORT_DETECT,
+            capabilities::AGENT_MODELS,
             capabilities::AGENT_MODES,
             capabilities::AGENT_NO_PROJECT,
             capabilities::AGENT_OPTIONS,

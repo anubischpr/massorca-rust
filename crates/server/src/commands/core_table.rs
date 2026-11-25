@@ -397,6 +397,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "agent.models",
+            "List the models a kind's picker offers for an account: declared choices, then the vendor CLI's listing",
+            "agent.models",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "refresh": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.start",
             "Start an agent in a workspace, or with no project in the conversations folder",
             "agent.start",
