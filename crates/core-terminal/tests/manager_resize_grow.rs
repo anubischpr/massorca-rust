@@ -62,7 +62,12 @@ async fn output_after_a_taller_resize_lands_right_below_the_output_before_it() {
     client.advance(&live.output[at_resize..]);
 
     let rows = client.rows();
-    let (Some(above), Some(below)) = (client.row_of(&before), client.row_of(&after)) else {
+    // A shell may print its prompt on the same row as the output, but never the command's echo.
+    let row_of = |marker: &str| {
+        rows.iter()
+            .position(|row| row.ends_with(marker) && !row.contains("echo"))
+    };
+    let (Some(above), Some(below)) = (row_of(&before), row_of(&after)) else {
         panic!("both markers are on the screen: {rows:?}");
     };
     assert!(
