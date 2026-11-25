@@ -174,6 +174,10 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- `launch_values` (decision 0164), optional: the vendor's spellings of the mode's launch value, in preference order.
+  `args` then holds `{value}` exactly once, right after its flag. At launch the first spelling the CLI's `--help` lists
+  for that flag is passed, and the first spelling when the help lists none or cannot be read. The help is the
+  instruction channel's cached `--help` probe, so one run serves both.
 - A mode's presentation (decision 0163), each optional: `description` (one line), `icon` (a
   lucide icon name: lowercase letters and digits in `-`-joined words, at most 64 characters),
   `tone` (`normal` | `warning`; a bypass mode never has `normal`) and `selectable` (default

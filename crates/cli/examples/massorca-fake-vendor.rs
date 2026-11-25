@@ -8,6 +8,8 @@
 //!   real install puts the CLI on `PATH`, and removes it for an uninstall. A file `fail-install` in that folder makes the
 //!   install fail with exit 7.
 //! - As a CLI it answers `--version` with exit 0. A file `fail-verify` in its folder makes that exit 1.
+//! - As a CLI, `self-uninstall --yes` records that it ran and takes its own file away, as a vendor's uninstaller removes
+//!   the CLI it is (decision 0164). Windows does not delete a running image, so there the file is renamed aside.
 //! - Anything else exits 2.
 
 use std::env;
@@ -41,6 +43,7 @@ fn main() -> ExitCode {
             say("fake-vendor 1.0");
             ExitCode::SUCCESS
         }
+        ["self-uninstall", "--yes"] => self_uninstall(),
         _ => {
             complain(&format!("fake-vendor: unknown arguments {words:?}"));
             ExitCode::from(2)
@@ -87,6 +90,30 @@ fn package_manager(folder: &Path, words: &[&str]) -> ExitCode {
     }
     complain(&format!("fake-vendor: unknown arguments {words:?}"));
     ExitCode::from(2)
+}
+
+/// `self-uninstall --yes` from the CLI itself: the run is recorded on its output, which the uninstall log keeps, and the
+/// file it runs from is taken away. Windows does not delete a running image, so there the file is renamed aside.
+fn self_uninstall() -> ExitCode {
+    say("fake-vendor: self-uninstall ran");
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            complain(&format!("fake-vendor: {error}"));
+            return ExitCode::FAILURE;
+        }
+    };
+    match fs::remove_file(&exe) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => finish(fs::rename(&exe, aside(&exe))),
+    }
+}
+
+/// Where a running file that cannot be deleted is renamed to: the same folder, with `.removed` after its name.
+fn aside(exe: &Path) -> PathBuf {
+    let mut name = exe.file_name().unwrap_or_default().to_os_string();
+    name.push(".removed");
+    exe.with_file_name(name)
 }
 
 /// The first folder on `PATH`: where the CLIs of a test's service are installed.
