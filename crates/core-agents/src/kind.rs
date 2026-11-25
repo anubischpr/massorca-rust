@@ -372,12 +372,52 @@ pub struct CredentialsDecl {
     /// Where the kind's CLI keeps each declared file by default, for an import without a folder (decision 0097).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<CredentialSource>,
+    /// The declared file that holds the CLI's own state, built on import and repaired before each check and launch
+    /// instead of being copied raw (decision 0099).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateDecl>,
+}
+
+/// Largest `max_source_bytes` a state rule may declare.
+pub const MAX_STATE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How an account home's state file is made (decision 0099): a JSON object holding only the `keep` keys of the source
+/// file and the `set` keys with their values. The source may be up to `max_source_bytes` long; only the kept keys are
+/// ever written into the home.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateDecl {
+    /// A declared credential file.
+    pub file: String,
+    /// Top-level keys copied from the source file when present.
+    #[serde(default)]
+    pub keep: Vec<String>,
+    /// Top-level keys forced to these values, on import and before each check and launch.
+    #[serde(default)]
+    pub set: BTreeMap<String, serde_json::Value>,
+    /// The largest source file the import reads; defaults to 1 MiB.
+    #[serde(default = "default_state_source_bytes")]
+    pub max_source_bytes: u64,
+}
+
+fn default_state_source_bytes() -> u64 {
+    crate::credentials::MAX_FILE_BYTES
 }
 
 impl CredentialsDecl {
     /// Whether an import needs `file`: every declared file not listed in `optional`.
     pub fn required(&self, file: &str) -> bool {
         !self.optional.iter().any(|name| name == file)
+    }
+
+    /// The largest source of `file` an import reads: the state rule's `max_source_bytes` for its file, else 1 MiB.
+    pub fn source_cap(&self, file: &str) -> u64 {
+        self.state
+            .as_ref()
+            .filter(|state| state.file == file)
+            .map_or(crate::credentials::MAX_FILE_BYTES, |state| {
+                state.max_source_bytes
+            })
     }
 }
 
@@ -877,6 +917,59 @@ fn credentials_problems(credentials: &CredentialsDecl, problems: &mut Vec<String
         }
     }
     sources_problems(credentials, problems);
+    if let Some(state) = &credentials.state {
+        state_problems(credentials, state, problems);
+    }
+}
+
+/// The state rule (decision 0099): `file` is a declared file, `keep` and `set` name plain top-level keys, each once and
+/// in only one of them, and the source cap is between 1 byte and [`MAX_STATE_SOURCE_BYTES`].
+fn state_problems(credentials: &CredentialsDecl, state: &StateDecl, problems: &mut Vec<String>) {
+    if !credentials.files.iter().any(|file| file == &state.file) {
+        problems.push(format!(
+            "credentials.state.file {:?} is not a declared file",
+            state.file
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for key in &state.keep {
+        if !valid_state_key(key) {
+            problems.push(format!(
+                "credentials.state.keep entry {key:?} is not a plain key name"
+            ));
+        }
+        if !seen.insert(key.as_str()) {
+            problems.push(format!("credentials.state.keep lists {key:?} twice"));
+        }
+    }
+    for key in state.set.keys() {
+        if !valid_state_key(key) {
+            problems.push(format!(
+                "credentials.state.set key {key:?} is not a plain key name"
+            ));
+        }
+        if seen.contains(key.as_str()) {
+            problems.push(format!(
+                "credentials.state lists {key:?} in both keep and set"
+            ));
+        }
+    }
+    if state.max_source_bytes == 0 || state.max_source_bytes > MAX_STATE_SOURCE_BYTES {
+        problems.push(format!(
+            "credentials.state.max_source_bytes {} must be between 1 and {MAX_STATE_SOURCE_BYTES}",
+            state.max_source_bytes
+        ));
+    }
+}
+
+/// A top-level state key: 1 to 64 ASCII letters, digits, `_`, `-` or `.`, starting with a letter or `_`.
+fn valid_state_key(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    key.len() <= 64
+        && bytes
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 /// The import source declarations (decision 0097): `optional` and every source name declared files, each file has at
@@ -2030,6 +2123,114 @@ mod tests {
             .is_err(),
             "an unknown source field does not parse"
         );
+    }
+
+    #[test]
+    fn a_state_rule_names_a_declared_file_and_plain_keys_once_with_a_sane_cap() {
+        let good = serde_json::json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.fake", "state.fake"],
+            "optional": ["state.fake"],
+            "state": { "file": "state.fake", "keep": ["account", "theme"],
+                       "set": { "onboarded": true }, "max_source_bytes": 2048 }
+        });
+        assert!(
+            with_sources(good.clone()).is_empty(),
+            "{:?}",
+            with_sources(good.clone())
+        );
+        let cases = [
+            (
+                "/state/file",
+                serde_json::json!("other.fake"),
+                "credentials.state.file \"other.fake\" is not a declared file",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["theme", "theme"]),
+                "credentials.state.keep lists \"theme\" twice",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["a/b"]),
+                "credentials.state.keep entry \"a/b\" is not a plain key name",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["onboarded"]),
+                "credentials.state lists \"onboarded\" in both keep and set",
+            ),
+            (
+                "/state/set",
+                serde_json::json!({ "": 1 }),
+                "credentials.state.set key \"\" is not a plain key name",
+            ),
+            (
+                "/state/max_source_bytes",
+                serde_json::json!(0),
+                "credentials.state.max_source_bytes 0 must be between 1 and 67108864",
+            ),
+            (
+                "/state/max_source_bytes",
+                serde_json::json!(MAX_STATE_SOURCE_BYTES + 1),
+                "credentials.state.max_source_bytes 67108865 must be between 1 and 67108864",
+            ),
+        ];
+        for (pointer, bad, expected) in cases {
+            let mut credentials = good.clone();
+            *credentials.pointer_mut(pointer).expect("a field to break") = bad;
+            let problems = with_sources(credentials);
+            assert!(
+                problems.iter().any(|problem| problem == expected),
+                "{pointer}: {problems:?}"
+            );
+        }
+        let mut unknown = good.clone();
+        unknown["state"]["copy"] = serde_json::json!(true);
+        assert!(
+            KindDecl::from_json(
+                &serde_json::json!({
+                    "id": "fake", "name": "Fake", "program": ["fake-agent"], "credentials": unknown
+                })
+                .to_string()
+            )
+            .is_err(),
+            "an unknown state field does not parse"
+        );
+    }
+
+    #[test]
+    fn claude_builds_its_state_file_with_onboarding_done_and_only_three_kept_keys() {
+        for text in [
+            include_str!("../kinds/claude.json"),
+            include_str!("../../../packages/agents/massorca.claude/agents/claude.json"),
+        ] {
+            let claude = KindDecl::from_json(text).expect("claude parses");
+            let credentials = claude.credentials.as_ref().expect("claude has credentials");
+            let state = credentials
+                .state
+                .as_ref()
+                .expect("claude declares a state rule");
+            assert_eq!(state.file, ".claude.json");
+            assert_eq!(state.keep, ["oauthAccount", "theme", "mcpServers"]);
+            assert_eq!(
+                serde_json::to_value(&state.set).unwrap(),
+                serde_json::json!({ "hasCompletedOnboarding": true })
+            );
+            assert_eq!(state.max_source_bytes, 16 * 1024 * 1024);
+            assert!(!credentials.required(".claude.json"));
+        }
+        for kind in [
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/antigravity.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ] {
+            let decl = KindDecl::from_json(kind).expect("the kind parses");
+            assert!(
+                decl.credentials
+                    .is_none_or(|credentials| credentials.state.is_none())
+            );
+        }
     }
 
     #[test]

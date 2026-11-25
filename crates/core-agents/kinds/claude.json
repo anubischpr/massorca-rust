@@ -25,7 +25,13 @@
     "sources": [
       { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
       { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
-    ]
+    ],
+    "state": {
+      "file": ".claude.json",
+      "keep": ["oauthAccount", "theme", "mcpServers"],
+      "set": { "hasCompletedOnboarding": true },
+      "max_source_bytes": 16777216
+    }
   },
   "accounts": {
     "login": ["auth", "login"],

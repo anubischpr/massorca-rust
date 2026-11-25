@@ -130,7 +130,8 @@ directory that does not exist has no kinds.
   `success`), `done:<outcome>`, `ignore`.
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
-  import: the declaration has no optional flag.
+  import unless `optional` lists it (decision 0097). `state` declares how the CLI's own state
+  file is built and repaired (decision 0099).
 - `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
   mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
   kind's own `args`), an optional deterministic `live_switch` typed into a running session,
@@ -600,9 +601,45 @@ absolute path. The built-in `claude` declares `.credentials.json` (required) in 
 (optional) in `{home}/.codex`, moved by `CODEX_HOME`.
 
 `agent.accounts.import_candidates` reports, per kind, each file's path and whether the import would accept it: a
-regular file, not a link, at most 1 MiB, judged from `symlink_metadata` alone. It never opens a file. `ready` means
+regular file, not a link, at most 1 MiB (a state file: its rule's `max_source_bytes`), judged from `symlink_metadata`
+alone. It never opens a file. `ready` means
 every required file was found. `agent.accounts.import` without `from` reads each file from its own path, with every
 check of Credential import; a folder import applies the same optional rule.
+
+## Account state file (decision 0099)
+
+`core-agents::state_file`. Some CLIs keep their own state beside the login in the folder the home variable names:
+with `CLAUDE_CONFIG_DIR` set, Claude Code reads `.claude.json` there too, and without `hasCompletedOnboarding` it opens
+its first-run setup, which ends in a browser sign-in, while `auth status` (which judges only the credentials) still
+says signed in. A kind's `credentials.state` declares how that file is made:
+
+```json
+"state": {
+  "file": ".claude.json",
+  "keep": ["oauthAccount", "theme", "mcpServers"],
+  "set": { "hasCompletedOnboarding": true },
+  "max_source_bytes": 16777216
+}
+```
+
+`file` is a declared file; `keep` and `set` name plain top-level keys (letters, digits, `_`, `-`, `.`), each once and in
+only one of them; `max_source_bytes` (default 1 MiB) is between 1 byte and 64 MiB. The kind's problems list each
+breach.
+
+- Import, from a folder or detected sources, builds the state file and never copies it raw. The source is read with
+  the checks of Credential import but with `max_source_bytes` as its cap, parsed, and only the `keep` keys present are
+  written, then the `set` keys. Everything else, project history included, stays behind. A missing source gives a file
+  with the `set` keys only. A source that is not a JSON object, or over its cap, refuses the import when the file is
+  required; when it is optional (Claude), the file gets the `set` keys only, and the import's `reason` and the file's
+  `reason` say why. A state file alone, built from nothing, is nothing to import.
+- Before every account check (`agent.accounts.check`, and the checks that decide an import or a sign-in) and before
+  every launch on an account home, the service puts the `set` keys back under `credentials::lock_homes`: it creates the
+  file when it is missing and merges the keys when they are absent or differ, keeping every other key, writing a new
+  owner-only sibling and renaming it over the file. A link or anything but a regular file is never followed or
+  written through. A state file that cannot be repaired (not a JSON object, over its cap, a link) is left as it is;
+  the check reports `needs_sign_in` and a launch is refused with `agent.credentials_invalid` naming the file, so the
+  check and the session never disagree. Existing accounts are repaired this way without a new import.
+- Only `claude` declares a rule. Folder trust prompts are out of scope.
 
 ## Accounts (decision 0059)
 
