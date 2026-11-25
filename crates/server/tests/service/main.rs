@@ -34,6 +34,7 @@ mod hosted_services;
 mod lifecycle;
 mod network;
 mod network_account_masking;
+mod pairing_offers;
 mod projects;
 mod reconnect;
 mod registries;

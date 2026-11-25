@@ -149,6 +149,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "marketplace.services.connect",
             "marketplace.services.disconnect",
             "marketplace.services.list",
+            "pair.cancel",
             "pair.offer",
             "project.add",
             "project.inspect",

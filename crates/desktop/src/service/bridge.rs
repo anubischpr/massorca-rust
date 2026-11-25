@@ -19,7 +19,8 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
-    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
+    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCancelParams,
+    PairingCancelled, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
@@ -54,7 +55,7 @@ use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::hosted_services::{self, ServicesCommand};
-use super::hosts::{self, SshAdded, SshFailed, SshHost};
+use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
@@ -225,6 +226,16 @@ pub(crate) enum Command {
         ssh_args: Vec<String>,
         reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
     },
+    /// Forgets a paired host, revoking this device there first. Needs no connection to this computer's service.
+    RemoveHost {
+        name: String,
+        reply: oneshot::Sender<Result<HostRemoval, Refusal>>,
+    },
+    /// Counts what a paired host holds, for the remove confirm. Needs no connection to this computer's service.
+    CountHostLoss {
+        name: String,
+        reply: oneshot::Sender<Result<HostLoss, Refusal>>,
+    },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
         offer: String,
@@ -241,6 +252,10 @@ pub(crate) enum Command {
     CreateOffer {
         params: PairingCreateParams,
         reply: oneshot::Sender<Result<PairingCreated, Refusal>>,
+    },
+    CancelOffer {
+        params: PairingCancelParams,
+        reply: oneshot::Sender<Result<PairingCancelled, Refusal>>,
     },
     NetworkStatus {
         reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
@@ -458,6 +473,15 @@ impl ServiceHandle {
         params: PairingCreateParams,
     ) -> Result<PairingCreated, Refusal> {
         self.ask(|reply| Command::CreateOffer { params, reply })
+            .await
+    }
+
+    /// `pairing.cancel`: retires a pending offer before it expires.
+    pub async fn cancel_offer(
+        &self,
+        params: PairingCancelParams,
+    ) -> Result<PairingCancelled, Refusal> {
+        self.ask(|reply| Command::CancelOffer { params, reply })
             .await
     }
 
@@ -679,6 +703,8 @@ impl Link {
             Command::RefreshHosts
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
+            | Command::RemoveHost { .. }
+            | Command::CountHostLoss { .. }
             | Command::AcceptOffer { .. } => {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
@@ -1212,6 +1238,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::CancelOffer { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .pairing_cancel(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::NetworkStatus { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1308,6 +1343,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::CreateOffer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::CancelOffer { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {

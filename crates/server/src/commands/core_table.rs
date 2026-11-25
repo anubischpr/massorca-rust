@@ -221,7 +221,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "type": "object",
                 "properties": {
                     "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
-                    "admin": { "type": "boolean" }
+                    "admin": { "type": "boolean" },
+                    "addresses": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
+                }
+            }),
+        ),
+        command(
+            "pair.cancel",
+            "Retire a pending pairing offer before it expires",
+            "pairing.cancel",
+            json!({
+                "type": "object",
+                "properties": {
+                    "offer_id": { "type": "string" },
+                    "all": { "type": "boolean" }
                 }
             }),
         ),

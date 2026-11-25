@@ -1,6 +1,6 @@
 //! A service answer that says "no", typed so each kind picks its dialog (decision 0028).
 
-use massorca_client::ClientError;
+use massorca_client::{ClientError, IdentityMismatch, TrustedFrom};
 use massorca_protocol::pairing::OfferError;
 use massorca_protocol::{ErrorBody, codes};
 
@@ -102,7 +102,10 @@ impl From<&ClientError> for Refusal {
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)
             | ClientError::UntrustedEndpoint(_) => unreachable_service(),
-            ClientError::ServerIdentityMismatch(_) => host_failure(HOST_IDENTITY_MISMATCH, error),
+            ClientError::ServerIdentityMismatch(mismatch) => Self::Failed {
+                code: HOST_IDENTITY_MISMATCH.to_owned(),
+                message: sentence(&identity_mismatch_message(mismatch)),
+            },
             ClientError::HostNotFound(_) => host_failure(HOST_NOT_FOUND, error),
             ClientError::HostExists(_) => host_failure(HOST_EXISTS, error),
             ClientError::InvalidHostName(_) => host_failure(HOST_INVALID_NAME, error),
@@ -177,6 +180,22 @@ fn unreachable_service() -> Refusal {
     Refusal::Unavailable {
         message: "The service cannot be reached right now.".to_owned(),
     }
+}
+
+/// A paired host's changed key, with the desktop's way out: Remove on the host's row, then a new pairing.
+fn identity_mismatch_message(mismatch: &IdentityMismatch) -> String {
+    if mismatch.trusted_from != TrustedFrom::Pairing {
+        return mismatch.message();
+    }
+    let host = &mismatch.host;
+    let actual = mismatch
+        .actual
+        .as_deref()
+        .unwrap_or("a certificate that could not be read");
+    format!(
+        "{host} presented a different server key than the one paired with (paired {}, now {actual}); refusing to          connect. If that server was reinstalled or its key replaced, check the new key on the server (`massorca          network status`), then remove {host} with Remove on its row in Settings and pair again on the Pairing page.          Otherwise do not connect: something may be between you and the server",
+        mismatch.expected
+    )
 }
 
 fn host_failure(code: &str, error: &ClientError) -> Refusal {
@@ -317,6 +336,31 @@ mod tests {
             Refusal::Failed { code, message }
                 if code == "host.identity_mismatch" && message.contains("Pairing page")
         ));
+    }
+
+    #[test]
+    fn a_changed_host_key_names_both_keys_and_offers_remove_host() {
+        let refusal = Refusal::from(&ClientError::ServerIdentityMismatch(Box::new(
+            IdentityMismatch {
+                host: "vps".into(),
+                trusted_from: TrustedFrom::Pairing,
+                expected: "sha256:old".into(),
+                actual: Some("sha256:new".into()),
+            },
+        )));
+        let message = refusal.message();
+        assert_eq!(refusal.code(), Some("host.identity_mismatch"));
+        for part in [
+            "sha256:old",
+            "sha256:new",
+            "remove vps with Remove on its row in Settings",
+        ] {
+            assert!(message.contains(part), "{part} is missing from: {message}");
+        }
+        assert!(
+            !message.contains("massorca host remove"),
+            "the desktop offers its own way out, not a command: {message}"
+        );
     }
 
     #[test]
