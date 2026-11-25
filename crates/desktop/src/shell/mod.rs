@@ -212,6 +212,8 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The team pill's switch menu, while it is open.
+    team_switch: Option<teams::OpenTeamSwitch>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -517,6 +519,7 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            team_switch: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -961,6 +964,10 @@ impl Render for Shell {
             .team_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let team_switch = self
+            .team_switch
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
             .revoke
             .as_ref()
@@ -1046,6 +1053,7 @@ impl Render for Shell {
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(team_switch, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))

@@ -4,15 +4,20 @@
 
 use super::super::Shell;
 use super::super::change;
+use super::team_pill;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{AddressId, Routine, RoutineId, Team, TeamId, TeamPage};
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
+};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::switch::Switch;
-use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_CAPTION, TYPE_HEADING};
+use massorca_ui::tokens::{
+    SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_CAPTION, TYPE_HEADING,
+};
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Routines page of one team (4.6).
@@ -20,6 +25,7 @@ pub(in crate::shell) fn routines_page(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     team: TeamId,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -33,9 +39,23 @@ pub(in crate::shell) fn routines_page(
         .justify_between()
         .child(
             div()
-                .text_style(TYPE_HEADING)
-                .text_color(theme.palette.text.primary)
-                .child("Routines"),
+                .flex()
+                .items_center()
+                .gap(px(SPACE_3))
+                .child(
+                    div()
+                        .text_style(TYPE_HEADING)
+                        .text_color(theme.palette.text.primary)
+                        .child("Routines"),
+                )
+                .child(team_pill(
+                    TeamPage::Routines(team),
+                    &team_data.name,
+                    team_data.character,
+                    shell,
+                    window,
+                    cx,
+                )),
         )
         .child(new_routine_button(shell, team, connected));
     let routines = if team_data.routines.is_empty() {

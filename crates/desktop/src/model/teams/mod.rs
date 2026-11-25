@@ -12,6 +12,7 @@ mod sample;
 mod sidebar;
 mod state;
 mod team_edit;
+mod team_switch;
 mod types;
 
 pub use access::{access_change, access_line, new_team_access_hint};
@@ -27,6 +28,7 @@ pub use sidebar::{
 };
 pub use state::{LINK_NOT_SAVED, NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
 pub use team_edit::{CHARACTER_CHOICES, TeamChange, TeamForm};
+pub use team_switch::{TeamSwitchRow, team_switch_rows};
 pub use types::{
     AddressId, BoardOwner, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId,
     MemoryTab, Pick, Project, ProjectId, Routine, RoutineId, RunOutcome, Task, TaskId, Team,
