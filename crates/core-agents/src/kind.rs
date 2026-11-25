@@ -2,7 +2,7 @@
 //!
 //! Behaviour is a closed set of mechanisms. An unknown field or mechanism fails to parse; it is never ignored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -365,6 +365,41 @@ pub struct CredentialsDecl {
     /// Variables removed from the run's environment when the profile home is used.
     #[serde(default)]
     pub strip_env: Vec<String>,
+    /// Declared files an import may skip when they are missing (decision 0097). Every other declared file is required;
+    /// absent means every declared file is required.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional: Vec<String>,
+    /// Where the kind's CLI keeps each declared file by default, for an import without a folder (decision 0097).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<CredentialSource>,
+}
+
+impl CredentialsDecl {
+    /// Whether an import needs `file`: every declared file not listed in `optional`.
+    pub fn required(&self, file: &str) -> bool {
+        !self.optional.iter().any(|name| name == file)
+    }
+}
+
+/// Where the kind's CLI keeps one declared credential file (decision 0097). `dir` is the default folder; a platform key
+/// replaces it on that platform. The only placeholder is `{home}`, the user's home folder. When `env` names a variable
+/// that is set to an absolute path, that folder is used instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialSource {
+    /// A declared file name.
+    pub file: String,
+    /// The vendor's own override variable, for example `CLAUDE_CONFIG_DIR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// The default folder template, for example `{home}/.claude`.
+    pub dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<String>,
 }
 
 /// How a kind signs an account in, checks it and signs it out (decision 0059). Every list is an argument list, passed
@@ -841,6 +876,91 @@ fn credentials_problems(credentials: &CredentialsDecl, problems: &mut Vec<String
             ));
         }
     }
+    sources_problems(credentials, problems);
+}
+
+/// The import source declarations (decision 0097): `optional` and every source name declared files, each file has at
+/// most one source, its variable is a variable name and its templates start with `{home}` or are absolute.
+fn sources_problems(credentials: &CredentialsDecl, problems: &mut Vec<String>) {
+    let declared = |name: &str| credentials.files.iter().any(|file| file == name);
+    let mut seen = BTreeSet::new();
+    for name in &credentials.optional {
+        if !declared(name) {
+            problems.push(format!(
+                "credentials.optional entry {name:?} is not a declared file"
+            ));
+        }
+        if !seen.insert(name.as_str()) {
+            problems.push(format!("credentials.optional lists {name:?} twice"));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for source in &credentials.sources {
+        let file = &source.file;
+        if !declared(file) {
+            problems.push(format!(
+                "credentials.sources entry {file:?} is not a declared file"
+            ));
+        }
+        if !seen.insert(file.as_str()) {
+            problems.push(format!("credentials.sources lists {file:?} twice"));
+        }
+        if let Some(env) = &source.env
+            && !valid_env_name(env)
+        {
+            problems.push(format!(
+                "credentials.sources env {env:?} of {file:?} is not a variable name"
+            ));
+        }
+        let templates = [
+            ("dir", Some(&source.dir)),
+            ("windows", source.windows.as_ref()),
+            ("macos", source.macos.as_ref()),
+            ("linux", source.linux.as_ref()),
+        ];
+        for (key, template) in templates {
+            if let Some(template) = template
+                && !valid_source_template(template)
+            {
+                problems.push(format!(
+                    "credentials.sources {key} {template:?} of {file:?} must start with {{home}} or be a local absolute path"
+                ));
+            }
+        }
+    }
+}
+
+/// A source folder template: `{home}` alone or followed by a separator, or a local absolute path (`/...`, `C:\...` or
+/// `C:/...`), with no other brace. A network or device path (`\\server\...`, `\\?\...`, `\\.\...`, `//server/...`) is
+/// refused, so detection never reaches out to another machine.
+pub(crate) fn valid_source_template(template: &str) -> bool {
+    let rest = if let Some(rest) = template.strip_prefix("{home}") {
+        if !(rest.is_empty() || rest.starts_with(['/', '\\'])) {
+            return false;
+        }
+        rest
+    } else {
+        let bytes = template.as_bytes();
+        let drive = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\');
+        if !((template.starts_with('/') && !remote_path(template)) || drive) {
+            return false;
+        }
+        template
+    };
+    !rest.contains(['{', '}', '\0'])
+}
+
+/// A path that starts with two separators: a UNC share (`\\server\...`, `//server/...`) or a Win32 device or verbatim
+/// prefix (`\\?\...`, `\\.\...`). Opening one may reach another machine.
+pub(crate) fn remote_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('/' | '\\'), Some('/' | '\\'))
+    )
 }
 
 /// `[a-z0-9-]{1,32}`.
@@ -1799,5 +1919,158 @@ mod tests {
         let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
             .expect("gentle-shell parses");
         assert!(gentle.model.is_none() && gentle.effort.is_none());
+    }
+
+    fn with_sources(credentials: serde_json::Value) -> Vec<String> {
+        problems_of(|value| value["credentials"] = credentials.clone())
+    }
+
+    #[test]
+    fn import_sources_name_declared_files_once_with_home_or_absolute_templates() {
+        let good = serde_json::json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.fake", "extra.fake"],
+            "optional": ["extra.fake"],
+            "sources": [
+                { "file": "token.fake", "env": "FAKE_VENDOR_DIR", "dir": "{home}/.fake",
+                  "windows": "C:/Fake", "macos": "/opt/fake", "linux": "{home}" },
+                { "file": "extra.fake", "dir": "{home}" }
+            ]
+        });
+        assert!(
+            with_sources(good.clone()).is_empty(),
+            "{:?}",
+            with_sources(good.clone())
+        );
+
+        let cases = [
+            (
+                "/optional",
+                serde_json::json!(["other.fake"]),
+                "credentials.optional entry \"other.fake\" is not a declared file",
+            ),
+            (
+                "/optional",
+                serde_json::json!(["extra.fake", "extra.fake"]),
+                "credentials.optional lists \"extra.fake\" twice",
+            ),
+            (
+                "/sources/1/file",
+                serde_json::json!("other.fake"),
+                "credentials.sources entry \"other.fake\" is not a declared file",
+            ),
+            (
+                "/sources/1/file",
+                serde_json::json!("token.fake"),
+                "credentials.sources lists \"token.fake\" twice",
+            ),
+            (
+                "/sources/0/env",
+                serde_json::json!("NOT A NAME"),
+                "credentials.sources env \"NOT A NAME\" of \"token.fake\" is not a variable name",
+            ),
+            (
+                "/sources/0/dir",
+                serde_json::json!("relative/.fake"),
+                "credentials.sources dir \"relative/.fake\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+            (
+                "/sources/0/windows",
+                serde_json::json!("{home}/{user}"),
+                "credentials.sources windows \"{home}/{user}\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+            (
+                "/sources/0/linux",
+                serde_json::json!("{homes}"),
+                "credentials.sources linux \"{homes}\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+        ];
+        let mut cases = cases.to_vec();
+        // Network and device paths: detection would reach another machine through them.
+        let remote = [
+            r"\\server\share",
+            r"\\?\C:\Fake",
+            r"\\.\pipe\fake",
+            "//server/share",
+            r"/\server\share",
+        ];
+        let messages: Vec<String> = remote
+            .iter()
+            .map(|template| {
+                format!(
+                    "credentials.sources dir {template:?} of \"token.fake\" must start with {{home}} or be a local absolute path"
+                )
+            })
+            .collect();
+        for (template, message) in remote.iter().zip(&messages) {
+            cases.push((
+                "/sources/0/dir",
+                serde_json::json!(template),
+                message.as_str(),
+            ));
+        }
+        for (pointer, bad, expected) in cases {
+            let mut credentials = good.clone();
+            *credentials.pointer_mut(pointer).expect("a field to break") = bad;
+            let problems = with_sources(credentials);
+            assert!(
+                problems.iter().any(|problem| problem == expected),
+                "{pointer}: {problems:?}"
+            );
+        }
+        assert!(
+            KindDecl::from_json(
+                &serde_json::json!({
+                    "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                    "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.fake"],
+                        "sources": [{ "file": "token.fake", "dir": "{home}", "path": "x" }] }
+                })
+                .to_string()
+            )
+            .is_err(),
+            "an unknown source field does not parse"
+        );
+    }
+
+    #[test]
+    fn claude_and_codex_declare_where_their_clis_keep_each_file() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        let credentials = claude.credentials.as_ref().expect("claude has credentials");
+        assert!(credentials.required(".credentials.json"));
+        assert!(!credentials.required(".claude.json"));
+        let dirs: Vec<(&str, Option<&str>, &str)> = credentials
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.file.as_str(),
+                    source.env.as_deref(),
+                    source.dir.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (
+                    ".credentials.json",
+                    Some("CLAUDE_CONFIG_DIR"),
+                    "{home}/.claude"
+                ),
+                (".claude.json", Some("CLAUDE_CONFIG_DIR"), "{home}"),
+            ]
+        );
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex parses");
+        let credentials = codex.credentials.as_ref().expect("codex has credentials");
+        assert!(credentials.required("auth.json") && !credentials.required("config.toml"));
+        assert!(
+            credentials
+                .sources
+                .iter()
+                .all(|source| source.env.as_deref() == Some("CODEX_HOME")
+                    && source.dir == "{home}/.codex")
+        );
+        assert_eq!(credentials.sources.len(), 2);
     }
 }

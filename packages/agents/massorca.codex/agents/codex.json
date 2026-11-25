@@ -14,7 +14,12 @@
   "credentials": {
     "home_env": "CODEX_HOME",
     "files": ["auth.json", "config.toml"],
-    "strip_env": ["OPENAI_API_KEY"]
+    "strip_env": ["OPENAI_API_KEY"],
+    "optional": ["config.toml"],
+    "sources": [
+      { "file": "auth.json", "env": "CODEX_HOME", "dir": "{home}/.codex" },
+      { "file": "config.toml", "env": "CODEX_HOME", "dir": "{home}/.codex" }
+    ]
   },
   "permission_modes": [
     {
