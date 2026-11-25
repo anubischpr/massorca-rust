@@ -60,6 +60,32 @@ pub struct KindDecl {
     /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<EffortDecl>,
+    /// Inherited variables that no run of the kind and none of its account commands may see (decision 0160): markers
+    /// that a process above the service left, such as another agent's session stamp. Names compare without case on
+    /// Windows. A name the launch itself sets is set, not stripped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strip_inherited_env: Vec<String>,
+    /// Where the kind's CLI saves a conversation per agent ref (decision 0160). When the file for a session's ref is not
+    /// there, the session cannot resume. Absent means no check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_transcript: Option<ResumeTranscriptDecl>,
+    /// A regular expression over a resumed run's output that means the CLI found no conversation for the ref (decision
+    /// 0160); such a run that exits with a failure leaves the session unable to resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_not_found_pattern: Option<String>,
+}
+
+/// Where a kind's CLI keeps one conversation per agent ref (decision 0160). The folder is the run's account home when it
+/// used one; else `env`'s value when it is set to an absolute path; else `dir`, where `{home}` is the user's home folder.
+/// `glob` is a relative path under that folder: `/`-separated parts, where a part may be `*` (any one folder) and the
+/// last part holds `{ref}` once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeTranscriptDecl {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    pub dir: String,
+    pub glob: String,
 }
 
 /// The `model` option of a kind (decision 0094): how a start's model is passed, and the choices the picker shows
@@ -588,7 +614,62 @@ impl KindDecl {
         self.mode_problems(&mut problems);
         self.model_problems(&mut problems);
         self.effort_problems(&mut problems);
+        self.inherited_env_problems(&mut problems);
+        self.resume_check_problems(&mut problems);
         problems
+    }
+
+    /// `strip_inherited_env` lists variable names, each once (without case, as Windows compares them).
+    fn inherited_env_problems(&self, problems: &mut Vec<String>) {
+        let mut seen = BTreeSet::new();
+        for name in &self.strip_inherited_env {
+            if !valid_env_name(name) {
+                problems.push(format!(
+                    "strip_inherited_env entry {name:?} is not a variable name"
+                ));
+            } else if !seen.insert(name.to_ascii_uppercase()) {
+                problems.push(format!("strip_inherited_env lists {name:?} twice"));
+            }
+        }
+    }
+
+    /// The transcript check and the not-found pattern need a resume form; the folder, the glob and the pattern must be
+    /// usable (decision 0160).
+    fn resume_check_problems(&self, problems: &mut Vec<String>) {
+        if let Some(transcript) = &self.resume_transcript {
+            if self.resume.is_none() {
+                problems.push("resume_transcript needs resume".to_owned());
+            }
+            if let Some(env) = &transcript.env
+                && !valid_env_name(env)
+            {
+                problems.push(format!(
+                    "resume_transcript.env {env:?} is not a variable name"
+                ));
+            }
+            if !valid_source_template(&transcript.dir) {
+                problems.push(format!(
+                    "resume_transcript.dir {:?} must be {{home}} or an absolute local folder, without ..",
+                    transcript.dir
+                ));
+            }
+            if !valid_transcript_glob(&transcript.glob) {
+                problems.push(format!(
+                    "resume_transcript.glob {:?} must be a relative path of plain parts or *, whose last part holds {REF_PLACEHOLDER} once",
+                    transcript.glob
+                ));
+            }
+        }
+        if let Some(pattern) = &self.resume_not_found_pattern {
+            if self.resume.is_none() {
+                problems.push("resume_not_found_pattern needs resume".to_owned());
+            }
+            if let Err(error) = regex::Regex::new(pattern) {
+                problems.push(format!(
+                    "resume_not_found_pattern does not compile: {error}"
+                ));
+            }
+        }
     }
 
     /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags or args (decisions
@@ -1135,6 +1216,23 @@ fn valid_env_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// A transcript glob (decision 0160): `/`-separated parts, none empty, `.` or `..`; a part is `*` or a plain name without
+/// `*`; the last part is a plain name with `{ref}` exactly once, and no other part has it.
+pub(crate) fn valid_transcript_glob(glob: &str) -> bool {
+    let parts: Vec<&str> = glob.split('/').collect();
+    let Some((last, folders)) = parts.split_last() else {
+        return false;
+    };
+    let folders_ok = folders
+        .iter()
+        .all(|part| *part == "*" || (valid_file_name(part) && !part.contains(['*', '{', '}'])));
+    let filled = last.replacen(REF_PLACEHOLDER, "r", 1);
+    folders_ok
+        && last.matches(REF_PLACEHOLDER).count() == 1
+        && valid_file_name(&filled)
+        && !filled.contains(['*', '{', '}'])
+}
+
 fn valid_file_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -1329,6 +1427,81 @@ mod tests {
         assert!(!parse(value.clone()).resumable());
         value["session_ref"] = serde_json::json!({ "learn": "session_id" });
         assert!(parse(value).resumable());
+    }
+
+    #[test]
+    fn inherited_strip_names_must_be_variable_names_listed_once() {
+        let problems = problems_of(|value| {
+            value["strip_inherited_env"] = serde_json::json!(["GOOD_ONE", "BAD-NAME", "good_one"]);
+        });
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("strip_inherited_env entry \"BAD-NAME\"")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("strip_inherited_env lists \"good_one\" twice")),
+            "{problems:?}"
+        );
+        let clean = problems_of(|value| {
+            value["strip_inherited_env"] = serde_json::json!(["MARKER_ONE", "MARKER_TWO"]);
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+    }
+
+    #[test]
+    fn the_resume_checks_need_a_resume_form_a_usable_folder_glob_and_pattern() {
+        let problems = problems_of(|value| {
+            value["resume_transcript"] =
+                serde_json::json!({ "env": "1BAD", "dir": "relative", "glob": "../{ref}.log" });
+            value["resume_not_found_pattern"] = serde_json::json!("(");
+        });
+        for expected in [
+            "resume_transcript needs resume",
+            "resume_transcript.env",
+            "resume_transcript.dir",
+            "resume_transcript.glob",
+            "resume_not_found_pattern needs resume",
+            "resume_not_found_pattern does not compile",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let clean = problems_of(|value| {
+            value["resume"] = serde_json::json!(["--resume", "{ref}"]);
+            value["session_ref"] = serde_json::json!({ "learn": "session_id" });
+            value["resume_transcript"] = serde_json::json!({
+                "env": "FAKE_VENDOR_DIR", "dir": "{home}/.fake", "glob": "projects/*/{ref}.jsonl"
+            });
+            value["resume_not_found_pattern"] = serde_json::json!("No conversation found");
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+    }
+
+    #[test]
+    fn a_transcript_glob_is_relative_with_the_ref_once_in_its_last_part() {
+        for good in ["{ref}.jsonl", "projects/*/{ref}.jsonl", "a/b/{ref}"] {
+            assert!(valid_transcript_glob(good), "{good}");
+        }
+        for bad in [
+            "",
+            "/abs/{ref}",
+            "projects/*",
+            "{ref}/x.jsonl",
+            "a/../{ref}",
+            "a//{ref}",
+            "a\\b/{ref}",
+            "a/*{ref}",
+            "{ref}{ref}",
+            "p*/{ref}",
+        ] {
+            assert!(!valid_transcript_glob(bad), "{bad}");
+        }
     }
 
     #[test]
@@ -2349,5 +2522,30 @@ mod tests {
                     && source.dir == "{home}/.codex")
         );
         assert_eq!(credentials.sources.len(), 2);
+    }
+
+    #[test]
+    fn the_service_drops_exactly_the_markers_the_built_in_kinds_declare() {
+        let mut declared: Vec<String> = [
+            include_str!("../kinds/claude.json"),
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/antigravity.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ]
+        .into_iter()
+        .flat_map(|json| {
+            KindDecl::from_json(json)
+                .expect("parses")
+                .strip_inherited_env
+        })
+        .collect();
+        declared.sort();
+        declared.dedup();
+        let mut constant: Vec<String> = crate::launch::INHERITED_VENDOR_MARKERS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        constant.sort();
+        assert_eq!(declared, constant);
     }
 }

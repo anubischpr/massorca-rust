@@ -277,14 +277,43 @@ fn quote_for_shell(path: &str) -> String {
     quoted
 }
 
-/// The run's own variables, the credential home when there is one, the provided ones, then the caller's; and what to
-/// strip. A provided name in `strip_env` is set, not stripped: the vault granted it.
+/// The run identity a launch sets (decision 0160): a value inherited by the service or given by the caller is never
+/// passed through, so a run never carries another session's identity.
+pub const RUN_IDENTITY_ENV: [&str; 3] = [ENV_SESSION, ENV_TOKEN, ENV_KIND];
+
+/// The vendor session markers the built-in kinds declare in `strip_inherited_env` (decision 0160). The service drops
+/// them from the environment every terminal starts from, so they are absent rather than empty; a kind installed later
+/// still has its own list emptied at launch. A test keeps this list equal to the built-in declarations.
+pub const INHERITED_VENDOR_MARKERS: &[&str] = &[
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDECODE",
+];
+
+/// Whether `name` is one of [`INHERITED_VENDOR_MARKERS`], compared as the platform compares variable names.
+#[must_use]
+pub fn is_inherited_vendor_marker(name: &str) -> bool {
+    INHERITED_VENDOR_MARKERS
+        .iter()
+        .any(|marker| same_name(marker, name))
+}
+
+/// Whether `name` is one of [`RUN_IDENTITY_ENV`], compared without case on Windows.
+#[must_use]
+pub fn is_run_identity(name: &str) -> bool {
+    RUN_IDENTITY_ENV
+        .iter()
+        .any(|identity| same_name(identity, name))
+}
+
+/// The credential home when there is one, the provided variables, the caller's, then the run's own identity, which
+/// nothing overrides; and what to strip: the credentials' `strip_env` with a home, then the kind's
+/// `strip_inherited_env` (decision 0160). A name the launch sets is set, not stripped: a provided name in `strip_env` was
+/// granted by the vault.
 fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<String>) {
     let mut env = BTreeMap::new();
     let value = |text: &str| EnvValue::new(text.to_owned());
-    env.insert(ENV_SESSION.to_owned(), value(input.session_id));
-    env.insert(ENV_TOKEN.to_owned(), value(input.token));
-    env.insert(ENV_KIND.to_owned(), value(&input.decl.id));
     env.insert(
         ENV_BIN.to_owned(),
         value(&input.massorca_bin.to_string_lossy()),
@@ -307,6 +336,16 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<Stri
     for (name, caller_value) in input.caller_env {
         env.retain(|existing, _| !same_name(existing, name));
         env.insert(name.clone(), value(caller_value));
+    }
+    env.retain(|existing, _| !is_run_identity(existing));
+    env.insert(ENV_SESSION.to_owned(), value(input.session_id));
+    env.insert(ENV_TOKEN.to_owned(), value(input.token));
+    env.insert(ENV_KIND.to_owned(), value(&input.decl.id));
+    for name in &input.decl.strip_inherited_env {
+        let set = env.keys().any(|existing| same_name(existing, name));
+        if !set && !remove_env.iter().any(|stripped| same_name(stripped, name)) {
+            remove_env.push(name.clone());
+        }
     }
     (env, remove_env)
 }
@@ -586,7 +625,10 @@ mod tests {
         let mut fixture = Fixture::new(built_in("claude"));
         let without = fixture.first(None);
         assert!(!without.env.contains_key("CLAUDE_CONFIG_DIR"));
-        assert!(without.remove_env.is_empty(), "no home, nothing stripped");
+        assert_eq!(
+            without.remove_env, CLAUDE_INHERITED,
+            "no home, only the inherited markers are stripped"
+        );
 
         fixture.home = Some(PathBuf::from("/data/profiles/default/agents/homes/claude"));
         let with = fixture.first(None);
@@ -595,13 +637,57 @@ mod tests {
             "/data/profiles/default/agents/homes/claude"
         );
         assert_eq!(
-            with.remove_env,
+            with.remove_env[..3],
             [
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_TOKEN"
             ]
         );
+        assert_eq!(with.remove_env[3..], CLAUDE_INHERITED);
+    }
+
+    /// The inherited markers the built-in claude kind strips (decision 0160).
+    const CLAUDE_INHERITED: [&str; 4] = [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDECODE",
+    ];
+
+    #[test]
+    fn inherited_markers_are_stripped_from_every_run_unless_the_launch_sets_them() {
+        let mut fixture = Fixture::new(kind(json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "resume": ["--resume", "{ref}"], "session_ref": { "learn": "id" },
+            "strip_inherited_env": ["PARENT_STAMP", "PARENT_ID", "SHARED"]
+        })));
+        fixture.caller_env = BTreeMap::from([("SHARED".to_owned(), "mine".to_owned())]);
+        let first = fixture.first(None);
+        assert_eq!(first.remove_env, ["PARENT_STAMP", "PARENT_ID"]);
+        assert_eq!(
+            first.env["SHARED"].as_str(),
+            "mine",
+            "a name the launch sets is set"
+        );
+        // A resume carries no caller env (docs/architecture/agents.md), so every listed name is stripped.
+        fixture.caller_env.clear();
+        let resumed = fixture.plan(Run::Resume { agent_ref: "r-9" }).unwrap();
+        assert_eq!(resumed.remove_env, ["PARENT_STAMP", "PARENT_ID", "SHARED"]);
+    }
+
+    #[test]
+    fn the_run_identity_is_the_launch_s_own_whatever_the_caller_sets() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.caller_env = BTreeMap::from([
+            (ENV_SESSION.to_owned(), "other-session".to_owned()),
+            (ENV_TOKEN.to_owned(), "other-token".to_owned()),
+            (ENV_KIND.to_owned(), "other-kind".to_owned()),
+        ]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env[ENV_SESSION].as_str(), "s-1");
+        assert_eq!(plan.env[ENV_TOKEN].as_str(), "t0k3n");
+        assert_eq!(plan.env[ENV_KIND].as_str(), "fake");
     }
 
     #[test]
