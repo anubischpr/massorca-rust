@@ -21,7 +21,7 @@ pub const OWN_WORKTREE_NOTICE: &str =
 
 /// What a writing child in the parent's folder is told before the person types.
 pub const SHARED_FOLDER_NOTICE: &str =
-    "The child will work in this same folder, not a copy. Its changes are not isolated.";
+    "This workspace has no Git, so the child works in this folder.";
 
 /// What an unavailable session says when the service gives no reason.
 pub const UNAVAILABLE_NOTICE: &str = "This session cannot start a child.";
@@ -243,12 +243,12 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_folder_child_is_told_its_changes_are_not_isolated() {
+    fn a_shared_folder_child_is_told_the_workspace_has_no_git() {
         let notice = placement_notice(&WritingChild::SharedFolder, false).expect("described");
         assert_eq!(
             (notice.text.as_str(), notice.blocks_send),
             (
-                "The child will work in this same folder, not a copy. Its changes are not isolated.",
+                "This workspace has no Git, so the child works in this folder.",
                 false
             )
         );

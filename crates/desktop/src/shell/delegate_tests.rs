@@ -346,9 +346,7 @@ fn an_own_worktree_child_is_described_before_the_person_types(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn a_shared_folder_child_is_described_as_not_isolated_before_the_person_types(
-    cx: &mut TestAppContext,
-) {
+fn a_shared_folder_child_is_described_before_the_person_types(cx: &mut TestAppContext) {
     let (rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
     declare(&rig, cx, WritingChild::SharedFolder);
