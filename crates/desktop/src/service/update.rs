@@ -23,7 +23,7 @@ use super::agent_chat::KindChat;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
-use super::skills::SkillsRead;
+use super::skills::{PlacementAnswer, PlacementOutcome, SkillsRead};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
@@ -83,6 +83,7 @@ pub enum StoreUpdate {
     HostMarketplace(HostMarketplaceRead),
     /// What a discovery of skills answered, for This computer or a paired host; the newest answer per host is kept.
     Skills(SkillsRead),
+    SkillPlacement(PlacementAnswer),
     /// Every setting the service declares with its value, after a connect. Replaces what was held.
     ConfigResync(Vec<ConfigValue>),
     /// One setting the service changed or stored, read again by its owner and key.
@@ -249,6 +250,10 @@ pub struct StoreState {
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
     /// The newest skills answer of This computer (None) and of each paired host, by host name.
     pub skills: BTreeMap<Option<String>, SkillsRead>,
+    /// The newest placement answer that is not a list: a preview, a placement, a removal, or a refusal.
+    pub placement: Option<PlacementAnswer>,
+    /// The newest answer that lists the skills MassOrca placed on This computer.
+    pub managed: Option<PlacementAnswer>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
@@ -297,6 +302,8 @@ impl Default for StoreState {
             extensions: None,
             host_listings: BTreeMap::new(),
             skills: BTreeMap::new(),
+            placement: None,
+            managed: None,
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
@@ -426,6 +433,7 @@ impl StoreState {
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),
+            StoreUpdate::SkillPlacement(answer) => self.apply_placement(answer),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
                 replace_by(&mut self.config, value, |held| {
@@ -517,6 +525,21 @@ impl StoreState {
             return;
         }
         self.host_listings.insert(read.host.clone(), read);
+    }
+
+    /// Keeps the newest placement answer of each slot: a list of placed skills, or any other placement answer.
+    fn apply_placement(&mut self, answer: PlacementAnswer) {
+        let slot = match answer.outcome {
+            PlacementOutcome::Managed(_) => &mut self.managed,
+            _ => &mut self.placement,
+        };
+        if slot
+            .as_ref()
+            .is_some_and(|held| held.request > answer.request)
+        {
+            return;
+        }
+        *slot = Some(answer);
     }
 
     /// Keeps the newest skills answer of each host, so an answer to an older request never replaces a newer one.
@@ -1338,5 +1361,26 @@ mod tests {
                 .map(|read| read.request),
             Some(3)
         );
+    }
+
+    #[test]
+    fn placement_answers_keep_the_newest_request_of_each_slot() {
+        use massorca_protocol::methods::skill_placement::SkillPlacementResult;
+
+        use crate::service::{PlacementAnswer, PlacementOutcome};
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let result = |name: &str| SkillPlacementResult {
+            name: name.to_owned(),
+            canonical_path: None,
+            agents: Vec::new(),
+        };
+        let answer =
+            |request, outcome| StoreUpdate::SkillPlacement(PlacementAnswer { request, outcome });
+        state.apply(answer(2, PlacementOutcome::Changed(result("new"))), now);
+        state.apply(answer(1, PlacementOutcome::Preview(result("old"))), now);
+        state.apply(answer(3, PlacementOutcome::Managed(Vec::new())), now);
+        assert_eq!(state.placement.as_ref().map(|held| held.request), Some(2));
+        assert_eq!(state.managed.as_ref().map(|held| held.request), Some(3));
     }
 }

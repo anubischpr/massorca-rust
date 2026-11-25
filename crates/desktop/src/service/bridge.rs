@@ -112,6 +112,11 @@ pub(crate) enum Command {
         request: u64,
         refresh: bool,
     },
+    /// Previews, places, removes or lists placed skills on This computer; the answer is a store update tagged with `request`.
+    SkillPlacement {
+        request: u64,
+        call: skills::PlacementCall,
+    },
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
@@ -845,6 +850,9 @@ impl Link {
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
                             }
+                            Some(Command::SkillPlacement { request, call }) => {
+                                skills::spawn_placement(client, request, call, &self.updates);
+                            }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
                                     client,
@@ -1203,7 +1211,7 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
-        Command::Skills { .. } | Command::HostSkills { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } | Command::SkillPlacement { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
