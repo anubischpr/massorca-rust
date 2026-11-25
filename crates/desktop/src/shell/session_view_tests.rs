@@ -496,7 +496,7 @@ fn after_a_resume_the_session_view_attaches_the_terminal_of_the_new_run(cx: &mut
         .expect("the shell waits for the answer");
     // The bridge hears the answer and hands the store the session it names.
     rig.updates
-        .send(StoreUpdate::AgentChanged(resumed))
+        .send(StoreUpdate::AgentChanged(Box::new(resumed)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -823,7 +823,7 @@ fn start_a_new_session_here_starts_the_same_agent_in_the_same_workspace(cx: &mut
         .send(Ok(started.clone()))
         .expect("the shell waits for the answer");
     rig.updates
-        .send(StoreUpdate::AgentChanged(started))
+        .send(StoreUpdate::AgentChanged(Box::new(started)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -922,7 +922,7 @@ fn a_session_in_the_vendors_default_shows_it_and_a_pick_asks_the_service(cx: &mu
         }))
         .expect("the shell waits for the answer");
     rig.updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -1014,7 +1014,7 @@ fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &m
     other.mode_source = Some(ModeSource::Chosen);
     other.pending_permission_mode = Some("plan".into());
     rig.updates
-        .send(StoreUpdate::AgentChanged(other))
+        .send(StoreUpdate::AgentChanged(Box::new(other)))
         .expect("the store listens");
     rig.shell.update(cx, |shell, _| {
         shell.session_calls.remove("s1");

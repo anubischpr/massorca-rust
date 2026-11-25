@@ -211,9 +211,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `request.invalid_params` naming the allowed ids. A resumed run keeps the kind's default model
   and effort.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
-  shell in between), with the first prompt as the kind declares. A workspace holds one live
-  session that is not `--read-only`; a second writing start fails with
-  `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
+  shell in between), with the first prompt as the kind declares. A worktree workspace holds one
+  live session that is not `--read-only`; a second writing start there fails with
+  `agent.workspace_busy`. A folder workspace takes several writing sessions (decision 0169), and each lists the
+  others that are live in `shared_folder_with`. A kind that is not installed fails with `agent.not_installed`.
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
@@ -240,8 +241,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
   session whose agent saved no conversation for its ref fails with `agent.resume_not_found`
   before any run starts (decision 0160); another
-  writing session in the workspace
-  fails with `agent.workspace_busy`.
+  writing session in the same worktree
+  fails with `agent.workspace_busy`; in a folder workspace it runs beside the others (decision 0169).
 - `agent status` shows, for an exited session that cannot resume, a line
   `resume: unavailable: REASON (CODE)`, for example
   `resume: unavailable: the agent saved no conversation for this session (agent.resume_not_found)`.
@@ -295,8 +296,7 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A writing child of a parent in
   a plain folder workspace runs in that folder, with no copy, and its `note` and
   `notes` say "This workspace has no Git, so the child works in this folder."; the
-  parent's delegation tree counts as one writer there, and any other writing start in the
-  folder still fails with `agent.workspace_busy` (decision 0161). A parent in a worktree with
+  folder takes several writers, so the child's writing start is not refused there (decisions 0161, 0169). A parent in a worktree with
   no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
