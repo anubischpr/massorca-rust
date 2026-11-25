@@ -14,6 +14,7 @@ mod home_start;
 mod host_remove;
 mod marketplace;
 mod pairing;
+mod pairing_qr;
 mod palette;
 mod path_field;
 mod project_sidebar;

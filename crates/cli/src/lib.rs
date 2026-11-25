@@ -28,6 +28,7 @@ pub mod pair;
 pub mod profile_secure;
 pub mod project;
 pub mod project_icon;
+pub mod qr;
 pub mod secret;
 pub mod secret_input;
 pub mod server_status;

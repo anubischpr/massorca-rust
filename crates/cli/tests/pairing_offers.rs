@@ -136,3 +136,29 @@ fn a_cancelled_offer_no_longer_pairs_and_all_retires_the_rest() {
         .run("server", &["--no-autostart", "pair", "cancel"])
         .code(2);
 }
+
+#[test]
+fn a_text_offer_ends_with_its_qr_code_unless_asked_not_to() {
+    let server = Sandbox::new();
+    let (_service, _port) = start_server(&server);
+    let block = '\u{2588}';
+
+    let shown = server
+        .run("server", &["--no-autostart", "pair", "offer"])
+        .success();
+    let text = String::from_utf8_lossy(&shown.get_output().stdout).into_owned();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with("mop1."),
+        "the offer stays alone on the first line"
+    );
+    let code: Vec<&&str> = lines.iter().filter(|line| line.contains(block)).collect();
+    assert!(code.len() > 10, "a QR code follows the offer: {text}");
+    let width = code[0].chars().count();
+    assert!(code.iter().all(|line| line.chars().count() == width));
+
+    let plain = server
+        .run("server", &["--no-autostart", "pair", "offer", "--no-qr"])
+        .success();
+    assert!(!String::from_utf8_lossy(&plain.get_output().stdout).contains(block));
+}

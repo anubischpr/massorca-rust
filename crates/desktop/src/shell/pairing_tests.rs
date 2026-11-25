@@ -271,6 +271,10 @@ fn retire_offer_names_the_shown_offer_and_clears_it_once_the_service_agrees(
     open_pairing(&rig, cx);
     make(&mut rig, cx, "offer-one");
     assert!(cx.debug_bounds("pairing-retire-offer").is_some());
+    assert!(
+        cx.debug_bounds("pairing-offer-qr").is_some(),
+        "the offer is drawn as a QR code too"
+    );
 
     click(cx, "pairing-retire-offer");
     let (id, reply) = next_retire(&mut rig);

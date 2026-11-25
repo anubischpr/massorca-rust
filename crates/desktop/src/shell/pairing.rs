@@ -21,7 +21,7 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
-use super::Shell;
+use super::{Shell, pairing_qr};
 use crate::model::devices::{DeviceRow, DevicesView, REVOKE_LOSS, RevokeFlow, revoke_title};
 use crate::model::navigation::Page;
 use crate::model::pairing::{
@@ -337,6 +337,13 @@ fn offer_group(frame: &PairingFrame, theme: &Theme) -> AnyElement {
         )
         .row(make.control(button));
     if let OfferState::Made(view) = &frame.state.offer {
+        if let Some(tile) = pairing_qr::tile(&view.offer) {
+            group = group.row(
+                SettingsRow::new("pairing-offer-qr", "QR code")
+                    .helper("Scan it with MassOrca on the phone. It is the same offer as the code below.")
+                    .control(tile),
+            );
+        }
         group = group.row(offer_text_row(view, frame, theme));
     }
     group.into_any_element()

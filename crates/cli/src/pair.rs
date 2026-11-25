@@ -15,6 +15,7 @@ use crate::connect::{connect, peer};
 use crate::error::CliError;
 use crate::host::records::record_lines;
 use crate::output::Output;
+use crate::qr;
 use crate::target::Target;
 use crate::time_text;
 
@@ -34,7 +35,10 @@ pub async fn offer(
         addresses: args.addresses.clone(),
     };
     let created: PairingCreated = client.call(devices::PAIRING_CREATE, &params).await?;
-    let lines = offer_lines(&created);
+    let mut lines = offer_lines(&created);
+    if !args.no_qr {
+        lines.extend(qr_lines(created.offer.expose()));
+    }
     output.success(&created, &lines);
     Ok(())
 }
@@ -53,6 +57,17 @@ fn offer_lines(created: &PairingCreated) -> Vec<String> {
             "Offer id: {id}. `massorca pair cancel {id}` retires it before it expires."
         ));
     }
+    lines
+}
+
+/// The offer as a QR code for a phone to scan, after a blank line; nothing when it is too long for a code.
+fn qr_lines(offer: &str) -> Vec<String> {
+    let Some(code) = qr::lines(offer) else {
+        return Vec::new();
+    };
+    let mut lines = vec![String::new()];
+    lines.extend(code);
+    lines.push("Scan it with MassOrca on the phone, or paste the offer.".to_owned());
     lines
 }
 

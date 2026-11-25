@@ -480,6 +480,9 @@ pub struct PairOfferArgs {
     /// emulator (10.0.2.2 reaches the computer running an Android emulator).
     #[arg(long = "address", value_name = "HOST[:PORT]", value_delimiter = ',')]
     pub addresses: Vec<String>,
+    /// Leaves out the QR code printed after the offer in text output.
+    #[arg(long)]
+    pub no_qr: bool,
 }
 
 #[derive(Debug, Args)]
