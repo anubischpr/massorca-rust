@@ -17,12 +17,14 @@ mod item_images_tests;
 mod package;
 mod review;
 mod sign_in;
+mod skills;
 #[cfg(test)]
 mod tests;
 
 use super::Shell;
 use crate::model::marketplace::{
-    AccountId, HostTarget, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
+    AccountId, HostTarget, ItemKind, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource,
+    SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
@@ -54,6 +56,8 @@ pub(super) struct UninstallConfirm {
     pub sending: bool,
     /// The person's tick for removing the CLI the package installed too; only offered when the package installed one.
     pub remove_cli: bool,
+    /// Whether Show details is open; it starts closed.
+    pub details_open: bool,
 }
 
 /// The install review on screen for one package, from the catalogue or a folder. What the service reported is shown
@@ -69,6 +73,8 @@ pub(super) struct InstallReview {
     pub review: Option<ExtensionReview>,
     /// The person's tick for running the vendor installer the review lists.
     pub run_installer: bool,
+    /// Whether Show details is open; it starts closed.
+    pub details_open: bool,
     pub sending: bool,
     pub error: Option<String>,
 }
@@ -100,6 +106,8 @@ pub(super) struct MarketplaceFrame {
     host_picker: Entity<SelectView>,
     /// The status word beside the picker, for the host it shows.
     host_status: &'static str,
+    /// The Skills section's host and what it shows for that host (SKL-01).
+    skills: skills::SkillsSection,
     shell: WeakEntity<Shell>,
 }
 
@@ -130,6 +138,7 @@ pub(super) fn frame(
         host_note: shell.picked_note(cx),
         host_picker: shell.marketplace_host_select.clone(),
         host_status: shell.picker_status(cx),
+        skills: skills::section_of(shell, cx),
         shell: weak,
     }
 }
@@ -178,6 +187,10 @@ impl Shell {
     /// Opens a Marketplace view or an item's page from anywhere in the shell.
     pub(super) fn open_marketplace(&mut self, page: MarketplacePage, cx: &mut Context<Self>) {
         self.marketplace_error = None;
+        if page == MarketplacePage::Category(ItemKind::Skill) {
+            let target = self.shown_target();
+            self.read_skills(&target, false);
+        }
         self.model.open_page(Page::Marketplace(page));
         cx.notify();
     }
@@ -320,7 +333,15 @@ impl Shell {
             error: None,
             sending: false,
             remove_cli: false,
+            details_open: false,
         });
+        cx.notify();
+    }
+
+    pub(super) fn set_uninstall_details(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.details_open = open;
+        }
         cx.notify();
     }
 

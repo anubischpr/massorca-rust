@@ -2,7 +2,7 @@
 //!
 //! The CLI never prompts. `install` without `--yes` prints the review and fails with `extension.consent_required`;
 //! `--yes` accepts the review it just printed, `--consent <FINGERPRINT>` accepts exactly the review an earlier run
-//! printed, and `--yes-run-installer` also accepts running the vendor command. `update` takes the same consent.
+//! printed, and `--yes-run-installer` also accepts running the vendor command. `update` and `rollback` take the same consent.
 
 use std::path::Path;
 
@@ -11,7 +11,8 @@ use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionInstallParams, ExtensionRemoveParams, ExtensionReview,
-    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams, SourceKind, SourceRef,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
+    SourceKind, SourceRef,
 };
 use serde_json::json;
 
@@ -20,7 +21,7 @@ use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
     UNINSTALL_CLI_WARNING, command_text, doctor_lines, installed_lines, item_lines, item_rows,
-    removed_lines, review_lines, state_text,
+    removed_lines, review_lines, run_lines, state_text,
 };
 use crate::output::Output;
 use crate::target::Target;
@@ -51,6 +52,9 @@ pub enum ExtensionCommand {
     /// Updates an installed package to its source's current version, in place. Without --yes it prints the new review
     /// and fails with extension.consent_required. Runs no vendor command; an unchanged package is already up to date.
     Update(UpdateArgs),
+    /// Rolls an extension back to the version its last update replaced. Without --yes it prints the review of that
+    /// version and fails with extension.consent_required; the built-in catalogue needs none.
+    Rollback(RollbackArgs),
     /// Enables an installed extension.
     Enable {
         /// Package id.
@@ -63,6 +67,11 @@ pub enum ExtensionCommand {
     },
     /// Removes an installed extension, its files and its data.
     Remove(RemoveArgs),
+    /// Lists the recent install, update, rollback and remove runs of an extension, oldest first.
+    Log {
+        /// Package id, such as massorca.claude.
+        id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -118,6 +127,20 @@ pub struct UpdateArgs {
     pub consent: Option<String>,
 }
 
+/// Params of `massorca extension rollback`: the package, and the accepted review of the version it restores.
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("accept").args(["yes", "consent"])))]
+pub struct RollbackArgs {
+    /// Package id, such as massorca.claude.
+    pub id: String,
+    /// Accepts the review of the version this command restores, as printed.
+    #[arg(long)]
+    pub yes: bool,
+    /// Accepts the review an earlier run printed, by its consent fingerprint. The rollback fails if anything changed.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub consent: Option<String>,
+}
+
 /// Runs one `extension` subcommand against the service `target` names.
 pub async fn execute(
     target: &Target,
@@ -160,6 +183,11 @@ pub async fn execute(
         }
         ExtensionCommand::Install(args) => install(&client, target, args, output).await?,
         ExtensionCommand::Update(args) => update(&client, args, output).await?,
+        ExtensionCommand::Rollback(args) => rollback(&client, args, output).await?,
+        ExtensionCommand::Log { id } => {
+            let log = client.extension_log(&id).await?;
+            output.success(&log, &run_lines(&log, "no runs yet"));
+        }
         ExtensionCommand::Enable { id } => set_enabled(&client, id, true, output).await?,
         ExtensionCommand::Disable { id } => set_enabled(&client, id, false, output).await?,
         ExtensionCommand::Remove(args) => remove(&client, args, output).await?,
@@ -330,6 +358,9 @@ fn agent_refusal(command: &ExtensionCommand) -> Option<CliError> {
         ExtensionCommand::Update(_) => {
             "an agent cannot update an extension; ask the person to run the command"
         }
+        ExtensionCommand::Rollback(_) => {
+            "an agent cannot roll back an extension; ask the person to run the command"
+        }
         ExtensionCommand::Remove(args) if args.uninstall_cli => {
             "an agent cannot run a vendor uninstaller; ask the person to run the command"
         }
@@ -446,6 +477,54 @@ async fn update(client: &Client, args: UpdateArgs, output: Output) -> Result<(),
         output.progress(&line);
     }
     send_update(client, &args.id, Some(review.consent), args.sha256, output).await
+}
+
+/// `massorca extension rollback`: restores the version the last update replaced. Without --yes or --consent it fails
+/// with the consent of that version's review, which the refusal carries.
+async fn rollback(client: &Client, args: RollbackArgs, output: Output) -> Result<(), CliError> {
+    if let Some(consent) = args.consent {
+        return send_rollback(client, &args.id, Some(consent), output).await;
+    }
+    let params = ExtensionRollbackParams {
+        id: args.id.clone(),
+        consent: None,
+        agent_token: agent_token(),
+    };
+    match client.extension_rollback(&params).await {
+        Ok(restored) => {
+            output.success(&restored, &installed_lines(&restored));
+            Ok(())
+        }
+        Err(error) => {
+            let refusal = CliError::from(error);
+            let consent = refusal
+                .data
+                .as_deref()
+                .and_then(|data| data["consent"].as_str().map(str::to_owned));
+            match consent {
+                Some(consent) if args.yes && refusal.code == codes::EXTENSION_CONSENT_REQUIRED => {
+                    send_rollback(client, &args.id, Some(consent), output).await
+                }
+                _ => Err(refusal),
+            }
+        }
+    }
+}
+
+async fn send_rollback(
+    client: &Client,
+    id: &str,
+    consent: Option<String>,
+    output: Output,
+) -> Result<(), CliError> {
+    let params = ExtensionRollbackParams {
+        id: id.to_owned(),
+        consent,
+        agent_token: agent_token(),
+    };
+    let restored = client.extension_rollback(&params).await?;
+    output.success(&restored, &installed_lines(&restored));
+    Ok(())
 }
 
 /// Sends the update. A package already in place is reported as up to date, whichever side noticed it first.

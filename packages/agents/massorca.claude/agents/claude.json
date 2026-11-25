@@ -20,11 +20,27 @@
   "credentials": {
     "home_env": "CLAUDE_CONFIG_DIR",
     "files": [".credentials.json", ".claude.json"],
-    "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+    "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+    "optional": [".claude.json"],
+    "sources": [
+      { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
+      { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
+    ],
+    "state": {
+      "file": ".claude.json",
+      "keep": ["oauthAccount", "theme", "mcpServers"],
+      "set": { "hasCompletedOnboarding": true },
+      "max_source_bytes": 16777216
+    }
   },
   "accounts": {
     "login": ["auth", "login"],
-    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "check": {
+      "args": ["auth", "status", "--json"],
+      "signed_in_exit": 0,
+      "identity_json": ["email", "orgName"],
+      "signed_in_json": "loggedIn"
+    },
     "logout": ["auth", "logout"],
     "strip_env": [
       "ANTHROPIC_API_KEY",
@@ -89,6 +105,24 @@
     }
   ],
   "default_permission_mode": "auto",
-  "model": { "flag": "--model" },
-  "effort": { "flag": "--effort" }
+  "model": {
+    "flag": "--model",
+    "choices": [
+      { "id": "fable", "label": "Fable" },
+      { "id": "opus", "label": "Opus" },
+      { "id": "sonnet", "label": "Sonnet", "default": true },
+      { "id": "haiku", "label": "Haiku", "efforts": [] }
+    ]
+  },
+  "effort": {
+    "flag": "--effort",
+    "levels": [
+      { "id": "low", "label": "Low" },
+      { "id": "medium", "label": "Medium" },
+      { "id": "high", "label": "High" },
+      { "id": "xhigh", "label": "Extra high" },
+      { "id": "max", "label": "Max" }
+    ],
+    "default": "high"
+  }
 }
