@@ -21,12 +21,16 @@ mod environment;
 mod keys;
 mod links;
 mod requests;
+mod services;
 
 pub use requests::{
     ANSWERED_RETENTION_DAYS, MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, PENDING_EXPIRY_DAYS,
 };
 
+pub use services::{ServiceConnection, ServiceField, StoredService};
+
 use keys::{Recorded, recorded};
+use services::is_service_scope;
 
 /// Why a vault call was refused. Messages name scopes and names only, never a value.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +69,12 @@ pub enum VaultError {
     ReservedName { name: String },
     #[error("invalid scope; use global, project:<id> or team:<id>")]
     InvalidScope,
+    #[error(
+        "invalid service; use 1 to 64 lowercase letters, digits and dashes, starting with a letter"
+    )]
+    InvalidService,
+    #[error("the service {0} must be plain text without control characters")]
+    InvalidServiceField(ServiceField),
     #[error("the value is longer than 64 KiB")]
     TooLarge,
     #[error("the reason must be plain text of at most 200 characters")]
@@ -166,7 +176,13 @@ impl Vault {
     /// A store failure.
     pub fn status(&self) -> Result<VaultStatus, VaultError> {
         let mut guard = self.lock();
-        let count = u64::try_from(self.store.list_secrets()?.len()).unwrap_or(u64::MAX);
+        let secrets = self.store.list_secrets()?;
+        let count = secrets
+            .iter()
+            .filter(|secret| !is_service_scope(&secret.scope))
+            .count();
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        let any_rows = !secrets.is_empty();
         let recorded = recorded(&self.dir);
         let protection = match recorded {
             Recorded::Protection(protection) => Some(protection),
@@ -174,7 +190,7 @@ impl Vault {
         };
         let locked = match recorded {
             // Secrets without a recorded key were sealed by a key that is gone.
-            Recorded::Nothing => count > 0,
+            Recorded::Nothing => any_rows,
             Recorded::Protection(_) | Recorded::Unreadable => self.key_in(&mut guard).is_err(),
         };
         Ok(VaultStatus {
@@ -189,7 +205,8 @@ impl Vault {
     /// # Errors
     /// A store failure.
     pub fn list(&self, scope: Option<&Scope>) -> Result<Vec<VaultEntry>, VaultError> {
-        let secrets = self.store.list_secrets()?;
+        let mut secrets = self.store.list_secrets()?;
+        secrets.retain(|secret| !is_service_scope(&secret.scope));
         let links = self.store.list_secret_links()?;
         let by_id: BTreeMap<&str, &SecretMeta> =
             secrets.iter().map(|s| (s.id.as_str(), s)).collect();

@@ -8,6 +8,7 @@ use std::sync::MutexGuard;
 
 use massorca_core_store::{SecretKeyCheck, now_ms};
 
+use super::services::{is_service_scope, service_row_aad};
 use super::{ScopedName, Vault, VaultError};
 use crate::cipher::{self, Aad};
 use crate::key::{KeyError, KeyStore, LockReason, MasterKey, Protection};
@@ -117,11 +118,15 @@ impl Vault {
         let mut unreadable = Vec::new();
         for meta in self.store.list_secrets()? {
             let opens = self.store.secret_by_id(&meta.id)?.is_some_and(|row| {
-                row.scope.parse::<Scope>().ok().is_some_and(|scope| {
-                    Aad::new(&row.id, &scope, &row.name).is_ok_and(|aad| {
-                        cipher::open(key, &aad, &row.nonce, &row.ciphertext).is_ok()
-                    })
-                })
+                let aad = if is_service_scope(&row.scope) {
+                    service_row_aad(&row)
+                } else {
+                    row.scope
+                        .parse::<Scope>()
+                        .ok()
+                        .and_then(|scope| Aad::new(&row.id, &scope, &row.name).ok())
+                };
+                aad.is_some_and(|aad| cipher::open(key, &aad, &row.nonce, &row.ciphertext).is_ok())
             });
             if !opens {
                 unreadable.push(ScopedName {
