@@ -75,6 +75,9 @@ pub struct AgentItem {
     pub id: String,
     pub detected: bool,
     pub program_path: Option<PathBuf>,
+    /// The search path the CLI was looked for on: `process` or `registry` (decision 0092). Absent without a CLI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_source: Option<String>,
     pub cli_installed_by_package: bool,
     pub cli: Option<CliSpec>,
 }
@@ -228,6 +231,7 @@ impl Extensions {
                     id: adapter.id.clone(),
                     detected: program_path.is_some(),
                     program_path,
+                    path_source: adapter.cli.is_some().then(|| self.resolver.search().source),
                     cli_installed_by_package: installed_by_package(&adapter.id),
                     cli: adapter.cli.as_ref().map(CliSpec::of),
                 }

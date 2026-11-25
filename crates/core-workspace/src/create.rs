@@ -342,7 +342,7 @@ impl Workspaces {
     }
 
     /// Registers an existing directory: the project's by default. Creates no files.
-    fn create_folder(
+    pub(crate) fn create_folder(
         &self,
         project: &ProjectRow,
         params: &WorkspaceCreateParams,

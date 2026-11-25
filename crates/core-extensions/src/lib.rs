@@ -8,6 +8,7 @@ pub mod catalogue;
 mod error;
 pub mod hooks;
 pub mod host;
+mod install_log_tail;
 pub mod item;
 pub mod layout;
 pub mod lockfile;
@@ -23,7 +24,7 @@ pub use agents::{
     CatalogueAgentKind, InstalledAgentKind, PackageAgentKind, PackageKindsCache,
     catalogue_agent_kinds, installed_agent_kinds, package_agent_kinds,
 };
-pub use error::{Error, HookError, codes};
+pub use error::{Diagnosis, Error, HookError, codes};
 pub use layout::Layout;
 pub use lockfile::Lockfile;
 pub use service::Extensions;

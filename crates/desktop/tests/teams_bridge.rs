@@ -15,7 +15,8 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    BotAddParams, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef, TeamUpdateParams,
+    BotAddParams, BotRemoveParams, BotUpdateParams, CodeSource, TeamAccess, TeamCreateParams,
+    TeamProjectAddParams, TeamRef, TeamUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -1013,6 +1014,272 @@ async fn a_team_removed_through_the_bridge_leaves_the_read_and_a_second_removal_
         .remove_team(key)
         .await
         .expect_err("a team that is gone is refused");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
+        "{refusal:?}"
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_added_through_the_bridge_is_stored_and_a_refused_one_is_not() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    handle
+        .create_team(TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: Some(false),
+        })
+        .await
+        .expect("the team is created");
+    until(&mut updates, &mut state, "the team to be read", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.name == "Ops")
+    })
+    .await;
+    let team = team_key_named(&state, "Ops");
+
+    // A code source needs Workspaces in the team, so the service refuses this project and stores nothing.
+    let refusal = handle
+        .add_team_project(TeamProjectAddParams {
+            team: team.clone(),
+            name: "Checkout".to_owned(),
+            goal: None,
+            brief: None,
+            source_project: None,
+            code_source: Some(CodeSource::ExistingRepository),
+        })
+        .await
+        .expect_err("a code source needs Workspaces");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("Workspaces")),
+        "{refusal:?}"
+    );
+
+    let project = handle
+        .add_team_project(TeamProjectAddParams {
+            team: team.clone(),
+            name: "Checkout".to_owned(),
+            goal: Some("Ship the cart".to_owned()),
+            brief: None,
+            source_project: None,
+            code_source: None,
+        })
+        .await
+        .expect("the project is added");
+    assert_eq!(project.name, "Checkout");
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be read",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    let listed = client_of(home.path())
+        .await
+        .team_project_list(&TeamRef { team })
+        .await
+        .expect("the projects are listed");
+    assert_eq!(
+        listed.projects.len(),
+        1,
+        "the refused project is not stored"
+    );
+    assert_eq!(listed.projects[0].goal, "Ship the cart");
+    stop_service(service).await;
+}
+
+/// The team and bot keys of the bot named `name`, as the store numbered them.
+fn bot_keys(state: &StoreState, name: &str) -> (String, String) {
+    let view = teams_view(state);
+    let team = view
+        .teams()
+        .iter()
+        .find(|team| team.bots.iter().any(|bot| bot.name == name))
+        .expect("the bot is listed");
+    let bot = team
+        .bots
+        .iter()
+        .find(|bot| bot.name == name)
+        .expect("the bot is listed");
+    let team_key = state
+        .team_ids
+        .key(team.id.0)
+        .expect("the team is numbered")
+        .to_owned();
+    let bot_key = state
+        .team_ids
+        .key(bot.id.0)
+        .expect("the bot is numbered")
+        .to_owned();
+    (team_key, bot_key)
+}
+
+#[tokio::test]
+async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_is_refused() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let bot = client
+        .team_bot_add(&nora(&team.id, false))
+        .await
+        .expect("the bot is added");
+    client
+        .task_create(&TaskCreateParams {
+            team: team.id.clone(),
+            title: "Review the diff".to_owned(),
+            body: None,
+            bot: Some(bot.id.clone()),
+            project: None,
+            origin: None,
+        })
+        .await
+        .expect("the task is created");
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    let (team_key, bot_key) = bot_keys(&state, "Nora");
+
+    let refusal = handle
+        .remove_bot(BotRemoveParams {
+            team: team_key.clone(),
+            bot: bot_key.clone(),
+            unassign: false,
+        })
+        .await
+        .expect_err("a bot that owns an open task is refused");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("open task")),
+        "{refusal:?}"
+    );
+
+    let renamed = handle
+        .update_bot(BotUpdateParams {
+            team: team_key,
+            bot: bot_key,
+            name: Some("Lucia".to_owned()),
+            job: None,
+            kind: None,
+            model: None,
+            effort: None,
+            lead: None,
+        })
+        .await
+        .expect("the bot is renamed");
+    assert_eq!(
+        (renamed.name.as_str(), renamed.job.as_str()),
+        ("Lucia", "Reviews")
+    );
+    until(
+        &mut updates,
+        &mut state,
+        "the new name to be read",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.bots
+                    .iter()
+                    .any(|bot| bot.name == "Lucia" && bot.role == "Reviews")
+            })
+        },
+    )
+    .await;
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_removal_is_refused() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .team_bot_add(&nora(&team.id, false))
+        .await
+        .expect("the bot is added");
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    let (team_key, bot_key) = bot_keys(&state, "Nora");
+
+    let removed = handle
+        .remove_bot(BotRemoveParams {
+            team: team_key.clone(),
+            bot: bot_key.clone(),
+            unassign: false,
+        })
+        .await
+        .expect("the bot is removed");
+    assert_eq!(removed.name, "Nora");
+    until(
+        &mut updates,
+        &mut state,
+        "the bot to leave the read",
+        |state| {
+            teams_view(state)
+                .teams()
+                .iter()
+                .all(|team| team.bots.is_empty())
+        },
+    )
+    .await;
+    let refusal = handle
+        .remove_bot(BotRemoveParams {
+            team: team_key,
+            bot: bot_key,
+            unassign: false,
+        })
+        .await
+        .expect_err("a bot that is gone is refused");
     assert!(
         matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
         "{refusal:?}"

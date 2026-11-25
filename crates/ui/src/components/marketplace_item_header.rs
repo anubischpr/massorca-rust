@@ -1,5 +1,6 @@
 //! Marketplace item header: plate and name with state, the meta line, then host and action.
 
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::badge::Badge;
 use crate::components::button::Button;
 use crate::icon::{Icon, IconName, IconSize};
@@ -79,15 +80,24 @@ fn meta_line(meta: &str, p: &Palette) -> AnyElement {
     line.into_any_element()
 }
 
-/// The 56 px plate: the logo when there is one, else the item icon at 24 px.
-fn plate(icon: IconName, logo: Option<ImageSource>, p: &Palette) -> AnyElement {
-    let content = match logo {
-        Some(logo) => div()
+/// The 56 px plate: the agent's own mark, else the logo, else the item icon at 24 px.
+fn plate(
+    icon: IconName,
+    logo: Option<ImageSource>,
+    agent: Option<AgentKind>,
+    p: &Palette,
+) -> AnyElement {
+    let content = match (agent, logo) {
+        (Some(agent), _) => div()
+            .debug_selector(|| "marketplace-header-agent".to_owned())
+            .child(AgentIcon::new(agent).size(AgentIconSize::Large))
+            .into_any_element(),
+        (None, Some(logo)) => div()
             .debug_selector(|| "marketplace-header-logo".to_owned())
             .size_full()
             .child(img(logo).size_full())
             .into_any_element(),
-        None => div()
+        (None, None) => div()
             .debug_selector(|| "marketplace-header-icon".to_owned())
             .child(
                 Icon::new(icon)
@@ -115,6 +125,7 @@ pub struct MarketplaceItemHeader {
     name: SharedString,
     icon: IconName,
     logo: Option<ImageSource>,
+    agent: Option<AgentKind>,
     state: Option<SharedString>,
     meta: Option<SharedString>,
     copy_link: Option<Button>,
@@ -141,6 +152,7 @@ impl MarketplaceItemHeader {
             name: name.into(),
             icon,
             logo: None,
+            agent: None,
             state: None,
             meta: None,
             copy_link: None,
@@ -152,6 +164,12 @@ impl MarketplaceItemHeader {
     /// The logo, drawn in the plate in place of the icon.
     pub fn logo(mut self, logo: impl Into<ImageSource>) -> Self {
         self.logo = Some(logo.into());
+        self
+    }
+
+    /// The agent's own mark, drawn in the plate before any logo or icon.
+    pub fn agent(mut self, agent: AgentKind) -> Self {
+        self.agent = Some(agent);
         self
     }
 
@@ -224,7 +242,7 @@ impl RenderOnce for MarketplaceItemHeader {
             .items_start()
             .gap(px(SPACE_4))
             .min_w_0()
-            .child(plate(self.icon, self.logo, p))
+            .child(plate(self.icon, self.logo, self.agent, p))
             .child(identity);
         let mut root = div()
             .flex()
@@ -317,6 +335,23 @@ mod tests {
             cx.debug_bounds("marketplace-header-icon").is_some(),
             "the kind icon is drawn"
         );
+    }
+
+    #[gpui::test]
+    fn an_agent_mark_replaces_the_kind_icon_in_the_plate(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| AgentHeader);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("marketplace-header-agent").is_some());
+        assert!(cx.debug_bounds("marketplace-header-icon").is_none());
+    }
+
+    struct AgentHeader;
+
+    impl gpui::Render for AgentHeader {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            MarketplaceItemHeader::new("name", "Gentle Shell", IconName::Bot)
+                .agent(AgentKind::GentleShell)
+        }
     }
 
     /// Hosts one item header, with a logo when `logo` is set.

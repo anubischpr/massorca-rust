@@ -3,17 +3,19 @@
 
 use super::{InstallReview, UninstallConfirm};
 use crate::model::marketplace::{
-    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, SignInFlow, SignInStep, offers_cli_removal,
-    review_lines, uninstall_body_for,
+    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, SignInFlow, SignInStep,
+    offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
 };
 use crate::shell::Shell;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Styled, WeakEntity, div, px,
+    AnyElement, App, ClipboardItem, InteractiveElement, IntoElement, ParentElement, Styled,
+    WeakEntity, div, px,
 };
 use massorca_ui::components::account_sign_in_dialog::{AccountSignInDialog, SignInStage};
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
-use massorca_ui::tokens::{SPACE_2, TYPE_BODY_SM};
+use massorca_ui::tokens::{SPACE_1, SPACE_2, TYPE_BODY, TYPE_BODY_SM, TYPE_CAPTION, TYPE_MONO_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 /// The dialog on screen, if any: the sign-in while an account is being added, the install review of a
@@ -43,45 +45,75 @@ pub(in crate::shell) fn dialog(
     uninstall(confirm, snapshot, weak, cx)
 }
 
-/// The install review: what the service reported, line by line, a tick for a vendor installer when the review
-/// runs one, and Install, which stays off until the review is read and the tick (if any) is set.
+/// The install review: only what the button will do (owner ruling 2026-11-24), a tick for a vendor installer when the
+/// review runs one, and the button, which stays off until the review is read and the tick (if any) is set.
 fn install_review(
     review: &InstallReview,
     snapshot: &MarketplaceSnapshot,
     weak: &WeakEntity<Shell>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let title = review_title(review, snapshot)?;
+    let name = review_name(review, snapshot)?;
     let theme = *cx.theme();
     let p = &theme.palette;
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
-    let (lines, runs_installer) = match &review.review {
-        Some(answer) => (review_lines(answer), answer.runs_installer),
-        None => (Vec::new(), false),
-    };
+    let outcome = review
+        .review
+        .as_ref()
+        .map(|answer| review_outcome(answer, &name));
+    let runs_installer = review
+        .review
+        .as_ref()
+        .is_some_and(|answer| answer.runs_installer);
     let may_install =
         review.review.is_some() && !review.sending && (!runs_installer || review.run_installer);
-    let mut body = div().flex().flex_col().gap(px(SPACE_2));
-    if review.review.is_none() && review.error.is_none() {
-        body = body.child(
+    let (title, action_label) = outcome.as_ref().map_or_else(
+        || (format!("Install {name}"), "Add to MassOrca"),
+        |outcome| (outcome.title().to_owned(), outcome.button()),
+    );
+    let sentence = |text: String| {
+        div()
+            .text_style(TYPE_BODY)
+            .text_color(p.text.primary)
+            .child(text)
+    };
+    let mut body = div().flex().flex_col().gap(px(SPACE_1));
+    body = match outcome {
+        None if review.error.is_none() => body.child(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(p.text.secondary)
                 .child("Reading what installing this package does."),
-        );
-    }
-    for line in lines {
-        body = body.child(
+        ),
+        None => body,
+        Some(ReviewOutcome::Add { body: text, .. }) => body.child(sentence(text)),
+        Some(ReviewOutcome::Install {
+            sentence: text,
+            command,
+            ..
+        }) => body.child(sentence(text)).child(
             div()
-                .text_style(TYPE_BODY_SM)
+                .text_style(TYPE_MONO_SM)
                 .text_color(p.text.primary)
-                .child(line),
-        );
+                .child(command),
+        ),
+    };
+    if let Some(answer) = &review.review {
+        let (toggle, open) = (weak.clone(), review.details_open);
+        body = body.child(details(
+            "marketplace-install-details",
+            open,
+            review_details(answer),
+            move |cx| {
+                let _ = toggle.update(cx, |shell, cx| shell.set_install_details(!open, cx));
+            },
+            cx,
+        ));
     }
     let mut dialog = Dialog::new("marketplace-install-review", title)
         .open(true)
         .child(body)
-        .action("Allow and install")
+        .action(action_label)
         .cancel_label("Cancel")
         .busy(review.sending)
         .action_disabled(!may_install)
@@ -104,19 +136,61 @@ fn install_review(
         );
     }
     if let Some(error) = &review.error {
+        // Copy details gives the whole refusal, with what was looked for and where, not only the line shown.
+        let text = error.clone();
+        dialog = dialog.child(
+            Button::new("marketplace-install-copy", "Copy details")
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                }),
+        );
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
 }
 
-/// The install review's title: the catalogue item's name, or the name the review reports for a folder package.
-fn review_title(review: &InstallReview, snapshot: &MarketplaceSnapshot) -> Option<String> {
-    let name = match (review.item, &review.review) {
+/// Show details: a ghost toggle, collapsed by default, and the technical lines under it when open.
+fn details(
+    id: &'static str,
+    open: bool,
+    lines: Vec<String>,
+    on_toggle: impl Fn(&mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let label = if open { "Hide details" } else { "Show details" };
+    let mut column = div().flex().flex_col().gap(px(SPACE_1)).child(
+        Button::new(id, label)
+            .variant(ButtonVariant::Ghost)
+            .on_click(move |_, cx| on_toggle(cx)),
+    );
+    if open {
+        let mut list = div()
+            .debug_selector(move || format!("{id}-list"))
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1));
+        for line in lines {
+            list = list.child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.secondary)
+                    .child(line),
+            );
+        }
+        column = column.child(list);
+    }
+    column.into_any_element()
+}
+
+/// The name the review says: the catalogue item's display name, or the name the review reports for a folder package.
+fn review_name(review: &InstallReview, snapshot: &MarketplaceSnapshot) -> Option<String> {
+    Some(match (review.item, &review.review) {
         (Some(item), _) => snapshot.item(item)?.name.clone(),
         (None, Some(answer)) => answer.name.clone(),
-        (None, None) => return Some("Install from a folder".to_owned()),
-    };
-    Some(format!("Install {name}"))
+        (None, None) => "from a folder".to_owned(),
+    })
 }
 
 /// The account sign-in. Each stage's press runs one step of the source's sign-in.
@@ -178,17 +252,19 @@ fn uninstall(
     let item = snapshot.item(confirm.item)?;
     let theme = *cx.theme();
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
-    let mut dialog = Dialog::new("marketplace-uninstall", format!("Uninstall {}?", item.name))
+    let outcome = remove_outcome(item, confirm.remove_cli);
+    let (toggle, open) = (weak.clone(), confirm.details_open);
+    let mut dialog = Dialog::new("marketplace-uninstall", outcome.title)
         .variant(DialogVariant::Destructive)
         .open(true)
         .busy(confirm.sending)
         .child(
             div()
-                .text_style(TYPE_BODY_SM)
-                .text_color(theme.palette.text.secondary)
-                .child(uninstall_body_for(item, confirm.remove_cli)),
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(outcome.sentence),
         )
-        .action("Uninstall")
+        .action(outcome.button)
         .cancel_label("Cancel")
         .on_action(move |_, cx| {
             let _ = ok.update(cx, |shell, cx| shell.confirm_marketplace_uninstall(cx));
@@ -222,6 +298,15 @@ fn uninstall(
                 ),
         );
     }
+    dialog = dialog.child(details(
+        "marketplace-uninstall-details",
+        open,
+        remove_details(item, confirm.remove_cli),
+        move |cx| {
+            let _ = toggle.update(cx, |shell, cx| shell.set_uninstall_details(!open, cx));
+        },
+        cx,
+    ));
     if let Some(error) = &confirm.error {
         dialog = dialog.error(error.clone());
     }

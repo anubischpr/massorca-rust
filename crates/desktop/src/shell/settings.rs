@@ -23,6 +23,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
+use super::path_field::{PickKind, path_field};
 use crate::model::app_theme::ThemeChoice;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
@@ -433,7 +434,9 @@ pub(super) fn host_word(connection: &ConnectionState) -> &'static str {
 /// The workspace folder: the field the service's value fills, with the row's reason, status and reset.
 fn folder_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyElement) {
     let mut row = row;
-    if let Some(reason) = folder_reason(frame.connection.is_connected(), frame.folder) {
+    let reason = folder_reason(frame.connection.is_connected(), frame.folder);
+    let enabled = reason.is_none();
+    if let Some(reason) = reason {
         row = row.disabled_reason(reason);
     }
     if let Some(status) = folder_status(frame.folder) {
@@ -448,14 +451,21 @@ fn folder_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyE
     // Escape puts the typed text back to the stored folder; the key reaches here from the field.
     let shell = frame.shell.clone();
     let control = div()
-        .debug_selector(|| "settings-folder".to_owned())
         .w_full()
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
             if event.keystroke.key == "escape" {
                 let _ = shell.update(cx, |shell, cx| shell.revert_folder(window, cx));
             }
         })
-        .child(frame.folder_field.clone())
+        .child(path_field(
+            "settings-folder-browse",
+            "settings-folder",
+            frame.shell.clone(),
+            frame.folder_field,
+            PickKind::Folder,
+            true,
+            enabled,
+        ))
         .into_any_element();
     (row, control)
 }

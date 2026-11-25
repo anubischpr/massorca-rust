@@ -217,7 +217,7 @@ pub fn offers_cli_removal(item: &MarketplaceItem) -> bool {
 /// What removing an extension package deletes, and what it leaves on this computer, in the service's own terms.
 fn package_uninstall_body(name: &str, extension: &ExtensionItem, remove_cli: bool) -> String {
     let effects = &extension.uninstall;
-    let mut sentences = vec![format!("{name} is removed from this computer.")];
+    let mut sentences = vec![format!("{name} is removed from MassOrca.")];
     if effects.package_files {
         sentences.push("Its package files are deleted.".to_owned());
     }

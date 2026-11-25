@@ -298,7 +298,7 @@ fn start_params_default_every_optional_field() {
     assert_eq!(
         decoded,
         AgentStartParams {
-            workspace: "main".to_owned(),
+            workspace: Some("main".to_owned()),
             kind: "fake".to_owned(),
             prompt: None,
             args: Vec::new(),
@@ -309,7 +309,58 @@ fn start_params_default_every_optional_field() {
             rows: None,
             request_id: None,
             permission_mode: None,
+            model: None,
+            effort: None,
         }
+    );
+}
+
+/// A start with no workspace (decision 0092) sends no `workspace` key, so an older peer never sees a null it would
+/// misread; a start that names one keeps the key.
+#[test]
+fn a_start_without_a_workspace_omits_the_key() {
+    let no_project = AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+    };
+    assert_wire(&no_project, &json!({ "kind": "fake", "read_only": false }));
+    let decoded: AgentStartParams =
+        serde_json::from_value(json!({ "kind": "fake" })).expect("decodes");
+    assert_eq!(decoded.workspace, None);
+}
+
+/// `model` and `effort` (decision 0092) are sent only when set, and decode from their keys.
+#[test]
+fn a_start_with_a_model_and_an_effort_carries_both_keys() {
+    let chosen = AgentStartParams {
+        workspace: Some("main".to_owned()),
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: Some("fast-model".to_owned()),
+        effort: Some("high".to_owned()),
+    };
+    assert_wire(
+        &chosen,
+        &json!({ "workspace": "main", "kind": "fake", "read_only": false, "model": "fast-model", "effort": "high" }),
     );
 }
 

@@ -2,14 +2,14 @@
 //! 0059). Parts 1 to 3 are the header; the rest follow it in the order the model gives.
 
 use super::MarketplaceFrame;
-use super::catalogue::kind_icon;
+use super::catalogue::{item_mark, kind_icon};
 use super::host_pick::host_picker_row;
 use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
-    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, advanced_rows, banner_tag,
-    connection_rows, information, information_links, problem_alert, settings_rows, state_chip,
-    uninstall_body,
+    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, account_block, advanced_rows,
+    banner_tag, connection_rows, information, information_links, problem_alert, settings_rows,
+    state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -36,6 +36,14 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 /// The height of an item's banner image; its width is the page's.
 const BANNER_IMAGE_HEIGHT: f32 = 180.0;
+
+/// Turns a button off with `reason` as its tooltip, when there is a reason.
+fn gated(button: Button, reason: Option<&str>) -> Button {
+    match reason {
+        Some(reason) => button.disabled(true).tooltip(reason.to_owned()),
+        None => button,
+    }
+}
 
 /// The page of one item, or a note when the catalogue has no item with that id.
 pub(super) fn item_page(
@@ -130,9 +138,13 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Any
     ))
     .copy_link(copy)
     .host(host_picker_row(frame, cx));
-    if let Some(logo) = item_images::logo(frame, item, cx) {
-        header = header.logo(logo);
-    }
+    header = match item_mark(item) {
+        Some(mark) => header.agent(mark),
+        None => match item_images::logo(frame, item, cx) {
+            Some(logo) => header.logo(logo),
+            None => header,
+        },
+    };
     if !item.state.is_installed() {
         header = header.action(install_action(frame, item));
     }
@@ -218,12 +230,16 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
         );
     }
     let kind = item.agent_kind.clone().unwrap_or_default();
-    let add = shell_button(
-        &frame.shell,
-        "marketplace-add-account",
-        "Add account",
-        ButtonVariant::Secondary,
-        move |shell, cx| shell.add_marketplace_account(&kind, cx),
+    let block = account_block(item);
+    let add = gated(
+        shell_button(
+            &frame.shell,
+            "marketplace-add-account",
+            "Add account",
+            ButtonVariant::Secondary,
+            move |shell, cx| shell.add_marketplace_account(&kind, cx),
+        ),
+        block.as_deref(),
     );
     let mut list = AccountConnectionList::new(SharedString::from(format!(
         "marketplace-connection-{}",
@@ -233,13 +249,14 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     .add_account(add);
     if frame.live_accounts {
         let kind = item.agent_kind.clone().unwrap_or_default();
-        list = list.import(shell_button(
+        let import = shell_button(
             &frame.shell,
             "marketplace-import-account",
             "Import",
             ButtonVariant::Ghost,
             move |shell, cx| shell.open_account_import(&kind, cx),
-        ));
+        );
+        list = list.import(gated(import, block.as_deref()));
     }
     let agent = item.agent_kind.clone().unwrap_or_default();
     let activity = AccountActivity {

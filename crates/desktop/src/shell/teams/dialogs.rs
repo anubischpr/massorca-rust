@@ -3,14 +3,17 @@
 //! with the reason, and nothing changes until the state accepts the change.
 
 use super::super::Shell;
+use super::new_project::{NewProjectDialog, new_project_view};
+use super::team_bots::bots_section;
 use crate::model::agent_kinds::{
     KindChoice, bot_kind_choices, choice_at, first_available, sample_bot_kind_choices,
 };
 use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
 use crate::model::teams::{
-    CHARACTER_CHOICES, HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamChange, TeamError,
-    TeamForm, TeamId, TeamPage, check_name, new_team_access_hint,
+    Bot, BotChange, BotForm, BotId, CHARACTER_CHOICES, MemoryId, NewBot, NewTeam, ProjectId,
+    TeamChange, TeamError, TeamForm, TeamId, TeamPage, TeamsState, check_name,
+    new_team_access_hint,
 };
 use crate::service::ServiceHandle;
 use gpui::{
@@ -18,7 +21,8 @@ use gpui::{
     prelude::*, px,
 };
 use massorca_protocol::methods::teams::{
-    BotAddParams, TeamCharacter, TeamCreateParams, TeamUpdateParams,
+    BotAddParams, BotRemoveParams, BotUpdateParams, TeamCharacter, TeamCreateParams,
+    TeamUpdateParams,
 };
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
@@ -33,6 +37,8 @@ use massorca_ui::{ActiveTheme, TextStyled};
 const NO_AGENT_KIND: &str = "No agent kind is installed on this service.";
 /// Why an Add bot form cannot be sent when every kind the service lists is unavailable on this host.
 const NO_AVAILABLE_KIND: &str = "No agent kind is available on this host.";
+/// Why an Edit bot form lists a bot's kind that the service does not offer; the form keeps it unchanged.
+const KIND_NOT_LISTED: &str = "Not installed on this service.";
 
 /// The New team form, or the Edit team form of an existing team: the same fields, with a new team's lead and
 /// host or an existing team's shape.
@@ -90,6 +96,8 @@ impl TeamFormDialog {
 #[derive(Debug)]
 pub(in crate::shell) struct AddBotDialog {
     team: TeamId,
+    /// Set on the Edit bot form: the bot it changes and the values it opened with.
+    edit: Option<BotEdit>,
     name: Entity<TextField>,
     role: Entity<TextField>,
     /// The kinds the form offers, in the order the service lists them (`agent.kinds`).
@@ -101,6 +109,28 @@ pub(in crate::shell) struct AddBotDialog {
     unavailable: Vec<UnavailableKind>,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The bot an Edit bot form changes, and the values it opened with.
+#[derive(Clone, Debug)]
+struct BotEdit {
+    bot: BotId,
+    opened: BotForm,
+}
+
+impl AddBotDialog {
+    /// The values the form holds now, as the service names them.
+    fn form(&self, cx: &App) -> BotForm {
+        BotForm {
+            name: self.name.read(cx).text().to_owned(),
+            job: self.role.read(cx).text().to_owned(),
+            kind: self
+                .kinds
+                .get(self.agent)
+                .map(|kind| kind.id.clone())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 /// A kind the Add bot form lists as unavailable on this host, and the Marketplace item of that kind.
@@ -127,6 +157,8 @@ pub(in crate::shell) enum TeamDialog {
     Team(TeamFormDialog),
     AddBot(AddBotDialog),
     EditBrief(EditBriefDialog),
+    /// The New project form of a team.
+    NewProject(NewProjectDialog),
 }
 
 /// A confirm before a Bot Teams item is deleted (X-DLG-01, destructive where it loses data).
@@ -148,10 +180,18 @@ pub(in crate::shell) enum TeamConfirm {
         team: TeamId,
         memory: MemoryId,
     },
+    /// A bot leaves its team. The service refuses it while the bot owns open tasks, and the reason stays here.
+    RemoveBot {
+        team: TeamId,
+        bot: BotId,
+        name: String,
+        /// Why the service refused the last removal, shown until the confirm closes.
+        error: Option<String>,
+    },
 }
 
 /// A field whose changes redraw the dialog, so its buttons follow what is typed. Enter submits.
-fn watched_field(
+pub(super) fn watched_field(
     label: &'static str,
     placeholder: &'static str,
     window: &mut Window,
@@ -228,23 +268,77 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_bot_form(team, None, window, cx);
+    }
+
+    /// "Edit bot" on the Edit team form: the Add bot form, filled with the bot's values.
+    pub(super) fn open_edit_bot(
+        &mut self,
+        team: TeamId,
+        bot: BotId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) = self
+            .model
+            .teams()
+            .team(team)
+            .and_then(|team| team.bot(bot))
+            .cloned()
+        else {
+            return;
+        };
+        self.open_bot_form(team, Some(current), window, cx);
+    }
+
+    /// The Add bot form, or the Edit bot form when `bot` is given.
+    fn open_bot_form(
+        &mut self,
+        team: TeamId,
+        bot: Option<Bot>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.model.teams().is_connected() {
             return;
         }
         let (name, name_events) = watched_field("Name", "Bot name", window, cx);
         let (role, role_events) =
             watched_field("Role", "What this bot is responsible for", window, cx);
+        if let Some(current) = &bot {
+            name.update(cx, |field, cx| field.set_text(&current.name, window, cx));
+            role.update(cx, |field, cx| field.set_text(&current.role, window, cx));
+        }
         // A connected service offers the kinds it lists as installed; sample data offers the four built-ins.
-        let kinds = match &self.service {
+        let mut kinds = match &self.service {
             Some(_) => bot_kind_choices(&self.store.read(cx).state().agent_kinds),
             None => sample_bot_kind_choices(),
         };
-        let agent = first_available(&kinds).unwrap_or(0);
+        // A bot kind the service does not list stays on the form as a choice nobody can pick, so saving keeps it.
+        let agent = match &bot {
+            Some(current) => match kinds.iter().position(|kind| kind.id == current.kind) {
+                Some(index) => index,
+                None => {
+                    kinds.push(KindChoice {
+                        id: current.kind.clone(),
+                        name: current.kind.clone(),
+                        unavailable: Some(KIND_NOT_LISTED),
+                    });
+                    kinds.len() - 1
+                }
+            },
+            None => first_available(&kinds).unwrap_or(0),
+        };
+        let selected = if bot.is_some() {
+            Some(agent)
+        } else {
+            first_available(&kinds)
+        };
         // A kind this host cannot run, or that is turned off, is listed disabled, with why; the form cannot choose it.
         let agent_select = cx.new(|cx| {
             let mut select = SelectView::new(kinds.iter().map(|kind| kind.name.clone()), cx)
                 .label("Agent")
-                .selected(first_available(&kinds))
+                .selected(selected)
                 .layer(OverlayLayer::Dialog);
             for (index, reason) in kinds
                 .iter()
@@ -292,8 +386,13 @@ impl Shell {
                 .disabled(true)
                 .layer(OverlayLayer::Dialog)
         });
+        let edit = bot.map(|current| BotEdit {
+            bot: current.id,
+            opened: BotForm::of(&current),
+        });
         self.team_dialog = Some(TeamDialog::AddBot(AddBotDialog {
             team,
+            edit,
             name,
             role,
             kinds,
@@ -369,6 +468,9 @@ impl Shell {
             (TeamDialog::EditBrief(dialog), Some(service)) => {
                 return self.send_edit_brief(service, dialog, cx);
             }
+            (TeamDialog::NewProject(dialog), Some(service)) => {
+                return self.send_new_project(service, dialog, cx);
+            }
             (dialog, _) => dialog,
         };
         self.team_dialog = match dialog {
@@ -393,27 +495,20 @@ impl Shell {
                     }
                 }
             }
-            TeamDialog::AddBot(mut dialog) => {
-                let result = self.model.teams_mut().add_bot(
-                    dialog.team,
-                    NewBot {
-                        name: dialog.name.read(cx).text().to_owned(),
-                        role: dialog.role.read(cx).text().to_owned(),
-                        kind: dialog
-                            .kinds
-                            .get(dialog.agent)
-                            .map(|kind| kind.id.clone())
-                            .unwrap_or_default(),
-                    },
-                );
-                match result {
-                    Ok(_) => None,
-                    Err(error) => {
-                        dialog.error = Some(error.message().into());
-                        Some(TeamDialog::AddBot(dialog))
-                    }
+            TeamDialog::NewProject(mut dialog) => match self.save_project_locally(&dialog, cx) {
+                Ok(()) => None,
+                Err(error) => {
+                    dialog.error = Some(error.message().into());
+                    Some(TeamDialog::NewProject(dialog))
                 }
-            }
+            },
+            TeamDialog::AddBot(mut dialog) => match self.save_bot_locally(&dialog, cx) {
+                Ok(()) => None,
+                Err(error) => {
+                    dialog.error = Some(error.message().into());
+                    Some(TeamDialog::AddBot(dialog))
+                }
+            },
         };
         cx.notify();
     }
@@ -534,6 +629,31 @@ impl Shell {
         .detach();
     }
 
+    /// Adds the bot of an Add bot form, or changes the bot of an Edit bot form, on sample data.
+    fn save_bot_locally(&mut self, dialog: &AddBotDialog, cx: &App) -> Result<(), TeamError> {
+        let form = dialog.form(cx);
+        match &dialog.edit {
+            None => self
+                .model
+                .teams_mut()
+                .add_bot(
+                    dialog.team,
+                    NewBot {
+                        name: form.name,
+                        role: form.job,
+                        kind: form.kind,
+                    },
+                )
+                .map(|_| ()),
+            Some(edit) => {
+                let change = BotChange::between(&edit.opened, &form)?;
+                self.model
+                    .teams_mut()
+                    .change_bot(dialog.team, edit.bot, &change)
+            }
+        }
+    }
+
     /// Sends the Add bot form, as `send_new_team` sends a team. The bot's team is the service's id for it.
     fn send_add_bot(
         &mut self,
@@ -542,6 +662,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         cx.notify();
+        if dialog.edit.is_some() {
+            return self.send_edit_bot(service, dialog, cx);
+        }
         let name = dialog.name.read(cx).text().to_owned();
         let job = dialog.role.read(cx).text().trim().to_owned();
         let kind = choice_at(&dialog.kinds, dialog.agent).map(|kind| kind.id.clone());
@@ -576,6 +699,55 @@ impl Shell {
         };
         cx.spawn(async move |this, cx| {
             let answer = service.add_bot(params).await;
+            this.update(cx, |shell, cx| {
+                let message = answer.err().map(|refusal| refusal.message().into());
+                shell.finish_team_dialog(form, message, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Sends the Edit bot form: `team.bot_update` carries only the fields it changed, and a form that changed nothing
+    /// sends nothing. A refusal reopens the form with its message.
+    fn send_edit_bot(
+        &mut self,
+        service: ServiceHandle,
+        dialog: AddBotDialog,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let Some(edit) = dialog.edit.clone() else {
+            return;
+        };
+        let team = dialog.team;
+        let values = dialog.form(cx);
+        let form = TeamDialog::AddBot(dialog);
+        let change = match BotChange::between(&edit.opened, &values) {
+            Ok(change) => change,
+            Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
+        };
+        if change.is_empty() {
+            return cx.notify();
+        }
+        let (Some(team_key), Some(bot_key)) =
+            (self.team_key(team, cx), self.service_key(edit.bot.0, cx))
+        else {
+            let missing = TeamError::Missing.message();
+            return self.finish_team_dialog(form, Some(missing.into()), cx);
+        };
+        let params = BotUpdateParams {
+            team: team_key,
+            bot: bot_key,
+            name: change.name,
+            job: change.job,
+            kind: change.kind,
+            model: None,
+            effort: None,
+            lead: None,
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.update_bot(params).await;
             this.update(cx, |shell, cx| {
                 let message = answer.err().map(|refusal| refusal.message().into());
                 shell.finish_team_dialog(form, message, cx);
@@ -648,6 +820,43 @@ impl Shell {
         .detach();
     }
 
+    /// Sends a bot removal without `unassign`: a bot that owns open tasks is refused, and the service's words for the
+    /// refusal stay on the confirm. The bot leaves the team once the service accepts.
+    fn send_remove_bot(
+        &mut self,
+        service: ServiceHandle,
+        confirm: TeamConfirm,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let TeamConfirm::RemoveBot { team, bot, .. } = &confirm else {
+            return;
+        };
+        let (team, bot) = (*team, *bot);
+        let (Some(team_key), Some(bot_key)) =
+            (self.team_key(team, cx), self.service_key(bot.0, cx))
+        else {
+            let missing = TeamError::Missing.message();
+            return self.finish_team_confirm(confirm, Some(missing.into()), cx);
+        };
+        let params = BotRemoveParams {
+            team: team_key,
+            bot: bot_key,
+            unassign: false,
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.remove_bot(params).await;
+            this.update(cx, |shell, cx| {
+                if let Err(refusal) = answer {
+                    shell.finish_team_confirm(confirm, Some(refusal.message().into()), cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Sends a team delete without `force`: a team with a running task is refused, and the service's words for the
     /// refusal stay on the team's card.
     fn send_delete_team(&mut self, service: ServiceHandle, team: TeamId, cx: &mut Context<Self>) {
@@ -697,6 +906,14 @@ impl Shell {
                 name,
                 error: Some(message.to_string()),
             },
+            TeamConfirm::RemoveBot {
+                team, bot, name, ..
+            } => TeamConfirm::RemoveBot {
+                team,
+                bot,
+                name,
+                error: Some(message.to_string()),
+            },
             other => other,
         });
         cx.notify();
@@ -704,7 +921,7 @@ impl Shell {
 
     /// Closes a form the service accepted (`message` is `None`). Otherwise the form comes back with the message,
     /// unless another form has been opened meanwhile.
-    fn finish_team_dialog(
+    pub(super) fn finish_team_dialog(
         &mut self,
         mut form: TeamDialog,
         message: Option<SharedString>,
@@ -720,6 +937,7 @@ impl Shell {
             TeamDialog::Team(dialog) => dialog.error = Some(message),
             TeamDialog::AddBot(dialog) => dialog.error = Some(message),
             TeamDialog::EditBrief(dialog) => dialog.error = Some(message),
+            TeamDialog::NewProject(dialog) => dialog.error = Some(message),
         }
         self.team_dialog = Some(form);
         cx.notify();
@@ -886,6 +1104,25 @@ impl Shell {
                     self.model.open_team_page(TeamPage::Board(team));
                 }
             }
+            (confirm @ TeamConfirm::RemoveBot { .. }, Some(service)) => {
+                self.send_remove_bot(service, confirm, cx);
+            }
+            (
+                TeamConfirm::RemoveBot {
+                    team, bot, name, ..
+                },
+                None,
+            ) => {
+                if let Err(error) = self.model.teams_mut().remove_bot(team, bot) {
+                    let confirm = TeamConfirm::RemoveBot {
+                        team,
+                        bot,
+                        name,
+                        error: None,
+                    };
+                    self.finish_team_confirm(confirm, Some(error.message().into()), cx);
+                }
+            }
             (TeamConfirm::DeleteMemory { team, memory }, _) => {
                 let _ = self.model.teams_mut().delete_memory(team, memory);
             }
@@ -897,19 +1134,25 @@ impl Shell {
 /// The team dialog on screen: the New or Edit team form, Add bot or Edit brief.
 pub(in crate::shell) fn team_dialog_view(
     dialog: &TeamDialog,
-    _hosts: &[HostChoice],
+    teams: &TeamsState,
     shell: &WeakEntity<Shell>,
     cx: &App,
 ) -> Dialog {
     match dialog {
-        TeamDialog::Team(form) => team_form_view(form, shell, cx),
+        TeamDialog::Team(form) => team_form_view(form, teams, shell, cx),
         TeamDialog::AddBot(form) => add_bot_view(form, shell, cx),
         TeamDialog::EditBrief(form) => edit_brief_view(form, shell, cx),
+        TeamDialog::NewProject(form) => new_project_view(form, shell, cx),
     }
 }
 
 /// The New team or Edit team form on screen.
-fn team_form_view(form: &TeamFormDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
+fn team_form_view(
+    form: &TeamFormDialog,
+    teams: &TeamsState,
+    shell: &WeakEntity<Shell>,
+    cx: &App,
+) -> Dialog {
     let theme = *cx.theme();
     let workspaces = {
         let shell = shell.clone();
@@ -934,7 +1177,9 @@ fn team_form_view(form: &TeamFormDialog, shell: &WeakEntity<Shell>, cx: &App) ->
         TeamFormMode::New {
             lead, host_select, ..
         } => body.child(lead.clone()).child(host_select.clone()),
-        TeamFormMode::Edit { shape, .. } => body.child(shape.clone()),
+        TeamFormMode::Edit { team, shape, .. } => body
+            .child(shape.clone())
+            .child(bots_section(*team, teams, shell, cx)),
     };
     body = body.child(
         div()
@@ -992,12 +1237,21 @@ fn add_bot_view(form: &AddBotDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dia
         );
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
-    let mut dialog = Dialog::new("add-bot", "Add bot")
+    let (id, title) = if form.edit.is_some() {
+        ("edit-bot", "Edit bot")
+    } else {
+        ("add-bot", "Add bot")
+    };
+    let mut dialog = Dialog::new(id, title)
         .open(true)
         .width(DialogWidth::Large)
         .child(body)
         .field(form.name.read(cx).focus_handle(cx))
-        .action("Add bot")
+        .action(if form.edit.is_some() {
+            "Save"
+        } else {
+            "Add bot"
+        })
         .action_disabled(!can_submit)
         .on_action(move |_, cx| {
             let _ = on_action.update(cx, |shell, cx| shell.submit_team_dialog(cx));
@@ -1055,7 +1309,9 @@ pub(in crate::shell) fn team_confirm_view(
     let theme = *cx.theme();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
     let error = match confirm {
-        TeamConfirm::DeleteProject { error, .. } => error.clone(),
+        TeamConfirm::DeleteProject { error, .. } | TeamConfirm::RemoveBot { error, .. } => {
+            error.clone()
+        }
         TeamConfirm::RemoveTeam { .. } | TeamConfirm::DeleteMemory { .. } => None,
     };
     let (dialog, body, action) = match confirm {
@@ -1070,6 +1326,12 @@ pub(in crate::shell) fn team_confirm_view(
                 .variant(DialogVariant::Destructive),
             "Its tasks are removed from the Board. This cannot be undone.",
             "Delete project",
+        ),
+        TeamConfirm::RemoveBot { name, .. } => (
+            Dialog::new("remove-bot", format!("Remove bot {name}?"))
+                .variant(DialogVariant::Destructive),
+            "The bot leaves the team. This cannot be undone.",
+            "Remove bot",
         ),
         TeamConfirm::DeleteMemory { .. } => (
             Dialog::new("delete-memory", "Delete this memory?"),
@@ -1564,5 +1826,126 @@ mod tests {
             let notice = shell.model().teams().removal_notice(TeamId(1));
             assert_eq!(notice, Some("A task is running."));
         });
+    }
+
+    /// Team t1 with one bot, Nora, who reviews and runs as Claude.
+    fn team_with_nora() -> TeamRecord {
+        use massorca_protocol::methods::teams::Bot as WireBot;
+        let mut record = team("t1", "Desarrollo");
+        record.bots.push(WireBot {
+            id: "b1".into(),
+            team_id: "t1".into(),
+            name: "Nora".into(),
+            job: "Reviews".into(),
+            kind: "claude".into(),
+            model: None,
+            effort: None,
+            lead: true,
+            created_at_ms: 1,
+        });
+        record
+    }
+
+    /// The desktop id of the first bot of team 1, once the team is read.
+    fn first_bot(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> BotId {
+        shell
+            .read_with(cx, |shell, _| {
+                shell
+                    .model()
+                    .teams()
+                    .team(TeamId(1))
+                    .and_then(|team| team.bots.first())
+                    .map(|bot| bot.id)
+            })
+            .expect("the team has its bot")
+    }
+
+    #[gpui::test]
+    fn a_bot_saved_from_the_edit_form_sends_only_the_field_that_changed(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_nora()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        let bot = first_bot(&rig.shell, cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_edit_bot(TeamId(1), bot, window, cx);
+        });
+        cx.run_until_parked();
+        let name = rig
+            .shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) if form.edit.is_some() => form.name.clone(),
+                other => panic!("the Edit bot form should open, found {other:?}"),
+            });
+        draw(cx);
+        name.update_in(cx, |field, window, cx| field.set_text("Lucia", window, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!((params.team.as_str(), params.bot.as_str()), ("t1", "b1"));
+        assert_eq!(
+            (params.name.as_deref(), params.job, params.kind),
+            (Some("Lucia"), None, None)
+        );
+    }
+
+    #[gpui::test]
+    fn removing_a_bot_sends_it_without_unassign_and_keeps_the_refusal_on_its_confirm(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_nora()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        let bot = first_bot(&rig.shell, cx);
+        rig.shell.update(cx, |shell, cx| {
+            let confirm = TeamConfirm::RemoveBot {
+                team: TeamId(1),
+                bot,
+                name: "Nora".into(),
+                error: None,
+            };
+            shell.open_team_confirm(confirm, cx);
+        });
+        rig.shell
+            .update(cx, |shell, cx| shell.confirm_team_delete(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::RemoveBot { params, reply })) = rig.script.next()
+        else {
+            panic!("the removal goes to the service");
+        };
+        assert_eq!(
+            (params.team.as_str(), params.bot.as_str(), params.unassign),
+            ("t1", "b1", false)
+        );
+        let _ = reply.send(Err(Refusal::Failed {
+            code: "bot.has_tasks".into(),
+            message: "bot Nora owns 1 open task(s); unassign them to remove it".into(),
+        }));
+        cx.run_until_parked();
+        rig.shell
+            .read_with(cx, |shell, _| match &shell.team_confirm {
+                Some(TeamConfirm::RemoveBot { error, .. }) => assert_eq!(
+                    error.as_deref(),
+                    Some("bot Nora owns 1 open task(s); unassign them to remove it")
+                ),
+                other => panic!("the confirm should stay open with the refusal, found {other:?}"),
+            });
     }
 }
