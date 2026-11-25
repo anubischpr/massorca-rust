@@ -9,6 +9,7 @@ mod bridge;
 mod connection;
 mod extensions;
 mod git;
+mod hosted_services;
 mod hosts;
 mod launch;
 mod quit;
