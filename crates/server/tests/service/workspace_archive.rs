@@ -61,6 +61,7 @@ async fn create(client: &Client, project: &str, name: &str) -> Workspace {
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
             },
         )
         .await
