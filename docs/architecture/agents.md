@@ -147,6 +147,17 @@ directory that does not exist has no kinds.
   resumed run's output that means the CLI found none; both need `resume` (decision 0160).
 - `strip_inherited_env`: variable names, each once, that no run of the kind and none of its
   account commands may inherit from the service (decision 0160).
+- `instructions`: optional, `{ "args": [...] }` with `{text}` exactly once and no other
+  placeholder (decision 0161). `supported_when: { args, contains }` declares a support probe:
+  the kind's program run with `args`, without an account home and with the names an account
+  command strips removed, for at most 5 s; the channel is used only when it exits 0 and its
+  output contains `contains`. The result is kept per program path and modified time, so the
+  probe runs once per installed CLI in a service. A run whose CLI fails the probe starts without
+  the text, and its session's `notes` say so. A run gets MassOrca's delegation instructions through these
+  arguments, after the hook arguments and before the session ref, the caller's arguments and
+  the prompt, on a first run and on a resume, while `agents.delegation_depth` leaves room for
+  a child below its session. The built-in `claude` declares `["--append-system-prompt",
+  "{text}"]` with the probe `--help` containing `--append-system-prompt`; the other built-in kinds declare none and get no text.
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
@@ -196,6 +207,8 @@ directory that does not exist has no kinds.
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
+| `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
+| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 
 ## Wire
 
@@ -311,7 +324,10 @@ home variable when the profile has a home for it (0056), minus the kind's
 project (0071), then the caller's `env`, then the run's own identity,
 `MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN` and `MASSORCA_AGENT_KIND`, which
 the caller cannot override. The kind's `strip_inherited_env` names are stripped
-from every run, unless the launch sets them (decision 0160).
+from every run, unless the launch sets them (decision 0160). `PATH` starts with the
+folder of `MASSORCA_BIN`, in front of the caller's or the vault's `PATH` when set,
+else the inherited one, and is not added again when already first, so the agent can
+run `massorca` (decision 0161).
 
 The service builds every terminal's environment without the run identity it may
 have inherited (when the service was started from inside an agent run), so
@@ -501,6 +517,11 @@ new run and drops the archive of the run before. The reference and deviations ar
 - The result of `agent.delegate` is the child's `AgentSession` with an optional `note` beside its fields
   (`AgentDelegated`), so a reader that expects a session reads it unchanged. A writing child's note says that the
   parent's uncommitted changes were not carried over.
+- Folder children (decision 0161): a writing child of a plain folder workspace runs in the parent's folder, with no
+  copy, and its `note` and `notes` say "This workspace has no Git, so the child works in this folder." The
+  sessions under the same delegation root count as one writer there: `agent.workspace_busy` does not refuse a writing
+  start or resume of one of them because another writes in the folder, while any other writing start is refused as
+  before. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
 - The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
   workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
   `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
