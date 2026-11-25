@@ -36,6 +36,7 @@ mod reconnect;
 mod registries;
 mod secrets;
 mod secrets_hardening;
+mod skill_placement;
 mod skills;
 mod tasks;
 mod teams;
