@@ -184,6 +184,33 @@ fn the_start_page_places_its_host_project_and_branch_in_one_card(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn the_chosen_agent_stays_chosen_when_the_installed_kinds_are_listed_again(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    let (offered, chosen) = composer.read_with(cx, |composer, cx| {
+        let state = composer.picker().read(cx).state();
+        (state.agents().len(), state.choice().model.to_string())
+    });
+    assert_eq!(offered, 2);
+    assert_eq!(
+        chosen, "claude",
+        "the chosen agent is kept across the refresh"
+    );
+}
+
+#[gpui::test]
 fn a_workspace_opens_its_start_page_and_the_page_is_drawn(cx: &mut TestAppContext) {
     let (projects, workspaces) = two_projects();
     let (rig, cx) = rig(cx, projects, workspaces);

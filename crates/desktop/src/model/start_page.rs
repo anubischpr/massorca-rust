@@ -134,6 +134,7 @@ pub fn start_params(
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
         permission_mode,
+        // The chosen model and effort stay in the picker until agent.start takes them (PR #288).
     }
 }
 
