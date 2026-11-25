@@ -315,7 +315,7 @@ fn start_params_default_every_optional_field() {
     );
 }
 
-/// A start with no workspace (decision 0092) sends no `workspace` key, so an older peer never sees a null it would
+/// A start with no workspace (decision 0094) sends no `workspace` key, so an older peer never sees a null it would
 /// misread; a start that names one keeps the key.
 #[test]
 fn a_start_without_a_workspace_omits_the_key() {
@@ -340,7 +340,7 @@ fn a_start_without_a_workspace_omits_the_key() {
     assert_eq!(decoded.workspace, None);
 }
 
-/// `model` and `effort` (decision 0092) are sent only when set, and decode from their keys.
+/// `model` and `effort` (decision 0094) are sent only when set, and decode from their keys.
 #[test]
 fn a_start_with_a_model_and_an_effort_carries_both_keys() {
     let chosen = AgentStartParams {

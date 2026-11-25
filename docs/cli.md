@@ -195,7 +195,7 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
   never detected, and never started. `--json` prints the `agent.kinds` result, where
   `installed` is deprecated and equals `detected`.
-- `agent start` without `--workspace` starts a session with no project (decision 0092). It
+- `agent start` without `--workspace` starts a session with no project (decision 0094). It
   runs in its own folder, named after the session, inside the conversations folder
   (`conversations.folder`, default `~/MassOrca/Conversations`, made on first use). The session
   has no worktree and no branch, and `project list` does not show it. A start that fails

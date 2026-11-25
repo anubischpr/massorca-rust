@@ -140,7 +140,7 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
-- `model` and `effort` (decision 0092): optional, each `{ "flag": "--model" }`. The flag starts
+- `model` and `effort` (decision 0094): optional, each `{ "flag": "--model" }`. The flag starts
   with `-` and holds no spaces, `=` or control characters. A start's `model` or `effort` is
   passed as the flag and its value, after the mode's `args` and before the caller's `args`.
   A kind without the flag refuses the option with `agent.option_unsupported`, naming the kind.
@@ -252,7 +252,7 @@ the run gets the vendor's default and the bypass stays pending; else in the last
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
 
-## No project (decision 0092)
+## No project (decision 0094)
 
 A conversation without a project starts with `agent.start` and no `workspace`. Its folder is
 `<conversations folder>/<session id>`, where the conversations folder is the setting
@@ -261,7 +261,7 @@ when it is not an absolute path). Each session gets a folder of its own because 
 keeps its history per folder, so two sessions must never share one.
 
 A folder workspace needs a project, so the conversations folder is registered under a hidden
-project (`projects.conversations = 1`, migration 0092 in `core-store`). `project list` and every
+project (`projects.conversations = 1`, migration 0094 in `core-store`). `project list` and every
 other project listing leave it out, so a conversation is never a project. The workspace has no
 worktree and no branch. A conversation's folder is an ordinary folder workspace, so stop,
 resume, list and the rest of the session commands work as for any session.

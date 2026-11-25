@@ -376,7 +376,7 @@ fn an_explicit_release_of_a_retained_session_clears_the_retain_and_releases_it()
     );
 }
 
-/// Declares kind `tuned`: the fake agent, declaring the flags a model and an effort pass to (decision 0092).
+/// Declares kind `tuned`: the fake agent, declaring the flags a model and an effort pass to (decision 0094).
 fn declare_tuned(sandbox: &Sandbox) {
     let kind = json!({
         "id": "tuned",

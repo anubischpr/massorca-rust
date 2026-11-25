@@ -347,7 +347,7 @@ pub struct AgentKinds {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStartParams {
     /// Workspace id, name or path. Absent starts a session with no project (capability `agent-no-project/1`, decision
-    /// 0092): it runs in the conversations folder, in a folder of its own.
+    /// 0094): it runs in the conversations folder, in a folder of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     pub kind: String,
@@ -376,11 +376,11 @@ pub struct AgentStartParams {
     /// An id the kind does not declare is refused with `agent.mode_unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// The model the kind's `model` flag takes (capability `agent-options/1`, decision 0092). A kind that declares no
+    /// The model the kind's `model` flag takes (capability `agent-options/1`, decision 0094). A kind that declares no
     /// model flag refuses it with `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// The reasoning effort the kind's `effort` flag takes (capability `agent-options/1`, decision 0092). A kind that
+    /// The reasoning effort the kind's `effort` flag takes (capability `agent-options/1`, decision 0094). A kind that
     /// declares no effort flag refuses it with `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

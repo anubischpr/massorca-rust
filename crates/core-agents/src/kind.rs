@@ -52,16 +52,16 @@ pub struct KindDecl {
     /// The mode a run gets when its caller names none. Required with modes, never a `bypass` mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
-    /// The flag a start's `model` is passed with (decision 0092), as `{"flag": "--model"}`; the value follows it. Absent
+    /// The flag a start's `model` is passed with (decision 0094), as `{"flag": "--model"}`; the value follows it. Absent
     /// means the kind takes no model, and a start that names one is refused with `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<OptionFlagDecl>,
-    /// The flag a start's `effort` is passed with (decision 0092), as `model`.
+    /// The flag a start's `effort` is passed with (decision 0094), as `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<OptionFlagDecl>,
 }
 
-/// The launch flag of a session option such as `model` or `effort` (decision 0092). The value follows the flag as the
+/// The launch flag of a session option such as `model` or `effort` (decision 0094). The value follows the flag as the
 /// next argument, after the mode's arguments and before the caller's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -401,7 +401,7 @@ impl KindDecl {
         problems
     }
 
-    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags (decision 0092).
+    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags (decision 0094).
     /// An option the kind declares no flag for is `agent.option_unsupported`, naming the kind; a value that could be read
     /// as a flag, or is empty, too long or has a space, is `request.invalid_params`.
     pub(crate) fn option_args(

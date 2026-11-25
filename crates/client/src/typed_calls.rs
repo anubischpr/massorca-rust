@@ -37,7 +37,7 @@ use crate::error::ClientError;
 use crate::subscription::Subscription;
 use crate::terminal_attach::TerminalAttachment;
 
-/// Refuses a request the service cannot read: it offers no `capability`, so the request is never sent (decision 0092). A
+/// Refuses a request the service cannot read: it offers no `capability`, so the request is never sent (decision 0094). A
 /// peer that predates the capability would misread the request, so the client does not send it at all.
 fn require_offered(offered: bool, capability: &str, what: &str) -> Result<(), ClientError> {
     if offered {
@@ -256,7 +256,7 @@ impl Client {
     }
 
     /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
-    /// 0092). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
+    /// 0094). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
     /// `agent-options/1`; a service that offers neither is refused before anything is sent.
     pub async fn agent_start(
         &self,

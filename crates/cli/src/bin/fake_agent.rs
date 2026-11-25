@@ -114,7 +114,7 @@ struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
     mode: Option<String>,
-    /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0092).
+    /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
     model: Option<String>,
     effort: Option<String>,
     prompt: Option<String>,
