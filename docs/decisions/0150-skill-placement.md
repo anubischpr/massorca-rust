@@ -26,11 +26,10 @@ through the extension install, so placement has its own methods.
   this computer (the discovery roots report that) and shows the folders before anything is written.
 - **Alias first (pv96).** Each agent folder is an alias to the canonical copy:
   - on macOS and Linux, a relative directory symlink;
-  - on Windows, a directory junction with an absolute target. The standard library cannot make a junction and the
-    workspace forbids `unsafe`, so the junction is made with `mklink /J` through `massorca_process`, with an argument
-    vector and no shell string. Removal of a junction uses `RemoveDirectory`, which deletes the link and not its target.
-    The per-operation process spawn is the cost of this choice, and it is recorded here for the EDR review that the
-    Windows rules call for.
+  - on Windows, a directory junction with an absolute target, made and read with the `junction` crate 2.1.0
+    (Windows-only, in `massorca-core-extensions`). The standard library cannot make a junction; the crate's API is safe,
+    so the workspace's ban on `unsafe` holds and no process is spawned. Removal uses `RemoveDirectory`, which deletes the
+    junction and not its target.
 - **Verified copy as the fallback.** A folder becomes an independent copy only when its alias is refused or unavailable.
   The copy must match the source's digest before it counts as placed; otherwise it is removed and reported
   (`skipped_copy_failed`).
@@ -61,8 +60,8 @@ through the extension install, so placement has its own methods.
   review and consent for packages, not for a link or copy into other agents' folders, and pv96 keeps the two apart.
 - Accept a free path as the source. Rejected: an administrator's client could then link or copy any folder into agent
   folders.
-- Create the Windows junction through an `unsafe` FFI call or a new crate. Rejected: the workspace denies `unsafe`, and no
-  junction crate is in the lock.
+- Create the Windows junction by spawning `mklink /J`. Rejected: it runs `cmd.exe` with paths as free text, so a path
+  holding `&`, `^` or `%` becomes command injection.
 
 ## Consequences
 

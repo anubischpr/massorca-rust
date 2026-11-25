@@ -1,6 +1,6 @@
 //! Links from an agent folder to the canonical copy, as pv96 places them: a relative symlink on Unix, a junction with an
-//! absolute target on Windows. The standard library cannot make a junction and the workspace forbids `unsafe`, so the
-//! junction comes from `mklink /J` through the process helper. Removal deletes the link itself, never what it points to.
+//! absolute target on Windows. The junction comes from the `junction` crate, whose API is safe; no process is spawned.
+//! Removal deletes the link itself, never what it points to.
 
 use std::fs;
 use std::io;
@@ -17,18 +17,7 @@ pub(super) fn create_link(canonical: &Path, link: &Path) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let status = massorca_process::command("cmd")
-            .args(["/D", "/C", "mklink", "/J"])
-            .arg(link)
-            .arg(canonical)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other("mklink /J was refused"))
-        }
+        junction::create(canonical, link)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -39,17 +28,20 @@ pub(super) fn create_link(canonical: &Path, link: &Path) -> io::Result<()> {
 
 /// Whether `link` is a link to `canonical`, by the target the link itself records.
 pub(super) fn link_points_to(link: &Path, canonical: &Path) -> bool {
-    let Ok(target) = fs::read_link(link) else {
-        return false;
-    };
     #[cfg(unix)]
     {
         let parent = link.parent().unwrap_or(Path::new("."));
-        target == relative_target(parent, canonical)
+        fs::read_link(link).is_ok_and(|target| target == relative_target(parent, canonical))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        normal_windows(&target) == normal_windows(canonical)
+        junction::get_target(link)
+            .is_ok_and(|target| normal_windows(&target) == normal_windows(canonical))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (link, canonical);
+        false
     }
 }
 
@@ -86,8 +78,8 @@ fn relative_target(from: &Path, to: &Path) -> PathBuf {
     target
 }
 
-/// A Windows path without its verbatim prefix, folded to lower case, so a junction's target compares equal to ours.
-#[cfg(not(unix))]
+/// A Windows path without its verbatim or NT prefix, folded to lower case, so a junction's target compares equal to ours.
+#[cfg(windows)]
 fn normal_windows(path: &Path) -> String {
     let text = path.to_string_lossy().to_ascii_lowercase();
     text.trim_start_matches(r"\\?\")
