@@ -14,6 +14,7 @@ mod package_problem;
 mod sample;
 mod service_accounts;
 mod service_source;
+mod skills;
 mod source;
 mod types;
 
@@ -39,6 +40,7 @@ pub use package_problem::{
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
+pub use skills::{RootRow, SkillRow, root_rows, search_skills, skill_count_line, skill_rows};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
     AccountId, AccountState, AgentAccount, DEFAULT_AGENT_KEY, Host, HostId, HostState, ItemKind,
