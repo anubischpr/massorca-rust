@@ -93,19 +93,19 @@ impl HostPrograms {
         (env, source)
     }
 
-    /// The allowlisted variables present in the service environment.
-    fn passed_env(&self) -> Vec<(&'static str, OsString)> {
+    /// The allowlisted variables of the service environment. `PATH` is the search path the program was resolved on, so
+    /// a shim finds what it calls and no relative entry reaches the command.
+    fn passed_env(&self, search: &SearchEnv) -> Vec<(&'static str, OsString)> {
         PASSED_ENV
             .iter()
             .filter_map(|name| {
-                let value = match &self.service_env {
-                    Some(env) => env.get(*name).cloned(),
-                    // The command gets the search path its program was resolved on, so a shim finds what it calls.
-                    None if *name == "PATH" => self
-                        .env
-                        .as_ref()
-                        .map_or_else(|| vendor_search_env().0.path, |env| env.path.clone()),
-                    None => std::env::var_os(name),
+                let value = if *name == "PATH" {
+                    search.path.clone()
+                } else {
+                    match &self.service_env {
+                        Some(env) => env.get(*name).cloned(),
+                        None => std::env::var_os(name),
+                    }
                 };
                 value.map(|value| (*name, value))
             })
@@ -177,7 +177,9 @@ impl HostPrograms {
                 .line(&format!("could not start: {error}"));
             error
         };
-        let resolved = resolve(program, &self.search_env()).ok_or_else(|| {
+        // One search path for both steps: the program is resolved on it and the command gets it as its PATH.
+        let search = self.search_env();
+        let resolved = resolve(program, &search).ok_or_else(|| {
             fail(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("`{program}` was not found on PATH"),
@@ -191,7 +193,7 @@ impl HostPrograms {
             .args(args)
             .current_dir(work.path())
             .env_clear()
-            .envs(self.passed_env())
+            .envs(self.passed_env(&search))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -994,5 +996,53 @@ mod tests {
             text.contains(&dir.path().to_string_lossy().into_owned()),
             "the command got the resolved search path: {text}"
         );
+    }
+
+    /// Only the absolute entries of the search path reach the command, and they are the ones its program was resolved
+    /// on: the relative `.` and `bin` do not resolve and do not reach the child's PATH.
+    #[test]
+    fn a_vendor_command_gets_only_the_absolute_search_path_it_resolved_on() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        #[cfg(windows)]
+        fs::write(
+            dir.path().join("printpath.cmd"),
+            "@echo off\r\necho PATH=%PATH%\r\n",
+        )
+        .expect("a program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.path().join("printpath");
+            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+        let search = std::env::join_paths([
+            PathBuf::from("."),
+            PathBuf::from("bin"),
+            dir.path().to_path_buf(),
+        ])
+        .expect("a search path");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(search),
+            pathext: if cfg!(windows) {
+                Some(".COM;.EXE;.BAT;.CMD".to_owned())
+            } else {
+                None
+            },
+        });
+
+        let exit = host
+            .run(&strings(&["printpath"]), &log, LONG)
+            .expect("the program runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        let path = text
+            .lines()
+            .find_map(|line| line.strip_prefix("PATH="))
+            .expect("the command printed its PATH");
+        let entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+        assert_eq!(entries, vec![dir.path().to_path_buf()], "{text}");
     }
 }
