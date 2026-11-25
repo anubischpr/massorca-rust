@@ -265,6 +265,8 @@ pub struct Shell {
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
+    focus_started_terminal: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -559,6 +561,7 @@ impl Shell {
             session_grid: None,
             stop_prompt: None,
             terminal_notice: None,
+            focus_started_terminal: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
@@ -725,6 +728,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -1072,5 +1076,21 @@ impl Render for Shell {
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
             .when_some(close_dialog, |el, dialog| el.child(dialog))
+    }
+}
+
+impl Shell {
+    /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
+    /// composer can never start a second session.
+    fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.focus_started_terminal.as_deref() else {
+            return;
+        };
+        let Some(view) = self.terminal_views.get(terminal) else {
+            return;
+        };
+        let focus = view.surface.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.focus_started_terminal = None;
     }
 }
