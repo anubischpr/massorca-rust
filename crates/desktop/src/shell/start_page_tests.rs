@@ -549,7 +549,8 @@ fn hover(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
-/// highlighted row with Enter.
+/// highlighted row with Enter. Enter keeps the popover open, so Escape closes it: the start page is read with the
+/// popover gone, as it was before a pick closed it on its own.
 fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     click(cx, "model-picker-trigger");
     for _ in 0..8 {
@@ -557,6 +558,7 @@ fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     }
     cx.simulate_input(agent);
     cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     draw(cx);
 }
