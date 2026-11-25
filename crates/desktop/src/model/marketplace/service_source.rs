@@ -10,7 +10,8 @@ use super::service_accounts::ServiceAccounts;
 
 use super::HostTarget;
 use super::extension_items::{
-    ExtensionIds, extension_items, provides_agent, state_of as package_state, update_version,
+    ExtensionIds, banner_prompts, extension_items, permissions_text, provides_agent, source_of,
+    state_of as package_state, update_version,
 };
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
@@ -89,6 +90,11 @@ fn with_package(
         .find(|entry| provides_agent(entry, kind));
     if let Some(entry) = package {
         agent.state = package_state(entry.state, update_version(entry, reviews));
+        // The kind carries only its name; what the page shows about the package comes from the package.
+        agent.examples = banner_prompts(entry);
+        agent.permissions = permissions_text(&entry.permissions);
+        agent.source_url = source_of(entry);
+        agent.has_settings = !entry.settings.is_empty();
         agent.extension = Some(Box::new(entry.clone()));
     }
     agent

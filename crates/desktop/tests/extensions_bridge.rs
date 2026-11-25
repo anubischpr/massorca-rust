@@ -311,3 +311,48 @@ async fn a_read_older_than_the_held_one_never_replaces_it() {
     assert_eq!(state.extensions.as_ref(), Some(&held));
     stop_service(service).await;
 }
+
+#[tokio::test]
+async fn a_not_installed_built_in_agent_shows_its_example_prompts_and_colours() {
+    use massorca_desktop::model::marketplace::{MarketplaceSource, ServiceMarketplace};
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the kinds and packages",
+        |state| state.extensions.is_some() && !state.agent_kinds.is_empty(),
+    )
+    .await;
+
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let installed = read.installed.as_ref().expect("the installed list");
+    let catalogue = read.catalogue.as_ref().expect("the catalogue is listed");
+    let mut source = ServiceMarketplace::default();
+    source.follow_agent_kinds(&state.agent_kinds);
+    source.follow_extensions(installed, catalogue);
+
+    let snapshot = source.snapshot();
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some("antigravity"))
+        .expect("Antigravity is listed");
+    assert!(!item.state.is_installed(), "a fresh profile has no install");
+    assert_eq!(
+        item.examples.len(),
+        3,
+        "its three example prompts reach the page"
+    );
+    let package = item.extension.as_deref().expect("it carries its package");
+    let banner = package
+        .listing
+        .banner
+        .as_ref()
+        .expect("the service sends its banner");
+    assert_eq!(banner.colors.len(), 2, "its colours reach the page");
+    stop_service(service).await;
+}

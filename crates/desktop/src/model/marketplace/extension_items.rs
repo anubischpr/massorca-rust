@@ -149,7 +149,7 @@ pub(super) fn update_version(entry: &ExtensionItem, reviews: &[ExtensionReview])
 }
 
 /// The permissions as words, one per permission, or None when the package asks for none.
-fn permissions_text(permissions: &[Permission]) -> Option<String> {
+pub(super) fn permissions_text(permissions: &[Permission]) -> Option<String> {
     if permissions.is_empty() {
         return None;
     }
@@ -201,7 +201,7 @@ pub fn risk_word(level: RiskLevel) -> &'static str {
 }
 
 /// The banner's prompts: the caption of each mention example, which starts with the item's tag, such as "@claude".
-fn banner_prompts(entry: &ExtensionItem) -> Vec<String> {
+pub(super) fn banner_prompts(entry: &ExtensionItem) -> Vec<String> {
     entry
         .listing
         .banner
@@ -222,7 +222,7 @@ fn agent_kind_of(entry: &ExtensionItem) -> Option<String> {
 }
 
 /// Where the item comes from: an agent's vendor install page, else the developer's page; empty when neither is listed.
-fn source_of(entry: &ExtensionItem) -> String {
+pub(super) fn source_of(entry: &ExtensionItem) -> String {
     entry
         .agents
         .iter()
