@@ -191,6 +191,7 @@ impl Render for ModelPicker {
         };
         let chip = div()
             .id("model-picker-trigger")
+            .debug_selector(|| "model-picker-trigger".to_owned())
             .role(Role::Button)
             .aria_label(aria)
             .aria_expanded(open)

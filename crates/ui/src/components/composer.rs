@@ -36,7 +36,7 @@ const KEY_CONTEXT: &str = "Composer";
 const PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 const HINT_DURATION: Duration = Duration::from_secs(3);
 
-/// Builds the control shown first in the bottom row, on each render.
+/// Builds the control shown after the access chip in the bottom row, on each render.
 pub type LeadingControl = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// Binds the composer's keys and those of the parts it holds; apps call this once at startup.
@@ -127,7 +127,7 @@ pub struct Composer {
     enter_inserts_newline: bool,
     /// Send works with a blank draft (the start page creates a workspace with no prompt).
     sends_empty: bool,
-    /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
+    /// A control shown after the access chip (the start page's Chat / Terminal switch).
     leading: Option<LeadingControl>,
     /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
     send_unavailable: Option<SharedString>,
@@ -451,7 +451,9 @@ mod tests {
     use super::*;
     use crate::components::agent_icon::AgentKind;
     use crate::components::model_picker::{AgentAvailability, AgentOption, ModelList, ModelOption};
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{
+        InteractiveElement, IntoElement, ParentElement, TestAppContext, VisualTestContext, div,
+    };
     use std::{cell::RefCell, rc::Rc};
 
     fn picker_state() -> PickerState {
@@ -803,5 +805,40 @@ mod tests {
         composer.update(cx, |composer, cx| composer.set_send_unavailable(None, cx));
         cx.simulate_keystrokes("enter");
         assert_eq!(*events.borrow(), vec![ComposerEvent::Send("hi".into())]);
+    }
+
+    #[gpui::test]
+    fn the_bottom_row_reads_attach_access_leading_then_the_model_chip_and_send(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (_composer, cx) = cx.add_window_view(|_, cx| {
+            Composer::new(picker_state(), access(), cx).leading_control(|_, _| {
+                div()
+                    .debug_selector(|| "composer-leading".to_owned())
+                    .child("Chat")
+                    .into_any_element()
+            })
+        });
+        cx.run_until_parked();
+        let order = [
+            "composer-attach",
+            "composer-access",
+            "composer-leading",
+            "model-picker-trigger",
+            "composer-primary",
+        ];
+        let lefts: Vec<_> = order
+            .iter()
+            .map(|name| {
+                cx.debug_bounds(name)
+                    .unwrap_or_else(|| panic!("{name} is drawn"))
+                    .left()
+            })
+            .collect();
+        assert!(
+            lefts.windows(2).all(|pair| pair[0] < pair[1]),
+            "left to right: {order:?}, drawn at {lefts:?}"
+        );
     }
 }

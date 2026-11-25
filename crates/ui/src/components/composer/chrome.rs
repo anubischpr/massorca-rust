@@ -57,7 +57,8 @@ impl Composer {
         self
     }
 
-    /// A control shown first in the bottom row, before attach; `build` runs on each render.
+    /// A control shown in the bottom row after the access chip, before the flexible gap; `build`
+    /// runs on each render.
     pub fn leading_control(
         mut self,
         build: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
@@ -560,7 +561,11 @@ impl Render for Composer {
                 .on_click(move |window, cx| {
                     attach_entity.update(cx, |this, cx| this.open_attach_menu(window, cx));
                 });
-            self.attach_trigger.track(div().child(button))
+            self.attach_trigger.track(
+                div()
+                    .debug_selector(|| "composer-attach".to_owned())
+                    .child(button),
+            )
         });
         let leading = self.leading.as_ref().map(|build| build(window, cx));
         // No modes means the host declares none: no chip rather than an empty menu.
@@ -570,9 +575,9 @@ impl Render for Composer {
             .items_center()
             .gap(px(SPACE_2))
             .h(px(SIZE_CONTROL_DEFAULT))
-            .when_some(leading, |row, leading| row.child(leading))
             .when_some(attach, |row, attach| row.child(attach))
             .when_some(access, |row, chip| row.child(chip))
+            .when_some(leading, |row, leading| row.child(leading))
             .child(div().flex_1())
             .when(self.model_picker_offered, |row| {
                 row.child(self.picker.clone())
