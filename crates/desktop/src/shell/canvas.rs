@@ -153,7 +153,7 @@ fn conversation(
             return diff;
         }
         return match pages.start {
-            Some(frame) => start_page::start_page(frame, cx),
+            Some(frame) => start_page::start_page(frame, window, cx),
             None => placeholder(
                 "Workspace",
                 "This workspace is not listed by the service.",
@@ -164,7 +164,7 @@ fn conversation(
     }
     let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => match pages.home {
-            Some(frame) => home_start::home_page(frame, cx),
+            Some(frame) => home_start::home_page(frame, window, cx),
             None => start_page(theme).into_any_element(),
         },
         Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),

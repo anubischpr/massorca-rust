@@ -65,6 +65,9 @@ pub struct LockEntry {
     /// Registered at upgrade as a built-in, without a vendor command or consent (decision 0063).
     #[serde(default, skip_serializing_if = "is_false")]
     pub adopted: bool,
+    /// The version an update replaced, kept for `extensions.rollback`. Absent until an update replaces the files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Box<KeptVersion>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -111,6 +114,48 @@ pub struct InstallerRun {
     pub extra: Map<String, Value>,
 }
 
+/// The package files of one version an update replaced. Rollback swaps them back in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeptVersion {
+    pub version: String,
+    pub source: LockSource,
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_sha256: Option<String>,
+    /// Relative to the extensions folder, `/`-separated, under the package's own `pkgs/<id>/`.
+    pub path: String,
+    pub consent: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_kinds: Vec<String>,
+    /// The path of the version that replaced this one. The kept version is a rollback target only while the current
+    /// version still has this path: an older binary can carry it forward past a later update.
+    #[serde(default)]
+    pub replaced_path: String,
+    /// Whether the version was registered without consent (decision 0063).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adopted: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl KeptVersion {
+    /// The files of `entry`, as the version that replaces it at `replaced_by` keeps them.
+    pub(crate) fn of(entry: &LockEntry, replaced_by: &str) -> Self {
+        Self {
+            version: entry.version.clone(),
+            source: entry.source.clone(),
+            sha256: entry.sha256.clone(),
+            files_sha256: entry.files_sha256.clone(),
+            path: entry.path.clone(),
+            consent: entry.consent.clone(),
+            agent_kinds: entry.agent_kinds.clone(),
+            replaced_path: replaced_by.to_owned(),
+            adopted: entry.adopted,
+            extra: Map::new(),
+        }
+    }
+}
+
 impl Lockfile {
     /// Reads the lockfile; a missing file is an empty lockfile.
     pub fn read(path: &Path) -> Result<Self, Error> {
@@ -139,29 +184,10 @@ impl Lockfile {
     pub fn write(&self, path: &Path) -> Result<(), Error> {
         // Refused before anything is written: a lockfile that `read` would refuse must never reach the disk.
         self.packages.iter().try_for_each(LockEntry::check)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
-        fs::create_dir_all(dir).map_err(Error::io("cannot create", dir))?;
         let mut bytes = serde_json::to_vec_pretty(self)
             .map_err(|error| Error::InvalidLockfile(error.to_string()))?;
         bytes.push(b'\n');
-        let temp = dir.join(format!(
-            ".lock.json.{}.{}.tmp",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let written = (|| {
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(&bytes)?;
-            file.flush()?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, path)?;
-            sync_dir(dir)
-        })();
-        written.map_err(|error| {
-            let _ = fs::remove_file(&temp);
-            Error::io("cannot write", path)(error)
-        })
+        write_atomic(path, &bytes)
     }
 
     pub fn get(&self, id: &str) -> Option<&LockEntry> {
@@ -195,26 +221,57 @@ impl LockEntry {
                 self.id
             )));
         }
-        let inside = self
-            .path
-            .strip_prefix("pkgs/")
-            .and_then(|rest| rest.strip_prefix(self.id.as_str()))
-            .and_then(|rest| rest.strip_prefix('/'))
-            .is_some_and(|version| !version.is_empty() && !version.contains('/'));
         if let Some(kind) = self.agent_kinds.iter().find(|kind| !is_kind_id(kind)) {
             return Err(Error::InvalidLockfile(format!(
                 "{kind:?} in {} is not an agent kind id",
                 self.id
             )));
         }
-        if !inside || package_path::check(&self.path, false).is_err() {
-            return Err(Error::InvalidLockfile(format!(
-                "the path of {} is not under pkgs/{}/",
-                self.id, self.id
-            )));
+        check_package_path(&self.id, &self.path)?;
+        if let Some(kept) = &self.previous {
+            check_package_path(&self.id, &kept.path)?;
         }
         Ok(())
     }
+}
+
+/// A path is refused unless it names a version folder of its own package, `pkgs/<id>/<version>`.
+fn check_package_path(id: &str, path: &str) -> Result<(), Error> {
+    let inside = path
+        .strip_prefix("pkgs/")
+        .and_then(|rest| rest.strip_prefix(id))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|version| !version.is_empty() && !version.contains('/'));
+    if !inside || package_path::check(path, false).is_err() {
+        return Err(Error::InvalidLockfile(format!(
+            "the path of {id} is not under pkgs/{id}/"
+        )));
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to `path` atomically: a temporary file in the same folder, synced, then renamed over it.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir).map_err(Error::io("cannot create", dir))?;
+    let temp = dir.join(format!(
+        ".lock.json.{}.{}.tmp",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| {
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp, path)?;
+        sync_dir(dir)
+    })();
+    written.map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        Error::io("cannot write", path)(error)
+    })
 }
 
 fn is_false(value: &bool) -> bool {
@@ -305,6 +362,33 @@ mod tests {
         )
         .expect("seed");
         Lockfile::read(&path).expect("a valid entry reads");
+    }
+
+    #[test]
+    fn a_kept_version_naming_a_path_outside_its_package_folder_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lock.json");
+        let entry = |kept_path: &str| {
+            serde_json::json!({ "version": 1, "packages": [{
+                "id": "acme.kit", "version": "1.3.0", "source": { "kind": "dir", "ref": "x" },
+                "sha256": "ab", "path": "pkgs/acme.kit/1.3.0-ab", "enabled": true, "consent": "c",
+                "installed_at_ms": 0,
+                "previous": { "version": "1.2.0", "source": { "kind": "dir", "ref": "x" },
+                              "sha256": "cd", "path": kept_path, "consent": "c" }
+            }] })
+        };
+        fs::write(&path, entry("pkgs/other.kit/1.2.0-cd").to_string()).expect("seed");
+        let error = Lockfile::read(&path).expect_err("a foreign kept path is refused");
+        assert_eq!(error.code(), crate::error::codes::INVALID_LOCKFILE);
+        fs::write(&path, entry("pkgs/acme.kit/1.2.0-cd").to_string()).expect("seed");
+        let lockfile = Lockfile::read(&path).expect("a kept version of its own reads");
+        assert_eq!(
+            lockfile.packages[0]
+                .previous
+                .as_ref()
+                .map(|kept| kept.version.as_str()),
+            Some("1.2.0")
+        );
     }
 
     #[test]

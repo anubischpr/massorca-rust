@@ -3,6 +3,7 @@
 //! refusals that pick a dialog.
 
 mod accounts;
+mod agent_chat;
 mod agent_queue;
 mod agents;
 mod bridge;
@@ -14,6 +15,7 @@ mod launch;
 mod quit;
 mod refusal;
 mod secrets;
+mod skills;
 mod team_room;
 mod teams;
 mod terminals;
@@ -26,6 +28,7 @@ mod secrets_tests;
 
 #[cfg(test)]
 pub(crate) use accounts::AccountCommand;
+pub use agent_chat::{ChatUnsupportedReason, KindChat};
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
@@ -45,6 +48,7 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
 pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};

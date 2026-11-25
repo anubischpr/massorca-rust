@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
-use massorca_protocol::methods::tasks::{Task, TaskRef};
+use massorca_protocol::methods::tasks::{Task, TaskRef, TaskStopParams};
 use massorca_protocol::methods::team_room::{TeamRoomPostParams, TeamRoomPosted};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
@@ -177,6 +177,14 @@ pub(crate) enum TeamCommand {
         params: BotRemoveParams,
         reply: oneshot::Sender<Result<Bot, Refusal>>,
     },
+    TaskStart {
+        task: String,
+        reply: oneshot::Sender<Result<Task, Refusal>>,
+    },
+    TaskStop {
+        task: String,
+        reply: oneshot::Sender<Result<Task, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -284,6 +292,18 @@ pub(super) fn spawn_call(
                 client.team_bot_remove(&params).await
             });
         }
+        TeamCommand::TaskStart { task, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.task_start(&TaskRef { task }).await
+            });
+        }
+        TeamCommand::TaskStop { task, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .task_stop(&TaskStopParams { task, force: false })
+                    .await
+            });
+        }
     }
 }
 
@@ -299,7 +319,10 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
         TeamCommand::AddBot { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        TeamCommand::TaskDone { reply, .. } | TeamCommand::TaskReopen { reply, .. } => {
+        TeamCommand::TaskDone { reply, .. }
+        | TeamCommand::TaskReopen { reply, .. }
+        | TeamCommand::TaskStart { reply, .. }
+        | TeamCommand::TaskStop { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::SaveBrief { reply, .. } | TeamCommand::DeleteProject { reply, .. } => {
@@ -429,6 +452,19 @@ impl ServiceHandle {
     /// the read that follows the answer lands.
     pub async fn remove_bot(&self, params: BotRemoveParams) -> Result<Bot, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::RemoveBot { params, reply }))
+            .await
+    }
+    /// `task.start`: the bot starts the task through the same path as the CLI. The card moves to Running when the
+    /// read that follows the answer lands; a refusal is the service's own sentence.
+    pub async fn start_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskStart { task, reply }))
+            .await
+    }
+
+    /// `task.stop` without force: the bot's run ends and the card moves to Waiting when the read that follows the
+    /// answer lands.
+    pub async fn stop_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskStop { task, reply }))
             .await
     }
 }

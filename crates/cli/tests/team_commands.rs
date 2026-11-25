@@ -806,3 +806,66 @@ fn a_team_project_records_its_code_source_only_when_the_team_has_workspaces() {
     let projects = sandbox.json_ok("default", &["project", "list"]);
     assert_eq!(projects["projects"], serde_json::json!([]), "{projects}");
 }
+
+/// The titles of every card on a Board, column by column.
+fn board_titles(board: &serde_json::Value) -> Vec<String> {
+    board["columns"]
+        .as_array()
+        .expect("four columns")
+        .iter()
+        .flat_map(|column| column["cards"].as_array().into_iter().flatten())
+        .filter_map(|card| card["title"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[test]
+fn the_board_without_a_project_lists_only_the_cards_no_project_holds() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox
+        .run("default", &["team", "project", "add", "alpha", "parser"])
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "task",
+                "create",
+                "alpha",
+                "parse the header",
+                "--project",
+                "parser",
+            ],
+        )
+        .success();
+    sandbox
+        .run("default", &["task", "create", "alpha", "write the readme"])
+        .success();
+
+    let all = sandbox.json_ok("default", &["team", "board", "alpha"]);
+    assert_eq!(board_titles(&all), ["parse the header", "write the readme"]);
+    let parser = sandbox.json_ok(
+        "default",
+        &["team", "board", "alpha", "--project", "parser"],
+    );
+    assert_eq!(board_titles(&parser), ["parse the header"]);
+    let loose = sandbox.json_ok("default", &["team", "board", "alpha", "--no-project"]);
+    assert_eq!(board_titles(&loose), ["write the readme"]);
+    assert_eq!(loose["project_id"], serde_json::Value::Null);
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "team",
+                "board",
+                "alpha",
+                "--project",
+                "parser",
+                "--no-project",
+            ],
+        )
+        .failure();
+}

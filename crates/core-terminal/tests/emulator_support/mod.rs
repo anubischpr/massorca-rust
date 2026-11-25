@@ -79,6 +79,16 @@ impl Client {
         }
     }
 
+    /// Takes a new size, as the desktop feed does when the terminal is resized.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let shape = Shape {
+            columns: usize::from(cols),
+            lines: usize::from(rows),
+        };
+        self.term.resize(shape);
+        (self.columns, self.lines) = (shape.columns, shape.lines);
+    }
+
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
     }

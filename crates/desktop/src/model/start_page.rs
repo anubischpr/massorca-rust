@@ -9,7 +9,7 @@ use massorca_protocol::methods::workspaces::WorkspaceState;
 
 use super::service_view::LOCAL_HOST;
 use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
-use crate::service::StoreState;
+use crate::service::{ChatUnsupportedReason, KindChat, StoreState};
 
 /// Why the page's actions that need git are off.
 pub const GIT_LATER: &str = "Git operations come later.";
@@ -17,6 +17,8 @@ pub const VOICE_LATER: &str = "Voice input comes later.";
 /// The Send button's reason while no agent is chosen, or the service is not connected.
 pub const CHOOSE_AN_AGENT: &str = "Choose an agent to start a session.";
 pub const NOT_CONNECTED: &str = "The service is not connected.";
+/// The Send button's reason while no agent is installed and turned on.
+pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
@@ -47,6 +49,75 @@ impl StartMode {
             Self::Terminal
         }
     }
+
+    /// The mode a start opens in: this one while Chat is available, else Terminal.
+    pub fn offered(self, chat_available: bool) -> Self {
+        if chat_available { self } else { Self::Terminal }
+    }
+}
+
+/// Why the Chat segment is off until the service offers chat sessions.
+pub const CHAT_NEEDS_NEWER_SERVICE: &str = "Chat sessions need a newer service.";
+
+/// Whether the Chat segment is on (decision 0101, D11): on while the service offers `agent-chat/1` and the picked
+/// agent can chat. With no agent picked it stays on, and Send says what is missing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatAvailability {
+    Available,
+    /// Off, with the reason its tooltip gives.
+    Unavailable(String),
+}
+
+impl ChatAvailability {
+    /// `agent` is the picked agent's name and its chat support; `None` while no agent is picked.
+    pub fn new(offered: bool, agent: Option<(&str, Option<&KindChat>)>) -> Self {
+        if !offered {
+            return Self::Unavailable(CHAT_NEEDS_NEWER_SERVICE.to_owned());
+        }
+        match agent {
+            Some((_, Some(chat))) if chat.supported => Self::Available,
+            Some((name, chat)) => Self::Unavailable(cannot_chat(name, chat)),
+            None => Self::Available,
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    /// The reason the segment is off, when it is.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Available => None,
+            Self::Unavailable(reason) => Some(reason.as_str()),
+        }
+    }
+}
+
+/// Why the picked agent `name` cannot run a chat, as the service reported it (decision 0101, D10).
+fn cannot_chat(name: &str, chat: Option<&KindChat>) -> String {
+    match chat.and_then(|chat| chat.reason) {
+        Some(ChatUnsupportedReason::NotDetected) => {
+            format!("{name} was not found on this computer.")
+        }
+        Some(ChatUnsupportedReason::VersionUnknown) => {
+            format!("{name}'s version could not be read.")
+        }
+        Some(ChatUnsupportedReason::VersionOutsideRange) => {
+            match chat.and_then(version_and_range) {
+                Some((version, range)) => {
+                    format!("Chat needs {name} {range}; this computer has {version}.")
+                }
+                None => format!("{name} cannot run chat sessions."),
+            }
+        }
+        None => format!("{name} cannot run chat sessions."),
+    }
+}
+
+/// The version the service read and the range it supports, when it gave both.
+fn version_and_range(chat: &KindChat) -> Option<(&str, &str)> {
+    Some((chat.version.as_deref()?, chat.range.as_deref()?))
 }
 
 /// The note under the composer while Terminal is chosen (WS-40).
@@ -91,9 +162,11 @@ impl StartingSession {
     }
 }
 
-/// Why Send is off, or `None` when it is on: a start in flight, the service away, or no agent chosen.
+/// Why Send is off, or `None` when it is on: a start in flight, the service away, no agent installed, or no agent
+/// chosen.
 pub fn send_reason(
     connected: bool,
+    agents_installed: bool,
     kind_chosen: bool,
     starting: Option<&StartingSession>,
 ) -> Option<String> {
@@ -101,10 +174,60 @@ pub fn send_reason(
         Some(starting.status())
     } else if !connected {
         Some(NOT_CONNECTED.to_owned())
+    } else if !agents_installed {
+        Some(NO_AGENTS_INSTALLED.to_owned())
     } else if !kind_chosen {
         Some(CHOOSE_AN_AGENT.to_owned())
     } else {
         None
+    }
+}
+
+/// The model and effort a start asks for (capability `agent-options/1`, decision 0092). Both absent sends neither.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// The protocol value of a picker effort label: the values the Claude kind's `--effort` takes.
+pub fn effort_value(label: &str) -> Option<&'static str> {
+    match label {
+        "Low" => Some("low"),
+        "Medium" => Some("medium"),
+        "High" => Some("high"),
+        "Extra High" => Some("xhigh"),
+        "Max" => Some("max"),
+        _ => None,
+    }
+}
+
+/// Whether the picker row `model` is a real model of `kind`, not the kind's own row. No kind declares models yet, so
+/// each kind's only row is itself; the per-kind model lists from the kind options PR make the other rows real.
+pub fn is_real_model(kind: &str, model: &str) -> bool {
+    model != kind
+}
+
+/// The options a start sends for the picker's row `model` of `kind`, whose effort is the index `effort` of `efforts`
+/// (the labels). Sent only when the service offers `agent-options/1`, the row is a real model, and the effort names a
+/// level the model offers.
+pub fn start_options(
+    offered: bool,
+    kind: &str,
+    model: &str,
+    efforts: &[&str],
+    effort: Option<usize>,
+) -> StartOptions {
+    if !offered || !is_real_model(kind, model) {
+        return StartOptions::default();
+    }
+    let effort = effort
+        .and_then(|index| efforts.get(index))
+        .and_then(|label| effort_value(label))
+        .map(str::to_owned);
+    StartOptions {
+        model: Some(model.to_owned()),
+        effort,
     }
 }
 
@@ -116,6 +239,7 @@ pub fn start_params(
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
+    options: StartOptions,
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.map(str::to_owned),
@@ -129,8 +253,8 @@ pub fn start_params(
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
         permission_mode,
-        model: None,
-        effort: None,
+        model: options.model,
+        effort: options.effort,
     }
 }
 
@@ -250,13 +374,25 @@ mod tests {
 
     #[test]
     fn send_is_off_until_an_agent_is_chosen_and_the_service_is_connected() {
-        assert_eq!(send_reason(true, true, None), None);
+        assert_eq!(send_reason(true, true, true, None), None);
         assert_eq!(
-            send_reason(true, false, None).as_deref(),
+            send_reason(true, true, false, None).as_deref(),
             Some(CHOOSE_AN_AGENT)
         );
         assert_eq!(
-            send_reason(false, true, None).as_deref(),
+            send_reason(false, true, true, None).as_deref(),
+            Some(NOT_CONNECTED)
+        );
+    }
+
+    #[test]
+    fn send_is_off_with_no_agent_installed_whatever_the_choice() {
+        assert_eq!(
+            send_reason(true, false, false, None).as_deref(),
+            Some(NO_AGENTS_INSTALLED)
+        );
+        assert_eq!(
+            send_reason(false, false, false, None).as_deref(),
             Some(NOT_CONNECTED)
         );
     }
@@ -268,7 +404,7 @@ mod tests {
             kind_name: "Claude".into(),
         };
         assert_eq!(
-            send_reason(true, true, Some(&starting)).as_deref(),
+            send_reason(true, true, true, Some(&starting)).as_deref(),
             Some("Starting Claude on This PC")
         );
     }
@@ -282,12 +418,163 @@ mod tests {
     }
 
     #[test]
+    fn without_the_chat_capability_every_start_opens_on_terminal() {
+        assert_eq!(StartMode::Chat.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Terminal.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Chat.offered(true), StartMode::Chat);
+        assert_eq!(StartMode::Terminal.offered(true), StartMode::Terminal);
+    }
+
+    fn agent_chat(supported: bool, reason: Option<ChatUnsupportedReason>) -> KindChat {
+        KindChat {
+            supported,
+            reason,
+            version: None,
+            range: None,
+        }
+    }
+
+    #[test]
+    fn chat_is_available_while_the_service_offers_it_and_the_picked_agent_can_chat() {
+        let can = agent_chat(true, None);
+        assert!(ChatAvailability::new(true, Some(("Claude", Some(&can)))).is_available());
+        assert_eq!(
+            ChatAvailability::new(false, Some(("Claude", Some(&can)))).reason(),
+            Some(CHAT_NEEDS_NEWER_SERVICE)
+        );
+        assert!(
+            ChatAvailability::new(true, None).is_available(),
+            "with no agent picked Send says what is missing, and Chat stays on"
+        );
+    }
+
+    #[test]
+    fn each_reason_says_why_the_picked_agent_cannot_chat() {
+        let reason_for = |chat: Option<KindChat>| {
+            ChatAvailability::new(true, Some(("Claude", chat.as_ref())))
+                .reason()
+                .map(str::to_owned)
+        };
+        let not_detected = agent_chat(false, Some(ChatUnsupportedReason::NotDetected));
+        assert_eq!(
+            reason_for(Some(not_detected)).as_deref(),
+            Some("Claude was not found on this computer.")
+        );
+        let unreadable = agent_chat(false, Some(ChatUnsupportedReason::VersionUnknown));
+        assert_eq!(
+            reason_for(Some(unreadable)).as_deref(),
+            Some("Claude's version could not be read.")
+        );
+        assert_eq!(
+            reason_for(Some(agent_chat(false, None))).as_deref(),
+            Some("Claude cannot run chat sessions.")
+        );
+        assert_eq!(
+            reason_for(None).as_deref(),
+            Some("Claude cannot run chat sessions."),
+            "a kind the service lists no chat for cannot chat"
+        );
+    }
+
+    #[test]
+    fn a_version_outside_the_range_names_the_range_and_the_version_found() {
+        let outside = KindChat {
+            supported: false,
+            reason: Some(ChatUnsupportedReason::VersionOutsideRange),
+            version: Some("2.4.1".to_owned()),
+            range: Some(">=2.1.0, <2.3.0".to_owned()),
+        };
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&outside)))).reason(),
+            Some("Chat needs Claude >=2.1.0, <2.3.0; this computer has 2.4.1.")
+        );
+        let no_range = KindChat {
+            range: None,
+            ..outside
+        };
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&no_range)))).reason(),
+            Some("Claude cannot run chat sessions."),
+            "without the range there is no sentence to say, so the plain reason stands"
+        );
+    }
+
+    #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
-        let params = start_params(Some("w1"), "claude", "fix the login", None);
+        let params = start_params(
+            Some("w1"),
+            "claude",
+            "fix the login",
+            None,
+            StartOptions::default(),
+        );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
         assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+    }
+
+    const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
+
+    #[test]
+    fn each_picker_effort_label_is_the_protocol_value_the_claude_kind_takes() {
+        let values: Vec<_> = LEVELS.iter().map(|label| effort_value(label)).collect();
+        assert_eq!(
+            values,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("xhigh"),
+                Some("max")
+            ]
+        );
+        assert_eq!(effort_value("Turbo"), None);
+    }
+
+    #[test]
+    fn without_the_capability_neither_model_nor_effort_is_sent() {
+        let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
+        assert_eq!(options, StartOptions::default());
+        let params = start_params(Some("w1"), "claude", "hi", None, options);
+        assert_eq!((params.model, params.effort), (None, None));
+    }
+
+    #[test]
+    fn a_kind_row_is_not_a_model_so_neither_is_sent_even_when_offered() {
+        assert!(!is_real_model("claude", "claude"));
+        assert_eq!(
+            start_options(true, "claude", "claude", &[], None),
+            StartOptions::default()
+        );
+    }
+
+    #[test]
+    fn a_real_model_sends_its_model_and_the_effort_the_row_chose() {
+        let options = start_options(true, "claude", "opus", &LEVELS, Some(3));
+        assert_eq!(
+            options,
+            StartOptions {
+                model: Some("opus".to_owned()),
+                effort: Some("xhigh".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_model_without_an_effort_sends_the_model_alone_and_an_unknown_level_sends_no_effort() {
+        assert_eq!(
+            start_options(true, "claude", "haiku", &[], None).effort,
+            None
+        );
+        assert_eq!(
+            start_options(true, "claude", "opus", &["Turbo"], Some(0)).effort,
+            None
+        );
+        assert_eq!(
+            start_options(true, "claude", "opus", &LEVELS, Some(9)).effort,
+            None
+        );
     }
 }
