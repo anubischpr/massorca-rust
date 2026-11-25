@@ -16,9 +16,9 @@ use std::fmt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, App, AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Subscription, Window, actions, anchored, deferred, div,
-    point, px,
+    FontWeight, InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, ParentElement, Render,
+    Role, StatefulInteractiveElement, Styled, Subscription, Window, actions, anchored, deferred,
+    div, point, px,
 };
 
 use crate::components::agent_icon::{AgentIcon, AgentIconSize};
@@ -29,7 +29,7 @@ use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH, LAYOUT_MODEL_PICKER_MAX_HEIGHT, LAYOUT_MODEL_PICKER_WIDTH,
-    RADIUS_FULL, RADIUS_XL, SIZE_CONTROL_COMPACT, SPACE_1, SPACE_2, TYPE_LABEL,
+    RADIUS_FULL, RADIUS_XL, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_LABEL,
 };
 
 actions!(
@@ -201,7 +201,7 @@ impl Render for ModelPicker {
             .flex_none()
             .items_center()
             .gap(px(SPACE_1))
-            .h(px(SIZE_CONTROL_COMPACT))
+            .h(px(SIZE_CONTROL_DEFAULT))
             .px(px(SPACE_2))
             .rounded(px(RADIUS_FULL))
             .text_style(TYPE_LABEL)
@@ -221,10 +221,17 @@ impl Render for ModelPicker {
                     .min_w_0()
                     .truncate()
                     .max_w(px(LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(name),
             )
             .when_some(effort, |chip, effort| {
-                chip.child(div().flex_none().text_color(p.text.secondary).child(effort))
+                chip.child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(p.text.secondary)
+                        .child(effort),
+                )
             })
             .child(
                 Icon::new(if open {
@@ -365,6 +372,16 @@ mod tests {
     fn open_and_draw(picker: &Entity<ModelPicker>, cx: &mut VisualTestContext) {
         picker.update_in(cx, |picker, window, cx| picker.open(window, cx));
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_chip_is_as_tall_as_the_composer_row(cx: &mut TestAppContext) {
+        let (_picker, cx) = picker_in(cx);
+        cx.run_until_parked();
+        let chip = cx
+            .debug_bounds("model-picker-trigger")
+            .expect("the chip is drawn");
+        assert_eq!(chip.size.height, px(SIZE_CONTROL_DEFAULT));
     }
 
     #[gpui::test]
