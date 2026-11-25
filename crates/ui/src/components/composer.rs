@@ -364,9 +364,14 @@ impl Composer {
         self.disabled_reason.as_ref()
     }
 
-    /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
-    /// otherwise the first model offered is chosen.
-    pub fn set_picker_agents(&mut self, agents: Vec<AgentOption>, cx: &mut Context<Self>) {
+    /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it; otherwise
+    /// `preselect` is chosen when the list offers it, and the first model offered when it does not.
+    pub fn set_picker_agents(
+        &mut self,
+        agents: Vec<AgentOption>,
+        preselect: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         let (choice, favourites, none_installed) = {
             let state = self.picker.read(cx).state();
             if state.agents() == agents.as_slice() {
@@ -384,9 +389,14 @@ impl Composer {
             let first = state
                 .agents()
                 .iter()
-                .position(|agent| !agent.models.is_empty());
-            if let Some(agent) = first {
-                state.select_model(RowRef { agent, model: 0 });
+                .position(|agent| !agent.models.is_empty())
+                .map(|agent| RowRef { agent, model: 0 });
+            let row = preselect
+                .as_deref()
+                .and_then(|id| state.locate(id))
+                .or(first);
+            if let Some(row) = row {
+                state.select_model(row);
             }
         }
         self.picker = cx.new(|cx| ModelPicker::new(state, cx));
@@ -830,14 +840,33 @@ mod tests {
                     offered(AgentKind::Codex, "codex"),
                     offered(AgentKind::Claude, "opus"),
                 ],
+                None,
                 cx,
             )
         });
         assert_eq!(chosen_model(&composer, cx), "opus");
         composer.update(cx, |composer, cx| {
-            composer.set_picker_agents(vec![offered(AgentKind::Codex, "codex")], cx)
+            composer.set_picker_agents(vec![offered(AgentKind::Codex, "codex")], None, cx)
         });
         assert_eq!(chosen_model(&composer, cx), "codex");
+    }
+
+    #[gpui::test]
+    fn a_new_agent_list_without_the_choice_takes_the_preselected_model_over_the_first(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_agents(
+                vec![
+                    offered(AgentKind::Codex, "codex"),
+                    offered(AgentKind::Claude, "haiku"),
+                ],
+                Some("haiku".into()),
+                cx,
+            )
+        });
+        assert_eq!(chosen_model(&composer, cx), "haiku");
     }
 
     #[gpui::test]

@@ -399,7 +399,7 @@ impl Shell {
             workspace: HOME_START.to_owned(),
             kind_name: kind.name,
         });
-        let options = self.chosen_options(&composer, &kind.id, cx);
+        let options = self.chosen_options(&composer, cx);
         let grid = self.start_grid(cx);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use super::start_page::{mode_segments, picked_options, split_last_segment};
+use super::start_page::{mode_segments, picked_options, picker_agents, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
@@ -1552,42 +1552,128 @@ fn a_mode_list_change_without_a_remembered_pick_sends_no_mode(cx: &mut TestAppCo
     assert_eq!(params.permission_mode, None);
 }
 
-/// Claude's picker rows with real models, Opus with five levels and Haiku with none, the row `model` chosen at `effort`.
-fn picker_of_claude(
+/// Claude as `claude.json` declares its models: Opus takes every level, Sonnet is the default and takes four, and Haiku
+/// takes none. The kind's default level is High.
+fn claude_with_models() -> AgentKind {
+    use massorca_protocol::methods::agents::{
+        KindEffort, KindEffortLevel, KindModel, KindModelChoice,
+    };
+    let level = |id: &str, label: &str| KindEffortLevel {
+        id: id.into(),
+        label: label.into(),
+    };
+    let choice = |id: &str, label: &str, default: bool, efforts: Option<&[&str]>| KindModelChoice {
+        id: id.into(),
+        label: label.into(),
+        default,
+        efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
+    };
+    let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
+    kind.model = Some(KindModel {
+        choices: vec![
+            choice("opus", "Opus", false, None),
+            choice(
+                "sonnet",
+                "Sonnet",
+                true,
+                Some(&["low", "medium", "high", "max"]),
+            ),
+            choice("haiku", "Haiku", false, Some(&[])),
+        ],
+    });
+    kind.effort = Some(KindEffort {
+        levels: vec![
+            level("low", "Low"),
+            level("medium", "Medium"),
+            level("high", "High"),
+            level("xhigh", "Extra high"),
+            level("max", "Max"),
+        ],
+        default: Some("high".into()),
+    });
+    kind
+}
+
+/// The picker over `kinds` as the composer builds it, with `model` chosen at the level index `effort`.
+fn picker_of(
+    kinds: &[AgentKind],
     model: &str,
     effort: Option<usize>,
 ) -> massorca_ui::components::model_picker::PickerState {
-    use massorca_ui::components::agent_icon::AgentKind as PickerKind;
-    use massorca_ui::components::model_picker::{
-        AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
-    };
-    let levels = ["Low", "Medium", "High", "Extra High", "Max"]
-        .map(gpui::SharedString::from)
-        .to_vec();
-    let row = |id: &str, name: &str, efforts: Vec<gpui::SharedString>| ModelOption {
-        id: id.to_owned().into(),
-        name: name.to_owned().into(),
-        efforts,
-        default_effort: 0,
-        fast: false,
-    };
-    let agent = AgentOption {
-        kind: PickerKind::Claude,
-        availability: AgentAvailability::Ready,
-        list: ModelList::Loaded,
-        models: vec![
-            row("opus", "Opus", levels),
-            row("haiku", "Haiku", Vec::new()),
-        ],
-    };
+    use crate::model::agent_kinds::session_kind_choices;
+    use massorca_ui::components::model_picker::{Choice, PickerState};
+    let installed = session_kind_choices(kinds);
     PickerState::new(
-        vec![agent],
+        picker_agents(kinds, &installed),
         Choice {
             model: model.to_owned().into(),
             effort,
             fast: false,
         },
     )
+}
+
+#[gpui::test]
+fn a_kind_with_declared_models_and_levels_shows_them_and_starts_on_the_declared_default(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_models()]);
+    rig._updates
+        .send(StoreUpdate::AgentOptionsOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    // Each row's id, name, level names and preselected level, in the order the picker lists them.
+    let rows = composer.read_with(cx, |composer, cx| {
+        composer.picker().read(cx).state().agents()[0]
+            .models
+            .iter()
+            .map(|model| {
+                (
+                    model.id.to_string(),
+                    model.name.to_string(),
+                    model
+                        .efforts
+                        .iter()
+                        .map(|effort| effort.to_string())
+                        .collect::<Vec<_>>(),
+                    model.default_effort,
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    let names = |list: &[&str]| {
+        list.iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows,
+        [
+            (
+                "opus".to_owned(),
+                "Opus".to_owned(),
+                names(&["Low", "Medium", "High", "Extra high", "Max"]),
+                2
+            ),
+            (
+                "sonnet".to_owned(),
+                "Sonnet".to_owned(),
+                names(&["Low", "Medium", "High", "Max"]),
+                2
+            ),
+            ("haiku".to_owned(), "Haiku".to_owned(), Vec::new(), 0),
+        ],
+        "one row per declared model, with the levels it accepts and the kind's default level preselected"
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(
+        (params.model.as_deref(), params.effort.as_deref()),
+        (Some("sonnet"), Some("high")),
+        "the preselected model and level go out by their declared ids"
+    );
 }
 
 #[gpui::test]
@@ -1619,29 +1705,43 @@ fn with_the_capability_a_kind_with_no_models_still_sends_neither(cx: &mut TestAp
 }
 
 #[test]
-fn a_picked_real_model_sends_its_model_and_effort_only_when_offered() {
-    let picker = picker_of_claude("opus", Some(3));
+fn the_picked_model_and_level_send_their_declared_ids_only_when_offered() {
+    let kinds = [claude_with_models()];
+    let picker = picker_of(&kinds, "opus", Some(4));
     assert_eq!(
-        picked_options(&picker, true, "claude"),
+        picked_options(&picker, true, &kinds),
         StartOptions {
             model: Some("opus".to_owned()),
-            effort: Some("xhigh".to_owned()),
+            effort: Some("max".to_owned()),
         }
     );
     assert_eq!(
-        picked_options(&picker, false, "claude"),
+        picked_options(&picker, false, &kinds),
         StartOptions::default()
     );
 }
 
 #[test]
-fn a_real_model_without_levels_sends_the_model_and_no_effort() {
-    let picker = picker_of_claude("haiku", Some(3));
+fn a_model_without_levels_sends_the_model_alone_and_a_level_past_its_list_sends_none() {
+    let kinds = [claude_with_models()];
     assert_eq!(
-        picked_options(&picker, true, "claude"),
+        picked_options(&picker_of(&kinds, "haiku", Some(3)), true, &kinds),
         StartOptions {
             model: Some("haiku".to_owned()),
             effort: None,
         }
+    );
+    assert_eq!(
+        picked_options(&picker_of(&kinds, "opus", Some(9)), true, &kinds).effort,
+        None
+    );
+}
+
+#[test]
+fn a_kind_with_no_declared_models_is_its_own_row_and_sends_neither() {
+    let kinds = [agent_kind("codex", "Codex", PackageState::Enabled)];
+    assert_eq!(
+        picked_options(&picker_of(&kinds, "codex", None), true, &kinds),
+        StartOptions::default()
     );
 }
