@@ -117,6 +117,8 @@ mod service_tests;
 #[cfg(test)]
 mod session_menu_tests;
 #[cfg(test)]
+mod session_chat_tests;
+#[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
@@ -217,6 +219,10 @@ pub struct Shell {
     session_notices: HashMap<String, String>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
     chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
+    /// The chat session whose transcript stream the bridge follows for the open view (decision 0101).
+    chat_watched: Option<String>,
+    /// The chat sessions whose older page is being fetched.
+    chat_history_pending: BTreeSet<String>,
     /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
     session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
@@ -564,6 +570,8 @@ impl Shell {
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
             chat_transcripts: HashMap::new(),
+            chat_watched: None,
+            chat_history_pending: BTreeSet::new(),
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
@@ -825,6 +833,7 @@ impl Render for Shell {
             == crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces))
         .then(|| self.home_frame(cx))
         .flatten();
+        self.sync_chat_watch(cx);
         let session = self.session_frame(cx);
         let room = self.room_frame(window, cx);
         let connection = self.store.read(cx).state().connection.clone();

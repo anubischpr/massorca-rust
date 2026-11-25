@@ -109,14 +109,14 @@ fn queue_rig(
 }
 
 /// An agent kind of the service's, able or unable to resume.
-fn kind(resumable: bool) -> AgentKind {
+pub(super) fn kind(resumable: bool) -> AgentKind {
     let mut kind = agent_kind("claude", "Claude Code", PackageState::Enabled);
     kind.resumable = resumable;
     kind
 }
 
 /// Session s1 of kind `claude` in w1: live or ended, and reporting `state` when given.
-fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
+pub(super) fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
     let mut session = agent("s1", "w1", 10);
     if ended {
         session.execution.state = TerminalState::Exited;
@@ -1081,7 +1081,7 @@ fn a_chat_arm_session_draws_its_transcript_and_composer_and_no_terminal(cx: &mut
 }
 
 /// A session whose service record says it runs as a chat.
-fn chat_s1(ended: bool) -> AgentSession {
+pub(super) fn chat_s1(ended: bool) -> AgentSession {
     let mut session = s1(ended, None);
     session.run = massorca_protocol::methods::chat::RunType::Chat;
     session.terminal_id = None;

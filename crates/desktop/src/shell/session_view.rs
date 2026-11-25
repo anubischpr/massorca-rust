@@ -10,7 +10,7 @@ use massorca_protocol::methods::agents::{
     AgentKind, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueParams,
     AgentSession, AgentSetModeParams, QueuedPrompt,
 };
-use massorca_protocol::methods::chat::RunType;
+use massorca_protocol::methods::chat::{self, ChatHistoryParams, RunType};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -189,21 +189,26 @@ pub(super) struct SessionFrame {
 /// The height of the session view's header, the band above the terminal's pane (`start_grid` fits the pane below it).
 pub(super) const SESSION_HEADER_HEIGHT: f32 = SIZE_TOOLBAR;
 
-/// A chat session's body: its transcript, whose answers go to the shell's answer hook.
+/// A chat session's body: its transcript, whose answers go to the shell's answer hook and whose top asks for the
+/// older page.
 fn transcript_body(
     rows: Vec<TranscriptRow>,
     shell: &WeakEntity<Shell>,
     session: &str,
     host_unreachable: bool,
 ) -> AnyElement {
-    let (shell, session) = (shell.clone(), session.to_owned());
+    let (answers, older, session) = (shell.clone(), shell.clone(), session.to_owned());
     let host = host_unreachable.then(|| SharedString::from("the host"));
+    let for_answers = session.clone();
     let view = TranscriptView::new(format!("session-transcript-{session}"), rows)
         .host_unreachable(host)
         .on_action(move |action, _, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.answer_transcript(&session, action, cx)
+            let _ = answers.update(cx, |shell, cx| {
+                shell.answer_transcript(&for_answers, action, cx)
             });
+        })
+        .on_reach_top(move |_, cx| {
+            let _ = older.update(cx, |shell, cx| shell.load_older_chat(&session, cx));
         });
     div().flex_1().min_h_0().child(view).into_any_element()
 }
@@ -402,6 +407,82 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
 }
 
 impl Shell {
+    /// The open session when it is a chat: its transcript is what the bridge follows while the view shows it.
+    fn open_chat_session(&self, cx: &App) -> Option<String> {
+        if !matches!(self.model.canvas(), Canvas::Session(_)) {
+            return None;
+        }
+        let id = self.model.snapshot().active_session.clone()?;
+        let state = self.store.read(cx).state();
+        let session = state.agents.iter().find(|session| session.id == id)?;
+        (!is_terminal_arm(session)).then_some(id)
+    }
+
+    /// Follows the transcript of the chat session the view shows, and stops following the one it no longer shows.
+    pub(super) fn sync_chat_watch(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.open_chat_session(cx);
+        if wanted == self.chat_watched {
+            return;
+        }
+        if let Some(service) = &self.service {
+            if let Some(old) = &self.chat_watched {
+                service.unwatch_chat(old);
+            }
+            if let Some(new) = &wanted {
+                service.watch_chat(new);
+            }
+        }
+        self.chat_history_pending.clear();
+        self.chat_watched = wanted;
+    }
+
+    /// Asks for the page of items before the oldest one the transcript holds, when the service has older ones. The store
+    /// adds the page when the bridge relays it; a refusal other than a stale cursor is kept above the composer.
+    pub(super) fn load_older_chat(&mut self, session: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        if self.chat_history_pending.contains(session) {
+            return;
+        }
+        let before = {
+            let state = self.store.read(cx).state();
+            state
+                .chat
+                .get(session)
+                .filter(|transcript| transcript.has_older())
+                .and_then(|transcript| transcript.history_cursor())
+        };
+        let Some(before) = before else {
+            return;
+        };
+        self.chat_history_pending.insert(session.to_owned());
+        let params = ChatHistoryParams {
+            session: session.to_owned(),
+            before: Some(before),
+            limit: None,
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_chat_history(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.chat_history_pending.remove(&id);
+                // A stale cursor means the stream resets and its snapshot brings the transcript back.
+                if let Err(refusal) = answer
+                    && refusal.code() != Some(chat::CURSOR_STALE)
+                {
+                    shell.session_notices.insert(
+                        id,
+                        format!("Could not load older messages: {}", refusal.sentence()),
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The open session's view. Its terminal is attached the first time the view is drawn, the way the Work panel
     /// attaches a terminal it selects. Its composer follows the session's state and the call it has in flight.
     pub(super) fn session_frame(&mut self, cx: &mut Context<Self>) -> Option<SessionFrame> {
@@ -424,8 +505,15 @@ impl Shell {
         };
         // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
         // terminal session draws one only where a test holds a transcript for it.
-        let transcript = match self.chat_transcripts.get(&id) {
-            Some(held) => Some(transcript_rows(held)),
+        let held = {
+            let state = self.store.read(cx).state();
+            self.chat_transcripts
+                .get(&id)
+                .or_else(|| state.chat.get(&id))
+                .map(transcript_rows)
+        };
+        let transcript = match held {
+            Some(rows) => Some(rows),
             None if !is_terminal_arm(&session) => Some(Vec::new()),
             None => None,
         };
