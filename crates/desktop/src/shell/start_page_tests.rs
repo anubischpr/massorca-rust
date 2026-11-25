@@ -846,3 +846,33 @@ fn a_kind_without_modes_shows_no_mode_chip(cx: &mut TestAppContext) {
     assert!(composer.read_with(cx, |composer, _| composer.access_modes().is_empty()));
     assert!(cx.debug_bounds("composer-access").is_none());
 }
+
+#[gpui::test]
+fn a_remembered_pick_comes_back_on_the_start_chip_and_is_sent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
+    let mut saved = ui_state::UiState::default();
+    saved
+        .start_permission_modes
+        .insert("claude".to_owned(), "plan".to_owned());
+    // The kind first lists no modes, so the chip is built only once the remembered pick is there.
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    cx.update(|_, cx| ui_state::install(cx, profile.clone(), saved));
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![claude_with_modes()]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+}

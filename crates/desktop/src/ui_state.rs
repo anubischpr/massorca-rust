@@ -93,6 +93,19 @@ pub fn saved_marketplace_host(cx: &App) -> Option<HostTarget> {
         .flatten()
 }
 
+/// The explicit permission mode last picked on a start page for agent kind `kind`, if any.
+pub fn saved_start_mode(cx: &App, kind: &str) -> Option<String> {
+    cx.has_global::<UiStateStore>()
+        .then(|| {
+            cx.global::<UiStateStore>()
+                .saved
+                .start_permission_modes
+                .get(kind)
+                .cloned()
+        })
+        .flatten()
+}
+
 /// Remembers `mode` as the explicit pick of agent kind `kind` on a start page; `None` clears it. Does nothing when no
 /// profile is kept.
 pub fn remember_start_mode(cx: &mut App, kind: &str, mode: Option<&str>) {

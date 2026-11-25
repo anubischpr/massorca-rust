@@ -37,7 +37,7 @@ use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
-use crate::model::permission_modes::{ModeChoice, start_choices};
+use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartingSession,
@@ -596,16 +596,25 @@ impl Shell {
             .model
             .clone();
         // The mode chip follows the chosen kind; a pick stays while the kind does.
-        let modes = kinds
+        let chosen_kind = kinds
             .iter()
-            .find(|kind| kind.id.as_str() == chosen.as_ref())
-            .map(|kind| access_modes(&start_choices(kind)))
-            .unwrap_or_default();
+            .find(|kind| kind.id.as_str() == chosen.as_ref());
+        let (modes, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
+            let choices = start_choices(kind);
+            // The person's last explicit pick for this kind comes back, while the kind still declares it.
+            let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+            let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
+                choices
+                    .iter()
+                    .position(|choice| choice.id.as_deref() == Some(id))
+            });
+            (access_modes(&choices), remembered)
+        });
         composer.update(cx, |composer, cx| {
             let keep = if composer.access_modes() == modes.as_slice() {
                 composer.access_index()
             } else {
-                0
+                remembered.unwrap_or(0)
             };
             composer.set_access_modes(modes, keep, cx);
         });
