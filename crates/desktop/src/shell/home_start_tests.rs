@@ -649,3 +649,30 @@ fn no_project_sends_even_while_the_branch_to_reuse_is_unnamed(cx: &mut TestAppCo
     assert_eq!(start.workspace, None);
     assert_eq!(start.prompt.as_deref(), Some("Fix the login bug"));
 }
+
+#[gpui::test]
+fn no_project_sends_while_no_project_is_listed_once_offered(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[]);
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![agent_kind(
+            "claude",
+            "Claude",
+            PackageState::Enabled,
+        )]))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::AgentNoProjectOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "button:sidebar-create");
+    click(cx, "home-start-project");
+    // With no project listed the rows are the caption, No project, a separator and Add a project.
+    click(cx, "menu-item-1");
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.home_project, Some(ProjectChoice::NoProject));
+    });
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (start, _reply) = expect_start(&mut rig.script);
+    assert_eq!(start.workspace, None);
+    assert_eq!(start.prompt.as_deref(), Some("Fix the login bug"));
+}
