@@ -191,6 +191,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -234,6 +235,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },

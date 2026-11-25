@@ -249,6 +249,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             problems: entry.problems.clone(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            chat: None,
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -274,6 +275,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
+        chat: None,
     }
 }
 

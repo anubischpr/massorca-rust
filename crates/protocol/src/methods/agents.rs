@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::methods::chat::KindChat;
 use crate::methods::terminals::{TerminalExit, TerminalState};
 
 /// Params: none. Result: [`AgentKinds`].
@@ -237,6 +238,10 @@ pub struct AgentKind {
     /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
+    /// Whether the kind can run as a structured chat (capability `agent-chat/1`, decision 0101), and why not. Absent from
+    /// a kind without chat support and from an older peer: no chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<KindChat>,
 }
 
 /// One permission mode of a kind, as `agent.kinds` lists it (decision 0083). How the mode is passed stays in the
@@ -285,6 +290,8 @@ struct AgentKindWire {
     permission_modes: Vec<PermissionMode>,
     #[serde(default)]
     default_permission_mode: Option<String>,
+    #[serde(default)]
+    chat: Option<KindChat>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -304,6 +311,7 @@ impl From<AgentKindWire> for AgentKind {
             problems: wire.problems,
             permission_modes: wire.permission_modes,
             default_permission_mode: wire.default_permission_mode,
+            chat: wire.chat,
         }
     }
 }
@@ -438,6 +446,9 @@ pub struct AgentPromptParams {
 pub enum ReceiptKind {
     /// The bytes were written to the terminal; nothing more is known.
     HandedToTerminal,
+    /// The text was written to a chat run's structured input as a user message (decision 0101); the transcript shows
+    /// it as a `user_message` item. Nothing more is known.
+    SentToChat,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
