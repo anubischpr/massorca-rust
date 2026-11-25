@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
+use massorca_desktop::model::marketplace::MarketplaceSnapshot;
 use massorca_desktop::service::{
     ExtensionsRead, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
@@ -466,6 +467,171 @@ async fn a_not_installed_built_in_agent_shows_its_example_prompts_and_colours() 
         .as_ref()
         .expect("the service sends its banner");
     assert_eq!(banner.colors.len(), 2, "its colours reach the page");
+    stop_service(service).await;
+}
+
+/// Writes a folder package named "Notes" whose listing carries `banner`, a JSON object.
+fn write_banner_package(root: &Path, banner: &str) {
+    fs::create_dir_all(root).expect("a package folder");
+    let manifest = format!(
+        r#"{{
+  "id": "{PACKAGE}", "name": "Notes", "version": "1.0.0", "publisher": "acme",
+  "description": "Keeps notes beside the workspace.", "api": "1.0",
+  "requires": {{ "massorca": ">=0.1.0" }}, "surfaces": ["desktop"], "modes": ["workspaces"],
+  "permissions": [{{ "kind": "storage", "reason": "Keeps its notes." }}],
+  "listing": {{ "category": "extensions", "mention": "notes", "banner": {banner} }}
+}}"#
+    );
+    fs::write(root.join("extension.json"), manifest).expect("the manifest is written");
+}
+
+/// The Marketplace model the desktop builds from the service's lists.
+fn marketplace_of(state: &StoreState) -> MarketplaceSnapshot {
+    use massorca_desktop::model::marketplace::{MarketplaceSource, ServiceMarketplace};
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let mut source = ServiceMarketplace::default();
+    source.follow_agent_kinds(&state.agent_kinds);
+    source.follow_extensions(
+        read.installed.as_ref().expect("the installed list"),
+        read.catalogue.as_ref().expect("the catalogue is listed"),
+    );
+    source.snapshot()
+}
+
+/// Installs the folder package at `package` through its reviewed consent, as the Marketplace does.
+async fn install_folder_package(
+    handle: &ServiceHandle,
+    package: &Path,
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+) {
+    let review = handle
+        .inspect_extension(source_of(package))
+        .await
+        .expect("the review is read");
+    handle
+        .install_extension(install_params(
+            source_of(package),
+            Some(review.consent.clone()),
+        ))
+        .await
+        .expect("the reviewed package installs");
+    until(updates, state, "the installed package", |state| {
+        installed_state(state, PACKAGE) == Some(ExtensionState::Enabled)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_real_services_claude_banner_has_its_colours_and_three_examples() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the kinds and packages",
+        |state| state.extensions.is_some() && !state.agent_kinds.is_empty(),
+    )
+    .await;
+    let snapshot = marketplace_of(&state);
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some("claude"))
+        .expect("Claude is listed");
+    assert_eq!(
+        item.examples.len(),
+        3,
+        "its three example prompts reach the page"
+    );
+    let package = item.extension.as_deref().expect("it carries its package");
+    let banner = package
+        .listing
+        .banner
+        .as_ref()
+        .expect("the service sends its banner");
+    assert_eq!(
+        banner.colors,
+        ["#D97757", "#B5532F"],
+        "its two colours reach the page"
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_folder_package_without_colours_takes_the_palette_slot_of_its_id() {
+    use massorca_desktop::model::marketplace::banner_palette_slot;
+    let home = temp_home();
+    let package = home.path().join("package");
+    write_banner_package(
+        &package,
+        r#"{ "examples": [
+      { "kind": "mention", "text": "@notes", "caption": "@notes summarise my notes" },
+      { "kind": "mention", "text": "@notes", "caption": "@notes list the open questions" }
+    ] }"#,
+    );
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the extension lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+    install_folder_package(&handle, &package, &mut updates, &mut state).await;
+    let snapshot = marketplace_of(&state);
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.name == "Notes")
+        .expect("the package is listed");
+    let package = item.extension.as_deref().expect("it carries its package");
+    let banner = package
+        .listing
+        .banner
+        .as_ref()
+        .expect("its banner reaches the page");
+    assert!(banner.colors.is_empty(), "its listing gives no colour");
+    assert_eq!(
+        item.examples.len(),
+        2,
+        "its two example prompts reach the page"
+    );
+    assert_eq!(
+        banner_palette_slot(item),
+        1,
+        "acme.notes always takes palette slot 1"
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_package_with_no_examples_has_no_banner_part() {
+    use massorca_desktop::model::marketplace::{Part, absent_reason};
+    let home = temp_home();
+    let package = home.path().join("package");
+    write_package(&package, "1.0.0");
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the extension lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+    install_folder_package(&handle, &package, &mut updates, &mut state).await;
+    let snapshot = marketplace_of(&state);
+    let item = snapshot
+        .items
+        .iter()
+        .find(|item| item.name == "Notes")
+        .expect("the package is listed");
+    assert!(item.examples.is_empty(), "it lists no example prompts");
+    assert_eq!(
+        absent_reason(item, Part::Banner),
+        None,
+        "the banner is left out, with no sentence"
+    );
     stop_service(service).await;
 }
 

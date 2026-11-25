@@ -26,7 +26,8 @@ use massorca_protocol::methods::events::{
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
     TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
     TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -43,6 +44,7 @@ use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -51,10 +53,12 @@ use super::git::{self, Freshness, Watches};
 use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
+use super::team_room::{self, RoomCommand};
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -98,6 +102,8 @@ pub(crate) enum Command {
     Terminal(TerminalCommand),
     /// A Bot Teams write, answered on its oneshot.
     Team(TeamCommand),
+    /// A team's Conference room: a read, or a post answered on its oneshot (decision 0102).
+    Room(RoomCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
@@ -123,6 +129,11 @@ pub(crate) enum Command {
         refresh: bool,
     },
     Secret(SecretCommand),
+    /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
+    HostedServices {
+        host: Option<String>,
+        command: ServicesCommand,
+    },
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
     SetConfig {
@@ -156,6 +167,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -499,6 +515,7 @@ impl ServiceBridge {
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
+            room_reads: Arc::new(Sequence::default()),
             extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
@@ -600,6 +617,8 @@ struct Link {
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
     team_reads: Arc<Sequence>,
+    /// Numbers the Conference room reads, so a stale answer never replaces a newer one.
+    room_reads: Arc<Sequence>,
     /// Numbers the extension reads across the connections of this bridge.
     extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
@@ -662,6 +681,13 @@ impl Link {
             | Command::ProbeSshHost { .. }
             | Command::AcceptOffer { .. } => {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
+                None
+            }
+            Command::HostedServices {
+                host: Some(host),
+                command,
+            } => {
+                hosted_services::spawn_host(self.profile.clone(), host, command);
                 None
             }
             Command::HostRead { host, request } => {
@@ -801,6 +827,9 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
             client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
         ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -863,6 +892,9 @@ impl Link {
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
                             }
+                            Some(Command::Room(command)) => {
+                                team_room::spawn_call(client, command, &self.updates, &self.room_reads);
+                            }
                             Some(Command::Extension(command)) => {
                                 extensions::spawn_call(
                                     client,
@@ -870,6 +902,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::HostedServices { command, .. }) => {
+                                hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
@@ -961,6 +996,10 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
+            // The id is the team's: its room is read again.
+            TOPIC_TEAM_ROOM_CHANGED => team_room::read(client, &self.room_reads, id.clone())
+                .await
+                .map(StoreUpdate::TeamRoom),
             // The events carry only the package id, so both lists are read again (decision 0062). A package can
             // carry an agent kind, and there is no kind event, so the kinds are read again too.
             TOPIC_EXTENSION_INSTALLED
@@ -1193,6 +1232,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1211,6 +1253,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Secret(_)
+        | Command::HostedServices { .. }
         | Command::Account(_)
         | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -1253,6 +1296,7 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
+        Command::Room(command) => team_room::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
@@ -1275,7 +1319,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
@@ -1292,6 +1338,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::HostedServices { command, .. } => {
+            hosted_services::refuse_while_down(command, refusal);
+        }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),

@@ -1,0 +1,254 @@
+//! The Conference room as the page draws it (bt-conference-room, screens 4.2, decision 0102): the lines of the team's
+//! room with who wrote them and the task each is about, and the bot that receives a line naming no bot.
+
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
+use massorca_protocol::methods::tasks::Column as WireColumn;
+use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+
+use super::types::{BotId, Team};
+use crate::service::{TeamIds, TeamRoomRead};
+
+/// What the room says while it has no line.
+pub const EMPTY_ROOM: &str = "Ask a bot, or describe what the team should do.";
+/// What the room of a team without bots says above its composer.
+pub const NO_BOTS: &str = "Add a bot to this team first.";
+
+/// What the room shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoomView {
+    /// The room was not read yet.
+    Loading,
+    /// The room cannot be read: the service's sentence.
+    Unavailable(String),
+    /// The lines, oldest first; empty draws `EMPTY_ROOM`.
+    Lines(Vec<RoomLine>),
+}
+
+/// One line of the room.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomLine {
+    pub id: String,
+    pub speaker: Speaker,
+    pub text: String,
+    /// The local clock time it was posted, "10:42".
+    pub time: String,
+    pub task: Option<RoomTask>,
+}
+
+/// Who wrote a line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Speaker {
+    Person,
+    /// A bot of the team; `lead` draws the Lead chip.
+    Bot {
+        name: String,
+        lead: bool,
+    },
+    /// A bot that was removed since, or an author this build does not know.
+    Gone,
+}
+
+/// The task a line is about, as its card shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomTask {
+    pub title: String,
+    pub column: &'static str,
+}
+
+/// The room of `team` from the store's read of it.
+pub fn room_view(
+    read: Option<&TeamRoomRead>,
+    team: &Team,
+    ids: &TeamIds,
+    zone: &TimeZone,
+) -> RoomView {
+    match read.map(|read| &read.room) {
+        None => RoomView::Loading,
+        Some(Err(refusal)) => RoomView::Unavailable(refusal.sentence()),
+        Some(Ok(messages)) => RoomView::Lines(
+            messages
+                .iter()
+                .map(|message| room_line(message, team, ids, zone))
+                .collect(),
+        ),
+    }
+}
+
+fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZone) -> RoomLine {
+    let speaker = match message.author {
+        RoomAuthor::Person => Speaker::Person,
+        RoomAuthor::Bot => match (&message.bot_name, message.bot_id.as_deref()) {
+            (Some(name), Some(id)) => Speaker::Bot {
+                name: name.clone(),
+                lead: team.lead.is_some() && ids.get(id).map(BotId) == team.lead,
+            },
+            _ => Speaker::Gone,
+        },
+        RoomAuthor::Unknown => Speaker::Gone,
+    };
+    RoomLine {
+        id: message.id.clone(),
+        speaker,
+        text: message.text.clone(),
+        time: clock_text(message.created_at_ms, zone),
+        task: message.task.as_ref().map(|task| RoomTask {
+            title: task.title.clone(),
+            column: column_word(task.column),
+        }),
+    }
+}
+
+/// The column a task card names.
+fn column_word(column: WireColumn) -> &'static str {
+    match column {
+        WireColumn::Open => "Open",
+        WireColumn::Running => "Running",
+        WireColumn::Waiting => "Waiting for you",
+        WireColumn::Done => "Done",
+        WireColumn::Unknown => "On the Board",
+    }
+}
+
+/// "10:42" in `zone`; empty for a time out of range.
+pub fn clock_text(at_ms: i64, zone: &TimeZone) -> String {
+    Timestamp::from_millisecond(at_ms)
+        .map(|at| {
+            at.to_zoned_datetime(zone.clone())
+                .strftime("%H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// The bot that receives a line naming no bot: the one picked in the composer while it is still on the team, else
+/// the lead, else the first bot.
+pub fn receiver(team: &Team, picked: Option<BotId>) -> Option<BotId> {
+    picked
+        .filter(|bot| team.bot(*bot).is_some())
+        .or(team.lead)
+        .or_else(|| team.bots.first().map(|bot| bot.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::teams::{SampleTeamsSource, TeamsSource};
+    use crate::service::Refusal;
+    use massorca_protocol::methods::tasks::{CardState, Task, TaskOrigin};
+
+    fn team() -> Team {
+        SampleTeamsSource.teams().teams()[0].clone()
+    }
+
+    fn message(author: RoomAuthor, bot: Option<(&str, &str)>, text: &str) -> TeamRoomMessage {
+        TeamRoomMessage {
+            id: text.to_owned(),
+            team_id: "t".to_owned(),
+            author,
+            bot_id: bot.map(|(id, _)| id.to_owned()),
+            bot_name: bot.map(|(_, name)| name.to_owned()),
+            text: text.to_owned(),
+            task: None,
+            created_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn an_unread_room_loads_and_a_refused_one_says_why() {
+        let team = team();
+        let ids = TeamIds::default();
+        assert_eq!(
+            room_view(None, &team, &ids, &TimeZone::UTC),
+            RoomView::Loading
+        );
+        let refused = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            room: Err(Refusal::unavailable("The service is not connected.")),
+        };
+        assert!(matches!(
+            room_view(Some(&refused), &team, &ids, &TimeZone::UTC),
+            RoomView::Unavailable(sentence) if sentence.contains("not connected")
+        ));
+    }
+
+    #[test]
+    fn lines_name_their_speaker_their_time_and_their_task() {
+        let team = team();
+        let ids = TeamIds::default();
+        let mut answer = message(
+            RoomAuthor::Bot,
+            Some(("b1", "Mara")),
+            "Added to the Board: Sign-in",
+        );
+        answer.task = Some(Task {
+            id: "task-1".to_owned(),
+            team_id: "t".to_owned(),
+            project_id: None,
+            bot_id: Some("b1".to_owned()),
+            title: "Sign-in".to_owned(),
+            body: String::new(),
+            origin: TaskOrigin::Room,
+            column: WireColumn::Running,
+            state: CardState::Working,
+            session_id: None,
+            outcome: None,
+            error: None,
+            error_code: None,
+            workspace_id: None,
+            branch: None,
+            last_known: false,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        });
+        let read = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            room: Ok(vec![
+                message(RoomAuthor::Person, None, "We need sign-in"),
+                answer,
+                message(RoomAuthor::Bot, None, "From a removed bot"),
+            ]),
+        };
+        let RoomView::Lines(lines) = room_view(Some(&read), &team, &ids, &TimeZone::UTC) else {
+            panic!("the room has lines");
+        };
+        assert_eq!(lines[0].speaker, Speaker::Person);
+        assert_eq!(lines[0].time, "22:13");
+        assert_eq!(
+            lines[1].speaker,
+            Speaker::Bot {
+                name: "Mara".to_owned(),
+                lead: false
+            }
+        );
+        assert_eq!(
+            lines[1].task,
+            Some(RoomTask {
+                title: "Sign-in".to_owned(),
+                column: "Running"
+            })
+        );
+        assert_eq!(lines[2].speaker, Speaker::Gone);
+    }
+
+    #[test]
+    fn a_line_naming_no_bot_goes_to_the_pick_else_the_lead_else_the_first_bot() {
+        let mut team = team();
+        let first = team.bots[0].id;
+        let second = team.bots[1].id;
+        team.lead = Some(second);
+        assert_eq!(receiver(&team, None), Some(second), "the lead");
+        assert_eq!(receiver(&team, Some(first)), Some(first), "the pick");
+        assert_eq!(
+            receiver(&team, Some(BotId(999))),
+            Some(second),
+            "a removed pick"
+        );
+        team.lead = None;
+        assert_eq!(receiver(&team, None), Some(first), "the first bot");
+        team.bots.clear();
+        assert_eq!(receiver(&team, None), None);
+    }
+}

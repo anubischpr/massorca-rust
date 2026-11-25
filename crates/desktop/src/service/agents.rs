@@ -13,6 +13,7 @@ use massorca_protocol::methods::agents::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+use super::agent_forget::{self, ForgetSessionParams};
 use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
@@ -86,6 +87,13 @@ impl ServiceHandle {
             reply,
         })
         .await
+    }
+
+    /// `agent.forget` with the `agent-archive/1` options: forgets a session, and with `remove_workspace` its worktree
+    /// and branch too. The store follows the service's own answer and refetch.
+    pub async fn agent_forget(&self, params: ForgetSessionParams) -> Result<AgentSession, Refusal> {
+        self.ask(|reply| Command::AgentForget { params, reply })
+            .await
     }
 
     /// `agent.set_mode`: switches the session's permission mode now or at its next resume. The store takes the
@@ -241,6 +249,32 @@ pub(super) fn spawn_resume(
     let client = client.clone();
     spawn_session_answer(updates, reply, async move {
         client.agent_resume_with(&params).await
+    });
+}
+
+/// Forgets a session on its own task, then reads its tree again whatever the answer: a forgotten session leaves
+/// the store, and a refused one is read as the service has it. Without the capability nothing is sent.
+pub(super) fn spawn_forget(
+    client: &Client,
+    params: ForgetSessionParams,
+    reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        if !client.has_capability(agent_forget::AGENT_ARCHIVE) {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "service.capability_missing".to_owned(),
+                message: "This service cannot forget a session with these options yet.".to_owned(),
+            }));
+            return;
+        }
+        let result = agent_forget::forget(&client, &params)
+            .await
+            .map_err(|error| Refusal::from(&error));
+        refetch_tree(&client, &params.session, &updates).await;
+        let _ = reply.send(result);
     });
 }
 

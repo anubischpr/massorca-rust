@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::methods::chat::KindChat;
+use crate::methods::chat::{KindChat, RunType};
 use crate::methods::terminals::{TerminalExit, TerminalState};
 
 /// Params: none. Result: [`AgentKinds`].
@@ -815,9 +815,12 @@ pub struct AgentSession {
     /// The agent's own conversation id, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_ref: Option<String>,
-    /// The current or last run's terminal.
+    /// The current or last run's terminal. A chat session has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
+    /// How the session's run talks to the service (decision 0101). Absent means `terminal`, as from an older peer.
+    #[serde(default, skip_serializing_if = "RunType::is_terminal")]
+    pub run: RunType,
     pub created_at_ms: i64,
     pub execution: Execution,
     /// Absent until the agent reports; absent is not a state.

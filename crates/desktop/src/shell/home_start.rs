@@ -38,6 +38,7 @@ use crate::model::home_start::{
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
+use crate::service::StoreUpdate;
 use crate::service::create_for_start;
 
 /// What the page draws, gathered by the shell for one frame.
@@ -578,6 +579,9 @@ impl Shell {
                     .await
                     {
                         Ok(workspace) => {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.remember_chosen_kind(&workspace.id, &kind.id, cx);
+                            });
                             let params = home_start_params(
                                 &workspace.id,
                                 &kind.id,
@@ -598,5 +602,20 @@ impl Shell {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Keeps the agent kind chosen for a workspace this app created, until its first session replaces its row (A97).
+    pub(super) fn remember_chosen_kind(
+        &mut self,
+        workspace: &str,
+        kind: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let update = StoreUpdate::WorkspaceKindChosen {
+            workspace: workspace.to_owned(),
+            kind: kind.to_owned(),
+        };
+        self.store
+            .update(cx, |store, cx| store.apply(vec![update], cx));
     }
 }

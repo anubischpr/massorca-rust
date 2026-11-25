@@ -12,8 +12,8 @@ use massorca_desktop::model::agent_sessions::bring_back_refusal;
 use massorca_desktop::model::session_ended::refusal_says_conversation_gone;
 use massorca_desktop::model::start_page::start_again_params;
 use massorca_desktop::service::{
-    AttachRole, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, TerminalStream,
-    TerminalStreamItem, connect_options, feed_events,
+    AttachRole, ForgetSessionParams, Refusal, ServiceBridge, ServiceHandle, StoreState,
+    StoreUpdate, TerminalStream, TerminalStreamItem, connect_options, feed_events,
 };
 use massorca_profile::Profile;
 use massorca_protocol::codes;
@@ -769,6 +769,45 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
         .close_terminal(&terminal)
         .await
         .expect("the session's terminal closes");
+    drop(bridge);
+    stop_service(service).await;
+}
+
+/// Until the service offers `agent-archive/1`, a forget with its options is refused in the desktop and never sent.
+/// When the service offers it, this test must send the call to a real session instead.
+#[tokio::test]
+async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_service_lacks_the_capability()
+ {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    let offered = timeout(WAIT, async {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if let StoreUpdate::AgentArchiveOffered(offered) = update {
+                return offered;
+            }
+        }
+    })
+    .await
+    .expect("the capability answer arrives after the connect");
+    assert!(!offered, "the service does not offer agent-archive/1 yet");
+
+    let refused = bridge
+        .handle()
+        .agent_forget(ForgetSessionParams {
+            session: "no-such-session".to_owned(),
+            remove_workspace: true,
+            force: false,
+        })
+        .await;
+    match refused {
+        Err(Refusal::Failed { code, .. }) => assert_eq!(code, "service.capability_missing"),
+        other => panic!("the forget is refused in the desktop, got {other:?}"),
+    }
+
     drop(bridge);
     stop_service(service).await;
 }

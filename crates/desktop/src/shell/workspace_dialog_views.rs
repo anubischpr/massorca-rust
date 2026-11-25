@@ -3,6 +3,7 @@
 use super::Shell;
 use super::path_field::{PickKind, path_field};
 use super::workspace_dialogs::AddProjectDialog;
+use crate::model::session_delete::{SessionDeleteFlow, SessionDeleteStage};
 use crate::model::workspace_flow::{DialogCopy, DialogKind, KEEP_BRANCH_LATER, RemoveFlow};
 use gpui::{AnyElement, App, Focusable, WeakEntity, Window, div, prelude::*, px};
 use massorca_ui::ActiveTheme;
@@ -75,6 +76,46 @@ pub(super) fn remove_dialog(flow: &RemoveFlow, shell: &WeakEntity<Shell>, cx: &A
             },
         ),
         keep_branch,
+    )
+}
+
+/// The delete-session confirm for the flow's current stage. The worktree option sits under the copy while the
+/// confirm is open, and only for a worktree (a plain folder has none).
+pub(super) fn session_delete_dialog(
+    flow: &SessionDeleteFlow,
+    shell: &WeakEntity<Shell>,
+    cx: &App,
+) -> Dialog {
+    let copy = flow.copy();
+    let confirming = flow.stage() == &SessionDeleteStage::Confirm;
+    let worktree = (flow.offers_workspace() && confirming).then(|| {
+        let toggle = shell.clone();
+        Checkbox::new("delete-session-worktree", flow.remove_workspace())
+            .label("Also remove its worktree and branch")
+            .disabled(flow.busy())
+            .on_change(move |checked, _: &mut Window, cx: &mut App| {
+                let _ = toggle.update(cx, |shell, cx| {
+                    shell.set_session_delete_remove_workspace(checked, cx);
+                });
+            })
+            .into_any_element()
+    });
+    let (on_action, on_dismiss) = (shell.clone(), shell.clone());
+    flow_dialog(
+        "delete-session",
+        copy,
+        flow.busy(),
+        flow.error(),
+        cx,
+        (
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_action.update(cx, |shell, cx| shell.confirm_session_delete(cx));
+            },
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_dismiss.update(cx, |shell, cx| shell.close_session_delete(cx));
+            },
+        ),
+        worktree,
     )
 }
 

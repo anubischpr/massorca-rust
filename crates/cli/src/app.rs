@@ -205,6 +205,12 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(skills::execute(&target, autostart, command, output))
         }
+        Commands::Marketplace { command } => {
+            let target = globals.target()?;
+            block_on(crate::marketplace::execute(
+                &target, autostart, command, output,
+            ))
+        }
     }
 }
 
