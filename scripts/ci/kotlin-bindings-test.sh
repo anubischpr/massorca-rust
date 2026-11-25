@@ -17,6 +17,11 @@ rm -rf "$project/build/uniffi"
 uniffi-bindgen generate --library "$lib_dir/libmassorca_client_ffi.so" --language kotlin \
   --no-format --out-dir "$project/build/uniffi"
 
+# A Kotlin exception already has `message`, and uniffi declares an error field of that name beside it, which Kotlin
+# refuses. uniffi's own renaming does not reach fields of types in a submodule, so the generated file is edited: every
+# backquoted `message` in it is such a field.
+sed -i 's/`message`/`reason`/g' "$project/build/uniffi/uniffi/massorca_client_ffi/massorca_client_ffi.kt"
+
 # A private home: the service refuses one that other users could reach.
 work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/massorca-kt.XXXXXX")"
 service_pid=""
