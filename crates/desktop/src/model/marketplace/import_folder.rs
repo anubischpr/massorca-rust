@@ -1,43 +1,13 @@
 //! The folder an account import starts from, as the service detects it (capability `agent-import-detect/1`).
 
-/// The service's answer to `agent.accounts.import_candidates`: the detected folder of each kind it knows.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ImportCandidates {
-    pub candidates: Vec<ImportCandidate>,
-}
+pub use massorca_protocol::methods::agents::{CandidateFile, ImportCandidate, ImportCandidates};
 
-impl ImportCandidates {
-    /// The candidate the service listed for `kind`, if any.
-    pub fn for_kind(&self, kind: &str) -> Option<&ImportCandidate> {
-        self.candidates
-            .iter()
-            .find(|candidate| candidate.kind == kind)
-    }
-}
-
-/// Where one kind's login files are, or where an import expects them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ImportCandidate {
-    pub kind: String,
-    /// Every required file is found.
-    pub ready: bool,
-    /// The folder of the first required file; omitted below the workspace scope.
-    pub folder: Option<String>,
-    pub files: Vec<CandidateFile>,
-}
-
-/// One file an import reads, and whether the service found it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CandidateFile {
-    pub name: String,
-    pub required: bool,
-    pub found: bool,
-    /// Set only when the file exists but cannot be used, such as "a link" or "too large"; with found=false.
-    pub reason: Option<String>,
-    /// Omitted below the workspace scope.
-    pub path: Option<String>,
-    /// The environment variable the location was read from, when the service names one; omitted below the workspace scope.
-    pub env: Option<String>,
+/// The candidate the service listed for `kind`, if any.
+pub fn candidate_for<'a>(found: &'a ImportCandidates, kind: &str) -> Option<&'a ImportCandidate> {
+    found
+        .candidates
+        .iter()
+        .find(|candidate| candidate.kind == kind)
 }
 
 /// The folder field's placeholder when no folder is expected: the wording the dialog has always had.

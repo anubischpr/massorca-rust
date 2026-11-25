@@ -58,6 +58,8 @@ pub enum StoreUpdate {
     AgentSeenOffered(bool),
     /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
     AgentNoProjectOffered(bool),
+    /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
+    AgentImportDetectOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -239,6 +241,8 @@ pub struct StoreState {
     pub agent_seen: bool,
     /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
     pub agent_no_project: bool,
+    /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
+    pub agent_import_detect: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -270,6 +274,7 @@ impl Default for StoreState {
             agent_queues: None,
             agent_seen: false,
             agent_no_project: false,
+            agent_import_detect: false,
             config: Vec::new(),
         }
     }
@@ -352,6 +357,7 @@ impl StoreState {
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
+            StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {

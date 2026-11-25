@@ -30,7 +30,8 @@ pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;
 pub use import_folder::{
-    CandidateFile, FolderField, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
+    CandidateFile, FolderField, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER,
+    candidate_for, folder_field,
 };
 pub use install_details::review_details;
 pub use install_review::{ReviewOutcome, installer_runs, review_outcome};

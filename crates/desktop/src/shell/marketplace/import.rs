@@ -10,8 +10,8 @@ use massorca_ui::tokens::{SPACE_1, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use crate::model::marketplace::{
-    FolderField, HostTarget, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, folder_field,
-    import_outcome,
+    FolderField, HostTarget, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, candidate_for,
+    folder_field, import_outcome,
 };
 use crate::shell::Shell;
 use crate::shell::path_field::{PickKind, path_field};
@@ -39,7 +39,7 @@ impl ImportDialog {
     fn candidate(&self) -> Option<&ImportCandidate> {
         self.detection
             .as_ref()
-            .and_then(|found| found.for_kind(&self.kind))
+            .and_then(|found| candidate_for(found, &self.kind))
     }
 
     /// What the dialog shows for the folder `edited` holds: `None` when it opens, the typed text afterwards.
@@ -112,6 +112,9 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
+        if !self.store.read(cx).state().agent_import_detect {
+            return;
+        }
         let kind = kind.to_owned();
         cx.spawn(async move |this, cx| {
             let detection = service.accounts_import_candidates(&kind).await;
@@ -159,12 +162,8 @@ impl Shell {
             return;
         }
         let typed = dialog.field.read(cx).text().to_owned();
-        // TODO(agent-import-detect/1): send `folder.from` as optional once the protocol makes `from` optional.
-        let from = dialog
-            .folder(Some(typed.as_str()))
-            .from
-            .unwrap_or_else(|| typed.trim().to_owned());
-        if from.is_empty() {
+        let from = dialog.folder(Some(typed.as_str())).from;
+        if from.as_deref().is_some_and(str::is_empty) {
             dialog.error = Some(NO_FOLDER.to_owned());
             cx.notify();
             return;
@@ -173,7 +172,7 @@ impl Shell {
         dialog.error = None;
         let params = AccountsImportParams {
             kind: dialog.kind.clone(),
-            from: Some(from),
+            from,
             label: None,
         };
         cx.notify();
@@ -216,19 +215,15 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
     let typed = import.field.read(cx).text().to_owned();
     let folder = import.folder(Some(typed.as_str()));
     let (submit, dismiss) = (weak.clone(), weak.clone());
-    let mut folder_section = div()
-        .flex()
-        .flex_col()
-        .gap(px(SPACE_1))
-        .child(path_field(
-            "account-import-browse",
-            "account-import-field",
-            weak.clone(),
-            &import.field,
-            PickKind::Folder,
-            matches!(shell.marketplace_pick.target(), HostTarget::Local),
-            !import.running,
-        ));
+    let mut folder_section = div().flex().flex_col().gap(px(SPACE_1)).child(path_field(
+        "account-import-browse",
+        "account-import-field",
+        weak.clone(),
+        &import.field,
+        PickKind::Folder,
+        matches!(shell.marketplace_pick.target(), HostTarget::Local),
+        !import.running,
+    ));
     if let Some(status) = folder.status {
         folder_section = folder_section.child(
             div()
