@@ -55,6 +55,7 @@ use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
+use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
 use crate::ui_state;
@@ -187,8 +188,8 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
-    /// The project the start page with no workspace creates in; `None` stands for the first one.
-    home_project: Option<String>,
+    /// The start page with no workspace's choice: a project or "No project"; `None` stands for the first project.
+    home_project: Option<ProjectChoice>,
     /// The last start-page call was refused because the data folder is not secured.
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.

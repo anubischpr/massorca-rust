@@ -21,8 +21,8 @@ use super::start_page::{
 };
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
-    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, create_params, home_project,
-    home_start_params,
+    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, create_params, home_choice,
+    home_start_params, no_project_start_params,
 };
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
@@ -31,7 +31,7 @@ use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 pub(super) struct HomeFrame {
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
-    /// The project's name, or `None` while there is no project.
+    /// The project's name, "No project" when the person chose it, or `None` while there is none to create in.
     pub project: Option<String>,
     /// The start in flight from this page, shown under the composer.
     pub starting: Option<String>,
@@ -42,14 +42,17 @@ pub(super) struct HomeFrame {
     pub profile_unsafe: bool,
 }
 
-/// The project menu of this page: the shared rows, with "No project" off until the service can
-/// start an agent without a workspace (A95). Its choice is `None`, so it can never be chosen.
+/// The project menu of this page: the shared rows. "No project" is chosen only once the service can start an agent
+/// without a workspace (A95); until then it is off with its reason, and its row stands for nothing.
 pub(super) fn home_project_menu(
     projects: &[Project],
-    chosen: Option<&str>,
+    chosen: Option<&ProjectChoice>,
+    no_project_offered: bool,
 ) -> (Vec<MenuEntry>, Vec<Option<ProjectMenuChoice>>) {
-    let chosen = chosen.map(|id| ProjectChoice::Project(id.to_owned()));
-    let (mut entries, mut choices) = project_menu(projects, chosen.as_ref());
+    let (mut entries, mut choices) = project_menu(projects, chosen);
+    if no_project_offered {
+        return (entries, choices);
+    }
     for (entry, choice) in entries.iter_mut().zip(choices.iter_mut()) {
         if *choice == Some(ProjectMenuChoice::Project(ProjectChoice::NoProject)) {
             *entry = MenuItem::new(NO_PROJECT_LABEL)
@@ -144,7 +147,13 @@ impl Shell {
         let composer = self.start_composer(HOME_START, cx);
         let project = {
             let projects = &self.store.read(cx).state().projects;
-            home_project(projects, self.home_project.as_deref()).map(|p| p.name.clone())
+            match home_choice(projects, self.home_project.as_ref()) {
+                Some(ProjectChoice::NoProject) => Some(NO_PROJECT_LABEL.to_owned()),
+                Some(ProjectChoice::Project(id)) => {
+                    projects.iter().find(|p| p.id == id).map(|p| p.name.clone())
+                }
+                None => None,
+            }
         };
         let starting = self
             .start_pending
@@ -162,11 +171,14 @@ impl Shell {
         })
     }
 
-    /// The project button's menu, with the page's project checked. It opens where the pointer is.
+    /// The project button's menu, with the page's choice checked. It opens where the pointer is.
     pub(super) fn open_home_project_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let projects = self.store.read(cx).state().projects.clone();
-        let chosen = home_project(&projects, self.home_project.as_deref()).map(|p| p.id.clone());
-        let (entries, choices) = home_project_menu(&projects, chosen.as_deref());
+        let (projects, offered) = {
+            let state = self.store.read(cx).state();
+            (state.projects.clone(), state.agent_no_project)
+        };
+        let chosen = home_choice(&projects, self.home_project.as_ref());
+        let (entries, choices) = home_project_menu(&projects, chosen.as_ref(), offered);
         self.open_menu(
             entries,
             MenuTarget::HomeProject(choices),
@@ -177,8 +189,9 @@ impl Shell {
         );
     }
 
-    /// Send: `workspace.create` in the page's project, then `agent.start` in the new workspace with
-    /// the chosen kind and mode. Either refusal gives the prompt back with the service's sentence.
+    /// Send: with a project, `workspace.create` in it and then `agent.start` in the new workspace; with "No project",
+    /// `agent.start` alone. The chosen kind and mode go with it. A refusal gives the prompt back with the service's
+    /// sentence.
     pub(super) fn start_from_home(
         &mut self,
         prompt: &str,
@@ -188,11 +201,10 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let Some(project) = home_project(
+        let Some(choice) = home_choice(
             &self.store.read(cx).state().projects,
-            self.home_project.as_deref(),
-        )
-        .map(|project| project.id.clone()) else {
+            self.home_project.as_ref(),
+        ) else {
             return;
         };
         let (kind, permission_mode) = match self.chosen_start(&composer, cx) {
@@ -204,17 +216,31 @@ impl Shell {
             workspace: HOME_START.to_owned(),
             kind_name: kind.name,
         });
-        let create = create_params(&project, prompt);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = match service.create_workspace(create).await {
-                Ok(workspace) => {
-                    let params =
-                        home_start_params(&workspace.id, &kind.id, &prompt, permission_mode);
+            let answer = match choice {
+                ProjectChoice::NoProject => {
+                    let params = no_project_start_params(&kind.id, &prompt, permission_mode);
                     service.agent_start(params).await
                 }
-                Err(refusal) => Err(refusal),
+                ProjectChoice::Project(project) => {
+                    match service
+                        .create_workspace(create_params(&project, &prompt))
+                        .await
+                    {
+                        Ok(workspace) => {
+                            let params = home_start_params(
+                                &workspace.id,
+                                &kind.id,
+                                &prompt,
+                                permission_mode,
+                            );
+                            service.agent_start(params).await
+                        }
+                        Err(refusal) => Err(refusal),
+                    }
+                }
             };
             let _ = shell.update(cx, |shell, cx| {
                 shell.finish_start(&prompt, composer, mode, answer, cx);
