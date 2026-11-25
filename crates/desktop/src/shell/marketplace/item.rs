@@ -198,10 +198,15 @@ fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
         .and_then(|entry| entry.listing.mention.as_deref());
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
+        item.name.clone(),
         banner_tag(mention, &item.name),
+        kind_icon(item.kind),
     );
-    if let Some((first, accent)) = banner_tint(item) {
-        banner = banner.tint(first, accent);
+    if let Some(agent) = item_mark(item) {
+        banner = banner.agent(agent);
+    }
+    if let Some((first, second)) = banner_tint(item) {
+        banner = banner.colours(first, second);
     }
     for example in &item.examples {
         banner = banner.example(example.clone());
