@@ -14,6 +14,7 @@ mod launch;
 mod quit;
 mod refusal;
 mod secrets;
+mod skills;
 mod teams;
 mod terminals;
 mod update;
@@ -44,6 +45,7 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
