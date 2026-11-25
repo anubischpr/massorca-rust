@@ -200,6 +200,7 @@ fn category_name(category: Category) -> &'static str {
         Category::Skills => "skills",
         Category::Services => "services",
         Category::Themes => "themes",
+        Category::Tools => "tools",
     }
 }
 

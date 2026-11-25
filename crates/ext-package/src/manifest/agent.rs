@@ -28,7 +28,10 @@ pub const VENDOR_PROGRAMS: [&str; 5] = ["winget", "brew", "npm", "powershell", "
 /// Whether a vendor command's argv starts with an allowlisted program.
 /// Whether a cli block declares a vendor command: an install, an uninstall or a verify. Only a built-in may (0062, V1).
 pub fn declares_vendor_commands(cli: &AgentCli) -> bool {
-    cli.verify.is_some() || !cli.install.is_empty() || !cli.uninstall.is_empty()
+    cli.verify.is_some()
+        || !cli.install.is_empty()
+        || !cli.update.is_empty()
+        || !cli.uninstall.is_empty()
 }
 
 pub fn is_vendor_program(argv: &[String]) -> bool {
@@ -67,8 +70,43 @@ pub struct AgentCli {
     pub source_checked: Option<String>,
     #[serde(default)]
     pub install: Vec<CliStep>,
+    /// The vendor's update command, run only for a program the package installed (decision 0151).
+    #[serde(default)]
+    pub update: Vec<CliStep>,
     #[serde(default)]
     pub uninstall: Vec<CliStep>,
+}
+
+/// A program on the host that a tool package installs and tracks, such as Git (decision 0151).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostProgram {
+    pub id: String,
+    pub cli: AgentCli,
+}
+
+impl Manifest {
+    /// Every CLI the package names, agent adapters first, then host programs, by contribution id.
+    pub fn program_clis(&self) -> impl Iterator<Item = (&str, &AgentCli)> {
+        let adapters = self
+            .contributes
+            .agent_adapters
+            .iter()
+            .filter_map(|adapter| Some((adapter.id.as_str(), adapter.cli.as_ref()?)));
+        let programs = self
+            .contributes
+            .host_programs
+            .iter()
+            .map(|program| (program.id.as_str(), &program.cli));
+        adapters.chain(programs)
+    }
+
+    /// The CLI of the agent adapter or host program `id`.
+    pub fn cli_of(&self, id: &str) -> Option<&AgentCli> {
+        self.program_clis()
+            .find(|(cli_id, _)| *cli_id == id)
+            .map(|(_, cli)| cli)
+    }
 }
 
 /// One command for one operating system, as argv.
@@ -110,6 +148,12 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
             "agent adapters need a process permission",
         );
     }
+    if !has_process && !manifest.contributes.host_programs.is_empty() {
+        problems.add(
+            "/contributes/hostPrograms",
+            "host programs need a process permission",
+        );
+    }
     if !has_process && !servers.is_empty() {
         problems.add(
             "/contributes/mcpServers",
@@ -142,6 +186,20 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
             if let Some(cli) = &adapter.cli {
                 validate_cli(cli, &at(here, "cli"), problems);
             }
+        },
+    );
+    list(
+        &manifest.contributes.host_programs,
+        "hostPrograms",
+        "id",
+        ids::is_kind_id,
+        |program| program.id.as_str(),
+        problems,
+        |program, here, problems| {
+            if adapters.iter().any(|adapter| adapter.id == program.id) {
+                problems.add(at(here, "id"), "repeats an agent adapter id");
+            }
+            validate_cli(&program.cli, &at(here, "cli"), problems);
         },
     );
     list(
@@ -192,6 +250,7 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
         );
     }
     check_steps(&cli.install, &at(base, "install"), problems);
+    check_steps(&cli.update, &at(base, "update"), problems);
     check_steps(&cli.uninstall, &at(base, "uninstall"), problems);
 }
 
