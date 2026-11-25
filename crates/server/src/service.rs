@@ -244,6 +244,7 @@ impl Service {
             workspaces: Arc::clone(&workspaces),
             profile_dir: profile.dir().to_path_buf(),
             massorca_bin: std::env::current_exe()?,
+            conversations_default: PathBuf::from(crate::features::default_conversations_root()?),
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
         });

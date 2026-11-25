@@ -468,7 +468,7 @@ fn sending_the_prompt_asks_the_service_to_start_the_chosen_kind_in_the_workspace
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!(params.workspace, "w1");
+    assert_eq!(params.workspace.as_deref(), Some("w1"));
     assert_eq!(params.kind, "claude");
     assert_eq!(params.prompt.as_deref(), Some("fix the login"));
 }
