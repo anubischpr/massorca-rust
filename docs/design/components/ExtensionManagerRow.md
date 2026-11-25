@@ -41,7 +41,7 @@ The row has no Update button. The artboard shows none, so the update is named in
 ## Behaviour (handoff)
 
 - Name press: opens the item page. Switch press: sends the change to the caller, which applies it; the switch settles when the service confirms.
-- More press: sends More to the caller, which opens the row's menu.
+- More press: opens the row's menu at the pointer. Roll back (to the previous version when there is one) and View log are disabled with "Not available yet" until the service has them. Remove, in the danger colour, opens the uninstall confirm that the item page's Danger zone opens. Up and Down move in the menu, Enter chooses and Escape closes it.
 - View log: sends View log. Until the service has a log, the caller opens the item page, as the card does.
 - Keyboard: each row is a list item. Tab visits the name, the switch, View log (failed rows only) and More.
 - Accessibility: rows are list items named by the extension's name. The switch is named "Enable <name>". The status word is plain text, read in order.

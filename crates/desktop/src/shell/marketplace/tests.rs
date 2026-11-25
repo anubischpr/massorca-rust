@@ -141,6 +141,47 @@ fn the_installed_view_lists_only_installed_items(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_row_menu_offers_remove_which_asks_the_existing_uninstall_confirm(cx: &mut TestAppContext) {
+    let (shell, cx) = open_shell(cx);
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    click(cx, "button:marketplace-row-6-more");
+    assert!(shown(cx, "menu-item-3"), "the row's menu lists Remove");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "nothing asks to be removed until Remove is chosen"
+    );
+    click(cx, "menu-item-3");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "Remove opens the uninstall confirm"
+    );
+    assert!(
+        matches!(item_state(&shell, cx, 6), ItemState::Installed { .. }),
+        "the item stays installed until the confirm's own action"
+    );
+}
+
+#[gpui::test]
+fn the_row_menu_roll_back_and_view_log_are_not_available_yet(cx: &mut TestAppContext) {
+    let (shell, cx) = open_shell(cx);
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    click(cx, "button:marketplace-row-6-more");
+    assert!(shown(cx, "menu-item-0"), "Roll back is listed");
+    assert!(shown(cx, "menu-item-1"), "View log is listed");
+    click(cx, "menu-item-0");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "a row that is not available yet opens nothing"
+    );
+    assert!(
+        matches!(item_state(&shell, cx, 6), ItemState::Installed { .. }),
+        "the item stays installed"
+    );
+}
+
+#[gpui::test]
 fn a_search_narrows_the_catalogue(cx: &mut TestAppContext) {
     let (shell, cx) = open_shell(cx);
     click(cx, "rail-marketplace");

@@ -266,6 +266,7 @@ fn discover_groups(
 pub(super) fn catalogue_view(
     frame: &MarketplaceFrame,
     page: MarketplacePage,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -313,7 +314,7 @@ pub(super) fn catalogue_view(
     } else {
         match page {
             MarketplacePage::Discover => discover_groups(frame, &items, cx),
-            MarketplacePage::Installed => installed_rows(frame, &items, cx),
+            MarketplacePage::Installed => installed_rows(frame, &items, window, cx),
             _ => card_grid(frame, &items, cx),
         }
     };
