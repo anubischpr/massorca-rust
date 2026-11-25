@@ -337,6 +337,39 @@ impl TextBuffer {
             .map_or(self.text.len(), |(range, _)| range.start)
     }
 
+    /// Selects the run of word characters, or of separators, under `offset`: a double click.
+    pub fn select_word_at(&mut self, offset: usize) {
+        let clusters = self.word_clusters();
+        let offset = self.clamp_offset(offset);
+        let Some(index) = clusters
+            .partition_point(|(range, _)| range.start <= offset)
+            .checked_sub(1)
+        else {
+            self.select_range(0..0);
+            return;
+        };
+        let class = clusters[index].1;
+        let mut first = index;
+        while first > 0 && clusters[first - 1].1 == class {
+            first -= 1;
+        }
+        let mut last = index;
+        while last + 1 < clusters.len() && clusters[last + 1].1 == class {
+            last += 1;
+        }
+        self.select_range(clusters[first].0.start..clusters[last].0.end);
+    }
+
+    /// Selects the line under `offset`, without its line break: a triple click.
+    pub fn select_line_at(&mut self, offset: usize) {
+        let offset = self.clamp_offset(offset);
+        let start = self.text[..offset].rfind('\n').map_or(0, |at| at + 1);
+        let end = self.text[offset..]
+            .find('\n')
+            .map_or(self.text.len(), |at| offset + at);
+        self.select_range(start..end);
+    }
+
     /// Writes `text` over the selection (paste, cut, a line break); `true` when the text changed.
     pub fn insert(&mut self, text: &str) -> bool {
         self.recorded(EditKind::Other, |buffer| {
@@ -536,6 +569,13 @@ impl TextBuffer {
     fn clamp_range(&self, range: Range<usize>) -> Range<usize> {
         let start = self.clamp_offset(range.start);
         start..self.clamp_offset(range.end).max(start)
+    }
+
+    /// Selects `range` with the caret at its end, ending any open undo step.
+    fn select_range(&mut self, range: Range<usize>) {
+        self.history.break_group();
+        self.selected = range;
+        self.reversed = false;
     }
 
     /// The grapheme clusters, each with whether it is a word: its first character is a letter, digit or underscore.
@@ -1064,13 +1104,13 @@ impl TextField {
         self.selecting = true;
         let index = self.index_for(event.position);
         let extend = event.modifiers.shift;
+        let clicks = event.click_count;
         self.move_caret(
-            move |buffer| {
-                if extend {
-                    buffer.select_to(index)
-                } else {
-                    buffer.move_to(index)
-                }
+            move |buffer| match (clicks, extend) {
+                (1, true) => buffer.select_to(index),
+                (2, _) => buffer.select_word_at(index),
+                (n, _) if n >= 3 => buffer.select_line_at(index),
+                _ => buffer.move_to(index),
             },
             window,
             cx,
@@ -2642,12 +2682,47 @@ mod tests {
         assert_eq!(buffer.text(), "one two");
     }
 
+    #[test]
+    fn a_double_click_selects_a_word_or_a_run_of_separators() {
+        let mut buffer = TextBuffer::new("hello world");
+        buffer.select_word_at(7);
+        assert_eq!(buffer.selected(), 6..11);
+        buffer.select_word_at(5);
+        assert_eq!(buffer.selected(), 5..6, "a single space is its own run");
+        buffer.select_word_at(11);
+        assert_eq!(
+            buffer.selected(),
+            6..11,
+            "the end of the text picks the last word"
+        );
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_line_without_its_break() {
+        let mut buffer = TextBuffer::new("ab\ncd ef");
+        buffer.select_line_at(1);
+        assert_eq!(buffer.selected(), 0..2);
+        buffer.select_line_at(4);
+        assert_eq!(buffer.selected(), 3..8);
+    }
+
     fn caret_of(field: &Entity<TextField>, cx: &VisualTestContext) -> usize {
         field.read_with(cx, |field, _| field.buffer.cursor())
     }
 
     fn selection_of(field: &Entity<TextField>, cx: &VisualTestContext) -> Range<usize> {
         field.read_with(cx, |field, _| field.buffer.selected())
+    }
+
+    /// A left-button press at `position` that is the `clicks`th click in a row.
+    fn press_at(position: Point<Pixels>, clicks: usize) -> MouseDownEvent {
+        MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+            click_count: clicks,
+            first_mouse: false,
+        }
     }
 
     #[gpui::test]
@@ -2684,6 +2759,25 @@ mod tests {
         assert_eq!(caret_of(&field, cx), 0);
         cx.simulate_keystrokes(platform_keys("cmd-down", "ctrl-end"));
         assert_eq!(caret_of(&field, cx), 3);
+    }
+
+    #[gpui::test]
+    fn a_double_click_selects_a_word_and_a_triple_click_the_field(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("one two three"));
+        focus_and_draw(&field, cx);
+        let bounds = field.read_with(cx, |field, _| {
+            field.last_bounds.expect("the field is painted")
+        });
+        let position = point(bounds.left() + px(1.), bounds.center().y);
+        field.update_in(cx, |field, window, cx| {
+            field.mouse_down(&press_at(position, 2), window, cx)
+        });
+        assert_eq!(selection_of(&field, cx), 0..3);
+        field.update_in(cx, |field, window, cx| {
+            field.mouse_down(&press_at(position, 3), window, cx)
+        });
+        assert_eq!(selection_of(&field, cx), 0..13);
     }
 }
 

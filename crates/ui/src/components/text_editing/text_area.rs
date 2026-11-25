@@ -371,7 +371,10 @@ impl_input_handler!(TextArea);
 mod tests {
     use super::*;
     use crate::components::text_editing::keymap::{REDO_KEYS, UNDO_KEYS, platform_keys};
-    use gpui::{ClipboardItem, Entity, EntityInputHandler, TestAppContext, VisualTestContext};
+    use gpui::{
+        ClipboardItem, Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent,
+        TestAppContext, VisualTestContext,
+    };
     use std::cell::RefCell;
 
     /// Subscribes to an area and collects the events it emits.
@@ -515,6 +518,17 @@ mod tests {
         assert_eq!(text_of(&area, cx), "ab");
     }
 
+    /// A left-button press at `position` that is the `clicks`th click in a row.
+    fn press_at(position: Point<Pixels>, clicks: usize) -> MouseDownEvent {
+        MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+            click_count: clicks,
+            first_mouse: false,
+        }
+    }
+
     #[gpui::test]
     fn word_keys_move_select_and_delete_by_the_word(cx: &mut TestAppContext) {
         cx.update(bind_keys);
@@ -554,6 +568,37 @@ mod tests {
         assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 3..5);
         cx.simulate_keystrokes(platform_keys("cmd-a", "ctrl-a"));
         assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 0..5);
+    }
+
+    #[gpui::test]
+    fn a_double_click_selects_a_word_and_a_triple_click_its_line(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) =
+            cx.add_window_view(|_, cx| TextArea::new(cx).with_text("one two\nthree four"));
+        focus_and_draw(&area, cx);
+        let (bounds, line, two, three) = area.read_with(cx, |area, _| {
+            let shaped = area.shaped.as_ref().expect("the area is painted");
+            (
+                area.bounds.expect("the area is painted"),
+                shaped.line_height,
+                shaped.point_for_offset(4).expect("offset 4 is laid out"),
+                shaped.point_for_offset(8).expect("offset 8 is laid out"),
+            )
+        });
+        let at = |spot: Point<Pixels>| {
+            point(
+                bounds.left() + spot.x + px(1.),
+                bounds.top() + spot.y + line * 0.5,
+            )
+        };
+        area.update_in(cx, |area, window, cx| {
+            area.mouse_down(&press_at(at(two), 2), window, cx)
+        });
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 4..7);
+        area.update_in(cx, |area, window, cx| {
+            area.mouse_down(&press_at(at(three), 3), window, cx)
+        });
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 8..18);
     }
 
     #[gpui::test]
