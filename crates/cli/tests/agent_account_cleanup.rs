@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 
 const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
 /// The same login with other contents: the fake agent's check reports the same identity.
+/// A token whose identity differs from the fake login's default one.
+const IMPORTED_TOKEN: &str =
+    r#"{"fake":true,"email":"imported@example.invalid","refresh":"fake-imported-value"}"#;
 const FAKE_TOKEN_AGAIN: &str = r#"{"fake":true,"refresh":"another-fake-value"}"#;
 
 /// A package whose agent kind is `acctagent`, run as the CLI `acctcli`.
@@ -155,7 +158,8 @@ fn removing_a_package_with_its_agent_homes_deletes_its_accounts_and_a_new_import
     let package = write_package(&host, ACCOUNTS);
     host.json(&["extension", "install", &package, "--yes"]);
 
-    let imported = import(&host, "acctagent", &source(&host, "first", FAKE_TOKEN));
+    // Its own identity, so the sign-in below (the fake login's default identity) stays a second account.
+    let imported = import(&host, "acctagent", &source(&host, "first", IMPORTED_TOKEN));
     assert_eq!(imported["result"], "imported", "{imported}");
     let old = imported["account"]["id"].as_str().unwrap().to_owned();
     // A second account, made by a MassOrca sign-in: its removal would run the sign-out, which this cleanup never runs.
@@ -168,8 +172,11 @@ fn removing_a_package_with_its_agent_homes_deletes_its_accounts_and_a_new_import
         "signed",
         "--no-attach",
     ]);
+    // Listed is not decided: the sign-in's account stays busy until its check settles it, so wait for both to be signed in.
     eventually("the sign-in to be decided", || {
-        (accounts(&host, "acctagent").len() == 2).then_some(())
+        let listed = accounts(&host, "acctagent");
+        (listed.len() == 2 && listed.iter().all(|account| account["state"] == "signed_in"))
+            .then_some(())
     });
     let homes = accounts_dir(&host, "acctagent");
     assert!(homes.join(&old).is_dir(), "the imported account has a home");
