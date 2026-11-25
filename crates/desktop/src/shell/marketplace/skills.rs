@@ -204,9 +204,7 @@ fn found_body(frame: &MarketplaceFrame, rows: &[SkillRow], cx: &App) -> AnyEleme
     if rows.is_empty() {
         return EmptyState::new("marketplace-skills-empty", "No skills found")
             .variant(EmptyStateVariant::Section)
-            .explanation(
-                "The scanned skill folders are empty. Install a shared bundle, or refresh after adding a skill.",
-            )
+            .explanation("The scanned skill folders are empty. Refresh after adding a skill.")
             .action(refresh_button(frame))
             .into_any_element();
     }
