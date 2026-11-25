@@ -23,8 +23,8 @@ pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 
-/// Where a session started from the page opens: as a Conversation in the Canvas, or as the agent's
-/// own terminal in the Work panel (D-AG-01, pv96). Chat is the default.
+/// How a session started from the page runs: as a Conversation (chat), or as the agent's own terminal. Both open
+/// in the Canvas (D-AG-01, owner ruling 2026-11-25). Chat is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StartMode {
     #[default]
@@ -122,7 +122,7 @@ fn version_and_range(chat: &KindChat) -> Option<(&str, &str)> {
 
 /// The note under the composer while Terminal is chosen (WS-40).
 pub const TERMINAL_NOTE: &str =
-    "The agent opens in a Work panel terminal. Some features are limited there.";
+    "The agent runs in its own terminal. Some features are limited there.";
 
 /// The key hints under the composer, each key with what it does (D-AG-01).
 pub const KEY_HINTS: [(&str, &str); 4] = [
