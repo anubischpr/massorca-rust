@@ -1021,11 +1021,11 @@ fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &m
 
 /// The transcript a chat session holds after its first exchange: the person's ask and the agent's answer.
 fn chat_transcript() -> crate::model::chat_transcript::ChatTranscript {
-    use crate::model::chat_items::{
-        ChatBody, ChatCursor, ChatEvent, ChatItem, ChatSnapshot, MessageState,
+    use massorca_protocol::methods::chat::{
+        ChatCursor, ChatEvent, ChatItem, ChatItemBody, ChatSnapshot, MessageState,
     };
 
-    let item = |id: &str, position: u64, body: ChatBody| ChatItem {
+    let item = |id: &str, position: u64, body: ChatItemBody| ChatItem {
         id: id.to_owned(),
         position,
         seq: position,
@@ -1044,14 +1044,14 @@ fn chat_transcript() -> crate::model::chat_transcript::ChatTranscript {
             item(
                 "ask",
                 1,
-                ChatBody::UserMessage {
+                ChatItemBody::UserMessage {
                     text: "Fix the parser.".to_owned(),
                 },
             ),
             item(
                 "answer",
                 2,
-                ChatBody::AssistantMessage {
+                ChatItemBody::AssistantMessage {
                     text: "Reading it now.".to_owned(),
                     state: MessageState::Completed,
                 },

@@ -4,8 +4,9 @@
 use std::cmp::Ordering;
 
 use massorca_protocol::methods::agents::Activity;
-
-use super::chat_items::*;
+use massorca_protocol::methods::chat::{
+    ChatBatch, ChatCursor, ChatEvent, ChatItem, ChatItemBody, ChatSnapshot, ChatUpdate, EndReason,
+};
 
 /// What the reader does after an event: keep the stream, or resubscribe after the last applied cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +100,7 @@ impl ChatTranscript {
         }
         self.latest_turn = snapshot
             .latest_turn
-            .filter(|turn| matches!(turn.body, ChatBody::Turn(_)));
+            .filter(|turn| matches!(turn.body, ChatItemBody::Turn(_)));
         self.cursor = Some(snapshot.cursor);
         self.activity = snapshot.activity;
         self.awaiting_snapshot = false;
@@ -112,7 +113,7 @@ impl ChatTranscript {
         }
         for update in batch.updates {
             match update {
-                ChatUpdate::Item(item) => self.put(item),
+                ChatUpdate::Item { item } => self.put(item),
                 ChatUpdate::Append {
                     id,
                     seq,
@@ -135,7 +136,7 @@ impl ChatTranscript {
 
     /// Replaces the held item with the same id, or adds the item at its position. Unknown types are skipped.
     fn put(&mut self, item: ChatItem) {
-        if matches!(item.body, ChatBody::Unknown) {
+        if matches!(item.body, ChatItemBody::Unknown) {
             return;
         }
         if let Some(turn) = self.latest_turn.as_mut().filter(|turn| turn.id == item.id) {
@@ -165,8 +166,8 @@ impl ChatTranscript {
             return Appended::Gap;
         };
         let held = match &mut item.body {
-            ChatBody::AssistantMessage { text: held, .. }
-            | ChatBody::Thinking { text: held, .. } => held,
+            ChatItemBody::AssistantMessage { text: held, .. }
+            | ChatItemBody::Thinking { text: held, .. } => held,
             _ => return Appended::Gap,
         };
         match (held.len() as u64).cmp(&offset) {
@@ -185,6 +186,7 @@ impl ChatTranscript {
 mod tests {
     use super::*;
     use massorca_protocol::methods::agents::{ActivitySource, ActivityState};
+    use massorca_protocol::methods::chat::{MessageState, ResetReason, Turn, TurnState};
 
     fn cursor(seq: u64) -> ChatCursor {
         ChatCursor {
@@ -193,7 +195,7 @@ mod tests {
         }
     }
 
-    fn item(id: &str, position: u64, body: ChatBody) -> ChatItem {
+    fn item(id: &str, position: u64, body: ChatItemBody) -> ChatItem {
         ChatItem {
             id: id.to_owned(),
             position,
@@ -209,7 +211,7 @@ mod tests {
         item(
             id,
             position,
-            ChatBody::AssistantMessage {
+            ChatItemBody::AssistantMessage {
                 text: text.to_owned(),
                 state,
             },
@@ -220,10 +222,11 @@ mod tests {
         item(
             id,
             position,
-            ChatBody::Turn(Turn {
+            ChatItemBody::Turn(Turn {
                 state,
                 user_item: None,
                 completed_at_ms: None,
+                outcome: None,
             }),
         )
     }
@@ -232,7 +235,7 @@ mod tests {
         item(
             id,
             position,
-            ChatBody::UserMessage {
+            ChatItemBody::UserMessage {
                 text: text.to_owned(),
             },
         )
@@ -267,7 +270,7 @@ mod tests {
 
     fn prose_text(transcript: &ChatTranscript, id: &str) -> String {
         match transcript.item(id).map(|item| &item.body) {
-            Some(ChatBody::AssistantMessage { text, .. }) => text.clone(),
+            Some(ChatItemBody::AssistantMessage { text, .. }) => text.clone(),
             other => panic!("expected held prose for {id}, found {other:?}"),
         }
     }
@@ -327,8 +330,12 @@ mod tests {
         transcript.apply(batch(
             2,
             vec![
-                ChatUpdate::Item(prose("answer", 3, "final", MessageState::Completed)),
-                ChatUpdate::Item(user("next", 4, "again")),
+                ChatUpdate::Item {
+                    item: prose("answer", 3, "final", MessageState::Completed),
+                },
+                ChatUpdate::Item {
+                    item: user("next", 4, "again"),
+                },
             ],
         ));
 
@@ -344,7 +351,12 @@ mod tests {
             1,
             vec![user("a", 1, "a"), user("b", 2, "b"), user("c", 3, "c")],
         ));
-        transcript.apply(batch(2, vec![ChatUpdate::Item(user("a", 5, "a"))]));
+        transcript.apply(batch(
+            2,
+            vec![ChatUpdate::Item {
+                item: user("a", 5, "a"),
+            }],
+        ));
 
         assert_eq!(ids(&transcript), ["b", "c", "a"]);
     }
@@ -355,11 +367,15 @@ mod tests {
         transcript.apply(snapshot(1, vec![user("ask", 1, "hi")]));
         transcript.apply(batch(
             2,
-            vec![ChatUpdate::Item(item("future", 2, ChatBody::Unknown))],
+            vec![ChatUpdate::Item {
+                item: item("future", 2, ChatItemBody::Unknown),
+            }],
         ));
         transcript.apply(batch(
             3,
-            vec![ChatUpdate::Item(item("ask", 1, ChatBody::Unknown))],
+            vec![ChatUpdate::Item {
+                item: item("ask", 1, ChatItemBody::Unknown),
+            }],
         ));
 
         assert_eq!(ids(&transcript), ["ask"]);
@@ -459,7 +475,9 @@ mod tests {
             2,
             vec![
                 append("answer", 2, 9, "x"),
-                ChatUpdate::Item(user("after", 2, "later")),
+                ChatUpdate::Item {
+                    item: user("after", 2, "later"),
+                },
             ],
         ));
 
@@ -472,7 +490,9 @@ mod tests {
     fn a_batch_applied_twice_converges() {
         let mut transcript = ChatTranscript::default();
         transcript.apply(snapshot(1, vec![user("ask", 1, "hi")]));
-        let update = ChatUpdate::Item(user("next", 2, "again"));
+        let update = ChatUpdate::Item {
+            item: user("next", 2, "again"),
+        };
         transcript.apply(batch(2, vec![update.clone()]));
         let once = transcript.clone();
         transcript.apply(batch(2, vec![update]));
@@ -494,7 +514,12 @@ mod tests {
         assert!(transcript.cursor().is_none());
         assert!(transcript.awaiting_snapshot());
 
-        transcript.apply(batch(5, vec![ChatUpdate::Item(user("stray", 5, "x"))]));
+        transcript.apply(batch(
+            5,
+            vec![ChatUpdate::Item {
+                item: user("stray", 5, "x"),
+            }],
+        ));
         assert!(transcript.items().is_empty());
 
         transcript.apply(snapshot(6, vec![user("fresh", 6, "new")]));
@@ -509,7 +534,12 @@ mod tests {
         transcript.apply(ChatEvent::End {
             reason: EndReason::Forgotten,
         });
-        transcript.apply(batch(2, vec![ChatUpdate::Item(user("late", 2, "x"))]));
+        transcript.apply(batch(
+            2,
+            vec![ChatUpdate::Item {
+                item: user("late", 2, "x"),
+            }],
+        ));
 
         assert_eq!(transcript.ended(), Some(EndReason::Forgotten));
         assert_eq!(ids(&transcript), ["ask"]);
@@ -571,11 +601,9 @@ mod tests {
         })));
         transcript.apply(batch(
             3,
-            vec![ChatUpdate::Item(turn_item(
-                "turn-1",
-                2,
-                TurnState::Completed,
-            ))],
+            vec![ChatUpdate::Item {
+                item: turn_item("turn-1", 2, TurnState::Completed),
+            }],
         ));
 
         assert_eq!(

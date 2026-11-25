@@ -7,7 +7,6 @@ pub mod agent_queue;
 pub mod agent_sessions;
 pub mod app_theme;
 pub mod canvas;
-pub mod chat_items;
 pub mod chat_transcript;
 pub mod close_confirm;
 pub mod devices;
