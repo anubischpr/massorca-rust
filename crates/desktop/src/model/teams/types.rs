@@ -97,6 +97,8 @@ pub struct Bot {
     pub id: BotId,
     pub name: String,
     pub role: String,
+    /// The service's id of the agent kind the bot runs on, such as `claude`.
+    pub kind: String,
     /// The agent the bot runs as; `None` when the service does not say which one.
     pub agent: Option<Agent>,
     /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.

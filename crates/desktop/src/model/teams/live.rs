@@ -75,6 +75,7 @@ fn live_bot(ids: &TeamIds, bot: &WireBot, kinds: &[AgentKind]) -> Option<Bot> {
         name: bot.name.clone(),
         role: bot.job.clone(),
         agent: agent_of_kind(&bot.kind),
+        kind: bot.kind.clone(),
         kind_unavailable: kind_unavailable_reason(kinds, &bot.kind),
     })
 }
