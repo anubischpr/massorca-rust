@@ -1,71 +1,35 @@
-//! The install review of a catalogue package: the lines that say exactly what the service reported (decision 0062).
-//! Permissions, the agent programs, the vendor commands and the fingerprint are shown as the service sent them.
+//! The install review dialog's words (decision 0062, owner ruling 2026-11-24): only what the button will do. The
+//! technical review (hashes, permissions, programs, verify and uninstall commands) stays in the CLI's review output.
 
-use massorca_protocol::methods::extensions::{
-    CliPlan, CliPlanState, ExtensionReview, KindView, RiskLevel,
-};
+use massorca_protocol::methods::extensions::{CliPlanState, ExtensionReview};
 
-use super::extension_items::{permission_word, risk_word, source_word};
-
-/// The review, one line per fact, in the order the person reads it: what the package is, its risk and permissions,
-/// what each agent runs, each vendor command, and the consent the person accepts.
-pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
-    let (level, reasons) = shown_risk(review);
-    let mut lines: Vec<String> = outcome_line(review).into_iter().collect();
-    lines.extend([
-        format!(
-            "{} ({}) {} by {}",
-            review.name, review.id, review.version, review.publisher
-        ),
-        review.description.clone(),
-        format!(
-            "Source: {} {}",
-            source_word(review.source.kind),
-            review.source.reference
-        ),
-        format!("Risk: {}", risk_word(level)),
-    ]);
-    lines.extend(reasons);
-    if review.permissions.is_empty() {
-        lines.push("Permissions: none".to_owned());
-    } else {
-        lines.push("Permissions:".to_owned());
-        lines.extend(review.permissions.iter().map(|permission| {
-            format!(
-                "{}: {}",
-                permission_word(&permission.kind),
-                permission.reason
-            )
-        }));
-    }
-    lines.extend(review.kinds.iter().flat_map(kind_lines));
-    lines.extend(review.mcp_servers.iter().map(|server| {
-        format!(
-            "MCP server {} runs: {}",
-            server.id,
-            server.command.join(" ")
-        )
-    }));
-    // A CLI that is already here has no lines of its own: the outcome line says it is found and not installed.
-    lines.extend(
-        review
-            .cli
-            .iter()
-            .filter(|plan| !matches!(plan.state, CliPlanState::Detected { .. }))
-            .flat_map(cli_lines),
-    );
-    lines
+/// What the dialog says, in one of two cases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewOutcome {
+    /// Nothing is installed on this computer: the package is added to MassOrca.
+    Add { title: String, body: String },
+    /// The vendor installer runs: the sentence and the command on its own line are the warning.
+    Install {
+        title: String,
+        sentence: String,
+        command: String,
+    },
 }
 
-/// The fingerprints of the review, shown under Details with what each one is.
-pub fn review_details(review: &ExtensionReview) -> Vec<String> {
-    vec![
-        format!("Package SHA-256: {}", review.sha256),
-        format!(
-            "Consent fingerprint (this review, as accepted): {}",
-            review.consent
-        ),
-    ]
+impl ReviewOutcome {
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Add { title, .. } | Self::Install { title, .. } => title,
+        }
+    }
+
+    /// The primary button.
+    pub fn button(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "Add to MassOrca",
+            Self::Install { .. } => "Install",
+        }
+    }
 }
 
 /// Whether this computer runs a vendor installer: a CLI plan that will run its command.
@@ -76,17 +40,8 @@ pub fn installer_runs(review: &ExtensionReview) -> bool {
         .any(|plan| matches!(plan.state, CliPlanState::WillRun { .. }))
 }
 
-/// The button that finishes the review: Allow and install when an installer runs, else Add to MassOrca.
-pub fn install_button_label(review: &ExtensionReview) -> &'static str {
-    if installer_runs(review) {
-        "Allow and install"
-    } else {
-        "Add to MassOrca"
-    }
-}
-
-/// The first line: what installing does on this computer, in plain words.
-fn outcome_line(review: &ExtensionReview) -> Option<String> {
+/// The dialog's words for `review`, naming the item `name` (the catalogue item's display name).
+pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
     let commands: Vec<String> = review
         .cli
         .iter()
@@ -96,130 +51,31 @@ fn outcome_line(review: &ExtensionReview) -> Option<String> {
         })
         .collect();
     if !commands.is_empty() {
-        return Some(format!(
-            "MassOrca will run the vendor's installer: {}.",
-            commands.join("; ")
-        ));
+        return ReviewOutcome::Install {
+            title: format!("Install {name}"),
+            sentence: format!("MassOrca will install {name} on this computer."),
+            command: commands.join("; "),
+        };
     }
-    review
+    let detected = review
         .cli
         .iter()
-        .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }))
-        .then(|| {
-            format!(
-                "{} is already on this computer. MassOrca will only add it to the model picker; nothing is downloaded or installed.",
-                review.name
-            )
-        })
-}
-
-/// How high a risk level is, to pick the highest of a review's reasons.
-fn rank(level: RiskLevel) -> u8 {
-    match level {
-        RiskLevel::High => 2,
-        RiskLevel::Medium => 1,
-        _ => 0,
-    }
-}
-
-/// The risk this computer shows: the highest level of the reasons that apply here, and their copy with repeats
-/// dropped. An installer reason applies only when the agent's CLI plan runs its command.
-pub fn shown_risk(review: &ExtensionReview) -> (RiskLevel, Vec<String>) {
-    let applies = |subject: &str| {
-        let installer = subject
-            .strip_prefix("agentAdapters:")
-            .and_then(|rest| rest.strip_suffix(":install"));
-        installer.is_none_or(|agent| {
-            review.cli.iter().any(|plan| {
-                plan.agent == agent && matches!(plan.state, CliPlanState::WillRun { .. })
-            })
-        })
+        .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }));
+    let body = if detected {
+        format!("MassOrca will add the {name} agent you already have installed on this computer.")
+    } else {
+        format!("MassOrca will add {name} to this computer.")
     };
-    let mut level = RiskLevel::Low;
-    let mut copies: Vec<String> = Vec::new();
-    for reason in review
-        .risk
-        .reasons
-        .iter()
-        .filter(|reason| applies(&reason.subject))
-    {
-        if rank(reason.level) > rank(level) {
-            level = reason.level;
-        }
-        if !copies.contains(&reason.copy) {
-            copies.push(reason.copy.clone());
-        }
+    ReviewOutcome::Add {
+        title: format!("Add {name} to MassOrca"),
+        body,
     }
-    (level, copies)
-}
-
-/// An agent kind's program and the names of what it reads; values are never shown.
-fn kind_lines(kind: &KindView) -> Vec<String> {
-    let mut lines = vec![format!(
-        "Agent {} starts: {}",
-        kind.id,
-        [kind.program.as_slice(), kind.args.as_slice()]
-            .concat()
-            .join(" ")
-    )];
-    if !kind.env.is_empty() {
-        lines.push(format!(
-            "Agent {} reads these environment variables: {}",
-            kind.id,
-            kind.env.join(", ")
-        ));
-    }
-    if !kind.credential_files.is_empty() {
-        lines.push(format!(
-            "Agent {} keeps its sign-in in: {}",
-            kind.id,
-            kind.credential_files.join(", ")
-        ));
-    }
-    lines
-}
-
-/// What the install does about one agent CLI on this computer.
-fn cli_lines(plan: &CliPlan) -> Vec<String> {
-    let mut lines = vec![match &plan.state {
-        CliPlanState::Detected { .. } => format!(
-            "{}: its CLI is already on this computer; nothing is installed for it.",
-            plan.agent
-        ),
-        CliPlanState::WillRun {
-            command,
-            runs_package_scripts,
-        } => format!(
-            "{}: this vendor command runs: {}. It installs the vendor's current release; the version is not pinned.{}",
-            plan.agent,
-            command.join(" "),
-            if *runs_package_scripts {
-                " npm also runs the install scripts of the package and its dependencies, which this review cannot show."
-            } else {
-                ""
-            }
-        ),
-        CliPlanState::Unsupported => format!(
-            "{}: no install command for this system; the agent is registered without its CLI.",
-            plan.agent
-        ),
-        CliPlanState::Unknown => {
-            format!("{}: this version does not know the CLI state.", plan.agent)
-        }
-    }];
-    if let Some(verify) = &plan.verify {
-        lines.push(format!("Verify after the install: {}", verify.join(" ")));
-    }
-    if let Some(uninstall) = &plan.uninstall {
-        lines.push(format!("Uninstall command: {}", uninstall.join(" ")));
-    }
-    lines
 }
 
 #[cfg(test)]
 mod tests {
     use massorca_protocol::methods::extensions::{
-        CliPlanState, KindView, Listing, Permission, Risk, RiskLevel, RiskReason, SourceKind,
+        CliPlan, CliPlanState, KindView, Listing, Permission, Risk, RiskLevel, SourceKind,
         SourceRef,
     };
 
@@ -287,57 +143,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_command_that_runs_package_scripts_says_so_and_one_that_does_not_stays_quiet() {
-        let mut plan = review().cli.remove(0);
-        let quiet = cli_lines(&plan);
-        assert!(!quiet[0].contains("install scripts"), "{quiet:?}");
-        plan.state = CliPlanState::WillRun {
-            command: vec![
-                "npm".to_owned(),
-                "install".to_owned(),
-                "-g".to_owned(),
-                "x".to_owned(),
-            ],
-            runs_package_scripts: true,
-        };
-        let told = cli_lines(&plan);
-        assert!(
-            told[0].ends_with(
-                "npm also runs the install scripts of the package and its dependencies, which this review cannot show."
-            ),
-            "{told:?}"
-        );
-    }
-
-    #[test]
-    fn the_review_shows_the_permissions_programs_commands_and_consent_it_was_given() {
-        let lines = review_lines(&review());
-        assert!(lines.contains(&"Permissions:".to_owned()), "{lines:?}");
-        assert!(
-            lines.contains(&"Files (read): Reads the project.".to_owned()),
-            "{lines:?}"
-        );
-        assert!(
-            lines.contains(&"Agent claude starts: claude --json".to_owned()),
-            "{lines:?}"
-        );
-        assert!(
-            lines.contains(
-                &"Agent claude reads these environment variables: CLAUDE_HOME".to_owned()
-            ),
-            "{lines:?}"
-        );
-        assert!(
-            lines.contains(&"claude: this vendor command runs: winget install Anthropic.ClaudeCode. It installs the vendor's current release; the version is not pinned.".to_owned()),
-            "{lines:?}"
-        );
-        assert!(
-            lines.contains(&"Verify after the install: claude --version".to_owned()),
-            "{lines:?}"
-        );
-    }
-
     /// The review of a CLI already on this computer: the installer is skipped.
     fn detected_review() -> ExtensionReview {
         let mut found = review();
@@ -346,120 +151,90 @@ mod tests {
         found
     }
 
-    /// The review with the risk reasons the service gives an agent that starts a program and has an installer.
-    fn with_installer_risk(mut risky: ExtensionReview) -> ExtensionReview {
-        let program = "Runs a program on this computer with your rights.";
-        risky.risk = Risk {
-            level: RiskLevel::High,
-            reasons: vec![
-                RiskReason {
-                    level: RiskLevel::High,
-                    subject: "permission:process".to_owned(),
-                    copy: program.to_owned(),
-                },
-                RiskReason {
-                    level: RiskLevel::High,
-                    subject: "agentAdapters:claude".to_owned(),
-                    copy: program.to_owned(),
-                },
-                RiskReason {
-                    level: RiskLevel::High,
-                    subject: "agentAdapters:claude:install".to_owned(),
-                    copy: "Runs the vendor's installer on this computer.".to_owned(),
-                },
-            ],
-        };
-        risky
+    /// Text the dialog no longer shows in any case.
+    const REMOVED: [&str; 10] = [
+        "SHA-256",
+        "Consent",
+        "Permissions",
+        "Runs a program",
+        "Gives agents access",
+        "starts:",
+        "keeps its sign-in in",
+        "Verify after the install",
+        "Uninstall command",
+        "Risk",
+    ];
+
+    fn words(outcome: &ReviewOutcome) -> String {
+        match outcome {
+            ReviewOutcome::Add { title, body } => format!(
+                "{title}
+{body}"
+            ),
+            ReviewOutcome::Install {
+                title,
+                sentence,
+                command,
+            } => format!(
+                "{title}
+{sentence}
+{command}"
+            ),
+        }
+    }
+
+    fn assert_nothing_removed_shows(outcome: &ReviewOutcome) {
+        let text = words(outcome);
+        for removed in REMOVED {
+            assert!(!text.contains(removed), "{removed:?} shows in {text:?}");
+        }
     }
 
     #[test]
-    fn a_cli_already_here_is_said_plainly_and_nothing_is_installed() {
-        let lines = review_lines(&detected_review());
+    fn a_cli_already_here_is_added_to_massorca_and_nothing_is_installed() {
+        let outcome = review_outcome(&detected_review(), "Claude");
         assert_eq!(
-            lines[0],
-            "Claude is already on this computer. MassOrca will only add it to the model picker; nothing is downloaded or installed.",
-            "{lines:?}"
+            outcome,
+            ReviewOutcome::Add {
+                title: "Add Claude to MassOrca".to_owned(),
+                body: "MassOrca will add the Claude agent you already have installed on this computer."
+                    .to_owned(),
+            }
         );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert_nothing_removed_shows(&outcome);
     }
 
     #[test]
-    fn a_missing_cli_names_the_installer_that_will_run() {
-        let lines = review_lines(&review());
+    fn a_missing_cli_names_the_one_installer_command() {
+        let outcome = review_outcome(&review(), "Claude");
         assert_eq!(
-            lines[0],
-            "MassOrca will run the vendor's installer: winget install Anthropic.ClaudeCode.",
-            "{lines:?}"
+            outcome,
+            ReviewOutcome::Install {
+                title: "Install Claude".to_owned(),
+                sentence: "MassOrca will install Claude on this computer.".to_owned(),
+                command: "winget install Anthropic.ClaudeCode".to_owned(),
+            }
         );
+        assert_eq!(outcome.button(), "Install");
+        assert_nothing_removed_shows(&outcome);
     }
 
     #[test]
-    fn the_button_adds_to_massorca_unless_an_installer_runs() {
-        assert_eq!(install_button_label(&detected_review()), "Add to MassOrca");
-        assert_eq!(install_button_label(&review()), "Allow and install");
-    }
-
-    #[test]
-    fn a_skipped_installer_adds_no_installer_risk() {
-        let (_, copies) = shown_risk(&with_installer_risk(detected_review()));
-        assert!(
-            !copies
-                .iter()
-                .any(|copy| copy == "Runs the vendor's installer on this computer."),
-            "{copies:?}"
-        );
-    }
-
-    #[test]
-    fn an_installer_that_runs_keeps_its_risk() {
-        let (level, copies) = shown_risk(&with_installer_risk(review()));
-        assert!(
-            copies
-                .iter()
-                .any(|copy| copy == "Runs the vendor's installer on this computer."),
-            "{copies:?}"
-        );
-        assert_eq!(level, RiskLevel::High);
-    }
-
-    #[test]
-    fn a_program_line_is_listed_once() {
-        let (_, copies) = shown_risk(&with_installer_risk(detected_review()));
-        let program = "Runs a program on this computer with your rights.";
-        assert_eq!(
-            copies
-                .iter()
-                .filter(|copy| copy.as_str() == program)
-                .count(),
-            1,
-            "{copies:?}"
-        );
-    }
-
-    #[test]
-    fn the_hashes_sit_under_details_with_their_labels() {
-        let summary = review_lines(&review());
-        assert!(
-            !summary
-                .iter()
-                .any(|line| line.contains("SHA-256") || line.starts_with("Consent")),
-            "{summary:?}"
-        );
-        assert_eq!(
-            review_details(&review()),
-            vec![
-                "Package SHA-256: abc123".to_owned(),
-                "Consent fingerprint (this review, as accepted): fingerprint-1".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_package_that_asks_for_nothing_says_so() {
+    fn a_package_without_an_installer_is_added_by_name() {
         let mut plain = review();
-        plain.permissions.clear();
         plain.cli.clear();
         plain.kinds.clear();
-        let lines = review_lines(&plain);
-        assert!(lines.contains(&"Permissions: none".to_owned()), "{lines:?}");
+        plain.runs_installer = false;
+        let outcome = review_outcome(&plain, "Kit");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Add {
+                title: "Add Kit to MassOrca".to_owned(),
+                body: "MassOrca will add Kit to this computer.".to_owned(),
+            }
+        );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert_nothing_removed_shows(&outcome);
     }
 }
