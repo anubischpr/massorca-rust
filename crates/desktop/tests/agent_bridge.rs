@@ -862,6 +862,7 @@ async fn a_folder_projects_second_start_runs_in_its_folder_once_the_first_sessio
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
     };
     let first_workspace = handle
         .create_workspace(params.clone())
