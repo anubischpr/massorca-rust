@@ -108,9 +108,8 @@ synchronous callback.
   has only been checked by the TypeScript side. The `android-apk` job is the first real build.
 - **Device name:** every phone calls itself "Android phone" to its hosts (`src/binding/index.ts`). A per-device name
   needs a choice from the owner.
-- **Terminal entry point:** the binding has no terminal list yet (`terminal.list` exists in the client crate but
-  `client-ffi` does not export it, and the agent sessions carry no terminal id). The terminal screen takes its terminal
-  id from its route, so nothing opens it until the binding exposes that id.
+- **Starting a terminal:** the binding lists a workspace's terminals but has no terminal create, so the workspace's
+  Terminal view opens the one live terminal, or lists the ones that exist. It cannot start one.
 - **Not checked on a device:** the terminal page runs in the WebView only under Jest (a double). Key sequences, the
   Ctrl key, resizing and the WebView's file URL need a run on a phone or an emulator.
 - Emulator flows (A11) and the phone validation (A12) are not started.
