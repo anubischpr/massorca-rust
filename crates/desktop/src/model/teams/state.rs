@@ -68,12 +68,15 @@ pub struct NewTeam {
     pub workspaces: bool,
 }
 
-/// What the Add bot dialog sends. `kind` is the service's id of the agent kind the bot runs on.
+/// What the Add bot dialog sends. `kind` is the service's id of the agent kind the bot runs on; `None` model or effort
+/// leaves it to the bot's job.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewBot {
     pub name: String,
     pub role: String,
     pub kind: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// All Bot Teams data the shell shows. `connected` is false when no service backs it.
@@ -272,6 +275,8 @@ impl TeamsState {
             role: new.role.trim().to_owned(),
             agent: agent_of_kind(&new.kind),
             kind: new.kind,
+            model: new.model,
+            effort: new.effort,
             kind_unavailable: None,
         });
         if team.lead.is_none() {
@@ -536,6 +541,12 @@ impl TeamsState {
         if let Some(kind) = &change.kind {
             target.agent = agent_of_kind(kind);
             target.kind = kind.clone();
+        }
+        if let Some(model) = &change.model {
+            target.model = (!model.is_empty()).then(|| model.clone());
+        }
+        if let Some(effort) = &change.effort {
+            target.effort = (!effort.is_empty()).then(|| effort.clone());
         }
         Ok(())
     }
@@ -812,6 +823,8 @@ mod tests {
                     name: "Nora".into(),
                     role: String::new(),
                     kind: "codex".into(),
+                    model: None,
+                    effort: None,
                 },
             )
             .unwrap();
@@ -833,6 +846,8 @@ mod tests {
                     name: "Ada".into(),
                     role: String::new(),
                     kind: "my-own-kind".into(),
+                    model: None,
+                    effort: None,
                 },
             )
             .unwrap();
@@ -959,7 +974,7 @@ mod tests {
         let rename = BotChange {
             name: Some("Marta".into()),
             job: Some("Leads".into()),
-            kind: None,
+            ..BotChange::default()
         };
         state
             .change_bot(TeamId(1), mara, &rename)
@@ -972,6 +987,66 @@ mod tests {
     }
 
     #[test]
+    fn a_new_bot_keeps_the_model_and_effort_it_was_given() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state
+            .add_bot(
+                TeamId(1),
+                NewBot {
+                    name: "Ada".into(),
+                    role: String::new(),
+                    kind: "claude".into(),
+                    model: Some("haiku".into()),
+                    effort: None,
+                },
+            )
+            .expect("the bot is added");
+        let bot = state
+            .team(TeamId(1))
+            .and_then(|team| team.bot(id))
+            .expect("the bot is kept");
+        assert_eq!(
+            (bot.model.as_deref(), bot.effort.as_deref()),
+            (Some("haiku"), None)
+        );
+    }
+
+    #[test]
+    fn a_bot_sets_its_model_and_effort_and_an_empty_change_clears_them() {
+        let mut state = SampleTeamsSource.teams();
+        let mara = BotId(1);
+        let set = BotChange {
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            ..BotChange::default()
+        };
+        state
+            .change_bot(TeamId(1), mara, &set)
+            .expect("the bot is changed");
+        let bot = state
+            .team(TeamId(1))
+            .and_then(|team| team.bot(mara))
+            .expect("the bot is kept");
+        assert_eq!(
+            (bot.model.as_deref(), bot.effort.as_deref()),
+            (Some("opus"), Some("high"))
+        );
+        let clear = BotChange {
+            model: Some(String::new()),
+            effort: Some(String::new()),
+            ..BotChange::default()
+        };
+        state
+            .change_bot(TeamId(1), mara, &clear)
+            .expect("the bot is changed");
+        let bot = state
+            .team(TeamId(1))
+            .and_then(|team| team.bot(mara))
+            .expect("the bot is kept");
+        assert_eq!((bot.model.as_deref(), bot.effort.as_deref()), (None, None));
+    }
+
+    #[test]
     fn a_bot_with_an_open_task_is_kept_and_one_with_only_finished_tasks_is_removed() {
         let mut state = SampleTeamsSource.teams();
         let bot = state
@@ -981,6 +1056,8 @@ mod tests {
                     name: "Lucia".into(),
                     role: "Reviews".into(),
                     kind: "claude".into(),
+                    model: None,
+                    effort: None,
                 },
             )
             .expect("the bot is added");
