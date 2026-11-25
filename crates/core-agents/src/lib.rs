@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod chat;
 pub mod credentials;
 pub mod event;
+pub mod fast_mode;
 pub mod instructions;
 pub mod kind;
 pub mod launch;

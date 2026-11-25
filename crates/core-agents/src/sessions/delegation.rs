@@ -219,6 +219,7 @@ impl Agents {
                 permission_mode: params.permission_mode,
                 model: None,
                 effort: None,
+                fast: None,
             },
             Some(&parent),
             grant,
@@ -1109,6 +1110,7 @@ then report"
                     permission_mode: None,
                     model: None,
                     effort: None,
+                    fast: None,
                 },
                 SecretGrant::Provide,
             )
@@ -1199,6 +1201,7 @@ then report"
                     permission_mode: None,
                     model: None,
                     effort: None,
+                    fast: None,
                 },
                 SecretGrant::Provide,
             )

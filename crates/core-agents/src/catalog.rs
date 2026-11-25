@@ -252,6 +252,10 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             chat: None,
             model: None,
             effort: None,
+            fast: Some(wire::KindFast {
+                supported: false,
+                reason: Some("the kind is not valid, so its fast mode is unknown".to_owned()),
+            }),
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -280,6 +284,22 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         chat: None,
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
+        fast: Some(fast_view(decl)),
+    }
+}
+
+/// A declared `fast` as `agent.kinds` lists it (decision 0165): supported, or why the kind takes no fast mode.
+fn fast_view(decl: &KindDecl) -> wire::KindFast {
+    if decl.fast.is_some() {
+        wire::KindFast {
+            supported: true,
+            reason: None,
+        }
+    } else {
+        wire::KindFast {
+            supported: false,
+            reason: Some("the kind declares no fast mode".to_owned()),
+        }
     }
 }
 
@@ -294,6 +314,7 @@ fn model_view(model: &ModelDecl) -> wire::KindModel {
                 label: choice.label.clone(),
                 default: choice.default,
                 efforts: choice.efforts.clone(),
+                fast: choice.fast,
             })
             .collect(),
     }

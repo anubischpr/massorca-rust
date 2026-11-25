@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::credentials;
+use crate::fast_mode;
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
     now_ms,
@@ -27,7 +28,7 @@ use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
     AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind, ResumeState,
+    PromptReceipt, ReceiptKind, ResumeState, SessionFast,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -599,6 +600,8 @@ impl Agents {
             decl.option_args(params.model.as_deref(), params.effort.as_deref())?,
         ]
         .concat();
+        // Fast mode, refused before anything starts when the kind or its model does not take it (decision 0165).
+        let fast = decl.fast_for(params.model.as_deref(), params.fast.unwrap_or(false))?;
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
@@ -680,6 +683,7 @@ impl Agents {
             caller_env: &params.env,
             instructions,
             inherited_path: inherited_path.as_deref(),
+            fast,
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
@@ -687,6 +691,7 @@ impl Agents {
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        fast_mode::record(&run_dir, fast.is_some());
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
             .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
@@ -974,11 +979,14 @@ impl Agents {
             caller_env: &no_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
+            // A resume takes no fast mode: the start's choice is not kept with the session (decision 0165).
+            fast: None,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        fast_mode::record(&run_dir, false);
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1911,6 +1919,11 @@ impl Agents {
 
     /// The record of a row read before the status lock: the row is read again under the lock, so a change applied
     /// in between is neither lost nor overwritten.
+    /// The fast mode of a session's current or last run (decision 0165).
+    fn fast_of(&self, session: &str) -> Option<SessionFast> {
+        fast_mode::of_run(&paths::run_dir(self.profile_dir(), session))
+    }
+
     fn view(&self, row: AgentSessionRow) -> Result<AgentSession, AgentError> {
         let mut live = lock(&self.inner.status);
         let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
@@ -1970,7 +1983,10 @@ impl Agents {
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
         let placement = self.delegation_view(&row);
         let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
-        Ok(record(row, execution, resume, placement, run, archived))
+        let fast = self.fast_of(&row.id);
+        Ok(record(
+            row, execution, resume, placement, run, archived, fast,
+        ))
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -2080,6 +2096,7 @@ impl Agents {
                 RunRef::Chat(_) => RunType::Chat,
             };
             let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
+            let fast = self.fast_of(&row.id);
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
@@ -2087,6 +2104,7 @@ impl Agents {
                 placement,
                 run_type,
                 archived,
+                fast,
             ))));
         }
         Ok(execution)
@@ -2100,8 +2118,8 @@ enum RunRef<'a> {
     Chat(&'a str),
 }
 
-/// The wire record of a row with its execution, its resume state, what it may delegate, its run type and whether it
-/// is archived.
+/// The wire record of a row with its execution, its resume state, what it may delegate, its run type, whether it is
+/// archived and its fast mode (decision 0165).
 fn record(
     row: AgentSessionRow,
     execution: Execution,
@@ -2109,6 +2127,7 @@ fn record(
     placement: DelegationView,
     run: RunType,
     archived: bool,
+    fast: Option<SessionFast>,
 ) -> AgentSession {
     AgentSession {
         id: row.id,
@@ -2137,6 +2156,7 @@ fn record(
         resume: Some(resume),
         delegation: placement.options,
         notes: placement.notes,
+        fast,
     }
 }
 

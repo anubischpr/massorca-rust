@@ -135,7 +135,7 @@
     "flag": "--model",
     "choices": [
       { "id": "fable", "label": "Fable" },
-      { "id": "opus", "label": "Opus" },
+      { "id": "opus", "label": "Opus", "fast": true },
       { "id": "sonnet", "label": "Sonnet", "default": true },
       { "id": "haiku", "label": "Haiku", "efforts": [] }
     ]
@@ -150,5 +150,11 @@
       { "id": "max", "label": "Max" }
     ],
     "default": "high"
+  },
+  "fast": {
+    "settings": { "fastMode": true },
+    "settings_flag": "--settings",
+    "live": "/fast",
+    "toggle": true
   }
 }

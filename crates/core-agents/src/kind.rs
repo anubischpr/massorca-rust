@@ -60,6 +60,10 @@ pub struct KindDecl {
     /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<EffortDecl>,
+    /// Fast mode a start may ask for (decision 0165): the settings a run gets, and the choices of `model` that take it.
+    /// Absent means the kind has no fast mode, and a start that asks for it is refused with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<FastDecl>,
     /// Inherited variables that no run of the kind and none of its account commands may see (decision 0160): markers
     /// that a process above the service left, such as another agent's session stamp. Names compare without case on
     /// Windows. A name the launch itself sets is set, not stripped.
@@ -158,6 +162,32 @@ pub struct ModelChoiceDecl {
     /// effort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub efforts: Option<Vec<String>>,
+    /// Whether the model takes fast mode (decision 0165). Only a kind that declares `fast` may set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
+}
+
+/// The `fast` option of a kind (decision 0165): the settings a run with fast mode on receives. A start that asks for it
+/// passes `settings` on `settings_flag`, or merges them into the settings file the run's hooks already use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FastDecl {
+    /// The settings object a run with fast mode on receives: non-empty, and it may not set `hooks`.
+    pub settings: serde_json::Map<String, serde_json::Value>,
+    /// The flag `settings` is passed with, `--settings` unless the kind says otherwise.
+    #[serde(default = "default_settings_flag")]
+    pub settings_flag: String,
+    /// The slash command that toggles fast mode in a running session, such as `/fast`. Declared for the live switch
+    /// that comes with `agent.set_options`; nothing sends it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
+    /// Whether `live` toggles rather than sets. Declared with `live`; nothing reads it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggle: bool,
+}
+
+fn default_settings_flag() -> String {
+    "--settings".to_owned()
 }
 
 /// The `effort` option of a kind (decision 0094): how a start's effort is passed, and the levels the picker shows
@@ -714,6 +744,7 @@ impl KindDecl {
         self.mode_problems(&mut problems);
         self.model_problems(&mut problems);
         self.effort_problems(&mut problems);
+        self.fast_problems(&mut problems);
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
         self.instructions_problems(&mut problems);
@@ -847,6 +878,49 @@ impl KindDecl {
         Ok(args)
     }
 
+    /// The `fast` declaration a start with fast mode asked for takes (decision 0165), or None when it is off. A kind with
+    /// no fast mode refuses it, and so does a model that the kind's choices do not mark as taking it: a start that names
+    /// no model is checked against the default choice. A kind with no model choices has nothing to check, so it passes.
+    pub(crate) fn fast_for(
+        &self,
+        model: Option<&str>,
+        on: bool,
+    ) -> Result<Option<&FastDecl>, AgentError> {
+        if !on {
+            return Ok(None);
+        }
+        let fast = self.fast.as_ref().ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_OPTION_UNSUPPORTED,
+                format!("kind {} declares no fast mode", self.id),
+            )
+        })?;
+        let choices: &[ModelChoiceDecl] = self
+            .model
+            .as_ref()
+            .map_or(&[], |model| model.choices.as_slice());
+        if !choices.is_empty() {
+            let named = model.map(str::to_owned).or_else(|| {
+                choices
+                    .iter()
+                    .find(|choice| choice.default)
+                    .map(|choice| choice.id.clone())
+            });
+            let takes = named
+                .as_deref()
+                .and_then(|id| choices.iter().find(|choice| choice.id == id))
+                .is_some_and(|choice| choice.fast);
+            if !takes {
+                let which = named.map_or_else(|| "no model".to_owned(), |id| format!("model {id}"));
+                return Err(AgentError::new(
+                    codes::AGENT_OPTION_UNSUPPORTED,
+                    format!("kind {} with {which} does not offer fast mode", self.id),
+                ));
+            }
+        }
+        Ok(Some(fast))
+    }
+
     fn unsupported(&self, name: &str) -> AgentError {
         AgentError::new(
             codes::AGENT_OPTION_UNSUPPORTED,
@@ -976,6 +1050,43 @@ impl KindDecl {
             problems.push(format!(
                 "effort.default {default:?} is not one of effort.levels"
             ));
+        }
+    }
+
+    /// Every rule the `fast` declaration breaks, and every model that marks fast mode without one (decision 0165).
+    fn fast_problems(&self, problems: &mut Vec<String>) {
+        if let Some(fast) = &self.fast {
+            if fast.settings.is_empty() {
+                problems.push("fast.settings must not be empty".to_owned());
+            }
+            if fast.settings.contains_key("hooks") {
+                problems.push(
+                    "fast.settings may not set hooks, which the status mechanism owns".to_owned(),
+                );
+            }
+            if !valid_option_flag(&fast.settings_flag) {
+                problems.push(format!(
+                    "fast.settings_flag {:?} must be a flag starting with -, with no spaces, = or control characters",
+                    fast.settings_flag
+                ));
+            }
+            if let Some(live) = &fast.live
+                && (live.len() < 2 || !live.starts_with('/') || live.contains(char::is_whitespace))
+            {
+                problems.push(format!(
+                    "fast.live {live:?} must be a slash command, such as /fast"
+                ));
+            }
+        }
+        if let Some(model) = &self.model {
+            for choice in model.choices.iter().filter(|choice| choice.fast) {
+                if self.fast.is_none() {
+                    problems.push(format!(
+                        "model.choices {:?} takes fast mode, but the kind declares no fast",
+                        choice.id
+                    ));
+                }
+            }
         }
     }
 
@@ -2906,5 +3017,149 @@ mod tests {
             .collect();
         constant.sort();
         assert_eq!(declared, constant);
+    }
+}
+
+#[cfg(test)]
+mod fast_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn claude() -> KindDecl {
+        KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses")
+    }
+
+    fn fake_with(fast: serde_json::Value, model: serde_json::Value) -> KindDecl {
+        let value = json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "status": { "mechanism": "env-command", "events": { "stop": "done" } },
+            "model": model, "fast": fast
+        });
+        KindDecl::from_json(&value.to_string()).expect("parses")
+    }
+
+    fn problems_with(fast: serde_json::Value, model: serde_json::Value) -> Vec<String> {
+        fake_with(fast, model).problems()
+    }
+
+    #[test]
+    fn claude_declares_fast_mode_and_only_opus_takes_it() {
+        let claude = claude();
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let fast = claude.fast.as_ref().expect("claude declares fast mode");
+        assert_eq!(fast.settings.get("fastMode"), Some(&json!(true)));
+        assert_eq!(fast.settings.len(), 1);
+        assert_eq!(fast.settings_flag, "--settings");
+        assert_eq!(fast.live.as_deref(), Some("/fast"));
+        assert!(fast.toggle);
+        let model = claude.model.as_ref().expect("claude takes a model");
+        let takes: Vec<(&str, bool)> = model
+            .choices
+            .iter()
+            .map(|choice| (choice.id.as_str(), choice.fast))
+            .collect();
+        assert_eq!(
+            takes,
+            [
+                ("fable", false),
+                ("opus", true),
+                ("sonnet", false),
+                ("haiku", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kind_without_fast_mode_refuses_it_and_an_off_request_passes_nothing() {
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex");
+        assert!(codex.fast.is_none());
+        assert!(codex.problems().is_empty(), "{:?}", codex.problems());
+        let error = codex
+            .fast_for(Some("gpt-5.5"), true)
+            .expect_err("codex has no fast mode");
+        assert_eq!(error.code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert!(error.message.contains("codex"), "{}", error.message);
+        assert!(codex.fast_for(Some("gpt-5.5"), false).unwrap().is_none());
+    }
+
+    #[test]
+    fn fast_mode_is_refused_for_a_model_without_it_and_named_in_the_refusal() {
+        let claude = claude();
+        let on = claude
+            .fast_for(Some("opus"), true)
+            .expect("opus takes fast mode")
+            .expect("on");
+        assert_eq!(on.settings_flag, "--settings");
+        let refused = claude
+            .fast_for(Some("sonnet"), true)
+            .expect_err("sonnet has no fast mode");
+        assert_eq!(refused.code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert!(refused.message.contains("sonnet"), "{}", refused.message);
+        assert!(refused.message.contains("claude"), "{}", refused.message);
+        // The default model is sonnet, so a start that names no model is refused too.
+        assert!(claude.fast_for(None, true).is_err());
+        assert!(claude.fast_for(Some("unlisted"), true).is_err());
+    }
+
+    #[test]
+    fn a_kind_without_model_choices_passes_fast_mode_on_without_a_model_to_check() {
+        let kind = fake_with(
+            json!({ "settings": { "fastMode": true } }),
+            json!({ "flag": "--model" }),
+        );
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+        assert!(
+            kind.fast_for(Some("anything"), true)
+                .expect("passes")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_fast_declaration_with_a_bad_part_is_a_problem() {
+        assert!(!problems_with(json!({ "settings": {} }), json!({ "flag": "--model" })).is_empty());
+        assert!(
+            !problems_with(
+                json!({ "settings": { "fastMode": true }, "settings_flag": "settings" }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty()
+        );
+        assert!(
+            !problems_with(
+                json!({ "settings": { "fastMode": true }, "live": "fast" }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty()
+        );
+        assert!(
+            !problems_with(
+                json!({ "settings": { "hooks": {} } }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty(),
+            "a fast setting may not replace the hooks"
+        );
+    }
+
+    #[test]
+    fn a_model_that_takes_fast_mode_needs_a_kind_that_declares_it() {
+        let problems = problems_with(
+            json!(null),
+            json!({ "flag": "--model", "choices": [{ "id": "big", "label": "Big", "fast": true }] }),
+        );
+        assert!(
+            problems.iter().any(|problem| problem.contains("big")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_fast_field_fails_to_parse() {
+        let value = json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "fast": { "settings": { "fastMode": true }, "bogus": 1 }
+        });
+        assert!(KindDecl::from_json(&value.to_string()).is_err());
     }
 }
