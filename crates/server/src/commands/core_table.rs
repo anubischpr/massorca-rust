@@ -120,6 +120,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.init-git",
+            "Turn a folder project into a git project",
+            "project.init_git",
+            selector("project"),
+        ),
+        command(
             "project.rm",
             "Remove a project",
             "project.remove",

@@ -149,6 +149,7 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "project.list",
     "project.show",
     "project.inspect",
+    "project.init-git",
     "project.rm",
     "project.set-base",
     "project.update",

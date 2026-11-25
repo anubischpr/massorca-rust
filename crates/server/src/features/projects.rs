@@ -1,4 +1,4 @@
-//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`), and `project.update` (capability `project-update/1`), over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`), `project.update` (capability `project-update/1`) and `project.init_git` (capability `project-init-git/1`), over the workspace domain.
 
 use std::sync::Arc;
 
@@ -79,6 +79,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::PROJECT_UPDATE,
             Permission::Workspace,
             update,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::PROJECT_INIT_GIT, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            projects::INIT_GIT,
+            capabilities::PROJECT_INIT_GIT,
+            Permission::Workspace,
+            init_git,
         )?,
     ])
 }
@@ -186,6 +196,14 @@ async fn set_base(ctx: RequestCtx, params: ProjectSetBaseParams) -> Result<Proje
 async fn update(ctx: RequestCtx, params: ProjectUpdateParams) -> Result<Project, ErrorBody> {
     let domain = for_mutation(&ctx).await?;
     let project = blocking(move || domain.update_project(params)).await?;
+    publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
+    Ok(project)
+}
+
+async fn init_git(ctx: RequestCtx, params: ProjectRef) -> Result<Project, ErrorBody> {
+    let layout = workspace_layout(&ctx).await?;
+    let domain = for_mutation(&ctx).await?.with_layout(layout);
+    let project = blocking(move || domain.init_project_git(&params.project)).await?;
     publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
     Ok(project)
 }
