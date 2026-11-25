@@ -7,7 +7,7 @@ use massorca_protocol::methods::git::diff::{
     GitDiffFile, GitDiffFileParams, GitDiffParams, GitFileContent, GitFileContentParams,
     MAX_CONTENT_BYTES, MAX_DIFF_LIMIT, MAX_PATCH_BYTES, preview_mime,
 };
-use massorca_protocol::{ErrorBody, capabilities};
+use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use super::{Repository, blocking, git_error, relative_path, repository, require_commit};
 use crate::context::{Registries, RequestCtx};
@@ -146,6 +146,9 @@ fn file_content_result(path: String, content: SideContent) -> GitFileContent {
 fn file_content_error(error: FileContentError) -> ErrorBody {
     match error {
         FileContentError::Refused { code, message } => ErrorBody::new(code, message),
+        unreadable @ FileContentError::Unreadable { .. } => {
+            ErrorBody::new(codes::GIT_FAILED, unreadable.to_string())
+        }
         FileContentError::Git(error) => git_error(error),
     }
 }

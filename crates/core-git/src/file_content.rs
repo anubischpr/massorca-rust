@@ -1,15 +1,18 @@
 //! One file's bytes on one side of a comparison: the working tree, the index or a revision (decision 0103).
-//! The working tree is read from disk behind a containment check; the other sides come from git's object store.
+//! The working tree is read from disk behind the checks in `worktree_file`; the other sides come from git's object store.
 
-use std::fs::{File, Metadata};
-use std::io::{self, Read};
-use std::path::{Component, Path, PathBuf};
+use std::io;
+use std::path::{Component, Path};
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::git::diff::FileSide;
 
 use crate::error::GitError;
 use crate::git::{Captured, Git};
+use crate::worktree_file::worktree_content;
+
+/// Bytes of an index listing kept: the first record of a path decides whether it is a file or a directory.
+const MAX_LISTING_BYTES: usize = 64 * 1024;
 
 /// What one side holds at a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +31,13 @@ pub enum FileContentError {
     /// A refusal: `code` names it.
     #[error("{message}")]
     Refused { code: &'static str, message: String },
+    /// A file could not be read. `path` is the workspace-relative path the caller asked for, never a host path.
+    #[error("`{path}` could not be read")]
+    Unreadable {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error(transparent)]
     Git(#[from] GitError),
 }
@@ -43,8 +53,9 @@ enum Listed {
 }
 
 impl Git {
-    /// The bytes of `path` on `side`, read only when they fit `max_bytes`. A path that leaves the work tree, names
-    /// git's own folder, or names a directory or submodule is refused.
+    /// The bytes of `path` on `side`, read only when they fit `max_bytes`. The path is spelled once first, so every
+    /// side reads the same file for the same request. A path that leaves the work tree, names git's own folder, or
+    /// names a directory or submodule is refused.
     pub fn file_content(
         &self,
         dir: &Path,
@@ -52,25 +63,33 @@ impl Git {
         path: &str,
         max_bytes: usize,
     ) -> Result<SideContent, FileContentError> {
-        let path = path.trim_end_matches('/');
+        let path = normalize_request(path)?;
         if path.is_empty() {
             return Err(refused(
                 codes::GIT_PATH_IS_DIRECTORY,
                 "the work tree itself is a directory, not a file".to_owned(),
             ));
         }
-        if !is_inside_worktree(path) {
-            return Err(outside(path));
-        }
         match side {
-            FileSide::Worktree => worktree_content(dir, path, max_bytes),
+            FileSide::Worktree => worktree_content(self, dir, &path, max_bytes),
             FileSide::Index => {
-                let captured = self.run(
+                let captured = self.run_capped(
                     Some(dir),
-                    ["--literal-pathspecs", "ls-files", "-s", "-z", "--", path],
+                    [
+                        "--literal-pathspecs",
+                        "ls-files",
+                        "-s",
+                        "-z",
+                        "--",
+                        path.as_str(),
+                    ],
+                    MAX_LISTING_BYTES,
                 )?;
-                captured.require_success()?;
-                self.content_of(dir, index_listed(&captured, path)?, path, max_bytes)
+                if !captured.truncated() {
+                    captured.require_success()?;
+                }
+                let listed = index_listed(&captured, &path)?;
+                self.content_of(dir, listed, &path, max_bytes)
             }
             FileSide::Revision { rev } => {
                 if !self.ref_exists(dir, rev)? {
@@ -87,11 +106,12 @@ impl Git {
                         "-z",
                         rev.as_str(),
                         "--",
-                        path,
+                        path.as_str(),
                     ],
                 )?;
                 captured.require_success()?;
-                self.content_of(dir, tree_listed(&captured, path)?, path, max_bytes)
+                let listed = tree_listed(&captured, &path)?;
+                self.content_of(dir, listed, &path, max_bytes)
             }
         }
     }
@@ -140,70 +160,6 @@ impl Git {
     }
 }
 
-fn worktree_content(
-    dir: &Path,
-    path: &str,
-    max_bytes: usize,
-) -> Result<SideContent, FileContentError> {
-    let Some((full, metadata)) = worktree_file(dir, path)? else {
-        return Ok(SideContent::Absent);
-    };
-    let cap = u64::try_from(max_bytes).unwrap_or(u64::MAX);
-    if metadata.len() > cap {
-        return Ok(SideContent::TooLarge {
-            size: metadata.len(),
-        });
-    }
-    let mut bytes = Vec::new();
-    File::open(&full)
-        .and_then(|file| file.take(cap.saturating_add(1)).read_to_end(&mut bytes))
-        .map_err(|source| unreadable(&full, source))?;
-    let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if read > cap {
-        // The file grew after it was measured; no partial bytes are returned.
-        return Ok(SideContent::TooLarge { size: read });
-    }
-    Ok(SideContent::Bytes(bytes))
-}
-
-/// The canonical path of `path` under `dir` with its metadata, or `None` when nothing exists there. A symlink is
-/// followed only to a target that is still inside the work tree.
-fn worktree_file(dir: &Path, path: &str) -> Result<Option<(PathBuf, Metadata)>, FileContentError> {
-    let root = dunce::canonicalize(dir).map_err(|source| unreadable(dir, source))?;
-    let joined = dir.join(path);
-    let full = match dunce::canonicalize(&joined) {
-        Ok(full) => full,
-        Err(error) if is_absent(&error) => return Ok(None),
-        Err(source) => return Err(unreadable(&joined, source)),
-    };
-    let Ok(inside) = full.strip_prefix(&root) else {
-        return Err(outside(path));
-    };
-    if inside
-        .components()
-        .any(|part| part.as_os_str().eq_ignore_ascii_case(".git"))
-    {
-        return Err(refused(
-            codes::REQUEST_INVALID_PARAMS,
-            format!("`{path}` is inside git's own folder, not a workspace file"),
-        ));
-    }
-    let metadata = std::fs::metadata(&full).map_err(|source| unreadable(&full, source))?;
-    if metadata.is_dir() {
-        return Err(refused(
-            codes::GIT_PATH_IS_DIRECTORY,
-            format!("`{path}` names a directory, not a file"),
-        ));
-    }
-    if !metadata.is_file() {
-        return Err(refused(
-            codes::REQUEST_INVALID_PARAMS,
-            format!("`{path}` is not a regular file"),
-        ));
-    }
-    Ok(Some((full, metadata)))
-}
-
 /// The index entry of `path` from `ls-files -s -z`, one `<mode> <object> <stage>\t<path>` record per NUL.
 fn index_listed(captured: &Captured, path: &str) -> Result<Listed, GitError> {
     let folder = format!("{path}/");
@@ -229,6 +185,9 @@ fn index_listed(captured: &Captured, path: &str) -> Result<Listed, GitError> {
         } else if matches!(listed, Listed::Absent) {
             listed = Listed::Conflicted;
         }
+    }
+    if captured.truncated() && matches!(listed, Listed::Absent) {
+        return Err(captured.invalid_output("the index listing was cut short before the path"));
     }
     Ok(listed)
 }
@@ -263,36 +222,134 @@ fn records(captured: &Captured) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Whether `path` is spelled as a path inside the work tree: relative, with no `..`, drive or root.
-fn is_inside_worktree(path: &str) -> bool {
+/// The request's path spelled once: relative, with `/` separators and no `.` or empty part (decision 0103). A rooted
+/// path, a `..` part, or a `.git` part in any case is refused. On Windows a backslash separates parts too.
+fn normalize_request(path: &str) -> Result<String, FileContentError> {
+    if path.contains('\0') {
+        return Err(refused(
+            codes::REQUEST_INVALID_PARAMS,
+            "the path contains a NUL byte".to_owned(),
+        ));
+    }
+    if is_rooted(path) {
+        return Err(outside(path));
+    }
+    let spelled = if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_owned()
+    };
+    let mut parts = Vec::new();
+    for part in spelled.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return Err(outside(path)),
+            name if name.eq_ignore_ascii_case(".git") => {
+                return Err(refused(
+                    codes::REQUEST_INVALID_PARAMS,
+                    format!("`{path}` is inside git's own folder, not a workspace file"),
+                ));
+            }
+            name => parts.push(name),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+/// Whether the path starts at a root or a drive, which a workspace-relative path never does.
+fn is_rooted(path: &str) -> bool {
     Path::new(path)
         .components()
-        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+        .next()
+        .is_some_and(|part| matches!(part, Component::RootDir | Component::Prefix(_)))
 }
 
 /// Whether a failed lookup means the path does not exist, rather than that it could not be read.
-fn is_absent(error: &io::Error) -> bool {
+pub(crate) fn is_absent(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
     )
 }
 
-fn refused(code: &'static str, message: String) -> FileContentError {
+pub(crate) fn refused(code: &'static str, message: String) -> FileContentError {
     FileContentError::Refused { code, message }
 }
 
-fn outside(path: &str) -> FileContentError {
+pub(crate) fn outside(path: &str) -> FileContentError {
     refused(
         codes::GIT_PATH_OUTSIDE_WORKTREE,
         format!("`{path}` is not a path inside the workspace"),
     )
 }
 
-fn unreadable(path: &Path, source: io::Error) -> FileContentError {
-    GitError::File {
-        path: path.to_path_buf(),
+pub(crate) fn unreadable(path: &str, source: io::Error) -> FileContentError {
+    FileContentError::Unreadable {
+        path: path.to_owned(),
         source,
     }
-    .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_protocol::codes;
+
+    use super::{FileContentError, normalize_request};
+
+    fn code_of(path: &str) -> &'static str {
+        match normalize_request(path) {
+            Err(FileContentError::Refused { code, .. }) => code,
+            other => panic!("{path} should be refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spellings_of_one_path_normalize_to_the_same_relative_path() {
+        assert_eq!(normalize_request("./README.md").expect("path"), "README.md");
+        assert_eq!(normalize_request("a//b/./c/").expect("path"), "a/b/c");
+        assert_eq!(
+            normalize_request("docs/./guide.md").expect("path"),
+            "docs/guide.md"
+        );
+        assert_eq!(normalize_request(".").expect("path"), "");
+    }
+
+    #[test]
+    fn a_climbing_or_rooted_path_is_outside_the_workspace() {
+        for path in ["../x", "a/../../x", "/etc/passwd", "a/..", ".."] {
+            assert_eq!(code_of(path), codes::GIT_PATH_OUTSIDE_WORKTREE, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_git_part_is_refused_in_any_case() {
+        for path in [".git", ".GIT/config", "x/.Git/HEAD", "./.git/config"] {
+            assert_eq!(code_of(path), codes::REQUEST_INVALID_PARAMS, "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn backslashes_separate_parts_and_rooted_or_drive_spellings_are_outside() {
+        assert_eq!(
+            normalize_request(r"docs\\guide.md").expect("path"),
+            "docs/guide.md"
+        );
+        assert_eq!(
+            normalize_request(r"docs/sub\guide.md").expect("path"),
+            "docs/sub/guide.md"
+        );
+        for path in [r"..\x", r"\\?\C:\x", r"C:x", r"\x", r"\\server\share\x"] {
+            assert_eq!(code_of(path), codes::GIT_PATH_OUTSIDE_WORKTREE, "{path}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_backslash_is_an_ordinary_character_off_windows() {
+        assert_eq!(
+            normalize_request(r"docs\guide.md").expect("path"),
+            r"docs\guide.md"
+        );
+    }
 }

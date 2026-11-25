@@ -13,6 +13,8 @@ mod config;
 mod diff;
 mod error;
 mod file_content;
+#[cfg(windows)]
+mod file_handle_path;
 mod git;
 mod index;
 mod log;
@@ -26,6 +28,7 @@ mod submodule_pointer;
 mod untrusted;
 mod version;
 mod worktree;
+mod worktree_file;
 mod worktree_locks;
 mod worktree_porcelain;
 
