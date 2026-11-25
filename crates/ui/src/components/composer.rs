@@ -372,7 +372,7 @@ impl Composer {
         preselect: Option<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        let (choice, favourites, none_installed) = {
+        let (choice, favourites, none_installed, fast_reason) = {
             let state = self.picker.read(cx).state();
             if state.agents() == agents.as_slice() {
                 return;
@@ -381,10 +381,12 @@ impl Composer {
                 state.choice().clone(),
                 state.favourites().to_vec(),
                 state.no_agents_installed(),
+                state.fast_reason().cloned(),
             )
         };
         let mut state = PickerState::new(agents, choice.clone()).with_favourites(favourites);
         state.set_no_agents_installed(none_installed);
+        state.set_fast_reason(fast_reason);
         if state.locate(choice.model.as_ref()).is_none() {
             let first = state
                 .agents()
@@ -402,6 +404,12 @@ impl Composer {
         self.picker = cx.new(|cx| ModelPicker::new(state, cx));
         self._picker_events = Self::subscribe_picker(&self.picker, cx);
         cx.notify();
+    }
+
+    /// Why Fast is off on every model while the service does not offer it; see `ModelPicker::set_fast_reason`.
+    pub fn set_picker_fast_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
+        self.picker
+            .update(cx, |picker, cx| picker.set_fast_reason(reason, cx));
     }
 
     fn situation(&self, cx: &App) -> Situation {

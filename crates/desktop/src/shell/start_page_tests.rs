@@ -1677,6 +1677,53 @@ fn a_kind_with_declared_models_and_levels_shows_them_and_starts_on_the_declared_
 }
 
 #[gpui::test]
+fn fast_is_off_with_its_reason_until_the_service_offers_it_and_standard_stays_chosen(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(cx, vec![claude_with_models()]);
+    let composer = composer_of(&rig, cx);
+    let fast_reason = composer.read_with(cx, |composer, cx| {
+        composer
+            .picker()
+            .read(cx)
+            .state()
+            .fast_reason()
+            .map(|reason| reason.to_string())
+    });
+    assert_eq!(
+        fast_reason.as_deref(),
+        Some("Fast mode needs a newer service."),
+        "the Fast segment names why it is off"
+    );
+    let (chosen_fast, can_pick_fast) = composer.read_with(cx, |composer, cx| {
+        let state = composer.picker().read(cx).state().clone();
+        let mut picking = state.clone();
+        (state.choice().fast, picking.set_fast(true))
+    });
+    assert!(
+        !chosen_fast && !can_pick_fast,
+        "Standard stays chosen and Fast cannot be picked"
+    );
+
+    rig._updates
+        .send(StoreUpdate::AgentFastOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let fast_reason = composer.read_with(cx, |composer, cx| {
+        composer
+            .picker()
+            .read(cx)
+            .state()
+            .fast_reason()
+            .map(|reason| reason.to_string())
+    });
+    assert_eq!(
+        fast_reason, None,
+        "once the service offers it the reason goes; the models still take no Fast flag"
+    );
+}
+
+#[gpui::test]
 fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,

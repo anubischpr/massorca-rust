@@ -202,6 +202,15 @@ pub fn start_options(offered: bool, model: Option<&str>, effort: Option<&str>) -
     }
 }
 
+/// Why Fast is off on every model until the service offers `agent-fast/1`. No declared model carries a Fast flag yet, and
+/// `agent.start` has no field for a speed, so Fast stays off even once the service offers it.
+pub const FAST_NEEDS_NEWER_SERVICE: &str = "Fast mode needs a newer service.";
+
+/// The reason Fast is off on every model, or `None` once the service offers fast speed.
+pub fn fast_reason(service_offers_fast: bool) -> Option<&'static str> {
+    (!service_offers_fast).then_some(FAST_NEEDS_NEWER_SERVICE)
+}
+
 /// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
 /// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
 pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
@@ -550,6 +559,12 @@ mod tests {
                 .as_deref(),
             Some("ultra")
         );
+    }
+
+    #[test]
+    fn fast_is_off_with_its_reason_until_the_service_offers_agent_fast() {
+        assert_eq!(fast_reason(false), Some(FAST_NEEDS_NEWER_SERVICE));
+        assert_eq!(fast_reason(true), None);
     }
 
     #[test]

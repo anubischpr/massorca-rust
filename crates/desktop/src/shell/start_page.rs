@@ -41,8 +41,8 @@ use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{DEFAULT_TAG, ModeChoice, remembered_mode, start_choices};
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
-    StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason,
-    start_options, start_params,
+    StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, fast_reason,
+    send_reason, start_options, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -685,12 +685,13 @@ impl Shell {
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let (choices, connected, kinds) = {
+        let (choices, connected, kinds, agent_fast) = {
             let state = self.store.read(cx).state();
             (
                 session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
+                state.agent_fast,
             )
         };
         let installed_kinds: Vec<AgentKind> = kinds
@@ -703,6 +704,8 @@ impl Shell {
             composer.set_picker_agents(picker_agents(&kinds, &choices), preselect, cx);
             // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
             composer.set_no_agents_installed(connected && choices.is_empty(), cx);
+            // Fast is off on every model until the service offers its speed (`AGENT_FAST_CAPABILITY`).
+            composer.set_picker_fast_reason(fast_reason(agent_fast).map(SharedString::from), cx);
         });
         let chosen = composer
             .read(cx)
