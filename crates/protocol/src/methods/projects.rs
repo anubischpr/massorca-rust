@@ -17,6 +17,8 @@ pub const INSPECT: &str = "project.inspect";
 pub const SET_BASE: &str = "project.set_base";
 /// Params: [`ProjectUpdateParams`]. Result: [`Project`]. Capability `project-update/1`.
 pub const UPDATE: &str = "project.update";
+/// Params: [`ProjectRef`]. Result: [`Project`]. Capability `project-init-git/1`: a folder project becomes a git project.
+pub const INIT_GIT: &str = "project.init_git";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

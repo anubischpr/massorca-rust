@@ -27,6 +27,8 @@ pub const PATH_NOT_DIRECTORY: &str = "path.not_directory";
 pub const PROJECT_NOT_FOUND: &str = "project.not_found";
 pub const PROJECT_EXISTS: &str = "project.exists";
 pub const PROJECT_NOT_GIT: &str = "project.not_git";
+/// The folder is already a git repository, or inside one, or already a git project (decision 0115).
+pub const PROJECT_ALREADY_GIT: &str = "project.already_git";
 pub const PROJECT_HAS_WORKSPACES: &str = "project.has_workspaces";
 pub const WORKSPACE_NOT_FOUND: &str = "workspace.not_found";
 pub const WORKSPACE_NAME_TAKEN: &str = "workspace.name_taken";

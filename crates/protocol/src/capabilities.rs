@@ -2,6 +2,8 @@
 
 pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
+/// `project.init_git` (decision 0115): turning a folder project into a git project.
+pub const PROJECT_INIT_GIT: &str = "project-init-git/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
 pub const WORKSPACES: &str = "workspaces/1";
