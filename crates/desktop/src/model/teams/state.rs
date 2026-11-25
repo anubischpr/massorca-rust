@@ -9,10 +9,12 @@ use super::bot_edit::BotChange;
 use super::filters::ProjectFilter;
 use super::live::agent_of_kind;
 use super::page::TeamPage;
+use super::routine_form::RoutineDraft;
+use super::routine_history::{RoutineHistory, RunsState};
 use super::team_edit::TeamChange;
 use super::types::{
     AddressId, BoardOwner, Bot, BotId, Column, HostChoice, MemoryId, MemoryTab, Pick, Project,
-    ProjectId, RoutineId, Task, Team, TeamId,
+    ProjectId, RoutineId, RunOutcome, Task, Team, TeamId,
 };
 
 /// Names hold at most this many characters (screens 4.5, 4.7).
@@ -94,10 +96,14 @@ pub struct TeamsState {
     access_notice: Option<(TeamId, String)>,
     /// Why the last removal of a team was refused, and for which team.
     removal_notice: Option<(TeamId, String)>,
+    /// Why the last run-now of a routine was refused, and for which routine.
+    routine_run_notice: Option<(TeamId, RoutineId, String)>,
     /// The project filter each team's Board shows; a team with none shows every card.
     board_filters: BTreeMap<TeamId, ProjectFilter>,
     /// Whether the Sidebar leaves out the projects whose cards are all Done.
     hide_finished_projects: bool,
+    /// The run history of the routine page that is open, if one is.
+    routine_history: Option<RoutineHistory>,
     next_id: u32,
 }
 
@@ -120,8 +126,10 @@ impl TeamsState {
             notice: None,
             access_notice: None,
             removal_notice: None,
+            routine_run_notice: None,
             board_filters: BTreeMap::new(),
             hide_finished_projects: false,
+            routine_history: None,
             next_id,
         }
     }
@@ -167,8 +175,10 @@ impl TeamsState {
         fresh.memory_tab = self.memory_tab;
         fresh.notice = self.notice.clone();
         fresh.access_notice = self.access_notice.clone();
+        fresh.routine_run_notice = self.routine_run_notice.clone();
         fresh.board_filters = self.board_filters.clone();
         fresh.hide_finished_projects = self.hide_finished_projects;
+        fresh.routine_history = self.routine_history.clone();
         fresh
     }
 
@@ -358,6 +368,91 @@ impl TeamsState {
             .ok_or(TeamError::Missing)?;
         item.enabled = enabled;
         Ok(())
+    }
+
+    /// Records a sample run of a routine in the sample store: its last run reads Done.
+    pub fn run_routine(&mut self, team: TeamId, routine: RoutineId) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let item = self.teams[index]
+            .routines
+            .iter_mut()
+            .find(|item| item.id == routine)
+            .ok_or(TeamError::Missing)?;
+        item.last_run = Some(RunOutcome::Done);
+        Ok(())
+    }
+
+    /// Adds a routine to a team from a checked draft, in the sample store (no service is attached).
+    pub fn add_routine(
+        &mut self,
+        team: TeamId,
+        draft: &RoutineDraft,
+    ) -> Result<RoutineId, TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let id = RoutineId(self.fresh());
+        let host = self.teams[index].host.clone();
+        self.teams[index]
+            .routines
+            .push(draft.new_routine_on(id, &host));
+        Ok(id)
+    }
+
+    /// Changes a routine of a team to what the draft holds; its pause and its runs stay as they are.
+    pub fn update_routine(
+        &mut self,
+        team: TeamId,
+        routine: RoutineId,
+        draft: &RoutineDraft,
+    ) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let item = self.teams[index]
+            .routines
+            .iter_mut()
+            .find(|item| item.id == routine)
+            .ok_or(TeamError::Missing)?;
+        draft.apply(item);
+        Ok(())
+    }
+
+    /// Removes a routine from a team.
+    pub fn remove_routine(&mut self, team: TeamId, routine: RoutineId) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let routines = &mut self.teams[index].routines;
+        let before = routines.len();
+        routines.retain(|item| item.id != routine);
+        if routines.len() == before {
+            return Err(TeamError::Missing);
+        }
+        Ok(())
+    }
+
+    /// The run history the routine page shows, if one is open.
+    pub fn routine_history(&self) -> Option<&RoutineHistory> {
+        self.routine_history.as_ref()
+    }
+
+    /// Opens a routine's run history, waiting for the service to answer.
+    pub fn open_routine_history(&mut self, team: TeamId, routine: RoutineId) {
+        self.routine_history = Some(RoutineHistory {
+            team,
+            routine,
+            runs: RunsState::Loading,
+        });
+    }
+
+    /// Shows the runs the service answered, if the open history is still that routine's.
+    pub fn set_routine_history(&mut self, team: TeamId, routine: RoutineId, runs: RunsState) {
+        if let Some(history) = self
+            .routine_history
+            .as_mut()
+            .filter(|open| open.team == team && open.routine == routine)
+        {
+            history.runs = runs;
+        }
     }
 
     pub fn delete_routine(&mut self, team: TeamId, routine: RoutineId) -> Result<(), TeamError> {
@@ -594,6 +689,24 @@ impl TeamsState {
         self.removal_notice = notice.map(|notice| (team, notice));
     }
 
+    /// Why the last run-now of `routine` was refused, if it was.
+    pub fn routine_run_notice(&self, team: TeamId, routine: RoutineId) -> Option<&str> {
+        self.routine_run_notice
+            .as_ref()
+            .filter(|(owner, id, _)| *owner == team && *id == routine)
+            .map(|(_, _, notice)| notice.as_str())
+    }
+
+    /// Keeps why a run-now of a routine was refused, or clears it with `None`.
+    pub fn set_routine_run_notice(
+        &mut self,
+        team: TeamId,
+        routine: RoutineId,
+        notice: Option<String>,
+    ) {
+        self.routine_run_notice = notice.map(|notice| (team, routine, notice));
+    }
+
     /// The team a page shows, when it belongs to a team that exists.
     pub fn page_team(&self, page: TeamPage) -> Option<&Team> {
         self.team(page.team())
@@ -668,6 +781,71 @@ mod tests {
     use super::super::types::{BoardOwner, TaskId};
     use super::*;
     use crate::model::shell::Agent;
+
+    #[test]
+    fn the_sample_store_adds_updates_and_removes_a_routine() {
+        use super::super::routine_form::ScheduleKind;
+        use super::super::types::{Cadence, Weekday};
+
+        let mut state = SampleTeamsSource.teams();
+        let draft = RoutineDraft {
+            name: "Weekly review".into(),
+            prompt: "Review the week".into(),
+            kind: ScheduleKind::Weekly,
+            weekday: Weekday::Friday,
+            ..RoutineDraft::new_routine(Some(BotId(1)))
+        };
+        let id = state
+            .add_routine(TeamId(1), &draft)
+            .expect("a routine on the sample team");
+        let routine = |state: &TeamsState| {
+            state
+                .team(TeamId(1))
+                .and_then(|team| team.routines.iter().find(|item| item.id == id).cloned())
+        };
+        let added = routine(&state).expect("the new routine");
+        assert_eq!(added.name, "Weekly review");
+        assert_eq!(added.cadence, Cadence::Weekly(Weekday::Friday));
+        assert!(added.enabled);
+        let renamed = RoutineDraft {
+            name: "Friday review".into(),
+            ..draft
+        };
+        state
+            .update_routine(TeamId(1), id, &renamed)
+            .expect("the routine is there");
+        assert_eq!(
+            routine(&state).map(|item| item.name),
+            Some("Friday review".into())
+        );
+        state
+            .remove_routine(TeamId(1), id)
+            .expect("the routine is there");
+        assert_eq!(routine(&state), None);
+        assert_eq!(state.remove_routine(TeamId(1), id), Err(TeamError::Missing));
+    }
+
+    #[test]
+    fn a_routine_history_shows_only_the_runs_of_the_routine_it_was_opened_for() {
+        let mut state = SampleTeamsSource.teams();
+        state.open_routine_history(TeamId(1), RoutineId(3));
+        state.set_routine_history(TeamId(1), RoutineId(4), RunsState::Failed("late".into()));
+        let runs = |state: &TeamsState| state.routine_history().map(|open| open.runs.clone());
+        assert_eq!(runs(&state), Some(RunsState::Loading));
+        state.set_routine_history(TeamId(1), RoutineId(3), RunsState::Loaded(Vec::new()));
+        assert_eq!(runs(&state), Some(RunsState::Loaded(Vec::new())));
+    }
+
+    #[test]
+    fn a_store_refresh_keeps_the_open_routine_history() {
+        let mut state = SampleTeamsSource.teams();
+        state.open_routine_history(TeamId(1), RoutineId(3));
+        let refreshed = state.refreshed(SampleTeamsSource.teams());
+        assert_eq!(
+            refreshed.routine_history().map(|open| open.routine),
+            Some(RoutineId(3))
+        );
+    }
 
     fn new_team(name: &str, host: usize) -> NewTeam {
         NewTeam {

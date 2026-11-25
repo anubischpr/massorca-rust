@@ -232,6 +232,12 @@ pub struct Shell {
     memory_menu: Option<teams::OpenMemoryMenu>,
     /// The team pill's switch menu, while it is open.
     team_switch: Option<teams::OpenTeamSwitch>,
+    /// The New or Edit routine form, while the Canvas shows that page.
+    routine_form: Option<teams::RoutineForm>,
+    /// The menu of a routine card, while it is open.
+    routine_menu: Option<teams::OpenRoutineMenu>,
+    /// The delete confirm of a routine, while it is on screen.
+    routine_confirm: Option<teams::RoutineConfirm>,
     /// The Conference room's composer, receivers and refusals (decision 0102).
     room_page: teams::RoomPage,
     /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
@@ -570,6 +576,9 @@ impl Shell {
             team_menu: None,
             memory_menu: None,
             team_switch: None,
+            routine_form: None,
+            routine_menu: None,
+            routine_confirm: None,
             room_page: teams::RoomPage::default(),
             filter_menu: None,
             vault_dialog: None,
@@ -906,6 +915,7 @@ impl Render for Shell {
                 pairing,
                 session,
                 room,
+                routine_form: self.routine_form.as_ref(),
             },
             self.conversation_size.clone(),
             window,
@@ -1036,6 +1046,14 @@ impl Render for Shell {
             .memory_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let routine_menu = self
+            .routine_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let routine_confirm = self
+            .routine_confirm
+            .as_ref()
+            .map(|confirm| teams::routine_confirm_view(confirm, &shell, cx));
         let receiver_menu = self
             .room_page
             .receiver_menu
@@ -1132,10 +1150,12 @@ impl Render for Shell {
             .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_switch, |el, menu| el.child(menu))
             .when_some(memory_menu, |el, menu| el.child(menu))
+            .when_some(routine_menu, |el, menu| el.child(menu))
             .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(routine_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
