@@ -93,20 +93,11 @@ pub(super) fn tree_row(
             state,
             depth,
             selected,
-            place,
-            own_worktree,
             can_bring_back,
             unread,
+            ..
         } => {
-            let row = session_row(
-                id,
-                title,
-                *agent,
-                *state,
-                *depth,
-                *selected,
-                place.as_deref().map(|place| (place, *own_worktree)),
-            );
+            let row = session_row(id, title, *agent, *state, *depth, *selected, None);
             // An unread session shows an accent dot, and its title in body-strong (WS-33).
             let row = if *unread {
                 row.title_strong(true)

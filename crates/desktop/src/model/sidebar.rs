@@ -6,6 +6,7 @@ use std::iter::Peekable;
 
 use super::navigation::{Mode, Page};
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
+use super::workspace_flow::NO_PROJECT_LABEL;
 
 /// The icon of a navigation row. The view maps each kind to a Lucide icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,14 +63,16 @@ pub enum TreeRow {
         state: AgentState,
         depth: usize,
         selected: bool,
-        /// Where a child session runs, shown after its title.
-        place: Option<String>,
-        /// The child runs in another worktree than its parent's, whose row stays listed too (WS-35).
-        own_worktree: bool,
         /// Whether the row offers to bring this child back.
         can_bring_back: bool,
         /// An unread session: shown with a dot and never folded (WS-33).
         unread: bool,
+        /// The row tooltip: "branch · worktree path", or the folder path (A97).
+        tooltip: Option<String>,
+        /// The workspace the session runs in, for the row menu.
+        workspace_id: String,
+        /// Its host is unreachable, so the row dims (A10).
+        dimmed: bool,
     },
     /// Shows a workspace's folded sessions: `count` of its top sessions are hidden behind it.
     ShowMore {
@@ -143,9 +146,24 @@ pub fn project_label(name: &str, emoji: Option<&str>) -> String {
     }
 }
 
+/// The row tooltip of a session: "branch · worktree path", the path alone for a folder (A97).
+pub fn tooltip_of(session: &SessionRow) -> Option<String> {
+    match (&session.branch, &session.path) {
+        (Some(branch), Some(path)) => Some(format!("{branch} · {path}")),
+        (Some(branch), None) => Some(branch.clone()),
+        (None, Some(path)) => Some(path.clone()),
+        (None, None) => None,
+    }
+}
+
 fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     for project in projects {
+        // The "No project" group is listed only while it has sessions (A95, A97).
+        let empty = project.hosts.iter().all(|host| host.sessions.is_empty());
+        if project.name == NO_PROJECT_LABEL && empty {
+            continue;
+        }
         rows.push(TreeRow::Project {
             name: project.name.clone(),
             emoji: project.emoji.clone(),
@@ -155,23 +173,22 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
                 name: host.name.clone(),
                 reach: host.reach,
             });
-            for workspace in &host.workspaces {
-                rows.push(TreeRow::Workspace {
-                    id: workspace.id.clone(),
-                    name: workspace.name.clone(),
-                    branch: workspace.branch.clone(),
-                    usage_slot: workspace.usage_slot,
-                });
-                for session in &workspace.sessions {
-                    push_session(&mut rows, session, 0, active);
-                }
+            let dimmed = matches!(host.reach, HostReach::Unreachable { .. });
+            for session in &host.sessions {
+                push_session(&mut rows, session, 0, active, dimmed);
             }
         }
     }
     rows
 }
 
-fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, active: Option<&str>) {
+fn push_session(
+    rows: &mut Vec<TreeRow>,
+    session: &SessionRow,
+    depth: usize,
+    active: Option<&str>,
+    dimmed: bool,
+) {
     rows.push(TreeRow::Session {
         id: session.id.clone(),
         title: session.title.clone(),
@@ -179,13 +196,14 @@ fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, act
         state: session.state,
         depth,
         selected: active == Some(session.id.as_str()),
-        place: session.place.clone(),
-        own_worktree: session.own_worktree,
-        can_bring_back: session.can_bring_back,
         unread: session.unread,
+        can_bring_back: session.can_bring_back,
+        tooltip: tooltip_of(session),
+        workspace_id: session.workspace_id.clone(),
+        dimmed,
     });
     for child in &session.children {
-        push_session(rows, child, depth + 1, active);
+        push_session(rows, child, depth + 1, active, dimmed);
     }
 }
 
@@ -311,6 +329,7 @@ fn worst_hidden_state(states: impl IntoIterator<Item = AgentState>) -> Option<Ag
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
+    use crate::model::shell::{HostGroup, StatusBarModel};
 
     fn sample() -> ShellSnapshot {
         SampleDataSource.snapshot()
@@ -346,13 +365,17 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_has_one_row_per_project_host_workspace_and_session() {
+    fn the_tree_has_project_host_and_session_rows_and_no_workspace_row() {
         let SidebarContent::Workspaces { tree, .. } = sidebar_content(&sample(), Mode::Workspaces)
         else {
             panic!("workspaces content expected");
         };
-        // 2 projects, 3 hosts, 4 workspaces and 6 sessions (one of them a child of another).
-        assert_eq!(tree.len(), 15);
+        // 2 projects, 3 hosts and 6 sessions (three of them children of another): no workspace row.
+        assert_eq!(tree.len(), 11);
+        assert!(
+            tree.iter()
+                .all(|row| !matches!(row, TreeRow::Workspace { .. }))
+        );
         assert_eq!(
             tree[0],
             TreeRow::Project {
@@ -442,5 +465,142 @@ mod tests {
         );
         assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
         assert_eq!(project_label("massorca", None), "massorca");
+    }
+
+    fn sample_session(id: &str) -> SessionRow {
+        SessionRow {
+            id: id.into(),
+            title: id.into(),
+            agent: Agent::Claude,
+            state: AgentState::Idle,
+            workspace_id: "w".into(),
+            branch: Some("feat/x".into()),
+            path: Some("D:/w".into()),
+            place: None,
+            own_worktree: false,
+            can_bring_back: false,
+            unread: false,
+            children: Vec::new(),
+        }
+    }
+
+    fn tree_of(snapshot: &ShellSnapshot) -> Vec<TreeRow> {
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        tree
+    }
+
+    fn host_with(sessions: Vec<SessionRow>, reach: HostReach) -> HostGroup {
+        HostGroup {
+            name: "This PC".into(),
+            reach,
+            workspaces: Vec::new(),
+            sessions,
+        }
+    }
+
+    fn snapshot_of(projects: Vec<ProjectGroup>) -> ShellSnapshot {
+        ShellSnapshot {
+            projects,
+            usage: Vec::new(),
+            status: StatusBarModel {
+                waiting: 0,
+                running: 0,
+                memory: None,
+                terminals: 0,
+                ports: None,
+                hosts_total: 1,
+                hosts_unreachable: 0,
+            },
+            session_title: None,
+            active_session: None,
+            prototypes: 0,
+            service_status: None,
+            service_notice: None,
+        }
+    }
+
+    #[test]
+    fn a_session_row_carries_the_branch_and_path_as_its_tooltip() {
+        let row = tree_of(&sample()).into_iter().find_map(|row| match row {
+            TreeRow::Session {
+                id,
+                tooltip,
+                workspace_id,
+                ..
+            } if id == "s2" => Some((tooltip, workspace_id)),
+            _ => None,
+        });
+        assert_eq!(
+            row,
+            Some((
+                Some("pr/store · D:/work/core-store".to_owned()),
+                "w2".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_folder_session_tooltip_is_the_folder_path_alone() {
+        let folder = SessionRow {
+            branch: None,
+            path: Some("D:/notes".into()),
+            ..sample_session("f1")
+        };
+        assert_eq!(tooltip_of(&folder), Some("D:/notes".to_owned()));
+        let bare = SessionRow {
+            branch: None,
+            path: None,
+            ..sample_session("f2")
+        };
+        assert_eq!(tooltip_of(&bare), None);
+    }
+
+    #[test]
+    fn the_sessions_of_an_unreachable_host_dim_and_the_others_do_not() {
+        let dimmed: Vec<(String, bool)> = tree_of(&sample())
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Session { id, dimmed, .. } => Some((id.clone(), *dimmed)),
+                _ => None,
+            })
+            .collect();
+        assert!(dimmed.contains(&("s3".to_owned(), true)));
+        assert!(dimmed.contains(&("s1".to_owned(), false)));
+    }
+
+    #[test]
+    fn the_no_project_group_is_hidden_while_it_has_no_sessions() {
+        let empty = ProjectGroup {
+            name: NO_PROJECT_LABEL.into(),
+            emoji: None,
+            hosts: vec![host_with(Vec::new(), HostReach::Connected)],
+        };
+        assert!(tree_of(&snapshot_of(vec![empty.clone()])).is_empty());
+
+        let listed = ProjectGroup {
+            hosts: vec![host_with(vec![sample_session("n1")], HostReach::Connected)],
+            ..empty
+        };
+        let rows = tree_of(&snapshot_of(vec![listed]));
+        assert_eq!(rows.len(), 3, "project, host and the session");
+        assert!(matches!(&rows[0], TreeRow::Project { name, .. } if name == NO_PROJECT_LABEL));
+    }
+
+    #[test]
+    fn a_stopped_session_stays_listed_however_many_sessions_there_are() {
+        let sessions: Vec<SessionRow> = (1..=9).map(|n| sample_session(&format!("s{n}"))).collect();
+        let snapshot = snapshot_of(vec![ProjectGroup {
+            name: "p".into(),
+            emoji: None,
+            hosts: vec![host_with(sessions, HostReach::Connected)],
+        }]);
+        let listed = tree_of(&snapshot)
+            .iter()
+            .filter(|row| matches!(row, TreeRow::Session { .. }))
+            .count();
+        assert_eq!(listed, 9);
     }
 }
