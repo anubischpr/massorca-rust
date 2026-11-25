@@ -13,6 +13,9 @@ use massorca_protocol::methods::agents::{
     KindPackage, ModeApplied, ModeSource, Outcome, PackageState, PermissionMode, PromptReceipt,
     ReceiptKind, StatusMechanism,
 };
+use massorca_protocol::methods::agents::{
+    AgentModel, AgentModels, AgentModelsParams, ModelListingError, ModelListingFailure, ModelSource,
+};
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -65,6 +68,7 @@ fn live_session() -> AgentSession {
 fn method_names_match_the_wire_table() {
     let names = [
         (agents::KINDS, "agent.kinds"),
+        (agents::MODELS, "agent.models"),
         (agents::START, "agent.start"),
         (agents::LIST, "agent.list"),
         (agents::SHOW, "agent.show"),
@@ -1048,4 +1052,100 @@ fn a_session_says_which_children_it_could_delegate_and_an_older_one_says_nothing
     let decoded: AgentSession = serde_json::from_value(older).expect("an older record decodes");
     assert_eq!(decoded.delegation, None);
     assert!(decoded.notes.is_empty());
+}
+
+#[test]
+fn a_models_listing_names_each_models_source_and_omits_an_absent_time_and_error() {
+    let declared = AgentModel {
+        id: "sonnet".to_owned(),
+        label: "Sonnet".to_owned(),
+        default: true,
+        efforts: Some(vec!["low".to_owned(), "high".to_owned()]),
+        source: ModelSource::Declared,
+    };
+    let discovered = AgentModel {
+        id: "opus[1m]".to_owned(),
+        label: "Opus (1M context)".to_owned(),
+        default: false,
+        efforts: None,
+        source: ModelSource::Discovered,
+    };
+    assert_wire(
+        &AgentModels {
+            models: vec![declared, discovered],
+            fetched_at_ms: Some(1_700_000_000_000),
+            error: None,
+        },
+        &json!({
+            "models": [
+                {
+                    "id": "sonnet",
+                    "label": "Sonnet",
+                    "default": true,
+                    "efforts": ["low", "high"],
+                    "source": "declared"
+                },
+                { "id": "opus[1m]", "label": "Opus (1M context)", "source": "discovered" }
+            ],
+            "fetched_at_ms": 1_700_000_000_000u64
+        }),
+    );
+    assert_wire(
+        &AgentModels {
+            models: Vec::new(),
+            fetched_at_ms: None,
+            error: Some(ModelListingError {
+                code: ModelListingFailure::CliMissing,
+                message: "the program was not found".to_owned(),
+            }),
+        },
+        &json!({
+            "models": [],
+            "error": { "code": "cli_missing", "message": "the program was not found" }
+        }),
+    );
+}
+
+#[test]
+fn the_models_params_name_a_kind_and_omit_an_absent_account_and_an_unset_refresh() {
+    assert_wire(
+        &AgentModelsParams {
+            kind: "claude".to_owned(),
+            account: None,
+            refresh: false,
+        },
+        &json!({ "kind": "claude" }),
+    );
+    assert_wire(
+        &AgentModelsParams {
+            kind: "claude".to_owned(),
+            account: Some("acc-1".to_owned()),
+            refresh: true,
+        },
+        &json!({ "kind": "claude", "account": "acc-1", "refresh": true }),
+    );
+}
+
+#[test]
+fn every_listing_failure_has_its_snake_case_code() {
+    let codes: Vec<Value> = [
+        ModelListingFailure::CliMissing,
+        ModelListingFailure::NotSignedIn,
+        ModelListingFailure::TimedOut,
+        ModelListingFailure::Failed,
+        ModelListingFailure::NoModels,
+    ]
+    .into_iter()
+    .map(|code| serde_json::to_value(code).expect("a failure encodes"))
+    .collect();
+    assert_eq!(
+        codes,
+        [
+            json!("cli_missing"),
+            json!("not_signed_in"),
+            json!("timed_out"),
+            json!("failed"),
+            json!("no_models"),
+        ]
+    );
 }

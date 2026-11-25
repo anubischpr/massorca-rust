@@ -46,6 +46,8 @@ pub const AGENT_CHAT: &str = "agent-chat/1";
 /// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
+/// `agent.models`: the models a kind's picker offers for an account, declared and listed by its vendor CLI (decision 0166).
+pub const AGENT_MODELS: &str = "agent-models/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";

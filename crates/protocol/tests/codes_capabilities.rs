@@ -181,5 +181,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
+    assert_eq!(capabilities::AGENT_MODELS, "agent-models/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

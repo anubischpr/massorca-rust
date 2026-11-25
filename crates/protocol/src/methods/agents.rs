@@ -12,6 +12,8 @@ use crate::methods::terminals::{TerminalExit, TerminalState};
 
 /// Params: none. Result: [`AgentKinds`].
 pub const KINDS: &str = "agent.kinds";
+/// Params: [`AgentModelsParams`]. Result: [`AgentModels`] (capability `agent-models/1`, decision 0166).
+pub const MODELS: &str = "agent.models";
 /// Params: [`AgentStartParams`]. Result: [`AgentSession`].
 pub const START: &str = "agent.start";
 /// Params: [`AgentListParams`]. Result: [`AgentSessionList`], newest first.
@@ -1138,6 +1140,76 @@ pub struct AccountsRemoved {
     pub kind: String,
     pub account: String,
     pub removed: bool,
+}
+
+/// Params of `agent.models` (capability `agent-models/1`, decision 0166). Without `account`, the kind's active account is
+/// listed, or the vendor's usual home when the kind has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModelsParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// Ask the vendor CLI again instead of answering from the cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
+}
+
+/// Result of `agent.models`: the kind's declared models, then the models its vendor CLI listed for the account and the
+/// declaration does not name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModels {
+    pub models: Vec<AgentModel>,
+    /// When the listing behind `models` was fetched, in milliseconds since the Unix epoch. Absent when no listing has
+    /// succeeded, such as a kind that declares no listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at_ms: Option<u64>,
+    /// Why the latest listing failed. The declared models are still listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ModelListingError>,
+}
+
+/// One model a picker offers: declared by the kind, or listed by its vendor CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModel {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels the model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+    pub source: ModelSource,
+}
+
+/// Where a model came from: the kind's declaration, or its vendor CLI's listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSource {
+    Declared,
+    Discovered,
+}
+
+/// Why a model listing failed (decision 0166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelListingFailure {
+    /// The kind's program was not found.
+    CliMissing,
+    /// The account's check reports it is not signed in, so the picker can offer the sign-in command.
+    NotSignedIn,
+    /// The vendor CLI did not answer within the time limit.
+    TimedOut,
+    /// The vendor CLI failed, or its output could not be read.
+    Failed,
+    /// The vendor CLI listed no model MassOrca can use.
+    NoModels,
+}
+
+/// A failed model listing: its code, and a message that names no path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelListingError {
+    pub code: ModelListingFailure,
+    pub message: String,
 }
 
 /// Params of `agent.accounts.check`. Without `account`, the kind's active account is checked.
