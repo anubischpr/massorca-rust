@@ -12,6 +12,12 @@ mod memory;
 mod memory_menu;
 mod new_project;
 mod project;
+mod routine_confirm;
+mod routine_form;
+mod routine_form_page;
+mod routine_history;
+mod routine_menu;
+mod routine_service;
 mod routines;
 mod sidebar;
 mod team_bots;
@@ -42,6 +48,11 @@ pub(super) use home::bot_teams_home;
 pub(super) use memory::memory_page;
 pub(super) use memory_menu::OpenMemoryMenu;
 pub(super) use project::project_page;
+pub(super) use routine_confirm::{RoutineConfirm, routine_confirm_view};
+pub(super) use routine_form::RoutineForm;
+pub(super) use routine_form_page::routine_form_page;
+pub(super) use routine_history::routine_history_page;
+pub(super) use routine_menu::OpenRoutineMenu;
 pub(super) use routines::routines_page;
 pub(super) use sidebar::teams_list;
 pub(super) use team_switch::OpenTeamSwitch;
@@ -114,6 +125,7 @@ fn team_shape(character: TeamCharacter) -> TeamShape {
         TeamCharacter::Star => TeamShape::Star,
     }
 }
+
 
 #[cfg(test)]
 mod tests {
