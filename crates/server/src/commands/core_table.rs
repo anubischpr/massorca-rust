@@ -549,7 +549,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.forget",
-            "Forget an agent session whose run has ended; with remove_workspace, remove its workspace too, or preview that",
+            "Forget an agent session whose run has ended; with remove_workspace, remove its workspace too",
             "agent.forget",
             json!({
                 "type": "object",
@@ -559,9 +559,15 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "remove_workspace": { "type": "boolean" },
                     "force": { "type": "boolean" },
                     "discard_ignored": { "type": "boolean" },
-                    "preview": { "type": "boolean" }
+                    "expect_dirty": { "type": "boolean" }
                 }
             }),
+        ),
+        command(
+            "agent.forget_preview",
+            "Say what forgetting an agent session would do to it and to its workspace, changing nothing",
+            "agent.forget_preview",
+            selector("session"),
         ),
         command(
             "agent.rename",
