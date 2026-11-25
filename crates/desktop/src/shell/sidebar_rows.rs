@@ -5,8 +5,8 @@ use super::Shell;
 use super::change;
 use super::rail::agent_kind;
 use crate::model::shell::{Agent, AgentState, HostReach};
-use crate::model::sidebar::{NavKind, NavRow, TreeRow, project_label};
-use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*};
+use crate::model::sidebar::{HOST_INDENT, NavKind, NavRow, TreeRow, project_label, session_indent};
+use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*, px};
 use massorca_ui::IconName;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -14,10 +14,9 @@ use massorca_ui::components::agent_status::{
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
-use massorca_ui::components::sidebar_row::{
-    HostConnection, SidebarRow, WorkspaceKind, child_session_indent,
-};
+use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow, WorkspaceKind};
 use massorca_ui::components::usage_ring::UsageSlot;
+use massorca_ui::tokens::SPACE_2;
 
 /// The tree level of each kind below the project: host 1, workspace 2, session 3 (A10, A83).
 const HOST_LEVEL: usize = 1;
@@ -95,9 +94,17 @@ pub(super) fn tree_row(
             selected,
             can_bring_back,
             unread,
+            tooltip,
+            dimmed,
             ..
         } => {
-            let row = session_row(id, title, *agent, *state, *depth, *selected, None);
+            let mut row = session_row(id, title, *agent, *state, *depth, *selected);
+            if let Some(tooltip) = tooltip {
+                row = row.tooltip(tooltip.clone());
+            }
+            if *dimmed {
+                row = row.dimmed(true);
+            }
             // An unread session shows an accent dot, and its title in body-strong (WS-33).
             let row = if *unread {
                 row.title_strong(true)
@@ -150,13 +157,25 @@ pub(super) fn tree_item(
     shell: &WeakEntity<Shell>,
 ) -> AnyElement {
     let item = tree_row(row, index, focus, shell);
+    let wrapper = div().pl(px(indent_padding(row)));
     match row_selector(row) {
-        Some(selector) => div()
+        Some(selector) => wrapper
             .debug_selector(move || selector)
             .child(item)
             .into_any_element(),
-        None => item.into_any_element(),
+        None => wrapper.child(item).into_any_element(),
     }
+}
+
+/// The padding that brings a row to its indent (A97). The row's own level indent is part of its indent, so
+/// this is the rest: the indent less the list padding and the level's step.
+fn indent_padding(row: &TreeRow) -> f32 {
+    let (indent, level) = match row {
+        TreeRow::Host { .. } | TreeRow::RemoteHost { .. } => (HOST_INDENT, HOST_LEVEL),
+        TreeRow::Session { depth, .. } => (session_indent(*depth), SESSION_LEVEL + depth),
+        _ => return 0.0,
+    };
+    indent - SPACE_2 - level as f32 * TREE_INDENT
 }
 
 /// The debug selector of a row a test clicks: a fold row named by its workspace, a session by its id.
@@ -227,8 +246,8 @@ fn remote_host_row(
         .level(HOST_LEVEL)
 }
 
-/// A session: its status glyph, its agent's mark, then its title (A84). A child session sits one
-/// step deeper than its parent, so its agent mark lines up with the parent's title (A83, A85).
+/// A session row: its status glyph, its agent's mark, then its title (A84, A97). Nothing else shows on
+/// the row; the worktree and branch live in its tooltip.
 fn session_row(
     id: SharedString,
     title: &str,
@@ -236,33 +255,10 @@ fn session_row(
     state: AgentState,
     depth: usize,
     selected: bool,
-    place: Option<(&str, bool)>,
 ) -> SidebarRow {
-    let mut row = SidebarRow::session(id, title.to_owned(), glyph_state(state), agent_kind(agent))
+    SidebarRow::session(id, title.to_owned(), glyph_state(state), agent_kind(agent))
         .level(SESSION_LEVEL + depth)
-        .selected(selected);
-    // A child in its own worktree marks its branch with a branch icon (WS-35).
-    match place {
-        Some((place, true)) => {
-            row = row
-                .secondary(place.to_owned())
-                .secondary_icon(IconName::GitBranch)
-        }
-        Some((place, false)) => row = row.secondary(place.to_owned()),
-        None => {}
-    }
-    if depth == 0 {
-        row
-    } else {
-        row.child_of(session_indent(depth - 1))
-    }
-}
-
-/// The indent of a session `depth` child steps below a top-level session.
-fn session_indent(depth: usize) -> f32 {
-    (0..depth).fold(SESSION_LEVEL as f32 * TREE_INDENT, |parent, _| {
-        child_session_indent(parent)
-    })
+        .selected(selected)
 }
 
 /// The icon of each navigation row. Two Lucide names are not bundled yet and use the nearest

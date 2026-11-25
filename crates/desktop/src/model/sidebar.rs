@@ -87,6 +87,21 @@ pub enum TreeRow {
     },
 }
 
+/// The indent of a project, a host and a top session, in px from the Sidebar's edge (A97).
+pub const PROJECT_INDENT: f32 = 8.0;
+pub const HOST_INDENT: f32 = 24.0;
+pub const SESSION_INDENT: f32 = 40.0;
+/// A child session's indent: its agent mark lines up with the first letter of its parent's title (A85).
+pub const CHILD_INDENT: f32 = 62.0;
+
+/// The indent of a session `depth` levels below the top: each child step adds the same 22 px.
+pub fn session_indent(depth: usize) -> f32 {
+    match depth {
+        0 => SESSION_INDENT,
+        depth => CHILD_INDENT + (depth - 1) as f32 * (CHILD_INDENT - SESSION_INDENT),
+    }
+}
+
 /// What the Sidebar lists in the current mode.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SidebarContent {
@@ -602,5 +617,17 @@ mod tests {
             .filter(|row| matches!(row, TreeRow::Session { .. }))
             .count();
         assert_eq!(listed, 9);
+    }
+
+    #[test]
+    fn indents_are_eight_twenty_four_forty_and_sixty_two_px() {
+        assert_eq!(
+            [PROJECT_INDENT, HOST_INDENT, SESSION_INDENT, CHILD_INDENT],
+            [8.0, 24.0, 40.0, 62.0]
+        );
+        assert_eq!(session_indent(0), 40.0);
+        assert_eq!(session_indent(1), 62.0);
+        // A grandchild steps in again by the same 22 px, so its mark stays under its parent's title.
+        assert_eq!(session_indent(2), 84.0);
     }
 }
