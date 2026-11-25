@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use massorca_client::Client;
 use massorca_desktop::model::agent_models::{DeclaredModel, declared_models};
 use massorca_desktop::model::agent_sessions::bring_back_refusal;
+use massorca_desktop::model::home_start::folder_start_workspace;
 use massorca_desktop::model::session_ended::refusal_says_conversation_gone;
 use massorca_desktop::model::start_page::start_again_params;
 use massorca_desktop::service::{
@@ -22,7 +23,7 @@ use massorca_protocol::methods::agents::{
     PackageState,
 };
 use massorca_protocol::methods::config::ConfigSet;
-use massorca_protocol::methods::projects::ProjectAddParams;
+use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams,
@@ -220,7 +221,7 @@ async fn the_claude_kind_declares_its_models_and_levels_to_the_store_and_the_pic
 }
 
 #[tokio::test]
-async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_absent() {
+async fn the_service_offers_agent_chat_and_the_bridge_reports_it() {
     let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
@@ -237,8 +238,8 @@ async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_abse
     })
     .await
     .expect("the offer arrives after the connect");
-    // No service ships chat sessions yet, so every start page stays on Terminal.
-    assert!(!offered);
+    // The service runs chat sessions (decision 0101), so the start page can offer Chat where a kind supports it.
+    assert!(offered);
 
     drop(bridge);
     stop_service(service).await;
@@ -473,24 +474,29 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the workspace is created")
 }
 
+/// The `agent.start` params of a fake session in `workspace`, sized for the feed the test reads it into.
+fn fake_start_params(workspace: &str) -> AgentStartParams {
+    AgentStartParams {
+        workspace: Some(workspace.to_owned()),
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: Some(100),
+        rows: Some(30),
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+    }
+}
+
 /// Starts a fake session in `workspace`, with a terminal sized for the feed the test reads it into.
 async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
     handle
-        .agent_start(AgentStartParams {
-            workspace: Some(workspace.to_owned()),
-            kind: "fake".to_owned(),
-            prompt: None,
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            read_only: false,
-            title: None,
-            cols: Some(100),
-            rows: Some(30),
-            request_id: None,
-            permission_mode: None,
-            model: None,
-            effort: None,
-        })
+        .agent_start(fake_start_params(workspace))
         .await
         .expect("the session starts")
 }
@@ -776,8 +782,7 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
 /// Until the service offers `agent-archive/1`, a forget with its options is refused in the desktop and never sent.
 /// When the service offers it, this test must send the call to a real session instead.
 #[tokio::test]
-async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_service_lacks_the_capability()
- {
+async fn a_forget_with_the_archive_options_reaches_the_service_that_offers_the_capability() {
     let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
@@ -793,8 +798,9 @@ async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_
     })
     .await
     .expect("the capability answer arrives after the connect");
-    assert!(!offered, "the service does not offer agent-archive/1 yet");
+    assert!(offered, "the service offers agent-archive/1");
 
+    // The desktop sends the forget; the service answers for a session it does not have.
     let refused = bridge
         .handle()
         .agent_forget(ForgetSessionParams {
@@ -804,10 +810,105 @@ async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_
         })
         .await;
     match refused {
-        Err(Refusal::Failed { code, .. }) => assert_eq!(code, "service.capability_missing"),
-        other => panic!("the forget is refused in the desktop, got {other:?}"),
+        Err(Refusal::Failed { code, .. }) => assert_ne!(code, "service.capability_missing"),
+        other => panic!("the service refuses an unknown session, got {other:?}"),
     }
 
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_folder_projects_second_start_runs_in_its_folder_once_the_first_session_ends() {
+    let home = temp_home();
+    let folder = home.path().with_file_name("notes");
+    std::fs::create_dir_all(&folder).expect("the folder");
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the bridge connects and lists the fake kind");
+    let project = handle
+        .add_project(ProjectAddParams {
+            icon: None,
+            path: folder.display().to_string(),
+            name: Some("notes".to_owned()),
+            kind: Some(ProjectKind::Folder),
+            workspaces_root: None,
+        })
+        .await
+        .expect("the folder project is added");
+    let params = WorkspaceCreateParams {
+        project: project.id.clone(),
+        name: "notes".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    };
+    let first_workspace = handle
+        .create_workspace(params.clone())
+        .await
+        .expect("the first start creates the folder's workspace");
+    assert!(
+        handle.create_workspace(params).await.is_err(),
+        "the folder is taken, so a second create there is refused"
+    );
+    let client = Client::connect(&profile(home.path()), connect_options(None))
+        .await
+        .expect("the client connects");
+    let workspaces = client
+        .workspace_list(&WorkspaceListParams { project: None })
+        .await
+        .expect("the service lists workspaces")
+        .workspaces;
+    let folder_workspace = folder_start_workspace(&project, &workspaces)
+        .expect("the folder workspace is listed for its project");
+    assert_eq!(folder_workspace.id, first_workspace.id);
+    let first = start_fake(&handle, &folder_workspace.id).await;
+    // The service lets one live writer work in a folder workspace, so a start beside it is refused.
+    let beside = handle
+        .agent_start(fake_start_params(&folder_workspace.id))
+        .await
+        .expect_err("a live writer holds the folder");
+    assert_eq!(beside.code(), Some(codes::AGENT_WORKSPACE_BUSY));
+    handle
+        .agent_stop(&first.id)
+        .await
+        .expect("the first session stops");
+    let second = timeout(WAIT, async {
+        loop {
+            match handle
+                .agent_start(fake_start_params(&folder_workspace.id))
+                .await
+            {
+                Ok(session) => return session,
+                Err(refusal) if refusal.code() == Some(codes::AGENT_WORKSPACE_BUSY) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(refusal) => panic!("the second start is refused: {refusal:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the second start succeeds once the first session ends");
+    assert_eq!(second.workspace_id, folder_workspace.id);
     drop(bridge);
     stop_service(service).await;
 }

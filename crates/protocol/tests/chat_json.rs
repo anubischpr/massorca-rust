@@ -10,10 +10,11 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::chat::{
     self, AgentChatStartParams, Approval, ApprovalDecision, ApprovalScope, ApprovalState,
-    ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams,
-    ChatInterrupted, ChatItem, ChatItemBody, ChatSnapshot, ChatSubscribeParams,
-    ChatUnsupportedReason, ChatUpdate, EndReason, KindChat, MessageState, NoticeLevel, PlanEntry,
-    PlanStatus, ResetReason, RunType, SubagentStatus, ToolStatus, ToolUse, Turn, TurnState,
+    ApprovalSuggestion, ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent,
+    ChatHistoryPage, ChatHistoryParams, ChatInterrupted, ChatItem, ChatItemBody, ChatSnapshot,
+    ChatSubscribeParams, ChatUnsupportedReason, ChatUpdate, DiffStatus, EndReason, KindChat,
+    MessageState, NoticeLevel, PlanEntry, PlanStatus, ResetReason, RunType, SubagentStatus,
+    ToolStatus, ToolUse, Turn, TurnState,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -55,6 +56,7 @@ fn pending_approval() -> Approval {
         truncated: false,
         tool_use_id: Some("toolu_1".to_owned()),
         can_always: true,
+        suggestions: Vec::new(),
         state: ApprovalState::Pending,
         scope: None,
         settled_at_ms: None,
@@ -418,6 +420,7 @@ fn every_item_type_has_its_wire_shape() {
                         status: PlanStatus::InProgress,
                     },
                 ],
+                document: None,
             },
             json!({ "type": "plan", "entries": [
                 { "text": "read", "status": "completed" },
@@ -427,10 +430,12 @@ fn every_item_type_has_its_wire_shape() {
         (
             ChatItemBody::Diff {
                 path: "src/a.rs".to_owned(),
+                status: DiffStatus::Modified,
+                old_path: None,
                 patch: "@@ -1 +1 @@".to_owned(),
                 truncated: false,
             },
-            json!({ "type": "diff", "path": "src/a.rs", "patch": "@@ -1 +1 @@" }),
+            json!({ "type": "diff", "path": "src/a.rs", "status": "modified", "patch": "@@ -1 +1 @@" }),
         ),
         (
             ChatItemBody::Subagent {
@@ -520,6 +525,7 @@ fn an_approval_answer_takes_a_decision_and_optional_scope_and_message() {
             decision: ApprovalDecision::Allow,
             scope: Some(ApprovalScope::Once),
             message: None,
+            seq: None,
         },
         &json!({ "session": "s-1", "request_id": "req-1", "decision": "allow", "scope": "once" }),
     );
@@ -530,6 +536,7 @@ fn an_approval_answer_takes_a_decision_and_optional_scope_and_message() {
             decision: ApprovalDecision::Deny,
             scope: None,
             message: Some("use cargo clean".to_owned()),
+            seq: None,
         },
         &json!({ "session": "s-1", "request_id": "req-1", "decision": "deny", "message": "use cargo clean" }),
     );
@@ -592,4 +599,109 @@ fn values_from_a_newer_peer_decode_as_unknown() {
     }
     let scope: ApprovalScope = serde_json::from_value(json!("project")).expect("decodes");
     assert_eq!(scope, ApprovalScope::Unknown);
+}
+
+#[test]
+fn a_diff_names_what_happened_to_its_file_and_a_rename_its_old_path() {
+    assert_wire(
+        &ChatItemBody::Diff {
+            path: "src/b.rs".to_owned(),
+            status: DiffStatus::Renamed,
+            old_path: Some("src/a.rs".to_owned()),
+            patch: String::new(),
+            truncated: false,
+        },
+        &json!({
+            "type": "diff", "path": "src/b.rs", "status": "renamed", "old_path": "src/a.rs", "patch": ""
+        }),
+    );
+    for (text, status) in [
+        ("added", DiffStatus::Added),
+        ("modified", DiffStatus::Modified),
+        ("deleted", DiffStatus::Deleted),
+        ("renamed", DiffStatus::Renamed),
+        ("copied", DiffStatus::Unknown),
+    ] {
+        let decoded: DiffStatus = serde_json::from_value(json!(text)).expect("a status");
+        assert_eq!(decoded, status, "{text}");
+    }
+}
+
+#[test]
+fn a_diff_from_an_older_peer_reads_as_modified() {
+    let decoded: ChatItemBody =
+        serde_json::from_value(json!({ "type": "diff", "path": "a.rs", "patch": "@@" }))
+            .expect("a diff");
+    assert_eq!(
+        decoded,
+        ChatItemBody::Diff {
+            path: "a.rs".to_owned(),
+            status: DiffStatus::Modified,
+            old_path: None,
+            patch: "@@".to_owned(),
+            truncated: false,
+        }
+    );
+}
+
+#[test]
+fn a_plan_may_name_the_document_it_was_written_to() {
+    assert_wire(
+        &ChatItemBody::Plan {
+            entries: Vec::new(),
+            document: Some("plans/next.md".to_owned()),
+        },
+        &json!({ "type": "plan", "entries": [], "document": "plans/next.md" }),
+    );
+    let older: ChatItemBody =
+        serde_json::from_value(json!({ "type": "plan", "entries": [] })).expect("a plan");
+    assert_eq!(
+        older,
+        ChatItemBody::Plan {
+            entries: Vec::new(),
+            document: None,
+        }
+    );
+}
+
+#[test]
+fn an_item_names_the_subagent_item_that_produced_it_as_parent() {
+    let item: ChatItem = serde_json::from_value(json!({
+        "id": "i-9", "position": 9, "seq": 9, "turn": "t-1", "parent": "i-4", "at_ms": 1,
+        "type": "notice", "level": "info", "text": "from the sub-agent"
+    }))
+    .expect("an item");
+    assert_eq!(item.parent.as_deref(), Some("i-4"));
+}
+
+#[test]
+fn an_approval_lists_what_always_writes_and_an_answer_may_name_the_seq_it_saw() {
+    let approval = Approval {
+        suggestions: vec![ApprovalSuggestion {
+            kind: "addRules".to_owned(),
+            rules: vec!["Bash(touch probe.txt)".to_owned()],
+            destination: "localSettings".to_owned(),
+        }],
+        ..pending_approval()
+    };
+    assert_wire(
+        &approval,
+        &json!({
+            "request_id": "req-1", "tool": "Bash", "input_summary": "rm -rf build", "tool_use_id": "toolu_1",
+            "can_always": true, "state": "pending",
+            "suggestions": [{ "type": "addRules", "rules": ["Bash(touch probe.txt)"], "destination": "localSettings" }]
+        }),
+    );
+    assert_wire(
+        &ChatApprovalAnswerParams {
+            session: "s-1".to_owned(),
+            request_id: "req-1".to_owned(),
+            decision: ApprovalDecision::Allow,
+            scope: Some(ApprovalScope::Always),
+            message: None,
+            seq: Some(12),
+        },
+        &json!({ "session": "s-1", "request_id": "req-1", "decision": "allow", "scope": "always", "seq": 12 }),
+    );
+    assert_eq!(chat::APPROVAL_CHANGED, "agent.approval_changed");
 }

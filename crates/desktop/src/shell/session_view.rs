@@ -10,6 +10,10 @@ use massorca_protocol::methods::agents::{
     AgentKind, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueParams,
     AgentSession, AgentSetModeParams, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::{
+    self, ApprovalDecision, ApprovalScope, ApprovalState, ChatApprovalAnswerParams,
+    ChatHistoryParams, ChatItem, ChatItemBody, RunType,
+};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -20,7 +24,9 @@ use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::terminal_surface::TerminalSurface;
-use massorca_ui::components::transcript::{TranscriptAction, TranscriptRow, TranscriptView};
+use massorca_ui::components::transcript::{
+    ApprovalAnswer, TranscriptAction, TranscriptRow, TranscriptView,
+};
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_READING, SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM,
     TYPE_TITLE_SM,
@@ -84,10 +90,10 @@ const QUEUEING: &str = "Queueing…";
 const RESUMING: &str = "Resuming…";
 const STARTING: &str = "Starting…";
 
-/// Whether a session runs in its terminal alone, with no composer (owner request 2026-11-24). Every session does until
-/// `AgentSession` carries `run: terminal|chat`, which then decides here.
-pub(super) fn is_terminal_arm(_session: &AgentSession) -> bool {
-    true
+/// Whether a session runs in its terminal alone, with no composer (owner request 2026-11-24). A session whose `run` is
+/// `chat` opens the transcript view instead; an absent or unknown run is a terminal session (decision 0101, D2).
+pub(super) fn is_terminal_arm(session: &AgentSession) -> bool {
+    session.run != RunType::Chat
 }
 
 /// Whether a session's run is live: its terminal runs, or may still, so it can be stopped.
@@ -189,21 +195,26 @@ pub(super) struct SessionFrame {
 /// The height of the session view's header, the band above the terminal's pane (`start_grid` fits the pane below it).
 pub(super) const SESSION_HEADER_HEIGHT: f32 = SIZE_TOOLBAR;
 
-/// A chat session's body: its transcript, whose answers go to the shell's answer hook.
+/// A chat session's body: its transcript, whose answers go to the shell's answer hook and whose top asks for the
+/// older page.
 fn transcript_body(
     rows: Vec<TranscriptRow>,
     shell: &WeakEntity<Shell>,
     session: &str,
     host_unreachable: bool,
 ) -> AnyElement {
-    let (shell, session) = (shell.clone(), session.to_owned());
+    let (answers, older, session) = (shell.clone(), shell.clone(), session.to_owned());
     let host = host_unreachable.then(|| SharedString::from("the host"));
+    let for_answers = session.clone();
     let view = TranscriptView::new(format!("session-transcript-{session}"), rows)
         .host_unreachable(host)
         .on_action(move |action, _, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.answer_transcript(&session, action, cx)
+            let _ = answers.update(cx, |shell, cx| {
+                shell.answer_transcript(&for_answers, action, cx)
             });
+        })
+        .on_reach_top(move |_, cx| {
+            let _ = older.update(cx, |shell, cx| shell.load_older_chat(&session, cx));
         });
     div().flex_1().min_h_0().child(view).into_any_element()
 }
@@ -402,6 +413,82 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
 }
 
 impl Shell {
+    /// The open session when it is a chat: its transcript is what the bridge follows while the view shows it.
+    fn open_chat_session(&self, cx: &App) -> Option<String> {
+        if !matches!(self.model.canvas(), Canvas::Session(_)) {
+            return None;
+        }
+        let id = self.model.snapshot().active_session.clone()?;
+        let state = self.store.read(cx).state();
+        let session = state.agents.iter().find(|session| session.id == id)?;
+        (!is_terminal_arm(session)).then_some(id)
+    }
+
+    /// Follows the transcript of the chat session the view shows, and stops following the one it no longer shows.
+    pub(super) fn sync_chat_watch(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.open_chat_session(cx);
+        if wanted == self.chat_watched {
+            return;
+        }
+        if let Some(service) = &self.service {
+            if let Some(old) = &self.chat_watched {
+                service.unwatch_chat(old);
+            }
+            if let Some(new) = &wanted {
+                service.watch_chat(new);
+            }
+        }
+        self.chat_history_pending.clear();
+        self.chat_watched = wanted;
+    }
+
+    /// Asks for the page of items before the oldest one the transcript holds, when the service has older ones. The store
+    /// adds the page when the bridge relays it; a refusal other than a stale cursor is kept above the composer.
+    pub(super) fn load_older_chat(&mut self, session: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        if self.chat_history_pending.contains(session) {
+            return;
+        }
+        let before = {
+            let state = self.store.read(cx).state();
+            state
+                .chat
+                .get(session)
+                .filter(|transcript| transcript.has_older())
+                .and_then(|transcript| transcript.history_cursor())
+        };
+        let Some(before) = before else {
+            return;
+        };
+        self.chat_history_pending.insert(session.to_owned());
+        let params = ChatHistoryParams {
+            session: session.to_owned(),
+            before: Some(before),
+            limit: None,
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_chat_history(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.chat_history_pending.remove(&id);
+                // A stale cursor means the stream resets and its snapshot brings the transcript back.
+                if let Err(refusal) = answer
+                    && refusal.code() != Some(chat::CURSOR_STALE)
+                {
+                    shell.session_notices.insert(
+                        id,
+                        format!("Could not load older messages: {}", refusal.sentence()),
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The open session's view. Its terminal is attached the first time the view is drawn, the way the Work panel
     /// attaches a terminal it selects. Its composer follows the session's state and the call it has in flight.
     pub(super) fn session_frame(&mut self, cx: &mut Context<Self>) -> Option<SessionFrame> {
@@ -422,7 +509,20 @@ impl Shell {
                 .and_then(|queues| queues.get(&id).cloned());
             (session, state.agent_kinds.clone(), queue)
         };
-        let transcript = self.chat_transcripts.get(&id).map(transcript_rows);
+        // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
+        // terminal session draws one only where a test holds a transcript for it.
+        let held = {
+            let state = self.store.read(cx).state();
+            self.chat_transcripts
+                .get(&id)
+                .or_else(|| state.chat.get(&id))
+                .map(transcript_rows)
+        };
+        let transcript = match held {
+            Some(rows) => Some(rows),
+            None if !is_terminal_arm(&session) => Some(Vec::new()),
+            None => None,
+        };
         if let Some(terminal) = session.terminal_id.as_deref()
             && !self.terminal_views.contains_key(terminal)
             && transcript.is_none()
@@ -467,7 +567,6 @@ impl Shell {
                 }
             }
         });
-        // The chat arm turns on with AgentSession.run; until then only a transcript fixture gives a session one.
         let terminal_arm = is_terminal_arm(&session) && transcript.is_none();
         let (mode_chip, mode_note) = match (&modes, terminal_arm) {
             (Some(modes), true) => (
@@ -839,28 +938,131 @@ impl Shell {
         cx.notify();
     }
 
-    /// Stops the session's run at once, without a confirm. The store follows the service's answer.
-    /// Where an approval answer from the transcript goes. Nothing is sent yet: the service offers
-    /// `agent.chat.approval.answer` only with capability `agent-chat/1` (decision 0101, D6), and no session runs as a chat.
-    fn answer_transcript(
-        &mut self,
-        _session: &str,
-        _action: TranscriptAction,
-        _cx: &mut Context<Self>,
-    ) {
+    /// The `seq` of the pending approval item of `session` that asks `request_id`, as the person sees it. None when the
+    /// request is not pending any more: there is nothing left to answer.
+    fn pending_approval_seq(&self, session: &str, request_id: &str, cx: &App) -> Option<u64> {
+        let state = self.store.read(cx).state();
+        let transcript = self
+            .chat_transcripts
+            .get(session)
+            .or_else(|| state.chat.get(session))?;
+        transcript.items().iter().find_map(|item| match &item.body {
+            ChatItemBody::Approval(approval)
+                if approval.request_id == request_id
+                    && approval.state == ApprovalState::Pending =>
+            {
+                Some(item.seq)
+            }
+            _ => None,
+        })
     }
 
+    /// Sends the person's answer to a permission request of a chat session, with the `seq` of the item they saw, so an
+    /// answer to a request the CLI sent again since is refused (decision 0101, D6). The item changes through the stream.
+    fn answer_transcript(
+        &mut self,
+        session: &str,
+        action: TranscriptAction,
+        cx: &mut Context<Self>,
+    ) {
+        let TranscriptAction::Answer { request_id, answer } = action;
+        let request_id = request_id.to_string();
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let Some(seq) = self.pending_approval_seq(session, &request_id, cx) else {
+            return;
+        };
+        if !self.chat_answering.insert(request_id.clone()) {
+            return;
+        }
+        let (decision, scope) = match answer {
+            ApprovalAnswer::Deny => (ApprovalDecision::Deny, None),
+            ApprovalAnswer::Allow => (ApprovalDecision::Allow, Some(ApprovalScope::Once)),
+            ApprovalAnswer::Always => (ApprovalDecision::Allow, Some(ApprovalScope::Always)),
+        };
+        let params = ChatApprovalAnswerParams {
+            session: session.to_owned(),
+            request_id: request_id.clone(),
+            decision,
+            scope,
+            message: None,
+            seq: Some(seq),
+        };
+        self.session_notices.remove(session);
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_chat_answer(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_approval(&id, &request_id, answer, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The service's answer to an approval. The item itself comes through the stream; a refusal says in a short note why
+    /// the answer did not count.
+    fn finish_approval(
+        &mut self,
+        session: &str,
+        request_id: &str,
+        answer: Result<ChatItem, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chat_answering.remove(request_id);
+        if let Err(refusal) = answer {
+            let note = match refusal.code() {
+                Some(chat::APPROVAL_CHANGED) => {
+                    "That request changed before your answer arrived. Read it again and answer."
+                        .to_owned()
+                }
+                Some(chat::APPROVAL_SETTLED) => "That request was already answered.".to_owned(),
+                _ => format!("Could not send your answer: {}", refusal.sentence()),
+            };
+            self.session_notices.insert(session.to_owned(), note);
+        }
+        cx.notify();
+    }
+
+    /// Whether `session` is a chat whose agent works or waits: its Stop ends the turn and keeps the session.
+    fn chat_turn_runs(&self, session: &str, cx: &App) -> bool {
+        let state = self.store.read(cx).state();
+        state
+            .agents
+            .iter()
+            .find(|record| record.id == session)
+            .is_some_and(|record| {
+                !is_terminal_arm(record)
+                    && matches!(
+                        session_state(record),
+                        AgentState::Running | AgentState::Waiting
+                    )
+            })
+    }
+
+    /// Stops what the session is doing. A chat that works gets its turn interrupted and keeps its run (decision 0101,
+    /// D8); any other Stop ends the run.
     fn stop_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let interrupt = self.chat_turn_runs(session, cx);
         let Some(service) = self.begin_session_call(session, SessionCall::Stopping, cx) else {
             return;
         };
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = service.agent_stop(&id).await;
-            let _ = shell.update(cx, |shell, cx| {
-                shell.finish_session_call(&id, "Could not stop the agent", answer, cx);
-            });
+            if interrupt {
+                let answer = service.agent_chat_interrupt(&id).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.finish_session_call(&id, "Could not stop the turn", answer, cx);
+                });
+            } else {
+                let answer = service.agent_stop(&id).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.finish_session_call(&id, "Could not stop the agent", answer, cx);
+                });
+            }
         })
         .detach();
     }
@@ -871,7 +1073,9 @@ impl Shell {
             return;
         };
         let mode = self.pending_bypass(session, cx);
-        let grid = Some(self.start_grid(cx));
+        // A chat has no terminal, so its run starts with no grid.
+        let chat = self.is_chat_session(session, cx);
+        let grid = (!chat).then(|| self.start_grid(cx));
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -881,8 +1085,18 @@ impl Shell {
         .detach();
     }
 
+    fn is_chat_session(&self, session: &str, cx: &App) -> bool {
+        let state = self.store.read(cx).state();
+        state
+            .agents
+            .iter()
+            .find(|record| record.id == session)
+            .is_some_and(|record| !is_terminal_arm(record))
+    }
+
     /// The service's answer to a resume. A refusal that says the saved conversation is gone replaces the reason of the
     /// ended session and offers Start a new session here; any other refusal is kept above the terminal with its reason.
+    /// A resumed chat follows its transcript again from the cursor it holds: the journal carries on (decision 0101, D9).
     fn finish_resume(
         &mut self,
         session: &str,
@@ -891,8 +1105,14 @@ impl Shell {
     ) {
         self.session_calls.remove(session);
         match answer {
-            Ok(_) => {
+            Ok(resumed) => {
                 self.session_resume_gone.remove(session);
+                if resumed.run == RunType::Chat
+                    && self.chat_watched.as_deref() == Some(session)
+                    && let Some(service) = &self.service
+                {
+                    service.watch_chat(session);
+                }
             }
             Err(refusal) if refusal_says_conversation_gone(refusal.code()) => {
                 self.session_resume_gone.insert(session.to_owned());
@@ -1044,11 +1264,11 @@ impl Shell {
     }
 
     /// The service's answer to a stop or resume: a refusal is kept above the composer with its reason.
-    fn finish_session_call(
+    fn finish_session_call<T>(
         &mut self,
         session: &str,
         what: &'static str,
-        answer: Result<AgentSession, Refusal>,
+        answer: Result<T, Refusal>,
         cx: &mut Context<Self>,
     ) {
         self.session_calls.remove(session);

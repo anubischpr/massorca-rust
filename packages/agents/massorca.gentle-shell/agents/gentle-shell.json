@@ -13,26 +13,34 @@
       "id": "normal",
       "label": "Normal",
       "description": "Asks before guarded commands.",
-      "live_switch": { "type": "input", "text": "/gentle:mode normal" }
+      "live_switch": { "type": "input", "text": "/gentle:mode normal" },
+      "icon": "hand",
+      "tone": "normal"
     },
     {
       "id": "auto",
       "label": "Auto",
       "description": "A reviewer checks eligible actions against your intent before they run.",
-      "live_switch": { "type": "input", "text": "/gentle:mode auto" }
+      "live_switch": { "type": "input", "text": "/gentle:mode auto" },
+      "icon": "sparkles",
+      "tone": "normal"
     },
     {
       "id": "yolo",
       "label": "YOLO",
       "description": "Standing permission for ordinary work; destructive confirmations still apply.",
-      "live_switch": { "type": "input", "text": "/gentle:mode yolo" }
+      "live_switch": { "type": "input", "text": "/gentle:mode yolo" },
+      "icon": "zap",
+      "tone": "normal"
     },
     {
       "id": "super-yolo",
       "label": "Super Yolo",
       "description": "No permission prompts at all; the sensitive-path guard and hard denials still apply.",
       "live_switch": { "type": "input", "text": "/gentle:mode super-yolo" },
-      "bypass": true
+      "bypass": true,
+      "icon": "shield-alert",
+      "tone": "warning"
     }
   ],
   "default_permission_mode": "normal"

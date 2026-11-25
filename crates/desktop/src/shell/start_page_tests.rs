@@ -13,8 +13,8 @@ use crate::model::start_page::{
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
-    ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
-    TerminalCommand, TerminalStreamItem, TerminalWrite,
+    ChatCommand, ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script,
+    StoreUpdate, TerminalCommand, TerminalStreamItem, TerminalWrite,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
@@ -549,7 +549,8 @@ fn hover(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
-/// highlighted row with Enter.
+/// highlighted row with Enter. Enter keeps the popover open, so Escape closes it: the start page is read with the
+/// popover gone, as it was before a pick closed it on its own.
 fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     click(cx, "model-picker-trigger");
     for _ in 0..8 {
@@ -557,6 +558,7 @@ fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     }
     cx.simulate_input(agent);
     cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     draw(cx);
 }
@@ -814,7 +816,11 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    // A terminal start: Chat is the default once offered, so the switch is set to Terminal.
     offer_chat(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_start_mode("w1", StartMode::Terminal, cx);
+    });
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -859,7 +865,11 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    // A terminal start: Chat is the default once offered, so the switch is set to Terminal.
     offer_chat(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_start_mode("w1", StartMode::Terminal, cx);
+    });
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -1216,6 +1226,9 @@ fn claude_with_modes() -> AgentKind {
         bypass,
         live_switch: false,
         may_fall_back: false,
+        icon: None,
+        tone: None,
+        selectable: true,
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![
@@ -1604,7 +1617,7 @@ fn picker_of(
     use massorca_ui::components::model_picker::{Choice, PickerState};
     let installed = session_kind_choices(kinds);
     PickerState::new(
-        picker_agents(kinds, &installed),
+        picker_agents(kinds, &installed, &std::collections::BTreeMap::new()),
         Choice {
             model: model.to_owned().into(),
             effort,
@@ -1790,5 +1803,192 @@ fn a_kind_with_no_declared_models_is_its_own_row_and_sends_neither() {
     assert_eq!(
         picked_options(&picker_of(&kinds, "codex", None), true, &kinds),
         StartOptions::default()
+    );
+}
+
+#[test]
+fn the_picker_gets_each_kinds_declared_levels_and_its_listed_brand_colours() {
+    use massorca_protocol::methods::agents::{KindEffort, KindEffortLevel, PackageState};
+    use massorca_ui::components::model_picker::AgentBrand;
+    use massorca_ui::tokens::Color;
+
+    let level = |id: &str, label: &str| KindEffortLevel {
+        id: id.to_owned(),
+        label: label.to_owned(),
+    };
+    let mut claude =
+        crate::service::fixtures::agent_kind("claude", "Claude", PackageState::Enabled);
+    claude.effort = Some(KindEffort {
+        levels: vec![level("low", "Low"), level("xhigh", "Extra High")],
+        default: Some("xhigh".to_owned()),
+    });
+    let kinds = [claude];
+    let installed = crate::model::agent_kinds::session_kind_choices(&kinds);
+    let brand = AgentBrand {
+        first: Color::rgba8(217, 119, 87, 1.0),
+        second: Some(Color::rgba8(181, 83, 47, 1.0)),
+    };
+    let brands = std::collections::BTreeMap::from([("claude".to_owned(), brand)]);
+
+    let agents = picker_agents(&kinds, &installed, &brands);
+    let row = &agents[0].models[0];
+    assert_eq!(
+        row.efforts
+            .iter()
+            .map(|effort| effort.as_ref())
+            .collect::<Vec<&str>>(),
+        ["Low", "Extra High"]
+    );
+    assert_eq!(
+        row.default_effort, 1,
+        "the kind's declared default is preselected"
+    );
+    assert_eq!(
+        agents[0].brand,
+        Some(brand),
+        "the agent carries its listed colours"
+    );
+}
+
+#[test]
+fn a_kind_with_levels_but_no_model_sends_only_the_chosen_level() {
+    use massorca_protocol::methods::agents::{KindEffort, KindEffortLevel, PackageState};
+    use massorca_ui::components::model_picker::{Choice, PickerState};
+
+    let level = |id: &str, label: &str| KindEffortLevel {
+        id: id.to_owned(),
+        label: label.to_owned(),
+    };
+    let mut codex = crate::service::fixtures::agent_kind("codex", "Codex", PackageState::Enabled);
+    codex.effort = Some(KindEffort {
+        levels: vec![level("low", "Low"), level("high", "High")],
+        default: Some("low".to_owned()),
+    });
+    let kinds = [codex];
+    let installed = crate::model::agent_kinds::session_kind_choices(&kinds);
+    let agents = picker_agents(&kinds, &installed, &std::collections::BTreeMap::new());
+    let picker = PickerState::new(
+        agents,
+        Choice {
+            model: "codex".into(),
+            effort: Some(1),
+            fast: false,
+        },
+    );
+
+    assert_eq!(
+        picked_options(&picker, true, &kinds),
+        crate::model::start_page::StartOptions {
+            model: None,
+            effort: Some("high".to_owned()),
+        }
+    );
+}
+
+/// An `agent.chat.start` the shell sent, with the reply that answers it.
+fn chat_start_call(script: &mut Script) -> Option<StartCall> {
+    while let Some(command) = script.next() {
+        if let Command::Chat(ChatCommand::Start { params, reply }) = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+fn chat_session(id: &str) -> AgentSession {
+    let mut session = agent(id, "w1", 5);
+    session.run = massorca_protocol::methods::chat::RunType::Chat;
+    session
+}
+
+#[gpui::test]
+fn send_in_chat_mode_starts_a_chat_without_a_grid_and_gives_its_composer_the_keyboard(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    offer_chat(&rig, cx);
+    assert_eq!(mode_of(&rig, cx), StartMode::Chat);
+
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, reply) =
+        chat_start_call(&mut rig._script).expect("a chat start is sent to the service");
+    assert_eq!(params.prompt.as_deref(), Some("fix the login"));
+    assert_eq!(
+        (params.cols, params.rows),
+        (None, None),
+        "a chat has no grid"
+    );
+    assert_eq!(params.workspace.as_deref(), Some("w1"));
+    let session = chat_session("s-chat");
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+
+    let canvas = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert!(matches!(canvas, Canvas::Session(_)), "{canvas:?}");
+    assert!(cx.debug_bounds("transcript-list").is_some());
+    cx.simulate_input("and then");
+    let composer = rig
+        .shell
+        .update(cx, |shell, cx| shell.session_composer("s-chat", cx));
+    assert_eq!(
+        composer.read_with(cx, |composer, cx| composer.draft(cx)),
+        "and then",
+        "the chat composer holds the keyboard"
+    );
+}
+
+#[gpui::test]
+fn a_chat_the_service_cannot_run_starts_a_terminal_session_and_says_why(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    offer_chat(&rig, cx);
+
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) =
+        chat_start_call(&mut rig._script).expect("a chat start is sent to the service");
+    reply
+        .send(Err(Refusal::Failed {
+            code: massorca_protocol::codes::AGENT_CHAT_UNSUPPORTED.to_owned(),
+            message: "claude 2.4.1 is outside the supported range".to_owned(),
+        }))
+        .expect("the shell is waiting for the answer");
+    cx.run_until_parked();
+    let (params, reply) =
+        start_call(&mut rig._script).expect("the terminal start follows the refusal");
+    assert!(params.cols.is_some() && params.rows.is_some());
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("s-term", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.session_notices.get("s-term").cloned());
+    assert_eq!(
+        notice.as_deref(),
+        Some(
+            "Started a terminal session instead of a chat: Claude 2.4.1 is outside the supported range"
+        )
     );
 }

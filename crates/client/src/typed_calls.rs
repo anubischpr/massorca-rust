@@ -5,14 +5,16 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
     AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
-    ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
+    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
+use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -279,6 +281,44 @@ impl Client {
         self.call(agents::START, params).await
     }
 
+    /// `agent.chat.start`: starts an agent session whose run is a structured chat (decision 0101). Needs capability
+    /// `agent-chat/1`; a service that does not offer it is refused before anything is sent. A kind that cannot run as a
+    /// chat is refused with `agent.chat_unsupported`, and the caller may start it with [`Self::agent_start`] instead.
+    pub async fn agent_chat_start(
+        &self,
+        params: &AgentStartParams,
+    ) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_CHAT),
+            capabilities::AGENT_CHAT,
+            "a chat session",
+        )?;
+        let params = chat::AgentChatStartParams {
+            start: params.clone(),
+        };
+        self.call(chat::START, &params).await
+    }
+
+    /// `agent.chat.approval.answer`: answers a chat session's permission request; the result is the approval item after
+    /// the answer (decision 0101, D6).
+    pub async fn agent_chat_answer(
+        &self,
+        params: &chat::ChatApprovalAnswerParams,
+    ) -> Result<chat::ChatItem, ClientError> {
+        self.call(chat::APPROVAL_ANSWER, params).await
+    }
+
+    /// `agent.chat.interrupt`: ends a chat session's running turn and keeps the session (decision 0101, D8).
+    pub async fn agent_chat_interrupt(
+        &self,
+        session: &str,
+    ) -> Result<chat::ChatInterrupted, ClientError> {
+        let params = agents::AgentSessionRef {
+            session: session.to_owned(),
+        };
+        self.call(chat::INTERRUPT, &params).await
+    }
+
     /// `agent.list`: sessions newest first, or only those of one workspace (a selector).
     pub async fn agent_list(
         &self,
@@ -286,8 +326,25 @@ impl Client {
     ) -> Result<AgentSessionList, ClientError> {
         let params = AgentListParams {
             workspace: workspace.map(str::to_owned),
+            include_archived: false,
         };
         self.call(agents::LIST, &params).await
+    }
+
+    /// `agent.list` with every parameter. Asking for archived sessions needs capability `agent-archive/1`; a service
+    /// without it is refused before anything is sent (decision 0163).
+    pub async fn agent_list_with(
+        &self,
+        params: &AgentListParams,
+    ) -> Result<AgentSessionList, ClientError> {
+        if params.include_archived {
+            require_offered(
+                self.has_capability(capabilities::AGENT_ARCHIVE),
+                capabilities::AGENT_ARCHIVE,
+                "archived sessions",
+            )?;
+        }
+        self.call(agents::LIST, params).await
     }
 
     /// `agent.show`: one session, by id or a unique id prefix of at least 8 characters.
@@ -325,6 +382,77 @@ impl Client {
     /// `agent.forget`: deletes the record of a session whose run has ended.
     pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::FORGET, &session_ref(session)).await
+    }
+
+    /// `agent.forget` with every parameter: with `remove_workspace`, the session's workspace goes too (decision 0163),
+    /// which needs capability `agent-archive/1`; a service without it is refused before anything is sent.
+    pub async fn agent_forget_with(
+        &self,
+        params: &AgentForgetParams,
+    ) -> Result<AgentForgotten, ClientError> {
+        if params.remove_workspace
+            || params.force
+            || params.discard_ignored
+            || params.expect_dirty.is_some()
+        {
+            require_offered(
+                self.has_capability(capabilities::AGENT_ARCHIVE),
+                capabilities::AGENT_ARCHIVE,
+                "removing a session's workspace",
+            )?;
+        }
+        self.call(agents::FORGET, params).await
+    }
+
+    /// `agent.forget_preview`: what deleting a session with its workspace would meet; nothing changes (capability
+    /// `agent-archive/1`).
+    pub async fn agent_forget_preview(
+        &self,
+        session: &str,
+    ) -> Result<AgentForgetPreview, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_ARCHIVE),
+            capabilities::AGENT_ARCHIVE,
+            "a delete preview",
+        )?;
+        self.call(agents::FORGET_PREVIEW, &session_ref(session))
+            .await
+    }
+
+    /// `agent.rename`: sets a live or exited session's title (capability `agent-archive/1`).
+    pub async fn agent_rename(
+        &self,
+        session: &str,
+        title: &str,
+    ) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_ARCHIVE),
+            capabilities::AGENT_ARCHIVE,
+            "renaming a session",
+        )?;
+        let params = AgentRenameParams {
+            session: session.to_owned(),
+            title: title.to_owned(),
+        };
+        self.call(agents::RENAME, &params).await
+    }
+
+    /// `agent.archive_session`: archives (hides) an exited session, or clears that (capability `agent-archive/1`).
+    pub async fn agent_archive_session(
+        &self,
+        session: &str,
+        archived: bool,
+    ) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_ARCHIVE),
+            capabilities::AGENT_ARCHIVE,
+            "archived sessions",
+        )?;
+        let params = AgentArchiveSessionParams {
+            session: session.to_owned(),
+            archived,
+        };
+        self.call(agents::ARCHIVE_SESSION, &params).await
     }
 
     /// `agent.release`: archives an exited session's output, frees its terminal and keeps the record (capability

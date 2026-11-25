@@ -77,6 +77,26 @@ pub struct KindDecl {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<InstructionsDecl>,
+    /// How the kind runs as a structured chat (decision 0101). Absent means it runs in a terminal only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatDecl>,
+}
+
+/// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
+pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+
+/// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
+/// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
+/// with a major version above `max_major`, is refused rather than tried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatDecl {
+    /// One of [`CHAT_ADAPTERS`].
+    pub adapter: String,
+    /// The oldest supported version, `MAJOR.MINOR.PATCH`.
+    pub min_version: String,
+    /// The newest supported major version.
+    pub max_major: u64,
 }
 
 /// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
@@ -213,6 +233,44 @@ pub struct PermissionModeDecl {
     /// arguments never confirm it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_fall_back: bool,
+    /// A lucide icon name for the mode (`file-pen`): lowercase letters and digits in `-`-separated words (decision 0163).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// How a picker presents the mode (decision 0163): [`MODE_TONE_NORMAL`] or [`MODE_TONE_WARNING`]; every bypass mode
+    /// warns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    /// Whether pickers offer the mode (decision 0163). An unoffered mode stays declared, so a session reporting it still
+    /// shows its name, and a caller naming it is still served.
+    #[serde(default = "offered", skip_serializing_if = "is_offered")]
+    pub selectable: bool,
+}
+
+/// The tone of an ordinary mode.
+pub const MODE_TONE_NORMAL: &str = "normal";
+/// The tone of a mode that lifts the vendor's prompts or sandbox.
+pub const MODE_TONE_WARNING: &str = "warning";
+/// Longest icon name a mode may declare.
+const MAX_ICON_LEN: usize = 64;
+
+fn offered() -> bool {
+    true
+}
+
+fn is_offered(selectable: &bool) -> bool {
+    *selectable
+}
+
+/// Whether `icon` reads as a lucide icon name: lowercase letters and digits in `-`-separated words.
+fn valid_icon_name(icon: &str) -> bool {
+    icon.len() <= MAX_ICON_LEN
+        && !icon.is_empty()
+        && icon.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 /// How a live switch reaches the agent.
@@ -657,7 +715,33 @@ impl KindDecl {
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
         self.instructions_problems(&mut problems);
+        self.chat_problems(&mut problems);
         problems
+    }
+
+    /// `chat.adapter` names a dialect MassOrca speaks, and its range is a version and a major version no older than it.
+    fn chat_problems(&self, problems: &mut Vec<String>) {
+        let Some(chat) = &self.chat else {
+            return;
+        };
+        if !CHAT_ADAPTERS.contains(&chat.adapter.as_str()) {
+            problems.push(format!(
+                "chat.adapter {:?} must be one of {}",
+                chat.adapter,
+                CHAT_ADAPTERS.join(", ")
+            ));
+        }
+        match crate::chat::version::Version::parse_exact(&chat.min_version) {
+            Some(min) if min.major > chat.max_major => problems.push(format!(
+                "chat.max_major {} must not be below the major version of chat.min_version",
+                chat.max_major
+            )),
+            Some(_) => {}
+            None => problems.push(format!(
+                "chat.min_version {:?} must be MAJOR.MINOR.PATCH",
+                chat.min_version
+            )),
+        }
     }
 
     /// `instructions.args` holds [`TEXT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
@@ -942,13 +1026,31 @@ impl KindDecl {
                     "{field}: live_switch.text must be one line of text without control characters"
                 ));
             }
-            let selectable = !mode.args.is_empty() || mode.live_switch.is_some();
-            if mode.bypass && !selectable {
+            if let Some(icon) = &mode.icon
+                && !valid_icon_name(icon)
+            {
+                problems.push(format!(
+                    "{field}: icon {icon:?} must be a lucide icon name: lowercase letters and digits in words joined by -"
+                ));
+            }
+            match mode.tone.as_deref() {
+                None | Some(MODE_TONE_NORMAL | MODE_TONE_WARNING) => {}
+                Some(tone) => problems.push(format!(
+                    "{field}: tone {tone:?} must be {MODE_TONE_NORMAL} or {MODE_TONE_WARNING}"
+                )),
+            }
+            if mode.bypass && mode.tone.as_deref() == Some(MODE_TONE_NORMAL) {
+                problems.push(format!(
+                    "{field}: a bypass mode warns, so its tone must be {MODE_TONE_WARNING}"
+                ));
+            }
+            let appliable = !mode.args.is_empty() || mode.live_switch.is_some();
+            if mode.bypass && !appliable {
                 problems.push(format!(
                     "{field}: a bypass mode needs its own args or live_switch"
                 ));
             }
-            if !selectable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
+            if !appliable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
                 problems.push(format!(
                     "{field}: a mode with no args and no live_switch can only be the default"
                 ));
@@ -1396,6 +1498,50 @@ mod tests {
         let mut value = minimal();
         patch(&mut value);
         parse(value).problems()
+    }
+
+    #[test]
+    fn a_chat_block_names_a_known_adapter_and_a_version_range() {
+        let valid = problems_of(|value| {
+            value["chat"] = serde_json::json!({
+                "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        for (chat, expected) in [
+            (
+                serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
+                "chat.adapter \"acp\" must be one of claude-stream-json",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),
+                "chat.min_version \"2.1\" must be MAJOR.MINOR.PATCH",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "3.0.0", "max_major": 2 }),
+                "chat.max_major 2 must not be below the major version of chat.min_version",
+            ),
+        ] {
+            let problems = problems_of(|value| value["chat"] = chat.clone());
+            assert_eq!(problems, [expected], "{chat}");
+        }
+    }
+
+    #[test]
+    fn the_built_in_claude_kind_runs_as_a_chat_from_2_1_258_through_2_x() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|kind| kind.id == "claude")
+            .expect("built in");
+        assert_eq!(
+            claude.chat,
+            Some(ChatDecl {
+                adapter: "claude-stream-json".to_owned(),
+                min_version: "2.1.258".to_owned(),
+                max_major: 2,
+            })
+        );
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
     }
 
     #[test]
@@ -2038,6 +2184,63 @@ mod tests {
     }
 
     #[test]
+    fn a_mode_presentation_names_a_known_tone_and_a_lucide_icon() {
+        let good = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"], "icon": "file-pen", "tone": "normal" },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "icon": "shield-alert", "tone": "warning" },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]),
+            Some("safe"),
+        );
+        assert!(good.is_empty(), "{good:?}");
+        let tone = with_modes(
+            serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "tone": "loud" }]),
+            Some("safe"),
+        );
+        assert!(tone.iter().any(|p| p.contains("tone")), "{tone:?}");
+        let calm_bypass = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "tone": "normal" }
+            ]),
+            Some("safe"),
+        );
+        assert!(
+            calm_bypass.iter().any(|p| p.contains("bypass mode warns")),
+            "{calm_bypass:?}"
+        );
+        for icon in [
+            "Shield",
+            "shield alert",
+            "-shield",
+            "shield-",
+            "shield--alert",
+            "",
+        ] {
+            let found = with_modes(
+                serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "icon": icon }]),
+                Some("safe"),
+            );
+            assert!(
+                found.iter().any(|p| p.contains("icon")),
+                "{icon:?}: {found:?}"
+            );
+        }
+        let kind = parse({
+            let mut value = minimal();
+            value["permission_modes"] = serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]);
+            value["default_permission_mode"] = serde_json::json!("safe");
+            value
+        });
+        assert!(kind.permission_mode("safe").unwrap().selectable);
+        assert!(!kind.permission_mode("hush").unwrap().selectable);
+    }
+
+    #[test]
     fn a_mode_may_say_that_the_vendor_falls_back_from_it() {
         let mut value = minimal();
         value["permission_modes"] = serde_json::json!([
@@ -2431,7 +2634,14 @@ mod tests {
             .iter()
             .map(|level| level.id.as_str())
             .collect();
-        assert_eq!(levels, ["low", "medium", "high"]);
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(
+            antigravity
+                .effort
+                .as_ref()
+                .and_then(|effort| effort.default.as_deref()),
+            Some("high")
+        );
 
         let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
             .expect("gentle-shell parses");

@@ -236,6 +236,7 @@ fn sample_state() -> PickerState {
         kind: AgentKind::Claude,
         availability: AgentAvailability::Ready,
         list: ModelList::Loaded,
+        brand: None,
         models: vec![
             model("opus", "Opus 5.5", &levels, 1, true),
             model("sonnet", "Sonnet 5", &levels[..3], 0, false),
@@ -247,6 +248,7 @@ fn sample_state() -> PickerState {
         kind: AgentKind::Codex,
         availability: AgentAvailability::SignedOut,
         list: ModelList::Loaded,
+        brand: None,
         models: vec![model("gpt", "GPT-5 Codex", &["Low", "High"], 0, true)],
     };
     PickerState::new(

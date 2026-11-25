@@ -47,6 +47,7 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
@@ -195,6 +196,8 @@ pub(crate) enum Command {
     },
     /// A prompt queue call (decision 0084), answered on its oneshot.
     AgentQueue(QueueCommand),
+    /// A chat session call, or a change of the chat session whose transcript is followed (decision 0101).
+    Chat(ChatCommand),
     GitDiffFile {
         params: GitDiffFileParams,
         reply: oneshot::Sender<Result<GitDiffFile, Refusal>>,
@@ -523,6 +526,8 @@ impl ServiceBridge {
             updates: updates_tx,
             connection: connection_tx,
             watching: BTreeSet::new(),
+            chat_watching: BTreeSet::new(),
+            chat_mirrors: ChatMirrors::default(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
             room_reads: Arc::new(Sequence::default()),
@@ -624,6 +629,10 @@ struct Link {
     connection: watch::Sender<ConnectionState>,
     /// The workspaces the UI follows. Kept across connections, so a reconnect watches them again.
     watching: BTreeSet<String>,
+    /// The chat sessions whose transcripts the UI follows. Kept across connections, as `watching` is.
+    chat_watching: BTreeSet<String>,
+    /// What each followed transcript looked like when the stream last applied an event.
+    chat_mirrors: ChatMirrors,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
@@ -789,7 +798,12 @@ impl Link {
                     None => return None,
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -814,7 +828,12 @@ impl Link {
                     }
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -900,6 +919,10 @@ impl Link {
         for workspace in &self.watching {
             watches.start(client, workspace, &self.updates, &self.freshness);
         }
+        let mut chat_watches = ChatWatches::default();
+        for session in &self.chat_watching {
+            chat_watches.start(client, session, &self.chat_mirrors, &self.updates);
+        }
         loop {
             let outcome = tokio::select! {
                 event = events.next_as::<ChangeEvent>() => match event {
@@ -959,6 +982,27 @@ impl Link {
                                     &self.updates,
                                     &self.accounts_order,
                                 );
+                            }
+                            Some(Command::Chat(ChatCommand::Watch { session })) => {
+                                chat_watches.start(
+                                    client,
+                                    &session,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                                self.chat_watching.insert(session);
+                            }
+                            Some(Command::Chat(ChatCommand::Unwatch { session })) => {
+                                chat_watches.stop(&session);
+                                chat::note_unwatch(
+                                    &session,
+                                    &mut self.chat_watching,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                            }
+                            Some(Command::Chat(command)) => {
+                                chat::spawn_call(client, command, &self.updates);
                             }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
@@ -1296,8 +1340,19 @@ fn spawn_call(
 }
 
 /// While the link is down a watch still changes what the bridge follows; the next connection starts it.
-fn decline_while_down(watching: &mut BTreeSet<String>, command: Command) {
+fn decline_while_down(
+    watching: &mut BTreeSet<String>,
+    chat: (&mut BTreeSet<String>, &ChatMirrors),
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    command: Command,
+) {
     match command {
+        Command::Chat(ChatCommand::Watch { session }) => {
+            chat.0.insert(session);
+        }
+        Command::Chat(ChatCommand::Unwatch { session }) => {
+            chat::note_unwatch(&session, chat.0, chat.1, updates);
+        }
         Command::GitWatch { workspace } => {
             watching.insert(workspace);
         }
@@ -1381,6 +1436,7 @@ fn refuse_while_down(command: Command) {
         }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
+        Command::Chat(command) => chat::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }

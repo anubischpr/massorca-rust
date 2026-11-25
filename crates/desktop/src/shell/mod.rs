@@ -10,6 +10,7 @@ mod debug_focus;
 mod debug_page;
 mod delegate;
 mod diff_page;
+mod display_settings;
 mod home_start;
 mod marketplace;
 mod pairing;
@@ -49,6 +50,7 @@ use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
 use crate::model::close_confirm::CloseRisk;
 use crate::model::devices::RevokeFlow;
+use crate::model::display_settings::DisplaySettings;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
 };
@@ -103,6 +105,8 @@ mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
 #[cfg(test)]
+mod display_settings_tests;
+#[cfg(test)]
 mod home_start_tests;
 #[cfg(test)]
 mod marketplace_accounts_tests;
@@ -118,6 +122,8 @@ mod remote_terminal_tests;
 mod seen_tests;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod session_chat_tests;
 #[cfg(test)]
 mod session_menu_tests;
 #[cfg(test)]
@@ -136,6 +142,8 @@ mod status_bar_tests;
 mod tests;
 #[cfg(test)]
 mod title_bar_tests;
+#[cfg(test)]
+mod ui_state_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
@@ -221,6 +229,12 @@ pub struct Shell {
     session_notices: HashMap<String, String>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
     chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
+    /// The chat session whose transcript stream the bridge follows for the open view (decision 0101).
+    chat_watched: Option<String>,
+    /// The chat sessions whose older page is being fetched.
+    chat_history_pending: BTreeSet<String>,
+    /// The approval requests whose answer is on its way, so a second click sends nothing.
+    chat_answering: BTreeSet<String>,
     /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
     session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
@@ -304,6 +318,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
     focus_started_terminal: Option<String>,
+    /// The started chat session whose composer takes the keyboard once its view exists.
+    focus_started_chat: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -312,6 +328,8 @@ pub struct Shell {
     delegate: Option<delegate::DelegateForm>,
     /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
     theme_notice: Option<String>,
+    /// The Status bar items the settings last showed; a change to them resets this window's own choice.
+    applied_status_items: Vec<crate::model::status_items::StatusItem>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
     /// The projects the Sidebar shows collapsed. Kept for the app run only.
@@ -357,6 +375,11 @@ impl Shell {
         self.model.restore_open_regions(open);
     }
 
+    /// Opens the Activity rail mode the last run left (SET-02); called before the first frame.
+    pub fn restore_mode(&mut self, mode: crate::model::navigation::Mode) {
+        self.model.restore_mode(mode);
+    }
+
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
@@ -389,6 +412,14 @@ impl Shell {
             }
             shell.service_connected = connected;
             shell.follow_app_theme(cx);
+            let settings = DisplaySettings::from_lookup(|key| {
+                store
+                    .read(cx)
+                    .state()
+                    .config_value(key)
+                    .map(|config| &config.value)
+            });
+            shell.follow_display_settings(settings, cx);
             shell.follow_service_folder(store.read(cx).state());
             if connected {
                 shell.settings.folder.forget_read_failure();
@@ -438,10 +469,14 @@ impl Shell {
             }
             cx.notify();
         });
-        // Every change of the shell is checked for a new set of open regions, so the next start opens the same ones.
+        // Every change is checked for the open regions and rail mode, so the next start opens the same ones.
         cx.observe_self(|shell, cx| {
             let open = shell.model.regions().open().to_vec();
-            ui_state::remember(cx, |state| state.open_regions = open);
+            let mode = shell.model.navigation().mode;
+            ui_state::remember(cx, |state| {
+                state.open_regions = open;
+                state.mode = mode;
+            });
         })
         .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -576,6 +611,9 @@ impl Shell {
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
             chat_transcripts: HashMap::new(),
+            chat_watched: None,
+            chat_history_pending: BTreeSet::new(),
+            chat_answering: BTreeSet::new(),
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
@@ -621,10 +659,12 @@ impl Shell {
             stop_prompt: None,
             terminal_notice: None,
             focus_started_terminal: None,
+            focus_started_chat: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
             theme_notice: None,
+            applied_status_items: crate::model::status_items::StatusItem::ALL.to_vec(),
             _appearance_changes: appearance_changes,
             collapsed_projects: BTreeSet::new(),
         }
@@ -788,6 +828,7 @@ impl Render for Shell {
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
         self.focus_started_terminal(window, cx);
+        self.focus_started_chat(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -836,6 +877,7 @@ impl Render for Shell {
             == crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces))
         .then(|| self.home_frame(cx))
         .flatten();
+        self.sync_chat_watch(cx);
         let session = self.session_frame(cx);
         let remote_session = self.remote_session_frame(cx);
         let room = self.room_frame(window, cx);
@@ -1166,6 +1208,19 @@ impl Render for Shell {
 }
 
 impl Shell {
+    /// Moves the keyboard into a just-started chat session's composer once its view is the one on the Canvas.
+    fn focus_started_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.focus_started_chat.clone() else {
+            return;
+        };
+        if self.model.snapshot().active_session.as_deref() != Some(session.as_str()) {
+            return;
+        }
+        let composer = self.session_composer(&session, cx);
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
+        self.focus_started_chat = None;
+    }
+
     /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
     /// composer can never start a second session.
     fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

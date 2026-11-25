@@ -98,6 +98,7 @@ fn main() {
             let window_size = size(px(1440.), px(900.));
             let bounds = Bounds::centered(None, window_size, cx);
             let open_regions = saved.open_regions.clone();
+            let rail_mode = saved.mode;
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -128,6 +129,7 @@ fn main() {
                             None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
                         };
                         shell.restore_open_regions(open_regions);
+                        shell.restore_mode(rail_mode);
                         if let Some(field) = launch.debug_focus {
                             shell.start_debug_input(field, window, cx);
                         }
