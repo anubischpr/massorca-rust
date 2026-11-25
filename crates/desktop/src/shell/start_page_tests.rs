@@ -549,7 +549,8 @@ fn hover(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
-/// highlighted row with Enter.
+/// highlighted row with Enter. Enter keeps the popover open, so Escape closes it: the start page is read with the
+/// popover gone, as it was before a pick closed it on its own.
 fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     click(cx, "model-picker-trigger");
     for _ in 0..8 {
@@ -557,6 +558,7 @@ fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
     }
     cx.simulate_input(agent);
     cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     draw(cx);
 }
@@ -1604,7 +1606,7 @@ fn picker_of(
     use massorca_ui::components::model_picker::{Choice, PickerState};
     let installed = session_kind_choices(kinds);
     PickerState::new(
-        picker_agents(kinds, &installed),
+        picker_agents(kinds, &installed, &std::collections::BTreeMap::new()),
         Choice {
             model: model.to_owned().into(),
             effort,
@@ -1790,5 +1792,84 @@ fn a_kind_with_no_declared_models_is_its_own_row_and_sends_neither() {
     assert_eq!(
         picked_options(&picker_of(&kinds, "codex", None), true, &kinds),
         StartOptions::default()
+    );
+}
+
+#[test]
+fn the_picker_gets_each_kinds_declared_levels_and_its_listed_brand_colours() {
+    use massorca_protocol::methods::agents::{KindEffort, KindEffortLevel, PackageState};
+    use massorca_ui::components::model_picker::AgentBrand;
+    use massorca_ui::tokens::Color;
+
+    let level = |id: &str, label: &str| KindEffortLevel {
+        id: id.to_owned(),
+        label: label.to_owned(),
+    };
+    let mut claude =
+        crate::service::fixtures::agent_kind("claude", "Claude", PackageState::Enabled);
+    claude.effort = Some(KindEffort {
+        levels: vec![level("low", "Low"), level("xhigh", "Extra High")],
+        default: Some("xhigh".to_owned()),
+    });
+    let kinds = [claude];
+    let installed = crate::model::agent_kinds::session_kind_choices(&kinds);
+    let brand = AgentBrand {
+        first: Color::rgba8(217, 119, 87, 1.0),
+        second: Some(Color::rgba8(181, 83, 47, 1.0)),
+    };
+    let brands = std::collections::BTreeMap::from([("claude".to_owned(), brand)]);
+
+    let agents = picker_agents(&kinds, &installed, &brands);
+    let row = &agents[0].models[0];
+    assert_eq!(
+        row.efforts
+            .iter()
+            .map(|effort| effort.as_ref())
+            .collect::<Vec<&str>>(),
+        ["Low", "Extra High"]
+    );
+    assert_eq!(
+        row.default_effort, 1,
+        "the kind's declared default is preselected"
+    );
+    assert_eq!(
+        agents[0].brand,
+        Some(brand),
+        "the agent carries its listed colours"
+    );
+}
+
+#[test]
+fn a_kind_with_levels_but_no_model_sends_only_the_chosen_level() {
+    use massorca_protocol::methods::agents::{KindEffort, KindEffortLevel, PackageState};
+    use massorca_ui::components::model_picker::{Choice, PickerState};
+
+    let level = |id: &str, label: &str| KindEffortLevel {
+        id: id.to_owned(),
+        label: label.to_owned(),
+    };
+    let mut codex = crate::service::fixtures::agent_kind("codex", "Codex", PackageState::Enabled);
+    codex.effort = Some(KindEffort {
+        levels: vec![level("low", "Low"), level("high", "High")],
+        default: Some("low".to_owned()),
+    });
+    let kinds = [codex];
+    let installed = crate::model::agent_kinds::session_kind_choices(&kinds);
+    let agents = picker_agents(&kinds, &installed, &std::collections::BTreeMap::new());
+    let picker = PickerState::new(
+        agents,
+        Choice {
+            model: "codex".into(),
+            effort: Some(1),
+            fast: false,
+        },
+    );
+
+    assert_eq!(
+        picked_options(&picker, true, &kinds),
+        crate::model::start_page::StartOptions {
+            model: None,
+            effort: Some("high".to_owned()),
+        }
     );
 }
