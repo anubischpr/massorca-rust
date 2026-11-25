@@ -63,6 +63,26 @@ impl Git {
             .collect())
     }
 
+    /// Whether `branch` has an upstream that resolves (`<branch>@{upstream}`), as a push with `-u` leaves it.
+    pub fn branch_has_upstream(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
+        if branch.starts_with('-') {
+            return Ok(false);
+        }
+        let upstream = format!("{branch}@{{upstream}}");
+        let captured = self.run(
+            Some(repo),
+            [
+                "rev-parse",
+                "--abbrev-ref",
+                "--verify",
+                "--quiet",
+                upstream.as_str(),
+            ],
+        )?;
+        // Git exits 1 or 128 when no upstream is set or it does not resolve.
+        Ok(captured.succeeded())
+    }
+
     /// Whether `rev` resolves to a commit in `repo`.
     pub fn ref_exists(&self, repo: &Path, rev: &str) -> Result<bool, GitError> {
         // No ref starts with a dash, and a leading one would be read as an option.

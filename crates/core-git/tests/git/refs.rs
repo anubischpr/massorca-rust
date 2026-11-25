@@ -270,3 +270,35 @@ fn delete_branch_if_merged_refuses_a_branch_checked_out_elsewhere() {
     assert!(matches!(error, GitError::Failed { .. }), "{error:?}");
     assert!(git().branch_exists(&repo, "busy").expect("check"));
 }
+
+#[test]
+fn a_branch_has_an_upstream_only_once_one_is_set_and_resolves() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let bare = fixture.sibling("remote.git");
+    run_git(&repo, &["init", "-q", "--bare", text(&bare)]);
+    run_git(&repo, &["remote", "add", "origin", text(&bare)]);
+    run_git(&repo, &["branch", "pushed"]);
+    run_git(&repo, &["branch", "local"]);
+    run_git(&repo, &["push", "-q", "-u", "origin", "pushed"]);
+    let git = git();
+
+    assert!(git.branch_has_upstream(&repo, "pushed").expect("check"));
+    assert!(!git.branch_has_upstream(&repo, "local").expect("check"));
+    assert!(!git.branch_has_upstream(&repo, "-x").expect("check"));
+}
+
+#[test]
+fn the_checked_out_branch_is_none_on_a_detached_head() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let git = git();
+    assert_eq!(
+        git.current_branch(&repo).expect("read").as_deref(),
+        Some("main")
+    );
+
+    run_git(&repo, &["checkout", "-q", "--detach"]);
+
+    assert_eq!(git.current_branch(&repo).expect("read"), None);
+}

@@ -70,6 +70,15 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
     (codes::WORKSPACE_MAIN_WORKTREE, "workspace.main_worktree"),
+    (
+        codes::WORKSPACE_NAME_NOT_GENERATED,
+        "workspace.name_not_generated",
+    ),
+    (codes::WORKSPACE_BRANCH_CHANGED, "workspace.branch_changed"),
+    (
+        codes::WORKSPACE_BRANCH_PUBLISHED,
+        "workspace.branch_published",
+    ),
     (codes::BRANCH_EXISTS, "branch.exists"),
     (codes::BRANCH_NOT_FOUND, "branch.not_found"),
     (codes::BRANCH_NAME_INVALID, "branch.name_invalid"),
@@ -167,6 +176,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::SERVICE, "service/1");
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
+    assert_eq!(capabilities::WORKSPACE_RENAME, "workspace-rename/1");
     assert_eq!(capabilities::GIT, "git/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");

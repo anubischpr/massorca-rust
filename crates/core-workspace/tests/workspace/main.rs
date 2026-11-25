@@ -21,6 +21,7 @@ mod projects;
 mod read;
 mod removal_edges;
 mod remove;
+mod rename;
 mod rollback;
 mod selectors;
 mod unique_names;

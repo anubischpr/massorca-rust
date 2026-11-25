@@ -17,6 +17,7 @@ mod paths;
 mod project_icon_detection;
 mod projects;
 mod remove;
+mod rename;
 mod selectors;
 pub mod setup;
 pub mod setup_runner;

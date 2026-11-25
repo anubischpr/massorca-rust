@@ -1,5 +1,6 @@
 //! `unique_name` on a create: a typed name whose name, branch or folder is taken moves on to `name-2` ..
-//! `name-100`, the scheme the reference app uses. Every comparison folds case, as the reference app does.
+//! `name-100`, the scheme the reference app uses. Every comparison folds case, as the reference app does. A rename of a
+//! generated name (decision 0111) runs the same search without the folder, which it never moves.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -35,12 +36,23 @@ impl Workspaces {
             ));
         }
         let base = names::clean_workspace_name(&params.name)?;
+        self.free_name(project, &base, Folders::Checked)
+    }
+
+    /// The first of `base`, `base-2` .. `base-100` that no workspace or branch (local or remote-tracking) of `project`
+    /// takes, nor a folder when `folders` says so. Called under the mutation lock.
+    pub(crate) fn free_name(
+        &self,
+        project: &ProjectRow,
+        base: &str,
+        folders: Folders,
+    ) -> Result<String, DomainError> {
         let rows = self.store.list_workspaces(Some(&project.id))?;
         let taken_names: HashSet<String> = rows.iter().map(|row| row.name.to_lowercase()).collect();
         let free = match project.kind {
             // A folder workspace's folder is the project's or a given one, never derived from the name.
             StoreKind::Folder => {
-                first_free_name(&base, |name| taken_names.contains(&name.to_lowercase()))
+                first_free_name(base, |name| taken_names.contains(&name.to_lowercase()))
             }
             StoreKind::Git => {
                 let repo = Path::new(&project.path);
@@ -57,20 +69,25 @@ impl Workspaces {
                         .into_iter()
                         .map(|branch| branch.to_lowercase()),
                 );
-                let claimed: HashSet<String> = self
-                    .store
-                    .list_workspaces(None)?
-                    .into_iter()
-                    .map(|row| row.path_key)
-                    .collect();
+                let claimed: HashSet<String> = match folders {
+                    Folders::Checked => self
+                        .store
+                        .list_workspaces(None)?
+                        .into_iter()
+                        .map(|row| row.path_key)
+                        .collect(),
+                    Folders::Ignored => HashSet::new(),
+                };
                 let root = paths::absolute(&project.workspaces_root)?;
-                first_free_name(&base, |name| {
+                first_free_name(base, |name| {
                     let branch = branch_prefix::branch_name(segment.as_deref(), name);
-                    let folder = root.join(name);
+                    let folder_taken = || {
+                        let folder = root.join(name);
+                        claimed.contains(&paths::path_key(&folder)) || is_occupied(&folder)
+                    };
                     taken_names.contains(&name.to_lowercase())
                         || branches.contains(&branch.to_lowercase())
-                        || claimed.contains(&paths::path_key(&folder))
-                        || is_occupied(&folder)
+                        || (matches!(folders, Folders::Checked) && folder_taken())
                 })
             }
         };
@@ -81,6 +98,13 @@ impl Workspaces {
             )
         })
     }
+}
+
+/// Whether a candidate's folder under the workspaces root counts: a create makes it, a rename never moves it.
+#[derive(Clone, Copy)]
+pub(crate) enum Folders {
+    Checked,
+    Ignored,
 }
 
 /// `base`, then `base-2` .. `base-100`: the first that `is_taken` does not refuse. A suffixed name cuts the base, and
