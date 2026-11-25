@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials, PackageState};
 
 use crate::credentials;
-use crate::kind::{KindDecl, PermissionModeDecl, StatusMechanism};
+use crate::kind::{EffortDecl, KindDecl, ModelDecl, PermissionModeDecl, StatusMechanism};
 use crate::packages::{BuiltInPackages, FIRST_PARTY_PREFIX, KindPackages, PackageKind};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
@@ -249,6 +249,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             problems: entry.problems.clone(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            model: None,
+            effort: None,
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -274,6 +276,39 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
+        model: decl.model.as_ref().map(model_view),
+        effort: decl.effort.as_ref().map(effort_view),
+    }
+}
+
+/// A declared `model` as `agent.kinds` lists it: its choices, and never its flag.
+fn model_view(model: &ModelDecl) -> wire::KindModel {
+    wire::KindModel {
+        choices: model
+            .choices
+            .iter()
+            .map(|choice| wire::KindModelChoice {
+                id: choice.id.clone(),
+                label: choice.label.clone(),
+                default: choice.default,
+                efforts: choice.efforts.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// A declared `effort` as `agent.kinds` lists it: its levels and default, and never its flag.
+fn effort_view(effort: &EffortDecl) -> wire::KindEffort {
+    wire::KindEffort {
+        levels: effort
+            .levels
+            .iter()
+            .map(|level| wire::KindEffortLevel {
+                id: level.id.clone(),
+                label: level.label.clone(),
+            })
+            .collect(),
+        default: effort.default.clone(),
     }
 }
 

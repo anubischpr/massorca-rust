@@ -149,7 +149,6 @@ pub struct ExtensionCard {
     name: SharedString,
     publisher: SharedString,
     source: SharedString,
-    category: Option<SharedString>,
     version: SharedString,
     description: SharedString,
     icon: IconName,
@@ -185,7 +184,6 @@ impl ExtensionCard {
             name: name.into(),
             publisher: SharedString::default(),
             source: SharedString::default(),
-            category: None,
             version: SharedString::default(),
             description: SharedString::default(),
             icon: IconName::Puzzle,
@@ -209,12 +207,6 @@ impl ExtensionCard {
     /// Where the extension comes from, such as "Marketplace".
     pub fn source(mut self, source: impl Into<SharedString>) -> Self {
         self.source = source.into();
-        self
-    }
-
-    /// The item's category, such as "Agent", as a label beside the publisher.
-    pub fn category(mut self, category: impl Into<SharedString>) -> Self {
-        self.category = Some(category.into());
         self
     }
 
@@ -579,7 +571,9 @@ impl RenderOnce for ExtensionCard {
         }
 
         let handler = self.on_action.clone();
-        let card = card.on_click(route_click(&handler, ExtensionAction::Open));
+        let card = card
+            .cursor_pointer()
+            .on_click(route_click(&handler, ExtensionAction::Open));
         let disabled_extension =
             matches!(self.state, ExtensionState::Installed { enabled: false, .. });
         let name_color = if disabled_extension {
@@ -663,12 +657,6 @@ impl RenderOnce for ExtensionCard {
                             .text_style(TYPE_BODY_SM)
                             .text_color(p.text.secondary)
                             .child(div().flex_1().min_w_0().truncate().child(byline))
-                            .children(self.category.clone().map(|category| {
-                                div()
-                                    .debug_selector(|| "extension-category".into())
-                                    .flex_none()
-                                    .child(Badge::text(category).category(true))
-                            }))
                             .child(
                                 div()
                                     .flex_none()
@@ -817,29 +805,6 @@ mod tests {
         cx.simulate_click(install, gpui::Modifiers::none());
 
         assert_eq!(*seen.borrow(), vec![ExtensionAction::Install]);
-    }
-
-    #[gpui::test]
-    fn the_card_names_its_category(cx: &mut gpui::TestAppContext) {
-        let (_, cx) = cx.add_window_view(|_, _| CategoryHarness);
-        cx.run_until_parked();
-
-        assert!(
-            cx.debug_bounds("extension-category").is_some(),
-            "the category badge is drawn"
-        );
-    }
-
-    /// Hosts one catalog card with a category, as the Marketplace draws an agent.
-    struct CategoryHarness;
-
-    impl gpui::Render for CategoryHarness {
-        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-            div().child(
-                ExtensionCard::new("acme", "Acme Metrics", ExtensionState::Catalog)
-                    .category("Agent"),
-            )
-        }
     }
 
     #[gpui::test]

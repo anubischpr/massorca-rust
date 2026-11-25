@@ -130,7 +130,8 @@ directory that does not exist has no kinds.
   `success`), `done:<outcome>`, `ignore`.
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
-  import: the declaration has no optional flag.
+  import unless `optional` lists it (decision 0097). `state` declares how the CLI's own state
+  file is built and repaired (decision 0099).
 - `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
   mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
   kind's own `args`), an optional deterministic `live_switch` typed into a running session,
@@ -140,11 +141,21 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
-- `model` and `effort` (decision 0092): optional, each `{ "flag": "--model" }`. The flag starts
-  with `-` and holds no spaces, `=` or control characters. A start's `model` or `effort` is
-  passed as the flag and its value, after the mode's `args` and before the caller's `args`.
-  A kind without the flag refuses the option with `agent.option_unsupported`, naming the kind.
-  A value is 1 to 128 letters, digits, `-`, `_`, `.`, `:` or `/`, never starting with `-`.
+- `model` and `effort` (decisions 0094, 0096): optional. Each is `{ "flag": "--model" }` (the
+  value follows the flag) or `{ "args": ["-m", "{value}"] }` (`{value}` is replaced by the value
+  and appears exactly once in the arguments): exactly one of the two. A flag starts with `-` and
+  holds no spaces, `=` or control characters. A start's `model` or `effort` is passed after the
+  mode's `args` and before the caller's `args`. A kind without the option refuses it with
+  `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
+  `:` or `/`, never starting with `-`.
+- `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
+  efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
+  absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
+  one of the effort's levels. `effort.levels` lists `{ id, label }` in order and `effort.default`
+  is one of them. With levels declared, a start's effort must be one of them; with a model that
+  lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
+  Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
+  choice is the default, and no label is empty.
 
 ## Session record (`AgentSession`)
 
@@ -171,7 +182,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
 | `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
@@ -194,7 +205,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
-| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.import` | workspace | `kind`, `from?`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }`. An absent `from` copies each file from where the kind's CLI keeps it and needs capability `agent-import-detect/1`; the client refuses it before sending when the service does not offer it (decision 0097). |
+| `agent.accounts.import_candidates` | read | `kind?` | `{ candidates: [{ kind, ready, folder?, files: [{ name, required, found, path?, env? }] }] }`. Capability `agent-import-detect/1` (decision 0097). Below `workspace` scope `folder` and `path` are omitted. |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
@@ -252,7 +264,7 @@ the run gets the vendor's default and the bypass stays pending; else in the last
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
 
-## No project (decision 0092)
+## No project (decision 0094)
 
 A conversation without a project starts with `agent.start` and no `workspace`. Its folder is
 `<conversations folder>/<session id>`, where the conversations folder is the setting
@@ -261,7 +273,7 @@ when it is not an absolute path). Each session gets a folder of its own because 
 keeps its history per folder, so two sessions must never share one.
 
 A folder workspace needs a project, so the conversations folder is registered under a hidden
-project (`projects.conversations = 1`, migration 0092 in `core-store`). `project list` and every
+project (`projects.conversations = 1`, migration 0094 in `core-store`). `project list` and every
 other project listing leave it out, so a conversation is never a project. The workspace has no
 worktree and no branch. A conversation's folder is an ordinary folder workspace, so stop,
 resume, list and the rest of the session commands work as for any session.
@@ -525,7 +537,8 @@ massorca agent credentials remove <kind>
 massorca agent accounts list <kind>
 massorca agent accounts add <kind> [--label <l>] [--no-attach]
 massorca agent accounts sign-in <kind> <account> [--no-attach]
-massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts import <kind> [--from <dir>] [--label <l>]
+massorca agent accounts candidates [<kind>]
 massorca agent accounts activate <kind> <account> [--project <p>]
 massorca agent accounts remove <kind> <account>
 massorca agent accounts check <kind> [<account>]
@@ -564,6 +577,69 @@ service refuses `import --replace` and `remove` with `agent.busy` while any sess
 kind has a run that has not exited. Declared file names must also not be Windows device
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
+
+## Import sources (decision 0097)
+
+`core-agents::sources`. A kind's `credentials` may declare, per file, where its CLI keeps it:
+
+```json
+"optional": [".claude.json"],
+"sources": [
+  { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
+  { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
+]
+```
+
+`dir` is the default folder template; `windows`, `macos` and `linux` replace it on that platform. The only
+placeholder is `{home}`, read from `USERPROFILE` on Windows and `HOME` elsewhere (what the vendor CLIs use), and from
+the platform when that variable is unset or not absolute. When `env` names a variable set to an absolute path in the
+service's environment, the file is looked for in that folder instead. A file not in `optional` is required; without
+`optional` every declared file is. The kind's problems list a source or optional entry that is not a declared file,
+a file named twice, an `env` that is not a variable name, and a template that neither starts with `{home}` nor is an
+absolute path. The built-in `claude` declares `.credentials.json` (required) in `{home}/.claude` and `.claude.json`
+(optional) in `{home}`, both moved by `CLAUDE_CONFIG_DIR`; `codex` declares `auth.json` (required) and `config.toml`
+(optional) in `{home}/.codex`, moved by `CODEX_HOME`.
+
+`agent.accounts.import_candidates` reports, per kind, each file's path and whether the import would accept it: a
+regular file, not a link, at most 1 MiB (a state file: its rule's `max_source_bytes`), judged from `symlink_metadata`
+alone. It never opens a file. `ready` means
+every required file was found. `agent.accounts.import` without `from` reads each file from its own path, with every
+check of Credential import; a folder import applies the same optional rule.
+
+## Account state file (decision 0099)
+
+`core-agents::state_file`. Some CLIs keep their own state beside the login in the folder the home variable names:
+with `CLAUDE_CONFIG_DIR` set, Claude Code reads `.claude.json` there too, and without `hasCompletedOnboarding` it opens
+its first-run setup, which ends in a browser sign-in, while `auth status` (which judges only the credentials) still
+says signed in. A kind's `credentials.state` declares how that file is made:
+
+```json
+"state": {
+  "file": ".claude.json",
+  "keep": ["oauthAccount", "theme", "mcpServers"],
+  "set": { "hasCompletedOnboarding": true },
+  "max_source_bytes": 16777216
+}
+```
+
+`file` is a declared file; `keep` and `set` name plain top-level keys (letters, digits, `_`, `-`, `.`), each once and in
+only one of them; `max_source_bytes` (default 1 MiB) is between 1 byte and 64 MiB. The kind's problems list each
+breach.
+
+- Import, from a folder or detected sources, builds the state file and never copies it raw. The source is read with
+  the checks of Credential import but with `max_source_bytes` as its cap, parsed, and only the `keep` keys present are
+  written, then the `set` keys. Everything else, project history included, stays behind. A missing source gives a file
+  with the `set` keys only. A source that is not a JSON object, or over its cap, refuses the import when the file is
+  required; when it is optional (Claude), the file gets the `set` keys only, and the import's `reason` and the file's
+  `reason` say why. A state file alone, built from nothing, is nothing to import.
+- Before every account check (`agent.accounts.check`, and the checks that decide an import or a sign-in) and before
+  every launch on an account home, the service puts the `set` keys back under `credentials::lock_homes`: it creates the
+  file when it is missing and merges the keys when they are absent or differ, keeping every other key, writing a new
+  owner-only sibling and renaming it over the file. A link or anything but a regular file is never followed or
+  written through. A state file that cannot be repaired (not a JSON object, over its cap, a link) is left as it is;
+  the check reports `needs_sign_in` and a launch is refused with `agent.credentials_invalid` naming the file, so the
+  check and the session never disagree. Existing accounts are repaired this way without a new import.
+- Only `claude` declares a rule. Folder trust prompts are out of scope.
 
 ## Accounts (decision 0059)
 
@@ -655,8 +731,9 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Import** copies the declared files into a new account (origin `import`), which stays undecided
   until its check decides it: a check that reports the login is not signed in deletes the new
   account without a sign-out, and the result is `failed`; any other result keeps it, and only then
-  does it count as the kind's history. `not_found` means none of the declared files is in the
-  source. An import a crash left undecided is decided at the next start, the same way.
+  does it count as the kind's history. `not_found` means a required file is missing; the reason
+  names each one and where it was looked for. A missing optional file (`credentials.optional`) is
+  skipped. Without `from`, each file is read from where the kind's CLI keeps it (see Import sources). An import a crash left undecided is decided at the next start, the same way.
 - **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
   already running) is refused, and the account is marked removing. Outside the gate, the kind's
   `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
