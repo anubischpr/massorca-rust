@@ -8,6 +8,7 @@ pub mod catalogue;
 mod error;
 pub mod hooks;
 pub mod host;
+mod install_log_tail;
 pub mod item;
 pub mod layout;
 pub mod lockfile;

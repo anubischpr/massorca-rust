@@ -1,6 +1,7 @@
 //! The create-workspace and remove-workspace dialogs, drawn from their flows (decision 0028).
 
 use super::Shell;
+use super::path_field::{PickKind, path_field};
 use super::workspace_dialogs::{AddProjectDialog, CreateDialog};
 use crate::model::workspace_flow::{
     DialogCopy, DialogKind, KEEP_BRANCH_LATER, ProjectChoice, RemoveFlow,
@@ -106,7 +107,15 @@ pub(super) fn add_project_dialog(
     let mut view = Dialog::new("add-project", "Add a project")
         .open(true)
         .variant(DialogVariant::OneField)
-        .child(dialog.path.clone())
+        .child(path_field(
+            "add-project-browse",
+            "add-project-field",
+            shell.clone(),
+            &dialog.path,
+            PickKind::Folder,
+            true,
+            true,
+        ))
         .field(dialog.path.read(cx).focus_handle(cx))
         .action("Add project")
         .action_disabled(!form.can_submit())

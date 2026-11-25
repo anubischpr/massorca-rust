@@ -2,17 +2,20 @@
 //! item and the notice above the Canvas. Plain functions over `StoreState`, so tests call them
 //! without GPUI (decision 0028).
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use super::agent_sessions::{session_state, sessions_by_workspace};
 use super::hosts::{HostTone, host_state};
 use super::shell::{
     AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
-    ShellSnapshot, StatusBarModel, WorkspaceRow,
+    SessionRow, ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
 use super::teams::{TeamsState, live_teams};
+use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::service::{ConnectionState, StoreState};
 use massorca_protocol::methods::projects::ProjectIcon;
+use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
 pub const LOCAL_HOST: &str = "This PC";
@@ -24,34 +27,47 @@ const USAGE_SLOTS: usize = 6;
 pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     let reach = reach_of(state, now);
     let sessions = sessions_by_workspace(state);
-    let projects = state
+    let mut projects: Vec<ProjectGroup> = state
         .projects
         .iter()
-        .map(|project| {
-            let workspaces = state
-                .workspaces
-                .iter()
-                .filter(|workspace| workspace.project_id == project.id)
-                .enumerate()
-                .map(|(index, workspace)| WorkspaceRow {
-                    id: workspace.id.clone(),
-                    name: workspace.name.clone(),
-                    branch: workspace.branch.clone(),
-                    usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
-                    sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
-                })
-                .collect();
-            ProjectGroup {
-                name: project.name.clone(),
-                emoji: project.icon.as_ref().and_then(emoji_of),
-                hosts: vec![HostGroup {
-                    name: LOCAL_HOST.to_owned(),
-                    reach,
-                    workspaces,
-                }],
-            }
+        .map(|project| ProjectGroup {
+            name: project.name.clone(),
+            emoji: project.icon.as_ref().and_then(emoji_of),
+            hosts: vec![HostGroup {
+                name: LOCAL_HOST.to_owned(),
+                reach,
+                workspaces: workspace_rows(
+                    state
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| workspace.project_id == project.id),
+                    &sessions,
+                ),
+            }],
         })
         .collect();
+    // A conversation's folder belongs to the hidden project of the conversations folder, which the service never
+    // lists (decision 0092). Any workspace whose project is not listed is one of those: it goes under No project, last.
+    let conversations = workspace_rows(
+        state.workspaces.iter().filter(|workspace| {
+            !state
+                .projects
+                .iter()
+                .any(|project| project.id == workspace.project_id)
+        }),
+        &sessions,
+    );
+    if !conversations.is_empty() {
+        projects.push(ProjectGroup {
+            name: NO_PROJECT_LABEL.to_owned(),
+            emoji: None,
+            hosts: vec![HostGroup {
+                name: LOCAL_HOST.to_owned(),
+                reach,
+                workspaces: conversations,
+            }],
+        });
+    }
     ShellSnapshot {
         projects,
         usage: Vec::new(),
@@ -71,6 +87,23 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
     }
+}
+
+/// The rows of `workspaces`, each with the agent sessions it runs; usage colours cycle over them in order.
+fn workspace_rows<'a>(
+    workspaces: impl Iterator<Item = &'a Workspace>,
+    sessions: &BTreeMap<String, Vec<SessionRow>>,
+) -> Vec<WorkspaceRow> {
+    workspaces
+        .enumerate()
+        .map(|(index, workspace)| WorkspaceRow {
+            id: workspace.id.clone(),
+            name: workspace.name.clone(),
+            branch: workspace.branch.clone(),
+            usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
+            sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// How many agent sessions show `wanted`, for the Status bar's agents item.
@@ -322,20 +355,35 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_whose_project_is_unknown_is_not_drawn() {
+    fn a_workspace_whose_project_is_not_listed_is_a_conversation_under_no_project() {
         let now = Instant::now();
         let mut state = loaded(now);
         state.apply(
-            StoreUpdate::WorkspaceChanged(workspace("w9", "gone", "stray", 9)),
+            StoreUpdate::WorkspaceChanged(workspace("w9", "hidden", "conversation", 9)),
             now,
         );
         let snapshot = service_snapshot(&state, now);
+        let last = snapshot.projects.last().expect("the No project group");
+        assert_eq!(last.name, NO_PROJECT_LABEL);
+        let ids: Vec<&str> = last.hosts[0]
+            .workspaces
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(ids, ["w9"]);
         let total: usize = snapshot
             .projects
             .iter()
             .map(|p| p.hosts[0].workspaces.len())
             .sum();
-        assert_eq!(total, 3);
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn no_project_group_is_absent_without_a_conversation() {
+        let now = Instant::now();
+        let snapshot = service_snapshot(&loaded(now), now);
+        assert!(snapshot.projects.iter().all(|p| p.name != NO_PROJECT_LABEL));
     }
 
     #[test]

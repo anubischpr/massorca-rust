@@ -46,19 +46,7 @@ pub(crate) async fn accept(
     max_frame_len: u32,
     origin: &Origin,
 ) -> Option<Negotiated> {
-    let first = match timeout(HELLO_TIMEOUT, inbound.recv()).await {
-        Ok(Some(first)) => first,
-        // The peer left before saying anything; there is nobody to answer.
-        Ok(None) => return None,
-        Err(_elapsed) => {
-            refuse(
-                outbound,
-                ErrorBody::new(codes::PROTOCOL_HANDSHAKE, "no hello within 10 seconds"),
-            )
-            .await;
-            return None;
-        }
-    };
+    let first = first_frame(inbound, outbound).await?;
     let Frame::Message(Message::Hello {
         protocol,
         capabilities: offered,
@@ -115,6 +103,24 @@ pub(crate) async fn accept(
 }
 
 /// The one place a handshake refusal is written: a `rejected` message names the range this service speaks.
+/// The peer's first frame. A peer silent for `HELLO_TIMEOUT` is refused; `None` closes the connection.
+async fn first_frame(
+    inbound: &mut mpsc::Receiver<Frame>,
+    outbound: &mpsc::Sender<Frame>,
+) -> Option<Frame> {
+    match timeout(HELLO_TIMEOUT, inbound.recv()).await {
+        Ok(first) => first,
+        Err(_elapsed) => {
+            refuse(
+                outbound,
+                ErrorBody::new(codes::PROTOCOL_HANDSHAKE, "no hello within 10 seconds"),
+            )
+            .await;
+            None
+        }
+    }
+}
+
 async fn refuse(outbound: &mpsc::Sender<Frame>, error: ErrorBody) {
     let _ = outbound
         .send(Frame::Message(Message::Rejected {
@@ -122,4 +128,51 @@ async fn refuse(outbound: &mpsc::Sender<Frame>, error: ErrorBody) {
             supported: SUPPORTED,
         }))
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::{Instant, sleep};
+
+    fn rejection_code(frame: Option<Frame>) -> Option<String> {
+        match frame {
+            Some(Frame::Message(Message::Rejected { error, .. })) => Some(error.code),
+            _ => None,
+        }
+    }
+
+    // The clock is paused, so the window is measured exactly however loaded the machine is.
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_peer_is_refused_when_the_hello_window_ends() {
+        let (_peer, mut inbound) = mpsc::channel(1);
+        let (outbound, mut sent) = mpsc::channel(1);
+        let started = Instant::now();
+
+        assert!(first_frame(&mut inbound, &outbound).await.is_none());
+        assert_eq!(started.elapsed(), HELLO_TIMEOUT);
+        assert_eq!(
+            rejection_code(sent.try_recv().ok()).as_deref(),
+            Some(codes::PROTOCOL_HANDSHAKE)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_first_frame_just_inside_the_window_is_read() {
+        let (peer, mut inbound) = mpsc::channel(1);
+        let (outbound, mut sent) = mpsc::channel(1);
+        tokio::spawn(async move {
+            sleep(HELLO_TIMEOUT - Duration::from_millis(1)).await;
+            let _ = peer
+                .send(Frame::Message(Message::Cancel { stream: 1 }))
+                .await;
+        });
+
+        let first = first_frame(&mut inbound, &outbound).await;
+        assert!(
+            matches!(first, Some(Frame::Message(Message::Cancel { stream: 1 }))),
+            "{first:?}"
+        );
+        assert!(sent.try_recv().is_err(), "nothing is refused");
+    }
 }
