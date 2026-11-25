@@ -1,5 +1,5 @@
-//! The install review dialog's words (decision 0062, owner ruling 2026-11-24): only what the button will do. The
-//! technical review (hashes, permissions, programs, verify and uninstall commands) stays in the CLI's review output.
+//! The install review dialog's words (decision 0062, owner ruling 2026-11-24): what the button will do, always shown.
+//! The technical review is under Show details (`install_details.rs`).
 
 use massorca_protocol::methods::extensions::{CliPlanState, ExtensionReview};
 
@@ -73,7 +73,7 @@ pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use massorca_protocol::methods::extensions::{
         CliPlan, CliPlanState, KindView, Listing, Permission, Risk, RiskLevel, SourceKind,
         SourceRef,
@@ -81,7 +81,7 @@ mod tests {
 
     use super::*;
 
-    fn review() -> ExtensionReview {
+    pub(in crate::model::marketplace) fn review() -> ExtensionReview {
         ExtensionReview {
             id: "massorca.claude".to_owned(),
             name: "Claude".to_owned(),
@@ -144,7 +144,7 @@ mod tests {
     }
 
     /// The review of a CLI already on this computer: the installer is skipped.
-    fn detected_review() -> ExtensionReview {
+    pub(in crate::model::marketplace) fn detected_review() -> ExtensionReview {
         let mut found = review();
         found.cli[0].state = CliPlanState::Detected { path: None };
         found.runs_installer = false;

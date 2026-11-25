@@ -1,4 +1,4 @@
-# 0092: Sessions with no project, and model and effort
+# 0094: Sessions with no project, and model and effort
 
 Status: accepted, 2026-11-24.
 
@@ -18,7 +18,7 @@ effort, which a start had no way to pass.
 - Why a folder of its own per session: a vendor CLI keeps its history per folder, so two sessions sharing one folder
   would share history. Why the session id as the name: it is unique, so the workspace name and path never collide.
 - A folder workspace needs a project. The conversations folder is registered under a hidden project, marked with the
-  new column `projects.conversations` (migration 0092, appended). Every project listing leaves hidden projects out. This
+  new column `projects.conversations` (migration 0094, appended). Every project listing leaves hidden projects out. This
   is the one schema change: the alternatives (a nullable `agent_sessions.workspace_id`, or a project per session) would
   reach every session call site or show in the project list.
 - The hidden project is never selected by id, name or path, so no project command acts on it, and `project inspect`
