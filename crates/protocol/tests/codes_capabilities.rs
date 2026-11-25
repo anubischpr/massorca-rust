@@ -177,6 +177,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_SEEN, "agent-seen/1");
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::AGENT_RELEASE, "agent-release/1");
+    assert_eq!(capabilities::AGENT_ARCHIVE, "agent-archive/1");
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");

@@ -9,10 +9,10 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentKind, AgentModels,
-    AgentModelsParams, AgentPromptParams, AgentResumeParams, AgentSession, AgentSessionList,
-    AgentSetModeParams, AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel,
-    ModelSource,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentKind,
+    AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -85,10 +85,40 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: QueueCommand,
     },
-    /// Forgets a session whose run has ended.
+    /// Forgets a session whose run has ended; with --remove-workspace, removes its workspace too, as `workspace rm`
+    /// would, when no other session uses it.
     Forget {
         /// Session id, or a unique prefix of at least 8 characters.
         session: String,
+        /// Also remove the session's workspace (its worktree and created branch; a folder workspace keeps its files).
+        #[arg(long, conflicts_with = "preview")]
+        remove_workspace: bool,
+        /// With --remove-workspace: discard the worktree's uncommitted and untracked changes.
+        #[arg(long, requires = "remove_workspace")]
+        force: bool,
+        /// With --remove-workspace: delete the worktree's ignored files (build output), which refuse removal otherwise.
+        #[arg(long, requires = "remove_workspace")]
+        discard_ignored: bool,
+        /// Print what forgetting the session with its workspace would meet, and change nothing.
+        #[arg(long)]
+        preview: bool,
+    },
+    /// Sets a session's title, live or exited: 1 to 120 characters once trimmed, without control characters.
+    Rename {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// The new title.
+        #[arg(allow_hyphen_values = true)]
+        title: String,
+    },
+    /// Hides (archives) an exited session from `agent list`, keeping its record, terminal and workspace; --off shows it
+    /// again. `agent list --archived` lists hidden sessions too.
+    Hide {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// Shows the session again.
+        #[arg(long)]
+        off: bool,
     },
     /// Archives an exited session's output (its newest 256 KiB) and frees its terminal. The record stays. Refused for a
     /// live run.
@@ -340,6 +370,9 @@ pub struct AgentListArgs {
     /// Only the sessions of this workspace (id, name or path).
     #[arg(long, value_name = "WORKSPACE")]
     pub workspace: Option<String>,
+    /// List hidden (archived) sessions too.
+    #[arg(long)]
+    pub archived: bool,
 }
 
 /// The `agent models` text: one line per model with its default, its efforts and where it came from, then the listing's
@@ -488,7 +521,12 @@ pub async fn execute(
             output.success(&started, &agent_text::session_details(&started));
         }
         AgentCommand::List(args) => {
-            let list = client.agent_list(args.workspace.as_deref()).await?;
+            let list = client
+                .agent_list_with(&AgentListParams {
+                    workspace: args.workspace,
+                    include_archived: args.archived,
+                })
+                .await?;
             output.success(&list, &agent_text::sessions_lines(&list.sessions));
         }
         AgentCommand::Status(AgentStatusArgs {
@@ -537,6 +575,11 @@ pub async fn execute(
             cols,
             rows,
         } => {
+            // A resume shows a hidden session again (decision 0163); say so when it was hidden.
+            let was_hidden = client
+                .agent_show(&session)
+                .await
+                .is_ok_and(|shown| shown.archived);
             let resumed = client
                 .agent_resume_with(&AgentResumeParams {
                     session,
@@ -545,7 +588,11 @@ pub async fn execute(
                     rows,
                 })
                 .await?;
-            output.success(&resumed, &agent_text::session_details(&resumed));
+            let mut lines = agent_text::session_details(&resumed);
+            if was_hidden && !resumed.archived {
+                lines.push("unhidden: the resume shows the session in agent list again".to_owned());
+            }
+            output.success(&resumed, &lines);
         }
         AgentCommand::Mode {
             session,
@@ -571,12 +618,49 @@ pub async fn execute(
         AgentCommand::Queue { command } => {
             queue_command(&client, command, output).await?;
         }
-        AgentCommand::Forget { session } => {
-            let forgotten = client.agent_forget(&session).await?;
-            output.success(
-                &forgotten,
-                &[format!("forgot agent session {}", forgotten.id)],
-            );
+        AgentCommand::Forget {
+            session,
+            preview: true,
+            ..
+        } => {
+            let preview = client.agent_forget_preview(&session).await?;
+            output.success(&preview, &agent_text::forget_preview_lines(&preview));
+        }
+        AgentCommand::Forget {
+            session,
+            remove_workspace,
+            force,
+            discard_ignored,
+            preview: false,
+        } => {
+            let forgotten = client
+                .agent_forget_with(&AgentForgetParams {
+                    session,
+                    remove_workspace,
+                    force,
+                    discard_ignored,
+                    expect_dirty: None,
+                })
+                .await?;
+            let mut lines = vec![format!("forgot agent session {}", forgotten.session.id)];
+            if let Some(removed) = &forgotten.workspace_removed {
+                lines.push(format!("removed workspace {}", removed.workspace.id));
+            }
+            if let Some(error) = &forgotten.workspace_error {
+                lines.push(format!(
+                    "the workspace was not removed: {}: {}",
+                    error.code, error.message
+                ));
+            }
+            output.success(&forgotten, &lines);
+        }
+        AgentCommand::Rename { session, title } => {
+            let renamed = client.agent_rename(&session, &title).await?;
+            output.success(&renamed, &agent_text::session_details(&renamed));
+        }
+        AgentCommand::Hide { session, off } => {
+            let hidden = client.agent_archive_session(&session, !off).await?;
+            output.success(&hidden, &agent_text::session_details(&hidden));
         }
         AgentCommand::Release { session } => {
             let released = client.agent_release(&session).await?;

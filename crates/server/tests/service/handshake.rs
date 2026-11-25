@@ -27,6 +27,7 @@ async fn welcome_offers_the_registered_capabilities() {
     assert_eq!(
         welcome.capabilities,
         [
+            capabilities::AGENT_ARCHIVE,
             capabilities::AGENT_IMPORT_DETECT,
             capabilities::AGENT_MODELS,
             capabilities::AGENT_MODES,

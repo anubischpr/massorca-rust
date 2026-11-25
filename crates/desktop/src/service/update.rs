@@ -675,6 +675,7 @@ pub(crate) mod fixtures {
             pending_permission_mode: None,
             retained: false,
             released: false,
+            archived: false,
             resume: None,
             delegation: None,
             notes: Vec::new(),

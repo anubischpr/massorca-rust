@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::methods::chat::{KindChat, RunType};
 use crate::methods::terminals::{TerminalExit, TerminalState};
+use crate::methods::workspaces::{WorkspaceKind, WorkspaceRemoved};
 
 /// Params: none. Result: [`AgentKinds`].
 pub const KINDS: &str = "agent.kinds";
@@ -22,8 +23,21 @@ pub const LIST: &str = "agent.list";
 pub const SHOW: &str = "agent.show";
 /// Params: [`AgentStopParams`]. Result: [`AgentSession`].
 pub const STOP: &str = "agent.stop";
-/// Params: [`AgentSessionRef`]. Result: [`AgentSession`], the forgotten record. The session must be exited.
+/// Params: [`AgentForgetParams`] (an [`AgentSessionRef`] with optional `remove_workspace` and `force`). Result:
+/// [`AgentForgotten`], the forgotten record with what became of its workspace. The session must be exited.
 pub const FORGET: &str = "agent.forget";
+/// Params: [`AgentSessionRef`]. Result: [`AgentForgetPreview`]: what `agent.forget` with `remove_workspace` would meet,
+/// read without changing anything. Capability `agent-archive/1` (decision 0163).
+pub const FORGET_PREVIEW: &str = "agent.forget_preview";
+/// Params: [`AgentArchiveSessionParams`]. Result: [`AgentSession`]. Archives (hides) an exited session, or clears that;
+/// a live run is refused with `agent.busy`. Capability `agent-archive/1` (decision 0163).
+pub const ARCHIVE_SESSION: &str = "agent.archive_session";
+/// Params: [`AgentRenameParams`]. Result: [`AgentSession`]. Sets a live or exited session's title, trimmed: 1 to
+/// [`MAX_TITLE_CHARS`] characters without control characters, else `request.invalid_params`. Capability
+/// `agent-archive/1` (decision 0163).
+pub const RENAME: &str = "agent.rename";
+/// Longest title `agent.rename` takes, in characters after trimming.
+pub const MAX_TITLE_CHARS: usize = 120;
 /// Params: [`AgentSessionRef`]. Result: [`AgentSession`], released: its terminal output is archived and its terminal freed,
 /// and the record stays. The session must be exited; a live run is refused with `agent.busy`. Capability `agent-release/1`
 /// (decision 0090).
@@ -315,6 +329,38 @@ pub struct PermissionMode {
     /// The vendor may start a run asked for this mode in another one without failing, so it is never confirmed.
     #[serde(default)]
     pub may_fall_back: bool,
+    /// A lucide icon name for the mode (decision 0163). Absent when the kind names none, and from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// How a picker presents the mode (decision 0163); every bypass mode is `warning`. Absent when the kind names none,
+    /// and from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<ModeTone>,
+    /// Whether a picker offers the mode (decision 0163). An unoffered mode is still recognised, so a session reporting it
+    /// shows its name. Sent only when false; absent (an older peer too) means offered.
+    #[serde(default = "mode_offered", skip_serializing_if = "is_mode_offered")]
+    pub selectable: bool,
+}
+
+fn mode_offered() -> bool {
+    true
+}
+
+fn is_mode_offered(selectable: &bool) -> bool {
+    *selectable
+}
+
+/// How a picker presents a permission mode (decision 0163).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeTone {
+    /// An ordinary mode.
+    Normal,
+    /// A mode that lifts the vendor's prompts or sandbox.
+    Warning,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The decoded form of [`AgentKind`]. Only the fallback for an absent `detected` lives here: an `agents/1` peer
@@ -456,6 +502,9 @@ pub struct AgentListParams {
     /// Workspace id, name or path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// List archived sessions too (capability `agent-archive/1`, decision 0163); they are left out without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_archived: bool,
 }
 
 /// Result of `agent.list`, newest first.
@@ -862,6 +911,10 @@ pub struct AgentSession {
     /// record stays. Absent when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub released: bool,
+    /// Whether the session is archived (hidden, decision 0163): `agent.list` leaves it out unless asked, and nothing it
+    /// needs is cleaned up. Absent when false, and from a peer without capability `agent-archive/1`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     /// Whether `agent.resume` could start a new run of the session now (decision 0160). Set by the service on every
     /// session view; absent from an older peer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1283,4 +1336,112 @@ pub struct AgentArchive {
     /// The run holds vault secrets (decision 0071) and the caller is below host-admin scope, so the text is not sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub withheld: bool,
+}
+
+/// Params of `agent.archive_session` (capability `agent-archive/1`, decision 0163).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentArchiveSessionParams {
+    pub session: String,
+    /// True archives the session; false clears its archive.
+    pub archived: bool,
+}
+
+/// Params of `agent.forget`. Without `remove_workspace` it forgets the session only, as before decision 0163.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentForgetParams {
+    pub session: String,
+    /// Also remove the session's workspace through `workspace.remove`, with its guards and codes, when no other session
+    /// uses it (capability `agent-archive/1`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_workspace: bool,
+    /// Discard uncommitted and untracked changes of the workspace being removed, as `workspace.remove`'s `force`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+    /// Delete ignored files of the worktree being removed (build output), as `workspace.remove`'s `discard_ignored`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discard_ignored: bool,
+    /// What the preview the person confirmed said about uncommitted or untracked changes. `Some(false)` refuses with
+    /// `workspace.dirty` when the worktree has such changes now, even with `force`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_dirty: Option<bool>,
+}
+
+/// Result of `agent.forget`: the forgotten session, with what became of its workspace when one was to be removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentForgotten {
+    #[serde(flatten)]
+    pub session: AgentSession,
+    /// The workspace removal, when `remove_workspace` was asked and it succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_removed: Option<WorkspaceRemoved>,
+    /// Why the workspace was not removed after the session was forgotten. Every check runs before the forget, so this
+    /// is only a failure of the removal itself; the workspace is then as `workspace.remove` left it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_error: Option<WorkspaceRemovalError>,
+}
+
+/// A workspace removal that failed after its session was forgotten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRemovalError {
+    pub code: String,
+    pub message: String,
+}
+
+/// Result of `agent.forget_preview` (capability `agent-archive/1`, decision 0163): what deleting the session with its
+/// workspace would meet. Read from the same checks the delete runs; nothing changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentForgetPreview {
+    pub session: String,
+    /// Whether `agent.forget` would forget the session now.
+    pub can_forget: bool,
+    /// Why it would not, in plain words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forget_blocker: Option<String>,
+    pub workspace: ForgetPreviewWorkspace,
+}
+
+/// The workspace part of an [`AgentForgetPreview`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetPreviewWorkspace {
+    pub id: String,
+    pub kind: WorkspaceKind,
+    /// The workspace's directory; absent for a caller below `workspace` scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Whether `agent.forget` with `remove_workspace` and without `force` would remove it. A folder workspace is only
+    /// forgotten; its files stay.
+    pub removable: bool,
+    /// Why it would not, in plain words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+    /// The stable code of that refusal, such as `workspace.dirty` or `agent.busy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker_code: Option<String>,
+    /// Uncommitted changes to tracked files, which only `force` discards.
+    pub dirty: bool,
+    /// Untracked files, which only `force` discards.
+    pub untracked: bool,
+    /// Ignored files that a removal would delete, which `agent.forget` never discards.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignored_files: bool,
+    /// Other sessions (live, exited or archived) of the workspace; while any is left, the workspace is not removed.
+    pub other_sessions: Vec<String>,
+    /// Teams whose workspace this is; while any is left, the workspace is not removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_teams: Vec<String>,
+    /// Tasks whose workspace this is; while any is left, the workspace is not removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_tasks: Vec<String>,
+    /// Terminals running in the workspace; while any runs, the workspace is not removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running_terminals: Vec<String>,
+}
+
+/// Params of `agent.rename` (capability `agent-archive/1`, decision 0163).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRenameParams {
+    pub session: String,
+    pub title: String,
 }
