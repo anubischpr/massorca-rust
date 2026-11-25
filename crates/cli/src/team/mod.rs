@@ -9,7 +9,9 @@ use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
-use massorca_protocol::methods::team_room::{TeamRoomListParams, TeamRoomPostParams};
+use massorca_protocol::methods::team_room::{
+    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomPostParams,
+};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
     TeamCreateParams, TeamProjectAddParams, TeamRef, TeamRemoveParams,
@@ -250,7 +252,8 @@ pub enum TeamRoomCommand {
         limit: Option<u32>,
     },
     /// Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with
-    /// @name, else --to, else the lead, else the first bot, and the task starts unless --no-start. The task's title is
+    /// @name, else --to, else the lead, else the only bot, and the task starts unless --no-start. With several bots and
+    /// none of those, the room answers with a choice card instead (see `team room answer`). The task's title is
     /// the line's first line without the @name of the team's bots, cut to 80 characters. A person's line that names one
     /// day (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any
     /// time in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a
@@ -270,6 +273,16 @@ pub enum TeamRoomCommand {
         /// Leave a person's task in Todo instead of starting it.
         #[arg(long, conflicts_with = "bot")]
         no_start: bool,
+    },
+    /// Answers a choice card once: `bot:<id>` gives the request to that bot, `team:<id>` puts it in another team's
+    /// Todo, and `todo` keeps it in this team's Todo with no bot. `team room list` prints each card's choices.
+    Answer {
+        /// Team id or name.
+        team: String,
+        /// The card's line id.
+        message: String,
+        /// One of the card's choices.
+        choice: String,
     },
 }
 
@@ -665,6 +678,22 @@ async fn run_room(
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));
+        }
+        TeamRoomCommand::Answer {
+            team,
+            message,
+            choice,
+        } => {
+            let answered = client
+                .team_room_answer(&TeamRoomAnswerParams {
+                    team,
+                    message,
+                    choice,
+                })
+                .await?;
+            let mut lines = text::room_lines(std::slice::from_ref(&answered.card));
+            lines.extend(text::room_lines(&answered.messages));
+            output.success(&answered, &lines);
         }
     }
     Ok(())

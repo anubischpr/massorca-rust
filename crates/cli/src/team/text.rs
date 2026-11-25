@@ -1,6 +1,6 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
-use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, TeamRoomMessage};
 use massorca_protocol::methods::teams::{
     Board, Bot, CodeSource, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday,
     Team, TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
@@ -269,16 +269,20 @@ fn weekday_word(day: RoutineWeekday) -> &'static str {
 }
 
 /// One room line per row: its author (`you` or the bot's name), its text, then the task it is about and its Board
-/// column, or the one-time routine it scheduled and when that runs.
+/// column, or the one-time routine it scheduled and when that runs, or a choice card's id and choices.
 pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
     messages
         .iter()
         .map(|line| {
             let author = match line.author {
                 RoomAuthor::Person => "you",
+                RoomAuthor::Bot if line.card.is_some() => "room",
                 RoomAuthor::Bot => line.bot_name.as_deref().unwrap_or("a removed bot"),
                 RoomAuthor::Unknown => "unknown",
             };
+            if let Some(card) = &line.card {
+                return card_line(&line.id, author, &line.text, card);
+            }
             match &line.task {
                 Some(task) => format!(
                     "{author}	{}	{} ({})",
@@ -299,4 +303,25 @@ pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// A choice card's line: its id to answer it with, its text, then its choices, or the one it was answered with.
+fn card_line(id: &str, author: &str, text: &str, card: &RoomCard) -> String {
+    let label = |choice: &str| {
+        card.options
+            .iter()
+            .find(|option| option.choice == choice)
+            .map_or_else(|| choice.to_owned(), |option| option.label.clone())
+    };
+    match &card.answer {
+        Some(answer) => format!("{author}\t{text}\tcard {id}: answered {}", label(answer)),
+        None => {
+            let choices: Vec<String> = card
+                .options
+                .iter()
+                .map(|option| format!("{} ({})", option.choice, option.label))
+                .collect();
+            format!("{author}\t{text}\tcard {id}: {}", choices.join(", "))
+        }
+    }
 }
