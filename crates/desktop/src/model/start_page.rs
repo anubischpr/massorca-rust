@@ -194,7 +194,7 @@ pub fn start_params(
 pub fn start_again_params(workspace: &str, kind: &str) -> AgentStartParams {
     AgentStartParams {
         prompt: None,
-        ..start_params(Some(workspace), kind, "", None)
+        ..start_params(Some(workspace), kind, "", None, StartOptions::default())
     }
 }
 
