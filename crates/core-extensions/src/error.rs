@@ -108,6 +108,8 @@ pub enum Error {
     ConsentRequired,
     #[error("the package or its install plan changed since the review")]
     ConsentMismatch,
+    #[error("the review of {version} is needed to roll back; accept it with --consent {consent}")]
+    RollbackReviewRequired { version: String, consent: String },
     #[error("the install runs a vendor installer, which needs its own consent")]
     InstallerConsentRequired,
     #[error("the installer for {agent} failed: {message}")]
@@ -164,6 +166,7 @@ impl Error {
             Self::HashRequired => codes::HASH_REQUIRED,
             Self::ConsentRequired => codes::CONSENT_REQUIRED,
             Self::ConsentMismatch => codes::CONSENT_MISMATCH,
+            Self::RollbackReviewRequired { .. } => codes::CONSENT_REQUIRED,
             Self::InstallerConsentRequired => codes::INSTALLER_CONSENT_REQUIRED,
             Self::InstallerFailed { .. } => codes::INSTALLER_FAILED,
             Self::VerifyFailed { .. } => codes::VERIFY_FAILED,
@@ -196,6 +199,9 @@ impl Error {
                 commands,
                 fingerprint,
             } => Some(serde_json::json!({ "uninstall": commands, "fingerprint": fingerprint })),
+            Self::RollbackReviewRequired { version, consent } => {
+                Some(serde_json::json!({ "version": version, "consent": consent }))
+            }
             Self::InstallerFailed {
                 agent, diagnosis, ..
             } => Some(diagnosis_data(agent, diagnosis)),

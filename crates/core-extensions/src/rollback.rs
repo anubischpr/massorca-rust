@@ -51,7 +51,12 @@ impl Extensions {
             let plan = review::plan(&manifest, &*self.resolver, self.os);
             let expected = review::fingerprint(&manifest, &kept.sha256, &plan, self.os);
             match consent {
-                None => return Err(Error::ConsentRequired),
+                None => {
+                    return Err(Error::RollbackReviewRequired {
+                        version: kept.version.clone(),
+                        consent: expected,
+                    });
+                }
                 Some(consent) if consent != expected => return Err(Error::ConsentMismatch),
                 Some(_) => expected,
             }

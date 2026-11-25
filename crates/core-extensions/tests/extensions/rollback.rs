@@ -121,6 +121,9 @@ fn a_rollback_needs_the_consent_of_the_restored_review() {
         .rollback("acme.kit", None)
         .expect_err("no consent");
     assert_eq!(missing.code(), codes::CONSENT_REQUIRED);
+    let review = missing.data().expect("the review the rollback needs");
+    assert_eq!(review["version"], "1.2.0", "{review}");
+    assert_eq!(review["consent"], consent_of(&s, "1.2.0"));
     let mismatch = s
         .service
         .rollback("acme.kit", Some(&current))
