@@ -135,8 +135,8 @@ fn repair_state(decl: &KindDecl, home: &Path) -> Result<(), AgentError> {
         AgentError::new(
             codes::AGENT_CREDENTIALS_INVALID,
             format!(
-                "the state file {} of the account of agent kind {} cannot be used ({reason}); delete it, or remove the                  account and add it again",
-                home.join(&rule.file).display(),
+                "the account's {} for agent kind {} cannot be used ({reason}); delete that file in the account's folder, or remove the account and add it again",
+                rule.file,
                 decl.id
             ),
         )
@@ -1141,8 +1141,14 @@ impl Agents {
                 && let Err(reason) = state_file::ensure(&home, rule)
             {
                 tracing::warn!(kind = %decl.id, file = %rule.file, %reason, "the account's state file cannot be repaired");
+                // Only a lasting reason means the account needs a new sign-in; a passing one says nothing about it.
+                let state = if state_file::lasting(&reason, rule) {
+                    AccountState::NeedsSignIn
+                } else {
+                    AccountState::Unknown
+                };
                 return Some(Verdict {
-                    state: AccountState::NeedsSignIn,
+                    state,
                     identity: None,
                 });
             }

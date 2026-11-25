@@ -150,6 +150,17 @@ fn replace(home: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+/// Whether a reason `ensure` gave lasts until the person acts: the file is a link or not a regular file, too large,
+/// or not a JSON object. Any other reason (unreadable, replaced while read, a rename another process blocked) may pass
+/// on the next try, so it says nothing about the login.
+pub(crate) fn lasting(reason: &str, rule: &StateDecl) -> bool {
+    reason == NOT_AN_OBJECT
+        || reason == "a link"
+        || reason == "a directory"
+        || reason == "not a regular file"
+        || reason == credentials::too_large(rule.max_source_bytes)
+}
+
 fn reason(doing: &str, error: &io::Error) -> String {
     format!("cannot {doing} the state file: {error}")
 }
@@ -298,6 +309,20 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["state.json"], "no temporary file is left behind");
+    }
+
+    #[test]
+    fn only_lasting_reasons_count_as_lasting() {
+        let rule = rule(CAP);
+        for reason in [NOT_AN_OBJECT, "a link", "a directory", "not a regular file"] {
+            assert!(lasting(reason, &rule), "{reason}");
+        }
+        assert!(lasting(&credentials::too_large(CAP), &rule));
+        assert!(!lasting(
+            "cannot replace the state file: access denied",
+            &rule
+        ));
+        assert!(!lasting("unreadable", &rule));
     }
 
     #[test]

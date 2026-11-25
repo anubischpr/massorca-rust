@@ -56,3 +56,13 @@ with it set Claude Code reads both `.credentials.json` and its own global state 
   to trust a workspace folder.
 - A kind declaration gains an optional field. A peer that predates it refuses a declaration that uses it, since
   declarations deny unknown fields.
+
+## Notes
+
+- A merge rewrites the file: its keys come out sorted and it is reformatted, duplicate keys collapse to one, and an
+  integer outside the 64-bit range becomes a float. A file that already holds the `set` keys is never rewritten.
+- A source state file that is a link (as dotfile managers make) is not followed: the import builds the file from the
+  `set` keys alone and says so.
+- Only a lasting reason (a link, not a regular file, too large, not a JSON object) makes the check report that the
+  account needs a sign-in. A passing one, such as a rename another process blocked for a moment, reports the state as
+  unknown and the next check tries again.
