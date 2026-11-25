@@ -140,11 +140,21 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
-- `model` and `effort` (decision 0094): optional, each `{ "flag": "--model" }`. The flag starts
-  with `-` and holds no spaces, `=` or control characters. A start's `model` or `effort` is
-  passed as the flag and its value, after the mode's `args` and before the caller's `args`.
-  A kind without the flag refuses the option with `agent.option_unsupported`, naming the kind.
-  A value is 1 to 128 letters, digits, `-`, `_`, `.`, `:` or `/`, never starting with `-`.
+- `model` and `effort` (decisions 0094, 0096): optional. Each is `{ "flag": "--model" }` (the
+  value follows the flag) or `{ "args": ["-m", "{value}"] }` (`{value}` is replaced by the value
+  and appears exactly once in the arguments): exactly one of the two. A flag starts with `-` and
+  holds no spaces, `=` or control characters. A start's `model` or `effort` is passed after the
+  mode's `args` and before the caller's `args`. A kind without the option refuses it with
+  `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
+  `:` or `/`, never starting with `-`.
+- `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
+  efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
+  absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
+  one of the effort's levels. `effort.levels` lists `{ id, label }` in order and `effort.default`
+  is one of them. With levels declared, a start's effort must be one of them; with a model that
+  lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
+  Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
+  choice is the default, and no label is empty.
 
 ## Session record (`AgentSession`)
 
@@ -171,7 +181,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
 | `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |

@@ -123,6 +123,9 @@ struct Arguments {
 /// The prefix of the startup query argument.
 const QUERY_PREFIX: &str = "--query=";
 
+/// The `-c` setting codex reads the reasoning effort from (decision 0094).
+const REASONING_EFFORT_CONFIG: &str = "model_reasoning_effort=";
+
 impl Arguments {
     fn parse(mut args: impl Iterator<Item = String>) -> Self {
         let mut parsed = Self::default();
@@ -135,6 +138,17 @@ impl Arguments {
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
+                // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
+                "-m" if words.is_empty() => parsed.model = args.next(),
+                "-c" if words.is_empty() => {
+                    if let Some(level) = args.next().and_then(|setting| {
+                        setting
+                            .strip_prefix(REASONING_EFFORT_CONFIG)
+                            .map(str::to_owned)
+                    }) {
+                        parsed.effort = Some(level);
+                    }
+                }
                 text if words.is_empty() && text.starts_with(QUERY_PREFIX) => {
                     query = Some(text[QUERY_PREFIX.len()..].to_owned());
                 }

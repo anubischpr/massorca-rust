@@ -4,7 +4,7 @@ mod harness;
 
 use std::path::Path;
 
-use harness::{Sandbox, stdout_text};
+use harness::{Sandbox, eventually, single_document, stdout_text};
 use predicates::str::contains;
 use serde_json::{Value, json};
 
@@ -250,4 +250,134 @@ fn a_kind_whose_default_mode_is_a_bypass_is_listed_with_the_problem() {
             .is_some_and(|problem| problem.contains("bypass mode")),
         "{listed}"
     );
+}
+
+/// A profile kind with model choices and effort levels, run by this test's fake agent. Both options reach it the way
+/// codex passes them: `-m <model>` and `-c model_reasoning_effort=<level>`.
+fn tuned_kind() -> Value {
+    json!({
+        "id": "tuned",
+        "name": "Tuned agent",
+        "icon": "bot",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "status": { "mechanism": "env-command", "events": { "stop": "done" } },
+        "model": {
+            "args": ["-m", "{value}"],
+            "choices": [
+                { "id": "opus", "label": "Opus" },
+                { "id": "sonnet", "label": "Sonnet", "default": true },
+                { "id": "haiku", "label": "Haiku", "efforts": [] }
+            ]
+        },
+        "effort": {
+            "args": ["-c", "model_reasoning_effort={value}"],
+            "levels": [
+                { "id": "low", "label": "Low" },
+                { "id": "medium", "label": "Medium" },
+                { "id": "high", "label": "High" }
+            ],
+            "default": "high"
+        }
+    })
+}
+
+/// A folder workspace named `main` in a project the sandbox makes, as `agents.rs` does.
+fn folder_workspace(sandbox: &Sandbox) {
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+}
+
+/// Waits until `line` is on the terminal's screen.
+fn wait_for_line(sandbox: &Sandbox, terminal: &str, line: &str) {
+    eventually(&format!("`{line}` on the agent's screen"), || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        screen["lines"]
+            .as_array()
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|shown| shown.as_str().map(str::trim) == Some(line))
+            })
+            .then_some(())
+    });
+}
+
+#[test]
+fn a_kind_with_choices_lists_them_in_json_and_in_text() {
+    let sandbox = Sandbox::new();
+    declare(&sandbox, "tuned.json", &tuned_kind().to_string());
+
+    let kinds = sandbox.json_ok("default", &["agent", "kinds"]);
+    let tuned = kind(&kinds, "tuned", "user");
+    let choices = tuned["model"]["choices"].as_array().expect("model choices");
+    assert_eq!(choices.len(), 3, "{tuned}");
+    assert_eq!(choices[1]["id"], "sonnet");
+    assert_eq!(choices[1]["default"], true);
+    assert!(choices[0].get("default").is_none(), "{tuned}");
+    assert_eq!(choices[2]["efforts"], json!([]));
+    assert_eq!(tuned["effort"]["levels"][2]["label"], "High");
+    assert_eq!(tuned["effort"]["default"], "high");
+    assert!(kind(&kinds, "gentle-shell", "core").get("model").is_none());
+
+    sandbox
+        .run("default", &["agent", "kinds"])
+        .success()
+        .stdout(contains("models: tuned: opus, sonnet (default), haiku"))
+        .stdout(contains("efforts: tuned: low, medium, high (default)"))
+        .stdout(contains(
+            "models: claude: fable, opus, sonnet (default), haiku",
+        ))
+        .stdout(contains(
+            "efforts: claude: low, medium, high (default), xhigh, max",
+        ));
+}
+
+#[test]
+fn a_start_passes_the_model_and_effort_as_the_arguments_the_kind_declares() {
+    let sandbox = Sandbox::new();
+    declare(&sandbox, "tuned.json", &tuned_kind().to_string());
+    folder_workspace(&sandbox);
+
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "tuned",
+            "--workspace",
+            "main",
+            "--model",
+            "opus",
+            "--effort",
+            "high",
+            "--prompt",
+            "hi",
+        ],
+    );
+    let terminal = started["terminal_id"]
+        .as_str()
+        .expect("a terminal")
+        .to_owned();
+    wait_for_line(&sandbox, &terminal, "fake-agent: model opus");
+    wait_for_line(&sandbox, &terminal, "fake-agent: effort high");
+
+    // A level the kind does not declare, and an effort for a model that takes none, are refused before anything runs.
+    for refused in [
+        ["--model", "opus", "--effort", "ultra"],
+        ["--model", "haiku", "--effort", "low"],
+    ] {
+        let mut command = vec!["--json", "agent", "start", "tuned", "--workspace", "main"];
+        command.extend(refused);
+        let document = single_document(&sandbox.run("default", &command).failure());
+        assert_eq!(
+            document["error"]["code"], "request.invalid_params",
+            "{document}"
+        );
+    }
 }
