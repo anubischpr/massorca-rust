@@ -134,6 +134,7 @@ fn create_params(
         path,
         request_id: args.request_id,
         no_setup: args.no_setup,
+        unique_name: args.unique,
     })
 }
 

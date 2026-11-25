@@ -354,6 +354,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
@@ -379,6 +380,7 @@ fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
         },
         &json!({
             "project": "app",
@@ -815,6 +817,27 @@ fn workspace_create_params_write_no_setup_only_when_it_is_set() {
     };
     assert_eq!(
         serde_json::to_value(&skipping).expect("encodes")["no_setup"],
+        json!(true)
+    );
+}
+
+#[test]
+fn workspace_create_params_write_unique_name_only_when_it_is_set() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
+    assert!(!params.unique_name);
+    assert!(
+        serde_json::to_value(&params)
+            .expect("encodes")
+            .get("unique_name")
+            .is_none()
+    );
+    let unique = workspaces::WorkspaceCreateParams {
+        unique_name: true,
+        ..params
+    };
+    assert_eq!(
+        serde_json::to_value(&unique).expect("encodes")["unique_name"],
         json!(true)
     );
 }

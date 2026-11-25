@@ -20,6 +20,7 @@ mod remove;
 mod selectors;
 pub mod setup;
 pub mod setup_runner;
+mod unique_names;
 mod unregistered;
 mod update;
 mod views;

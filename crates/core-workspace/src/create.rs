@@ -92,6 +92,7 @@ impl Workspaces {
         }
         let project = self.resolve_project(&params.project)?;
         let name = match naming {
+            Naming::Typed if params.unique_name => self.unique_name(&project, &params)?,
             Naming::Typed => names::clean_workspace_name(&params.name)?,
             Naming::Generated => self.generated_name(&project)?,
         };
@@ -417,13 +418,13 @@ impl Workspaces {
     }
 }
 
-fn invalid(message: &str) -> DomainError {
+pub(crate) fn invalid(message: &str) -> DomainError {
     DomainError::new(codes::REQUEST_INVALID_PARAMS, message)
 }
 
 /// A file, a link or a non-empty directory occupies a path; an absent path or an empty
 /// directory does not.
-fn is_occupied(target: &Path) -> bool {
+pub(crate) fn is_occupied(target: &Path) -> bool {
     match std::fs::symlink_metadata(target) {
         Err(_) => false,
         Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(target) {

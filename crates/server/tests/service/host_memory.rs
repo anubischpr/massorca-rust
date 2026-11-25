@@ -60,6 +60,7 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
             },
         )
         .await

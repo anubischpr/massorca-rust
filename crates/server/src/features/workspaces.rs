@@ -1,6 +1,6 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
-//! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.current` (`workspace-current/1`). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;
@@ -60,6 +60,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             remove,
         )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_UNIQUE_NAME, Owner::Core)?,
         registries
             .capabilities
             .register(capabilities::WORKSPACE_UPDATE, Owner::Core)?,

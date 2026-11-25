@@ -70,6 +70,7 @@ impl Workspaces {
             path: Some(paths::path_text(&folder)?),
             request_id: None,
             no_setup: false,
+            unique_name: false,
         };
         self.create_folder(&project, &params)
     }

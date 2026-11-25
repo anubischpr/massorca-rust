@@ -81,6 +81,7 @@ async fn create(client: &Client, project: &str, name: &str, no_setup: bool) -> W
                 path: None,
                 request_id: None,
                 no_setup,
+                unique_name: false,
             },
         )
         .await
@@ -233,6 +234,7 @@ fn params(project: &str, name: &str) -> WorkspaceCreateParams {
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
     }
 }
 

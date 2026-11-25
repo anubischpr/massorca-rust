@@ -400,6 +400,10 @@ pub struct WorkspaceCreateArgs {
     /// Do not run the setup script of the new worktree's `orca.yaml`.
     #[arg(long)]
     pub no_setup: bool,
+    /// When the name, its branch or its folder is taken, use the next free `NAME-2` .. `NAME-100` instead of refusing.
+    /// Not with `--branch`, `--existing-branch` or `--path`.
+    #[arg(long)]
+    pub unique: bool,
 }
 
 #[derive(Debug, Args)]
