@@ -1,7 +1,7 @@
 //! The delegate form under a running session (X-CH-06): a prompt, the agent the child starts on, an optional
 //! workspace name and title, read only, and the line that says where a writing child runs, stated before the person
 //! types. Sending calls `agent.delegate` with this submit's id, so a retry sends the same id and the service answers
-//! with the child it already made. A refusal keeps the form and its input.
+//! with the child it already made. A refusal keeps the form and its input, shows its reason, and leaves Delegate on.
 
 use gpui::{
     AnyElement, App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*,
@@ -45,7 +45,7 @@ pub(super) struct DelegateForm {
     /// Where a writing child of the parent runs, as the parent declares it; `None` while none is declared.
     pub(super) placement: Option<WritingChild>,
     pub(super) read_only: bool,
-    /// The id of the submit the form last sent. It stays while the answer or its refusal shows, so a retry sends it.
+    /// The id of the last submit sent. It stays while the answer or its refusal shows, so the next submit sends it.
     pub(super) request: Option<String>,
     pub(super) sending: bool,
     pub(super) error: Option<String>,
@@ -308,7 +308,8 @@ impl Shell {
     }
 }
 
-/// The form's dialog: its fields, the read-only choice, and its submit, which reads Retry after a refusal.
+/// The form's dialog: the line about its child, its fields, the read-only choice, and its submit. After a refusal the
+/// submit stays Delegate, and the refusal's reason shows in the status line above the footer.
 fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
     let can_send = !form.prompt.read(cx).text().trim().is_empty()
         && form.kind.is_some()
@@ -338,11 +339,7 @@ fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElem
         .busy(form.sending)
         .child(body)
         .field(form.prompt.read(cx).focus_handle(cx))
-        .action(if form.error.is_some() {
-            "Retry"
-        } else {
-            "Delegate"
-        })
+        .action("Delegate")
         .action_disabled(!can_send)
         .on_action(move |_, cx| {
             let _ = on_action.update(cx, |shell, cx| shell.submit_delegate(cx));

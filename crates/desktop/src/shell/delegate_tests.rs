@@ -1,5 +1,6 @@
 //! The delegate form under a running session, on a scripted service: a submit sends `agent.delegate` with its fields
-//! and a fresh id, a refusal keeps the input and a retry sends the same id, and the form offers the child it made.
+//! and a fresh id, a refusal shows its reason and keeps the input, the next submit sends the same id, and the form
+//! offers the child it made.
 //! Only the agents turned on and detected on this host are offered. No service runs.
 
 use gpui::{Entity, TestAppContext, VisualTestContext};
@@ -145,7 +146,9 @@ fn a_submit_sends_its_fields_with_a_new_request_id_and_then_offers_the_child(
 }
 
 #[gpui::test]
-fn a_refused_submit_keeps_its_input_and_a_retry_sends_the_same_request_id(cx: &mut TestAppContext) {
+fn a_refusal_shows_its_reason_and_keeps_delegate_live_with_the_same_request_id(
+    cx: &mut TestAppContext,
+) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
     type_prompt(&rig, cx, "Write the tests");
