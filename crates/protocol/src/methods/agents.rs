@@ -237,6 +237,53 @@ pub struct AgentKind {
     /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
+    /// The `model` the kind takes at start, with its choices (decisions 0094, 0096). Absent when the kind takes no model,
+    /// and from a peer that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<KindModel>,
+    /// The `effort` the kind takes at start, with its levels (decisions 0094, 0096). Absent when the kind takes no
+    /// effort, and from a peer that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<KindEffort>,
+}
+
+/// The `model` option of a kind (decision 0094), as `agent.kinds` lists it: the choices its picker shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindModel {
+    /// The choices in declared order. Empty when the list is account-scoped and the vendor CLI reports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<KindModelChoice>,
+}
+
+/// One model choice of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindModelChoice {
+    pub id: String,
+    pub label: String,
+    /// The model the picker preselects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels this model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+}
+
+/// The `effort` option of a kind (decision 0094), as `agent.kinds` lists it: the levels its picker shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindEffort {
+    /// The levels in declared order. Empty: the kind declares none, so any value a start names is passed on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<KindEffortLevel>,
+    /// The level the picker preselects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// One effort level of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindEffortLevel {
+    pub id: String,
+    pub label: String,
 }
 
 /// One permission mode of a kind, as `agent.kinds` lists it (decision 0083). How the mode is passed stays in the
@@ -285,6 +332,10 @@ struct AgentKindWire {
     permission_modes: Vec<PermissionMode>,
     #[serde(default)]
     default_permission_mode: Option<String>,
+    #[serde(default)]
+    model: Option<KindModel>,
+    #[serde(default)]
+    effort: Option<KindEffort>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -304,6 +355,8 @@ impl From<AgentKindWire> for AgentKind {
             problems: wire.problems,
             permission_modes: wire.permission_modes,
             default_permission_mode: wire.default_permission_mode,
+            model: wire.model,
+            effort: wire.effort,
         }
     }
 }

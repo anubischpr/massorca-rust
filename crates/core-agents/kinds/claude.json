@@ -89,6 +89,24 @@
     }
   ],
   "default_permission_mode": "auto",
-  "model": { "flag": "--model" },
-  "effort": { "flag": "--effort" }
+  "model": {
+    "flag": "--model",
+    "choices": [
+      { "id": "fable", "label": "Fable" },
+      { "id": "opus", "label": "Opus" },
+      { "id": "sonnet", "label": "Sonnet", "default": true },
+      { "id": "haiku", "label": "Haiku", "efforts": [] }
+    ]
+  },
+  "effort": {
+    "flag": "--effort",
+    "levels": [
+      { "id": "low", "label": "Low" },
+      { "id": "medium", "label": "Medium" },
+      { "id": "high", "label": "High" },
+      { "id": "xhigh", "label": "Extra high" },
+      { "id": "max", "label": "Max" }
+    ],
+    "default": "high"
+  }
 }

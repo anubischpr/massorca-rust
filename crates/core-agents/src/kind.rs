@@ -52,22 +52,73 @@ pub struct KindDecl {
     /// The mode a run gets when its caller names none. Required with modes, never a `bypass` mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
-    /// The flag a start's `model` is passed with (decision 0094), as `{"flag": "--model"}`; the value follows it. Absent
-    /// means the kind takes no model, and a start that names one is refused with `agent.option_unsupported`.
+    /// The `model` a start may name (decision 0094): how it reaches the launch line, and the choices the picker shows
+    /// (decision 0096). Absent means the kind takes no model, and a start that names one is refused with
+    /// `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<OptionFlagDecl>,
-    /// The flag a start's `effort` is passed with (decision 0094), as `model`.
+    pub model: Option<ModelDecl>,
+    /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<OptionFlagDecl>,
+    pub effort: Option<EffortDecl>,
 }
 
-/// The launch flag of a session option such as `model` or `effort` (decision 0094). The value follows the flag as the
-/// next argument, after the mode's arguments and before the caller's.
+/// The `model` option of a kind (decision 0094): how a start's model is passed, and the choices the picker shows
+/// (decision 0096). The value follows `flag`, or is substituted for `{value}` in `args`: exactly one of the two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OptionFlagDecl {
+pub struct ModelDecl {
     /// The flag, starting with `-` and holding no spaces, `=` or control characters: `--model`.
-    pub flag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// Launch arguments with `{value}` exactly once, as `["-m", "{value}"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<ModelChoiceDecl>,
+}
+
+/// One model a kind's picker offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelChoiceDecl {
+    /// The value a start names for this model, passed as declared.
+    pub id: String,
+    pub label: String,
+    /// The model the picker preselects. At most one choice has it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels this model accepts, by id. Absent: every level the kind declares. Empty: the model takes no
+    /// effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+}
+
+/// The `effort` option of a kind (decision 0094): how a start's effort is passed, and the levels the picker shows
+/// (decision 0096). Declared as `ModelDecl` is, with levels and a default in place of choices.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffortDecl {
+    /// The flag, as `ModelDecl::flag`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// The launch arguments, as `ModelDecl::args`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// The levels a start may name, in order. Empty: any value that passes the format check is passed on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<EffortLevelDecl>,
+    /// The level the picker preselects. It is one of `levels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// One effort level of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffortLevelDecl {
+    pub id: String,
+    pub label: String,
 }
 
 /// Longest value of a `model` or an `effort` a start may name.
@@ -135,15 +186,71 @@ fn valid_option_value(text: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || "-_.:/".contains(character))
 }
 
-fn option_flag_problems(name: &str, flag: Option<&OptionFlagDecl>, problems: &mut Vec<String>) {
-    if let Some(flag) = flag
-        && !valid_option_flag(&flag.flag)
-    {
-        problems.push(format!(
-            "{name}.flag {:?} must start with - and hold no spaces, = or control characters",
-            flag.flag
-        ));
+/// The placeholder an `args` template uses for the value a start names (decision 0094).
+const VALUE_PLACEHOLDER: &str = "{value}";
+
+/// Every rule a `model` or `effort` launch declaration breaks, named by `name`: exactly one of `flag` and `args`, a valid
+/// flag, and an `args` template that holds [`VALUE_PLACEHOLDER`] exactly once and no other placeholder.
+fn launch_problems(
+    name: &str,
+    flag: Option<&str>,
+    args: Option<&[String]>,
+    problems: &mut Vec<String>,
+) {
+    match (flag, args) {
+        (Some(flag), None) => {
+            if !valid_option_flag(flag) {
+                problems.push(format!(
+                    "{name}.flag {flag:?} must start with - and hold no spaces, = or control characters"
+                ));
+            }
+        }
+        (None, Some(args)) => {
+            let placeholders: usize = args
+                .iter()
+                .map(|arg| arg.matches(VALUE_PLACEHOLDER).count())
+                .sum();
+            if placeholders != 1 {
+                problems.push(format!(
+                    "{name}.args must hold {VALUE_PLACEHOLDER} exactly once, not {placeholders} times"
+                ));
+            }
+            if args
+                .iter()
+                .any(|arg| arg.replace(VALUE_PLACEHOLDER, "").contains(['{', '}']))
+            {
+                problems.push(format!(
+                    "{name}.args may use {VALUE_PLACEHOLDER} as its only placeholder"
+                ));
+            }
+        }
+        _ => problems.push(format!("{name} must declare exactly one of flag and args")),
     }
+}
+
+/// The launch arguments that pass `value` on through a declared `flag`, or through `args` with the value substituted.
+fn launch_args(flag: Option<&str>, args: Option<&[String]>, value: &str) -> Vec<String> {
+    match (flag, args) {
+        (Some(flag), _) => vec![flag.to_owned(), value.to_owned()],
+        (None, Some(args)) => args
+            .iter()
+            .map(|arg| arg.replace(VALUE_PLACEHOLDER, value))
+            .collect(),
+        (None, None) => Vec::new(),
+    }
+}
+
+/// Refuses a `model` or an `effort` value the format rule does not accept (decision 0094).
+fn check_option_value(name: &str, value: &str) -> Result<(), AgentError> {
+    if valid_option_value(value) {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        codes::REQUEST_INVALID_PARAMS,
+        format!(
+            "the {name} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
+        ),
+    ))
 }
 
 fn default_icon() -> String {
@@ -396,43 +503,179 @@ impl KindDecl {
             accounts_problems(self.credentials.as_ref(), accounts, &mut problems);
         }
         self.mode_problems(&mut problems);
-        option_flag_problems("model", self.model.as_ref(), &mut problems);
-        option_flag_problems("effort", self.effort.as_ref(), &mut problems);
+        self.model_problems(&mut problems);
+        self.effort_problems(&mut problems);
         problems
     }
 
-    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags (decision 0094).
-    /// An option the kind declares no flag for is `agent.option_unsupported`, naming the kind; a value that could be read
-    /// as a flag, or is empty, too long or has a space, is `request.invalid_params`.
+    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags or args (decisions
+    /// 0094, 0096). An option the kind declares nothing for is `agent.option_unsupported`, naming the kind. A value that
+    /// could be read as a flag, or is empty, too long or has a space, is `request.invalid_params`, and so is an effort
+    /// that the declared levels, or the named model's own efforts, do not list.
     pub(crate) fn option_args(
         &self,
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Result<Vec<String>, AgentError> {
         let mut args = Vec::new();
-        for (name, value, flag) in [
-            ("model", model, self.model.as_ref()),
-            ("effort", effort, self.effort.as_ref()),
-        ] {
-            let Some(value) = value else { continue };
-            let Some(flag) = flag else {
-                return Err(AgentError::new(
-                    codes::AGENT_OPTION_UNSUPPORTED,
-                    format!("kind {} declares no flag for a {name}", self.id),
-                ));
-            };
-            if !valid_option_value(value) {
-                return Err(AgentError::new(
-                    codes::REQUEST_INVALID_PARAMS,
-                    format!(
-                        "the {name} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
-                    ),
-                ));
-            }
-            args.push(flag.flag.clone());
-            args.push(value.to_owned());
+        if let Some(value) = model {
+            let decl = self
+                .model
+                .as_ref()
+                .ok_or_else(|| self.unsupported("model"))?;
+            check_option_value("model", value)?;
+            args.extend(launch_args(
+                decl.flag.as_deref(),
+                decl.args.as_deref(),
+                value,
+            ));
+        }
+        if let Some(value) = effort {
+            let decl = self
+                .effort
+                .as_ref()
+                .ok_or_else(|| self.unsupported("effort"))?;
+            check_option_value("effort", value)?;
+            self.check_effort(decl, model, value)?;
+            args.extend(launch_args(
+                decl.flag.as_deref(),
+                decl.args.as_deref(),
+                value,
+            ));
         }
         Ok(args)
+    }
+
+    fn unsupported(&self, name: &str) -> AgentError {
+        AgentError::new(
+            codes::AGENT_OPTION_UNSUPPORTED,
+            format!("kind {} declares no flag for a {name}", self.id),
+        )
+    }
+
+    /// The declared choice `id` of the `model` option.
+    fn model_choice(&self, id: &str) -> Option<&ModelChoiceDecl> {
+        self.model
+            .as_ref()?
+            .choices
+            .iter()
+            .find(|choice| choice.id == id)
+    }
+
+    /// Whether the kind declares `id` as one of its effort levels.
+    fn effort_declares(&self, id: &str) -> bool {
+        self.effort
+            .as_ref()
+            .is_some_and(|effort| effort.levels.iter().any(|level| level.id == id))
+    }
+
+    /// Refuses an effort the declared levels do not list, and one the named model does not accept (decision 0096).
+    fn check_effort(
+        &self,
+        decl: &EffortDecl,
+        model: Option<&str>,
+        value: &str,
+    ) -> Result<(), AgentError> {
+        if !decl.levels.is_empty() && !decl.levels.iter().any(|level| level.id == value) {
+            let allowed: Vec<&str> = decl.levels.iter().map(|level| level.id.as_str()).collect();
+            return Err(AgentError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("the effort must be one of {}", allowed.join(", ")),
+            ));
+        }
+        let listed = model
+            .and_then(|id| self.model_choice(id))
+            .and_then(|choice| choice.efforts.as_deref());
+        if let (Some(model), Some(listed)) = (model, listed)
+            && !listed.iter().any(|id| id == value)
+        {
+            let message = if listed.is_empty() {
+                format!("model {model} takes no effort")
+            } else {
+                format!(
+                    "the effort for model {model} must be one of {}",
+                    listed.join(", ")
+                )
+            };
+            return Err(AgentError::new(codes::REQUEST_INVALID_PARAMS, message));
+        }
+        Ok(())
+    }
+
+    /// Every rule the `model` declaration breaks (decision 0094, 0096): its launch, its choices' ids, labels and efforts,
+    /// and at most one default.
+    fn model_problems(&self, problems: &mut Vec<String>) {
+        let Some(model) = &self.model else { return };
+        launch_problems(
+            "model",
+            model.flag.as_deref(),
+            model.args.as_deref(),
+            problems,
+        );
+        let mut seen = std::collections::HashSet::new();
+        let mut defaults = 0;
+        for choice in &model.choices {
+            if !valid_option_value(&choice.id) {
+                problems.push(format!(
+                    "model.choices id {:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -",
+                    choice.id
+                ));
+            } else if !seen.insert(choice.id.as_str()) {
+                problems.push(format!("model.choices repeats id {:?}", choice.id));
+            }
+            if choice.label.trim().is_empty() {
+                problems.push(format!("model.choices {:?} needs a label", choice.id));
+            }
+            if choice.default {
+                defaults += 1;
+            }
+            for effort in choice.efforts.iter().flatten() {
+                if !self.effort_declares(effort) {
+                    problems.push(format!(
+                        "model.choices {:?} names effort {effort:?}, which the effort does not declare",
+                        choice.id
+                    ));
+                }
+            }
+        }
+        if defaults > 1 {
+            problems.push(format!(
+                "model.choices may name one default, not {defaults}"
+            ));
+        }
+    }
+
+    /// Every rule the `effort` declaration breaks (decision 0094, 0096): its launch, its levels' ids and labels, and a
+    /// default that is one of the levels.
+    fn effort_problems(&self, problems: &mut Vec<String>) {
+        let Some(effort) = &self.effort else { return };
+        launch_problems(
+            "effort",
+            effort.flag.as_deref(),
+            effort.args.as_deref(),
+            problems,
+        );
+        let mut seen = std::collections::HashSet::new();
+        for level in &effort.levels {
+            if !valid_option_value(&level.id) {
+                problems.push(format!(
+                    "effort.levels id {:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -",
+                    level.id
+                ));
+            } else if !seen.insert(level.id.as_str()) {
+                problems.push(format!("effort.levels repeats id {:?}", level.id));
+            }
+            if level.label.trim().is_empty() {
+                problems.push(format!("effort.levels {:?} needs a label", level.id));
+            }
+        }
+        if let Some(default) = &effort.default
+            && !self.effort_declares(default)
+        {
+            problems.push(format!(
+                "effort.default {default:?} is not one of effort.levels"
+            ));
+        }
     }
 
     fn mode_problems(&self, problems: &mut Vec<String>) {
