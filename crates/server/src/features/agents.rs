@@ -12,13 +12,13 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
-    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
-    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
-    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
-    CredentialsRemoved, CredentialsShown, ImportCandidate, ImportCandidates,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
+    AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams,
+    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams,
+    AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, ImportCandidate, ImportCandidates,
     ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
@@ -64,6 +64,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // `agent.fork` (decision 0168).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_FORK, Owner::Core)?,
         // Import source detection, and an import without a folder (decision 0097).
         registries
             .capabilities
@@ -141,6 +145,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             resume,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::FORK,
+            capabilities::AGENT_FORK,
+            Permission::Workspace,
+            fork,
         )?,
         methods.register(
             Owner::Core,
@@ -543,6 +554,20 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
             params.cols,
             params.rows,
         )
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Forks an exited session into a new one (decision 0168). The fork copies the source's conversation, so a source holding
+/// vault secrets needs host-admin scope, as its resume does.
+async fn fork(ctx: RequestCtx, params: AgentForkParams) -> Result<AgentSession, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let grant = secret_grant(&ctx);
+    let session = on_agents(&ctx, move |agents| {
+        // As a start, the fork waits for task starts and for done, reopen and bot changes.
+        let _gate = start_gate();
+        agents.fork(params, grant)
     })
     .await?;
     Ok(for_caller(&ctx, session))

@@ -1,11 +1,11 @@
-//! First prompts that do not fit a launch argument, and session metadata (decision 0168), through
+//! First prompts that do not fit a launch argument, session metadata and previews, and forks (decision 0168), through
 //! the CLI against the fake agent. Every wait is on an observed state, never a sleep.
 
 mod harness;
 
 use std::path::PathBuf;
 
-use harness::{Sandbox, eventually, git_repo};
+use harness::{Sandbox, eventually, git_repo, single_document, with_json};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -54,7 +54,7 @@ fn sandbox() -> Sandbox {
         &sandbox,
         "fake",
         json!({ "mode": "argv", "paste": "bracketed" }),
-        json!({}),
+        json!({ "fork": ["--fork", "{ref}"] }),
     );
     declare(
         &sandbox,
@@ -131,6 +131,16 @@ fn until(sandbox: &Sandbox, session: &str, state: &str) -> Value {
             UNTIL_SECS,
         ],
     )
+}
+
+fn error_code(sandbox: &Sandbox, args: &[&str]) -> String {
+    let outcome = sandbox.run("default", &with_json(args)).failure();
+    let document = single_document(&outcome);
+    assert_eq!(document["ok"], false, "{document}");
+    document["error"]["code"]
+        .as_str()
+        .expect("an error code")
+        .to_owned()
 }
 
 /// The lines the terminal shows now, trimmed.
@@ -321,4 +331,71 @@ fn a_session_shows_its_model_effort_branch_and_preview_and_a_resume_keeps_them()
     wait_for(&sandbox, &terminal, "the resumed run's effort", |line| {
         line == "fake-agent: effort high"
     });
+}
+
+/// A fork is a new session in the same workspace, started with the kind's fork form and the source's ref, which learns
+/// its own ref from its run and records its source (AG-13).
+#[test]
+fn a_fork_starts_a_new_session_from_the_source_ref_and_records_its_source() {
+    let sandbox = sandbox();
+    let started = start(
+        &sandbox,
+        "fake",
+        "main",
+        &["--prompt", "first", "--model", "m-2", "--title", "origin"],
+    );
+    let source = text(&started, "id").to_owned();
+    let source_ref = text(&started, "agent_ref").to_owned();
+    until(&sandbox, &source, "done");
+    assert_eq!(
+        error_code(&sandbox, &["agent", "fork", &source]),
+        "agent.busy",
+        "a live source is not forked"
+    );
+    sandbox.json_ok("default", &["agent", "stop", &source, "--force"]);
+
+    let forked = sandbox.json_ok("default", &["agent", "fork", &source, "--prompt", "second"]);
+    let fork = text(&forked, "id").to_owned();
+    assert_ne!(fork, source);
+    assert_eq!(forked["forked_from"], source.as_str());
+    assert_eq!(forked["workspace_id"], started["workspace_id"]);
+    assert_eq!(forked["title"], "origin", "the source's title");
+    assert_eq!(forked["model"], "m-2", "the source's model");
+    let terminal = text(&forked, "terminal_id").to_owned();
+    let prefix = format!("fake-agent: forked {source_ref} as ");
+    let line = wait_for(&sandbox, &terminal, "the fork line", |line| {
+        line.starts_with(&prefix)
+    });
+    let new_ref = line[prefix.len()..].to_owned();
+
+    let done = until(&sandbox, &fork, "done");
+    assert_eq!(done["result"], "done: second");
+    assert_eq!(done["agent_ref"], new_ref.as_str(), "learned from the run");
+    let source_now = sandbox.json_ok("default", &["agent", "status", &source]);
+    assert_eq!(
+        source_now["agent_ref"],
+        source_ref.as_str(),
+        "the source keeps its ref"
+    );
+    assert!(source_now.get("forked_from").is_none());
+}
+
+/// A kind with no fork form refuses a fork, and nothing is started (AG-13).
+#[test]
+fn a_fork_of_a_kind_without_a_fork_form_is_refused() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-once", "main", &["--prompt", "only"]);
+    let source = text(&started, "id").to_owned();
+    until(&sandbox, &source, "done");
+    sandbox.json_ok("default", &["agent", "stop", &source, "--force"]);
+    assert_eq!(
+        error_code(&sandbox, &["agent", "fork", &source]),
+        "agent.fork_unavailable"
+    );
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(
+        listed["sessions"].as_array().map(Vec::len),
+        Some(1),
+        "nothing was started"
+    );
 }

@@ -243,6 +243,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
+| `agent.fork` | workspace | `session`, `prompt?`, `permission_mode?`, `title?` | `AgentSession`, the new session (capability `agent-fork/1`, decision 0168; the client refuses it before sending when the service does not offer it) |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
@@ -263,7 +264,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.hook_refused`,
+`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.fork_unavailable`,
+`agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
@@ -437,6 +439,22 @@ no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_foun
 session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 worktree; a folder workspace takes several writers (decision 0169).
+
+### Fork (decision 0168)
+
+`agent.fork` starts a new session from a copy of an exited session's conversation. A kind declares its fork form as
+data, `"fork": [..., "{ref}", ...]`, launch arguments holding `{ref}`, which takes the source's agent ref; the form
+needs `session_ref.learn`, since the fork's own ref is never assigned: the new run reports it, as a Codex first start
+does. The built-in `claude` declares `["--resume", "{ref}", "--fork-session"]` and `codex` `["fork", "{ref}"]`, the
+forms pv96 builds (`src/shared/agent-resume-argv.ts`); the other built-ins declare none.
+
+The new session has a new id, runs in the source's workspace, and records `forked_from`. It keeps the source's read-only mark and the model and effort its kind still takes (a stored one it no longer takes is
+left out and noted, as on a resume), takes `title` or the source's title, and its prompt and mode as a start does; its first
+prompt follows the fork form like a first prompt. A source holding vault secrets makes the fork hold them too, and
+`agent.fork` on it needs host-admin scope. Every check of `agent.start` follows, the one-writer rule among them.
+Refusals: `agent.busy` while the source runs (its transcript may be mid-turn, and the fork would write in the same
+workspace); `agent.chat_unsupported` for a chat session; `agent.fork_unavailable` when the kind declares no fork form,
+the source's ref is not known, or the source's resume state is `agent.resume_not_found`.
 
 ### Resume state (decision 0160)
 

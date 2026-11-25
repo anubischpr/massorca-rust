@@ -45,6 +45,8 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `agent.fork` (decision 0168): a new session from a copy of an exited session's conversation, by the kind's fork form.
+pub const AGENT_FORK: &str = "agent-fork/1";
 /// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
 /// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
 pub const AGENT_CHAT: &str = "agent-chat/1";

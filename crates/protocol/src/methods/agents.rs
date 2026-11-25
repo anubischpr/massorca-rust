@@ -50,6 +50,8 @@ pub const ARCHIVE: &str = "agent.archive";
 pub const PROMPT: &str = "agent.prompt";
 /// Params: [`AgentResumeParams`] (an [`AgentSessionRef`] with an optional mode). Result: [`AgentSession`].
 pub const RESUME: &str = "agent.resume";
+/// Params: [`AgentForkParams`]. Result: [`AgentSession`], the new session. Capability `agent-fork/1` (decision 0168).
+pub const FORK: &str = "agent.fork";
 /// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
 pub const SET_MODE: &str = "agent.set_mode";
 /// Params: [`AgentMarkSeenParams`]. Result: [`AgentSession`]. Marks a session's latest `waiting` or `done` as seen
@@ -579,6 +581,23 @@ pub struct AgentResumeParams {
     /// The terminal's rows, for the view that shows it; the default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u16>,
+}
+
+/// Params of `agent.fork` (decision 0168): a new session that continues a copy of `session`'s conversation, in the same
+/// workspace, with the kind's fork arguments. The source keeps its own conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentForkParams {
+    /// The source session: id, or a unique prefix of at least 8 characters. Its run must have exited.
+    pub session: String,
+    /// The new run's first prompt, at most [`MAX_PROMPT_BYTES`], delivered as a first start delivers one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// One of the kind's permission modes; the kind's default when absent, as a start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The new session's title; the source's title when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Params of `agent.set_mode`.

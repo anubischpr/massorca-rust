@@ -36,6 +36,12 @@ pub enum Run<'a> {
     },
     /// A new run of an exited session, with the agent's known id.
     Resume { agent_ref: &'a str },
+    /// The first run of a session forked from another (decision 0168): the kind's fork form with the source's ref, then
+    /// the prompt as a first run takes it. The new run's ref is learned from its reports, never assigned.
+    Fork {
+        prompt: Option<&'a str>,
+        source_ref: &'a str,
+    },
 }
 
 /// Most bytes of a prompt passed as a launch argument (decision 0168). A Windows command line holds at most 32,767
@@ -132,6 +138,8 @@ pub enum LaunchError {
     PromptHasControl,
     #[error("the kind declares no resume form")]
     NotResumable,
+    #[error("the kind declares no fork form")]
+    NotForkable,
     #[error(
         "the vault provides {0}, which the run sets itself or which may not carry a secret; rename that secret"
     )]
@@ -188,6 +196,11 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
                 args.extend(with_ref(assign, new_ref));
                 agent_ref = Some(new_ref.to_owned());
             }
+            prompt
+        }
+        Run::Fork { prompt, source_ref } => {
+            let fork = decl.fork.as_ref().ok_or(LaunchError::NotForkable)?;
+            args.extend(with_ref(fork, source_ref));
             prompt
         }
         Run::Resume { agent_ref: known } => {
@@ -1105,6 +1118,7 @@ mod tests {
             "id": "fake", "name": "Fake", "program": ["fake"], "args": ["--plain"],
             "prompt": prompt,
             "session_ref": { "learn": "session_id" },
+            "fork": ["--fork", "{ref}"],
             "status": { "mechanism": "env-command", "events": { "start": "idle", "stop": "done" } }
         }))
     }
@@ -1155,5 +1169,37 @@ mod tests {
         let plan = fixture.first(Some("a\nb"));
         assert_eq!(plan.args.last().map(String::as_str), Some("a\nb"));
         assert_eq!(plan.pending_prompt, None);
+    }
+
+    #[test]
+    fn a_fork_takes_the_fork_form_with_the_source_ref_and_assigns_no_ref() {
+        let mut decl = ready_kind(json!({ "mode": "argv" }));
+        decl.session_ref = Some(
+            serde_json::from_value(
+                json!({ "assign": ["--session-id", "{ref}"], "learn": "session_id" }),
+            )
+            .unwrap(),
+        );
+        let fixture = Fixture::new(decl);
+        let plan = fixture
+            .plan(Run::Fork {
+                prompt: Some("go on"),
+                source_ref: "src-1",
+            })
+            .unwrap();
+        assert_eq!(plan.args, ["--plain", "--fork", "src-1", "go on"]);
+        assert_eq!(
+            plan.agent_ref, None,
+            "the fork's ref is learned from its run"
+        );
+
+        let no_fork = Fixture::new(fake(json!({ "mode": "argv" })));
+        assert_eq!(
+            no_fork.plan(Run::Fork {
+                prompt: None,
+                source_ref: "src-1",
+            }),
+            Err(LaunchError::NotForkable)
+        );
     }
 }

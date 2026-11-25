@@ -99,6 +99,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::AGENT_PROMPT_INVALID, "agent.prompt_invalid"),
     (codes::AGENT_RESUME_UNAVAILABLE, "agent.resume_unavailable"),
     (codes::AGENT_RESUME_NOT_FOUND, "agent.resume_not_found"),
+    (codes::AGENT_FORK_UNAVAILABLE, "agent.fork_unavailable"),
     (codes::AGENT_HOOK_REFUSED, "agent.hook_refused"),
     (codes::AGENT_DELEGATE_NEEDS_GIT, "agent.delegate_needs_git"),
     (codes::AGENT_DEPTH_EXCEEDED, "agent.depth_exceeded"),
@@ -182,5 +183,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
+    assert_eq!(capabilities::AGENT_FORK, "agent-fork/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

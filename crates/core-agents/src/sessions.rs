@@ -56,11 +56,13 @@ use crate::status::{self, HookRules};
 mod archive;
 mod chat;
 mod delegation;
+mod fork;
 mod queue;
 
 pub use chat::ChatOpened;
 use chat::{ChatRun, RunStart, Started};
 use delegation::DelegationView;
+use fork::ForkFrom;
 
 pub use delegation::{
     DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING,
@@ -237,6 +239,7 @@ impl From<LaunchError> for AgentError {
             | LaunchError::PromptHasNul
             | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
+            LaunchError::NotForkable => codes::AGENT_FORK_UNAVAILABLE,
             LaunchError::ReservedName(_) => codes::AGENT_SECRETS_UNAVAILABLE,
             LaunchError::DangerousCallerEnv(_) => codes::REQUEST_INVALID_PARAMS,
         };
@@ -555,7 +558,7 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
-        self.start_session_as(params, parent, grant, RunStart::Terminal)
+        self.start_session_as(params, parent, grant, RunStart::Terminal, None)
     }
 
     /// [`Self::start_session`], with the run in a terminal or as a chat (decision 0101). A chat's first prompt goes to
@@ -566,9 +569,12 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
         run: RunStart,
+        fork: Option<&ForkFrom>,
     ) -> Result<AgentSession, AgentError> {
         let chat = matches!(run, RunStart::Chat(_));
-        let parent_holds = parent.is_some_and(|parent| parent.holds_secrets);
+        // A fork's conversation is a copy of its source's, so it holds what the source holds (decision 0168).
+        let parent_holds = parent.is_some_and(|parent| parent.holds_secrets)
+            || fork.is_some_and(|fork| fork.holds_secrets);
         let parent_id = parent.map(|parent| parent.id.clone());
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
@@ -650,9 +656,15 @@ impl Agents {
             program: &program,
             session_id: &session_id,
             token: &token,
-            run: Run::First {
-                prompt: params.prompt.as_deref().filter(|_| !chat),
-                new_ref: &new_ref,
+            run: match fork {
+                Some(fork) => Run::Fork {
+                    prompt: params.prompt.as_deref(),
+                    source_ref: &fork.source_ref,
+                },
+                None => Run::First {
+                    prompt: params.prompt.as_deref().filter(|_| !chat),
+                    new_ref: &new_ref,
+                },
             },
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
@@ -671,6 +683,10 @@ impl Agents {
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        run_notes::record(
+            &run_dir,
+            fork.map(|fork| fork.notes.as_slice()).unwrap_or_default(),
+        );
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
             .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
@@ -705,7 +721,7 @@ impl Agents {
         let origin = SessionOrigin {
             model: params.model.clone(),
             effort: params.effort.clone(),
-            forked_from: None,
+            forked_from: fork.map(|fork| fork.source_id.clone()),
         };
         let started = match run {
             RunStart::Terminal => self

@@ -159,14 +159,16 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>]
-/// [PROMPT WORDS...]`. The flags
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--fork <ID>] [--prompt <TEXT>] [--mode <ID>]
+/// [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>] [PROMPT WORDS...]`. The flags
 /// count only before the first prompt word; every later word belongs to the prompt. `--query=<TEXT>` is the startup
 /// query of a kind with the `startup-query` prompt mode (0054): the agent takes it as its prompt, as if it were typed.
 #[derive(Debug, Default)]
 struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
+    /// `--fork <ID>`: a copy of conversation `ID` under a new id (decision 0168), which the run's reports carry.
+    fork: Option<String>,
     mode: Option<String>,
     /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
     model: Option<String>,
@@ -191,6 +193,9 @@ impl Arguments {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
+                "--fork" if words.is_empty() => parsed.fork = args.next(),
+                // The `flag` prompt mode of a test kind (0054): the next argument is the whole prompt.
+                "--prompt" if words.is_empty() => query = args.next(),
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
@@ -242,6 +247,7 @@ impl Agent {
             session: arguments
                 .resume
                 .clone()
+                .or_else(|| arguments.fork.as_deref().map(forked_id))
                 .or_else(|| arguments.session_id.clone()),
             hook_program: env::var_os(HOOK_PROGRAM_ENV).filter(|program| !program.is_empty()),
             cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -256,6 +262,9 @@ impl Agent {
         }
         if let Some(id) = &arguments.resume {
             say(&format!("resumed {id}"));
+        }
+        if let Some(id) = &arguments.fork {
+            say(&format!("forked {id} as {}", forked_id(id)));
         }
         if let Some(mode) = &arguments.mode {
             say(&format!("mode {mode}"));
@@ -428,6 +437,11 @@ impl Agent {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// The id a fork of conversation `source` gets (decision 0168): new, and unique per run.
+fn forked_id(source: &str) -> String {
+    format!("{source}-fork-{}", std::process::id())
 }
 
 /// The longest prompt `working on` prints whole, lines and all, so a multi-line prompt shows its lines on the screen.

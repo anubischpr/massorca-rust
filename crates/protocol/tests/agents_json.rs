@@ -80,6 +80,7 @@ fn method_names_match_the_wire_table() {
         (agents::FORGET, "agent.forget"),
         (agents::PROMPT, "agent.prompt"),
         (agents::RESUME, "agent.resume"),
+        (agents::FORK, "agent.fork"),
         (agents::MARK_SEEN, "agent.mark_seen"),
         (agents::HOOK, "agent.hook"),
         (agents::WATCH, "agent.watch"),
