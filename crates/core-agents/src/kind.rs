@@ -1424,4 +1424,380 @@ mod tests {
         value["permission_modes"] = serde_json::json!([{ "id": "a", "label": "A", "flag": "-a" }]);
         assert!(KindDecl::from_json(&value.to_string()).is_err());
     }
+
+    /// A kind that takes a model and an effort, declared as given, on the minimal declaration.
+    fn options_kind(model: serde_json::Value, effort: serde_json::Value) -> KindDecl {
+        let mut value = minimal();
+        value["model"] = model;
+        value["effort"] = effort;
+        parse(value)
+    }
+
+    /// The code and the message of a refused `option_args`.
+    fn refusal(result: Result<Vec<String>, AgentError>) -> (&'static str, String) {
+        let error = result.expect_err("refused");
+        (error.code, error.message)
+    }
+
+    #[test]
+    fn a_model_or_effort_declares_a_flag_or_args_with_the_value_once() {
+        let flag = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert!(flag.problems().is_empty(), "{:?}", flag.problems());
+        assert_eq!(
+            flag.option_args(Some("opus"), Some("high"))
+                .expect("launch arguments"),
+            ["--model", "opus", "--effort", "high"]
+        );
+
+        let args = options_kind(
+            serde_json::json!({ "args": ["-m", "{value}"] }),
+            serde_json::json!({ "args": ["-c", "model_reasoning_effort={value}"] }),
+        );
+        assert!(args.problems().is_empty(), "{:?}", args.problems());
+        assert_eq!(
+            args.option_args(Some("gpt-5.5"), Some("high"))
+                .expect("launch arguments"),
+            ["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
+        );
+
+        for model in [
+            serde_json::json!({ "args": ["-m"] }),
+            serde_json::json!({ "args": ["{value}", "--x", "{value}"] }),
+            serde_json::json!({ "args": ["-m", "{model}"] }),
+            serde_json::json!({ "args": [] }),
+            serde_json::json!({ "flag": "--model", "args": ["-m", "{value}"] }),
+            serde_json::json!({}),
+        ] {
+            let problems =
+                options_kind(model.clone(), serde_json::json!({ "flag": "--effort" })).problems();
+            assert!(
+                problems.iter().any(|problem| problem.starts_with("model")),
+                "{model}: {problems:?}"
+            );
+        }
+        let effort = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort", "args": ["-c", "{value}"] }),
+        );
+        assert!(
+            effort
+                .problems()
+                .iter()
+                .any(|problem| problem.starts_with("effort")),
+            "{:?}",
+            effort.problems()
+        );
+    }
+
+    #[test]
+    fn model_choices_need_valid_unique_ids_one_default_and_declared_efforts() {
+        let effort = serde_json::json!({
+            "flag": "--effort",
+            "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }]
+        });
+        let valid = options_kind(
+            serde_json::json!({ "flag": "--model", "choices": [
+                { "id": "big", "label": "Big", "default": true, "efforts": ["low", "high"] },
+                { "id": "small", "label": "Small", "efforts": [] },
+                { "id": "plain", "label": "Plain" }
+            ]}),
+            effort.clone(),
+        );
+        assert!(valid.problems().is_empty(), "{:?}", valid.problems());
+
+        let cases = [
+            (
+                "a repeated id",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A" }, { "id": "a", "label": "B" }
+                ]}),
+            ),
+            (
+                "two defaults",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A", "default": true },
+                    { "id": "b", "label": "B", "default": true }
+                ]}),
+            ),
+            (
+                "an id with a space",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "gpt 5", "label": "GPT 5" }
+                ]}),
+            ),
+            (
+                "an effort the kind does not declare",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A", "efforts": ["max"] }
+                ]}),
+            ),
+            (
+                "an empty label",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": " " }
+                ]}),
+            ),
+        ];
+        for (case, model) in cases {
+            let problems = options_kind(model, effort.clone()).problems();
+            assert!(
+                problems
+                    .iter()
+                    .any(|problem| problem.starts_with("model.choices")),
+                "{case}: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn effort_levels_need_valid_unique_ids_and_a_default_that_is_one_of_them() {
+        let valid = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({
+                "flag": "--effort",
+                "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }],
+                "default": "high"
+            }),
+        );
+        assert!(valid.problems().is_empty(), "{:?}", valid.problems());
+
+        let cases = [
+            (
+                "a default that is no level",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "low", "label": "Low" }], "default": "max"
+                }),
+            ),
+            (
+                "a default without levels",
+                serde_json::json!({
+                    "flag": "--effort", "default": "low"
+                }),
+            ),
+            (
+                "a repeated level",
+                serde_json::json!({
+                    "flag": "--effort",
+                    "levels": [{ "id": "low", "label": "Low" }, { "id": "low", "label": "Again" }]
+                }),
+            ),
+            (
+                "a level id with a space",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "very high", "label": "Very high" }]
+                }),
+            ),
+            (
+                "an empty label",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "low", "label": "" }]
+                }),
+            ),
+        ];
+        for (case, effort) in cases {
+            let problems =
+                options_kind(serde_json::json!({ "flag": "--model" }), effort).problems();
+            assert!(
+                problems.iter().any(|problem| problem.starts_with("effort")),
+                "{case}: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_effort_outside_the_declared_levels_is_refused_and_names_the_allowed_ids() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({
+                "flag": "--effort",
+                "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }]
+            }),
+        );
+        assert_eq!(
+            kind.option_args(None, Some("low")).expect("a level passes"),
+            ["--effort", "low"]
+        );
+        let (code, message) = refusal(kind.option_args(None, Some("ultra")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("low, high"), "{message}");
+
+        let free = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert_eq!(
+            free.option_args(None, Some("anything-1"))
+                .expect("no levels declared, so any value passes"),
+            ["--effort", "anything-1"]
+        );
+    }
+
+    #[test]
+    fn a_model_with_its_own_efforts_refuses_the_others_for_that_model() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model", "choices": [
+                { "id": "big", "label": "Big", "efforts": ["low", "high"] },
+                { "id": "small", "label": "Small", "efforts": [] },
+                { "id": "any", "label": "Any" }
+            ]}),
+            serde_json::json!({ "flag": "--effort", "levels": [
+                { "id": "low", "label": "Low" },
+                { "id": "medium", "label": "Medium" },
+                { "id": "high", "label": "High" }
+            ]}),
+        );
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+
+        let (code, message) = refusal(kind.option_args(Some("big"), Some("medium")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("low, high"), "{message}");
+
+        let (code, message) = refusal(kind.option_args(Some("small"), Some("low")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("takes no effort"), "{message}");
+
+        assert_eq!(
+            kind.option_args(Some("big"), Some("high")).expect("listed"),
+            ["--model", "big", "--effort", "high"]
+        );
+        assert_eq!(
+            kind.option_args(Some("small"), None).expect("no effort"),
+            ["--model", "small"]
+        );
+        assert_eq!(
+            kind.option_args(Some("any"), Some("medium"))
+                .expect("every level"),
+            ["--model", "any", "--effort", "medium"]
+        );
+        assert_eq!(
+            kind.option_args(Some("unlisted"), Some("low"))
+                .expect("a model the declaration does not list"),
+            ["--model", "unlisted", "--effort", "low"]
+        );
+    }
+
+    #[test]
+    fn a_flag_only_declaration_launches_and_refuses_as_it_did_before_the_choices() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert_eq!(
+            kind.option_args(Some("opus"), Some("max"))
+                .expect("a flag-only effort passes any value the format rule accepts"),
+            ["--model", "opus", "--effort", "max"]
+        );
+        let (code, message) = refusal(kind.option_args(None, Some("bad value!")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert_eq!(
+            message,
+            "the effort must be 1 to 128 letters, digits, - _ . : or /, not starting with -"
+        );
+
+        let plain = parse(minimal());
+        let (code, message) = refusal(plain.option_args(Some("opus"), None));
+        assert_eq!(code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert_eq!(message, "kind fake declares no flag for a model");
+    }
+
+    #[test]
+    fn the_built_in_kinds_declare_the_reference_model_and_effort_choices() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let model = claude.model.as_ref().expect("claude takes a model");
+        assert_eq!(model.flag.as_deref(), Some("--model"));
+        let choices: Vec<(&str, bool)> = model
+            .choices
+            .iter()
+            .map(|choice| (choice.id.as_str(), choice.default))
+            .collect();
+        assert_eq!(
+            choices,
+            [
+                ("fable", false),
+                ("opus", false),
+                ("sonnet", true),
+                ("haiku", false)
+            ]
+        );
+        assert_eq!(model.choices[3].efforts, Some(Vec::new()));
+        assert_eq!(model.choices[1].efforts, None);
+        let effort = claude.effort.as_ref().expect("claude takes an effort");
+        let levels: Vec<&str> = effort
+            .levels
+            .iter()
+            .map(|level| level.id.as_str())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(effort.default.as_deref(), Some("high"));
+
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex parses");
+        assert!(codex.problems().is_empty(), "{:?}", codex.problems());
+        let model = codex.model.as_ref().expect("codex takes a model");
+        assert_eq!(
+            model.args.as_deref(),
+            Some(&["-m".to_owned(), "{value}".to_owned()][..])
+        );
+        assert!(model.choices.iter().all(|choice| !choice.default));
+        let ceiling = |id: &str| {
+            model
+                .choices
+                .iter()
+                .find(|choice| choice.id == id)
+                .and_then(|choice| choice.efforts.as_ref())
+                .and_then(|efforts| efforts.last())
+                .cloned()
+        };
+        assert_eq!(ceiling("gpt-5.6-sol").as_deref(), Some("ultra"));
+        assert_eq!(ceiling("gpt-5.6-terra").as_deref(), Some("ultra"));
+        assert_eq!(ceiling("gpt-5.6-luna").as_deref(), Some("max"));
+        assert_eq!(ceiling("gpt-5.5").as_deref(), Some("xhigh"));
+        assert_eq!(ceiling("gpt-5.2-codex").as_deref(), Some("xhigh"));
+        assert_eq!(
+            codex
+                .effort
+                .as_ref()
+                .and_then(|effort| effort.default.as_deref()),
+            Some("medium")
+        );
+        let (code, _) = refusal(codex.option_args(Some("gpt-5.5"), Some("ultra")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert_eq!(
+            codex
+                .option_args(Some("gpt-5.6-sol"), Some("ultra"))
+                .expect("sol goes up to ultra"),
+            ["-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=ultra"]
+        );
+
+        let antigravity = KindDecl::from_json(include_str!("../kinds/antigravity.json"))
+            .expect("antigravity parses");
+        assert!(
+            antigravity.problems().is_empty(),
+            "{:?}",
+            antigravity.problems()
+        );
+        assert!(
+            antigravity
+                .model
+                .as_ref()
+                .is_some_and(|model| model.choices.is_empty())
+        );
+        let levels: Vec<&str> = antigravity
+            .effort
+            .as_ref()
+            .expect("antigravity takes an effort")
+            .levels
+            .iter()
+            .map(|level| level.id.as_str())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high"]);
+
+        let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
+            .expect("gentle-shell parses");
+        assert!(gentle.model.is_none() && gentle.effort.is_none());
+    }
 }
