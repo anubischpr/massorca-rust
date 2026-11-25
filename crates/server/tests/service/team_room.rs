@@ -1,8 +1,9 @@
 //! The Conference room over the wire: a person's line that names a day and a time becomes a one-time routine of its
-//! bot, with the bot's answer about it (decision 0121). None of these lines starts an agent; a refused routine, which
-//! becomes a task, is covered by the CLI tests with the fake agent.
+//! bot, with the bot's answer about it (decision 0121), and a line with start off waits in Todo. None of these lines
+//! starts an agent; a refused routine, which becomes a task, is covered by the CLI tests with the fake agent.
 
 use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
+use massorca_protocol::methods::tasks::Column;
 use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomListParams, TeamRoomPostParams};
 use massorca_protocol::methods::teams::{BotAddParams, RoutineCadence, TeamCreateParams, TeamRef};
 
@@ -16,6 +17,7 @@ fn post(text: &str, bot: Option<&str>) -> TeamRoomPostParams {
         to: None,
         session: None,
         agent_token: None,
+        start: None,
     }
 }
 
@@ -141,5 +143,35 @@ async fn a_bot_line_is_never_scheduled() {
         .await
         .expect("team.routine_list");
     assert!(routines.routines.is_empty());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_line_with_start_off_waits_in_todo_with_its_mention_left_out_of_the_title() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    team_with_bots(&client).await;
+
+    let mut params = post("@Mara, parse the headers\nthen stop.", None);
+    params.start = Some(false);
+    let posted = client
+        .team_room_post(&params)
+        .await
+        .expect("team.room_post");
+    let [person, answer] = posted.messages.as_slice() else {
+        panic!("a line and its answer: {posted:?}");
+    };
+    assert_eq!(person.text, "@Mara, parse the headers\nthen stop.");
+    assert_eq!(answer.bot_name.as_deref(), Some("Mara"));
+    assert_eq!(
+        answer.text,
+        "Added to the Board, not started: parse the headers"
+    );
+    let task = answer.task.as_ref().expect("the answer carries its task");
+    assert_eq!(task.title, "parse the headers");
+    assert_eq!(task.body, "@Mara, parse the headers\nthen stop.");
+    assert_eq!(task.column, Column::Open, "it waits in Todo");
+    assert_eq!(task.session_id, None, "no agent started");
     stop(running).await;
 }

@@ -130,10 +130,7 @@ fn a_line_becomes_a_started_task_for_the_bot_it_names_and_the_bot_answers() {
     assert_eq!(lines[0]["author"], "person");
     assert_eq!(lines[1]["author"], "bot");
     assert_eq!(lines[1]["bot_name"], "bruno");
-    assert_eq!(
-        lines[1]["text"],
-        "Added to the Board: @bruno Parse the headers"
-    );
+    assert_eq!(lines[1]["text"], "Added to the Board: Parse the headers");
     let task = &lines[1]["task"];
     assert_eq!(task["origin"], "room", "{task}");
     assert_eq!(task["column"], "running", "{task}");
@@ -176,16 +173,16 @@ fn a_line_becomes_a_started_task_for_the_bot_it_names_and_the_bot_answers() {
         .success();
     eventually("the bot to post that the task is done", || {
         room(&sandbox)
-            .contains(&"bruno: Done: @bruno Parse the headers".to_owned())
+            .contains(&"bruno: Done: Parse the headers".to_owned())
             .then_some(())
     });
     assert_eq!(
         room(&sandbox),
         [
             "you: @bruno Parse the headers\nthen stop.",
-            "bruno: Added to the Board: @bruno Parse the headers",
+            "bruno: Added to the Board: Parse the headers",
             "bruno: Reading the headers now",
-            "bruno: Done: @bruno Parse the headers",
+            "bruno: Done: Parse the headers",
         ]
     );
     let shown = sandbox.json_ok("default", &["task", "show", task_id.as_str()]);
@@ -299,4 +296,45 @@ fn a_refused_routine_or_a_time_only_mentioned_leaves_the_line_a_task() {
     }
     let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
     assert_eq!(routines["routines"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn no_start_leaves_the_task_in_todo_with_the_mention_left_out_of_its_title() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    let posted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "room",
+            "post",
+            "alpha",
+            "@mara, parse the headers",
+            "--no-start",
+        ],
+    );
+    let answer = &posted["messages"][1];
+    assert_eq!(
+        answer["text"], "Added to the Board, not started: parse the headers",
+        "{posted}"
+    );
+    assert_eq!(answer["task"]["title"], "parse the headers");
+    assert_eq!(answer["task"]["column"], "open", "it waits in Todo");
+    assert!(answer["task"].get("session_id").is_none(), "{posted}");
+    sandbox
+        .run(
+            "default",
+            &[
+                "team",
+                "room",
+                "post",
+                "alpha",
+                "hi",
+                "--bot",
+                "mara",
+                "--no-start",
+            ],
+        )
+        .failure();
 }

@@ -82,10 +82,11 @@ async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomLis
     .await
 }
 
-/// What starting a person's task needs: the workspaces root and the caller's vault grant.
+/// What starting a person's task needs: the workspaces root, the caller's vault grant, and whether it starts at once.
 struct Start {
     workspaces: Workspaces,
     grant: SecretGrant,
+    at_once: bool,
 }
 
 impl Start {
@@ -131,6 +132,7 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
                 start: Start {
                     workspaces: for_mutation(&ctx).await?,
                     grant: secret_grant(&ctx),
+                    at_once: params.start.unwrap_or(true),
                 },
             },
         },
@@ -229,12 +231,22 @@ fn person_line(
     };
     let now = now_ms();
     if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&text, today))
-        && let Some(lines) =
-            schedule_line(store, team, bot, text.clone(), moment, start.admin(), now)?
+        && let Some(lines) = schedule_line(
+            store,
+            team,
+            &bots,
+            bot,
+            text.clone(),
+            Asked {
+                moment,
+                admin: start.admin(),
+                now,
+            },
+        )?
     {
         return Ok(lines);
     }
-    let title = task_title(&text);
+    let title = task_title(&text, &bots);
     let task = create_task(
         store,
         TaskCreateParams {
@@ -248,6 +260,11 @@ fn person_line(
     )?;
     // Stored once the task is, so a refused task leaves no line without an answer.
     let person = insert_line(store, team, None, task.body.clone(), None)?;
+    if !start.at_once {
+        let answer = format!("Added to the Board, not started: {title}");
+        let bot_line = insert_line(store, team, Some(bot), answer, Some(task.id))?;
+        return Ok(vec![person, bot_line]);
+    }
     let answer = match start_task(
         store,
         agents,
@@ -263,19 +280,26 @@ fn person_line(
     Ok(vec![person, bot_line])
 }
 
+/// The moment a line asks for, with the poster's host-admin scope and the time it was posted.
+struct Asked {
+    moment: Moment,
+    admin: bool,
+    now: i64,
+}
+
 /// Schedules a person's line that names a day and a time as `bot`'s one-time routine through the path of
 /// `team.routine_add`, then stores the line and the bot's answer about the routine. A routine the path refuses (a
 /// moment already past, an unreadable host zone) stores nothing and is `None`, so the line becomes a task instead.
 fn schedule_line(
     store: &Store,
     team: &TeamRow,
+    bots: &[BotRow],
     bot: &BotRow,
     text: String,
-    moment: Moment,
-    admin: bool,
-    now: i64,
+    asked: Asked,
 ) -> Result<Option<Vec<TeamRoomMessageRow>>, ErrorBody> {
-    let title = task_title(&text);
+    let Asked { moment, admin, now } = asked;
+    let title = task_title(&text, bots);
     let (date, time) = (moment.run_date(), moment.clock());
     let added = add_routine(
         store,
@@ -347,18 +371,56 @@ pub(super) fn addressed_bot<'a>(
         .or_else(|| bots.first())
 }
 
-/// The task title a line makes: its first non-blank line, cut to 80 characters.
-pub(super) fn task_title(text: &str) -> String {
+/// The task title a line makes: its first line that is not blank without the `@name` of the team's bots, cut to 80
+/// characters.
+pub(super) fn task_title(text: &str, bots: &[BotRow]) -> String {
     let first = text
         .lines()
-        .map(str::trim)
+        .map(|line| without_mentions(line, bots))
         .find(|line| !line.is_empty())
         .unwrap_or_default();
     if first.chars().count() <= MAX_TITLE_CHARS {
-        return first.to_owned();
+        return first;
     }
     let cut: String = first.chars().take(MAX_TITLE_CHARS - 1).collect();
     format!("{}…", cut.trim_end())
+}
+
+/// `line` without each `@name` of `bots` at the start of a word (the longest name wins), with its spaces collapsed and
+/// the punctuation a removed mention leaves at its start ("@mara, add" is "add").
+fn without_mentions(line: &str, bots: &[BotRow]) -> String {
+    let mut names: Vec<String> = bots.iter().map(|bot| bot.name.to_lowercase()).collect();
+    names.sort_by_key(|name| std::cmp::Reverse(name.chars().count()));
+    let mut kept = String::new();
+    let mut rest = line;
+    let mut previous: Option<char> = None;
+    while let Some(next) = rest.chars().next() {
+        if next == '@' && previous.is_none_or(|before| !before.is_alphanumeric()) {
+            let after = &rest[1..];
+            let named = names.iter().find_map(|name| {
+                let count = name.chars().count();
+                let candidate: String = after.chars().take(count).collect();
+                let tail = &after[candidate.len()..];
+                (candidate.to_lowercase() == *name
+                    && tail.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+                .then_some(tail)
+            });
+            if let Some(tail) = named {
+                rest = tail;
+                previous = Some(' ');
+                kept.push(' ');
+                continue;
+            }
+        }
+        kept.push(next);
+        previous = Some(next);
+        rest = &rest[next.len_utf8()..];
+    }
+    kept.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_start_matches([',', ':', ';', '-', ' '])
+        .to_owned()
 }
 
 fn room_text(text: &str) -> Result<String, ErrorBody> {
@@ -506,12 +568,34 @@ mod tests {
     #[test]
     fn a_title_is_the_first_line_cut_to_eighty_characters() {
         assert_eq!(
-            task_title("\n  Add magic link sign-in\nwith email"),
+            task_title("\n  Add magic link sign-in\nwith email", &[]),
             "Add magic link sign-in"
         );
-        let title = task_title(&"x".repeat(100));
+        let title = task_title(&"x".repeat(100), &[]);
         assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn a_title_leaves_out_the_mentions_of_the_team_bots() {
+        let bots = [bot("Mara", false), bot("Bruno Jr", false)];
+        assert_eq!(task_title("@mara, add sign-in", &bots), "add sign-in");
+        assert_eq!(
+            task_title("Ask @Bruno Jr to parse   the headers", &bots),
+            "Ask to parse the headers"
+        );
+        assert_eq!(
+            task_title("@Mara\nParse the headers", &bots),
+            "Parse the headers",
+            "a first line that is only a mention is skipped"
+        );
+        assert_eq!(
+            task_title("mail me@mara.dev and @iris", &bots),
+            "mail me@mara.dev and @iris",
+            "not a mention of a team bot"
+        );
+        let long = format!("@mara {}", "x".repeat(90));
+        assert_eq!(task_title(&long, &bots).chars().count(), MAX_TITLE_CHARS);
     }
 
     /// A store with team `alpha`, bots Mara and Bruno, and a room task of Bruno's run by `session-1`.
@@ -600,7 +684,12 @@ mod tests {
         let mara = bots.iter().find(|bot| bot.name == "Mara").unwrap();
         let text = "Back up the docs on 2099-01-02 at 09:00".to_owned();
         let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
-        let lines = schedule_line(&store, &team, mara, text.clone(), moment, true, now_ms())
+        let asked = Asked {
+            moment,
+            admin: true,
+            now: now_ms(),
+        };
+        let lines = schedule_line(&store, &team, &bots, mara, text.clone(), asked)
             .unwrap()
             .expect("the routine is made");
 
@@ -643,8 +732,12 @@ mod tests {
         let bots = store.list_bots(&team.id).unwrap();
         let text = "2000-01-01 at 9am rotate logs".to_owned();
         let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
-        let refused =
-            schedule_line(&store, &team, &bots[0], text, moment, false, now_ms()).unwrap();
+        let asked = Asked {
+            moment,
+            admin: false,
+            now: now_ms(),
+        };
+        let refused = schedule_line(&store, &team, &bots, &bots[0], text, asked).unwrap();
         assert_eq!(refused, None, "a moment already past");
         assert!(store.list_routines(&team.id).unwrap().is_empty());
         assert!(store.list_team_room(&team.id, None).unwrap().is_empty());

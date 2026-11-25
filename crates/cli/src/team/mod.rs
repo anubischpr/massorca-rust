@@ -250,9 +250,10 @@ pub enum TeamRoomCommand {
         limit: Option<u32>,
     },
     /// Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with
-    /// @name, else --to, else the lead, else the first bot, and the task starts. A person's line that names one day
-    /// (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any time
-    /// in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a
+    /// @name, else --to, else the lead, else the first bot, and the task starts unless --no-start. The task's title is
+    /// the line's first line without the @name of the team's bots, cut to 80 characters. A person's line that names one
+    /// day (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any
+    /// time in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a
     /// routine the host refuses leaves it a task. With --bot, that bot posts the line.
     /// Inside an agent run, the line is posted as the bot of the run's own task, and naming another bot is refused.
     Post {
@@ -266,6 +267,9 @@ pub enum TeamRoomCommand {
         /// The bot a person's line goes to when it names none: id or name within the team.
         #[arg(long, value_name = "BOT", conflicts_with = "bot")]
         to: Option<String>,
+        /// Leave a person's task in Todo instead of starting it.
+        #[arg(long, conflicts_with = "bot")]
+        no_start: bool,
     },
 }
 
@@ -645,6 +649,7 @@ async fn run_room(
             text,
             bot,
             to,
+            no_start,
         } => {
             // Inside an agent run, the run's session and token bind the line to the bot of that run's task.
             let (session, agent_token) = agent_run();
@@ -656,6 +661,7 @@ async fn run_room(
                     to,
                     session,
                     agent_token,
+                    start: no_start.then_some(false),
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));

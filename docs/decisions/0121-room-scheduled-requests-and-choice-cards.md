@@ -46,6 +46,17 @@ just to read a date.
   "View routine", which opens the team's Routines page. The CLI prints the routine id and its date and time after
   the line.
 
+### A room task's title and start
+
+- A room task's title is the line's first line that is not blank once the `@name` of each of the team's bots is left
+  out (at the start of a word, the longest name first), with its spaces collapsed and the punctuation a removed mention
+  leaves at its start, cut to 80 characters. "@Mara, parse the headers" makes "parse the headers". The body keeps the
+  whole line as written.
+- `team.room_post` takes the optional `start`. `false` leaves a person's task in Todo (the Board's Open column) and the
+  bot answers "Added to the Board, not started: {title}"; absent or `true` starts it at once, as before. The CLI flag
+  is `--no-start`, and the desktop composer has a Start at once checkbox, on by default. Older hosts ignore the field
+  and start the task.
+
 ## Not done here
 
 - Repeating schedules from the room ("every Monday at 9"). They need a weekday or month-day reading this decision does

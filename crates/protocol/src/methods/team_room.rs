@@ -82,6 +82,9 @@ pub struct TeamRoomPostParams {
     /// The run token of `session` (`MASSORCA_AGENT_TOKEN`). `Debug` never prints it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
+    /// `false` leaves a person's task in Todo (the Board's Open column) instead of starting it; absent starts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<bool>,
 }
 
 impl fmt::Debug for TeamRoomPostParams {
@@ -91,6 +94,7 @@ impl fmt::Debug for TeamRoomPostParams {
             .field("text", &self.text)
             .field("bot", &self.bot)
             .field("to", &self.to)
+            .field("start", &self.start)
             .field("session", &self.session)
             .field(
                 "agent_token",
@@ -125,6 +129,7 @@ mod tests {
             to: None,
             session: None,
             agent_token: None,
+            start: None,
         };
         let wire = serde_json::to_value(&params).unwrap();
         assert_eq!(
