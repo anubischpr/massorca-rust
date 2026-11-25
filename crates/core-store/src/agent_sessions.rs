@@ -390,6 +390,72 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// The ids of the teams and of the tasks whose `workspace_id` is `workspace` (decision 0163). Neither column has a
+    /// foreign key, so a workspace removal would leave them pointing at nothing.
+    pub fn teams_and_tasks_of_workspace(
+        &self,
+        workspace: &str,
+    ) -> Result<(Vec<String>, Vec<String>), StoreError> {
+        let teams = self.query_all(
+            "SELECT id FROM teams WHERE workspace_id = ?1 ORDER BY id",
+            [workspace],
+            |row| row.get::<_, String>(0),
+        )?;
+        let tasks = self.query_all(
+            "SELECT id FROM tasks WHERE workspace_id = ?1 ORDER BY id",
+            [workspace],
+            |row| row.get::<_, String>(0),
+        )?;
+        Ok((teams, tasks))
+    }
+
+    /// Sets a session's title (decision 0163). Returns whether a row matched.
+    pub fn set_agent_session_title(&self, id: &str, title: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET title = ?2 WHERE id = ?1",
+            params![id, title],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Archives a session at `at`, or clears its archive with `None` (decision 0163). Returns whether a row matched.
+    pub fn set_agent_session_archived(
+        &self,
+        id: &str,
+        at: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET archived_at = ?2 WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// When a session was archived; `None` when it is not archived or does not exist.
+    pub fn agent_session_archived_at(&self, id: &str) -> Result<Option<i64>, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT archived_at FROM agent_sessions WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<i64>>("archived_at"),
+            )?
+            .flatten())
+    }
+
+    /// The ids of every archived session.
+    pub fn archived_agent_session_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        Ok(self
+            .query_all(
+                "SELECT id FROM agent_sessions WHERE archived_at IS NOT NULL",
+                [],
+                |row| row.get::<_, String>(0),
+            )?
+            .into_iter()
+            .collect())
+    }
+
     /// Writes a session's activity and result (0052), replacing both, and sets its agent ref from `agent_ref_if_unset`
     /// only when the row has none. One statement, so a reader never sees half a change. A different activity clears the
     /// seen mark; the argument's `seen_at` is not written. Returns whether a row matched.
