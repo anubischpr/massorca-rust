@@ -886,13 +886,28 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
-            // The events carry only the package id, so both lists are read again (decision 0062).
+            // The events carry only the package id, so both lists are read again (decision 0062). A package can
+            // carry an agent kind, and there is no kind event, so the kinds are read again too.
             TOPIC_EXTENSION_INSTALLED
             | TOPIC_EXTENSION_ENABLED
             | TOPIC_EXTENSION_DISABLED
-            | TOPIC_EXTENSION_REMOVED => extensions::read(client, &self.extension_reads)
-                .await
-                .map(StoreUpdate::Extensions),
+            | TOPIC_EXTENSION_REMOVED => match agents::list_kinds(client).await {
+                Ok(kinds) => {
+                    for kind in &kinds {
+                        accounts::refresh_in_background(
+                            client,
+                            &kind.id,
+                            &self.updates,
+                            &self.accounts_order,
+                        );
+                    }
+                    self.emit(StoreUpdate::AgentKindsResync(kinds));
+                    extensions::read(client, &self.extension_reads)
+                        .await
+                        .map(StoreUpdate::Extensions)
+                }
+                Err(error) => Err(error),
+            },
             // The event names `<owner>/<key>` and no value, so the changed setting is read again.
             TOPIC_CONFIG_CHANGED => {
                 let Some((owner, key)) = id.split_once('/') else {
