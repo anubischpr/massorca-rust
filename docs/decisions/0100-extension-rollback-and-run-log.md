@@ -38,8 +38,11 @@ rules of decision 0092 and about 20 runs, as the orchestrator set.
   - An agent run may not roll back, as for an update.
 - **Run log.** Each install, update, rollback and remove that changes a package adds one run to
   `logs/<id>-runs.json`: time, action, version from and to, outcome (`ok` or `failed`) and the output tail. The newest
-  20 runs are kept. The output tail is the bytes that run's vendor command wrote, redacted and capped by the
-  install-log rules. A change refused before it touches anything is not a run. An install whose vendor command ran and
+  20 runs are kept. The log file is read up to 256 KiB; a larger file counts as empty, and the next run rewrites it.
+  The output tail is the bytes that run's vendor command wrote, redacted and capped by the install-log rules. Those
+  rules cover `token=`, `password=`, `secret=`, `api_key=`, `apikey=`, `--token`/`--password` followed by a space,
+  `Basic`, `Bearer`, `Authorization:`, the prefixes `ghp_`, `gho_`, `github_pat_`, `sk-` and `npm_` (not inside a
+  word), and the `user:secret` of a URL. A change refused before it touches anything is not a run. An install whose vendor command ran and
   then failed is a `failed` run. The log stays after removal, so the removal is in it. Writing it is best effort: the
   lockfile is the record of what is installed.
 - **Show the log.** `extensions.log { id }`, read permission, capability `extensions-log/1`. The output lines are empty

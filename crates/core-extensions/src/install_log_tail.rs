@@ -10,8 +10,23 @@ const LINE_CHARS: usize = 500;
 /// Bytes kept of the whole tail, so one failure never carries megabytes of output.
 const TAIL_BYTES: usize = 8 * 1024;
 const REDACTED: &str = "[redacted]";
-/// Lowercase markers of a secret. Each keeps its key and redacts the value after it, except `npm_`, which is the token.
-const SECRET_MARKERS: &[&str] = &["token=", "password=", "authorization:", "bearer ", "npm_"];
+/// Lowercase markers of a secret. Each keeps its key and redacts the value after it. `authorization:` redacts the rest of
+/// the line, and `--token `/`--password `/`basic ` redact the value after the space.
+const SECRET_MARKERS: &[&str] = &[
+    "token=",
+    "password=",
+    "secret=",
+    "api_key=",
+    "apikey=",
+    "--token ",
+    "--password ",
+    "authorization:",
+    "bearer ",
+    "basic ",
+];
+/// Lowercase prefixes of a token, which is redacted from its prefix to the end of its word. A prefix inside a word
+/// (`task-sk-`) is not a token.
+const TOKEN_PREFIXES: &[&str] = &["npm_", "ghp_", "gho_", "github_pat_", "sk-"];
 /// Bytes that end a `key=value` secret: whitespace and the usual URL and quote separators.
 const VALUE_END: &[char] = &['&', ';', ',', '\'', '"'];
 
@@ -85,9 +100,8 @@ fn secret_spans(line: &str) -> Vec<(usize, usize)> {
         for (at, _) in lower.match_indices(marker) {
             let after = at + marker.len();
             let span = match *marker {
-                "npm_" => (at, word_end(line, after)),
                 "authorization:" => (skip_spaces(line, after), line.len()),
-                "bearer " => {
+                "bearer " | "basic " | "--token " | "--password " => {
                     let start = skip_spaces(line, after);
                     (start, value_end(line, start))
                 }
@@ -96,6 +110,41 @@ fn secret_spans(line: &str) -> Vec<(usize, usize)> {
             if span.0 < span.1 {
                 spans.push(span);
             }
+        }
+    }
+    for prefix in TOKEN_PREFIXES {
+        for (at, _) in lower.match_indices(prefix) {
+            if !preceded_by_word_char(line, at) {
+                spans.push((at, word_end(line, at + prefix.len())));
+            }
+        }
+    }
+    spans.extend(url_userinfo_spans(line));
+    spans
+}
+
+/// Whether the byte before `at` is a letter, digit, `_` or `-`, so a prefix at `at` sits inside a word.
+fn preceded_by_word_char(line: &str, at: usize) -> bool {
+    line[..at]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The `user:secret` userinfo of each `scheme://user:secret@host` URL in `line`.
+fn url_userinfo_spans(line: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (at, _) in line.match_indices("://") {
+        let start = at + "://".len();
+        let end = line[start..]
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '/' | '?' | '#' | '\'' | '"' | '<' | '>')
+            })
+            .map_or(line.len(), |offset| start + offset);
+        if let Some(at_sign) = line[start..end].rfind('@')
+            && at_sign > 0
+        {
+            spans.push((start, start + at_sign));
         }
     }
     spans
@@ -221,5 +270,68 @@ mod tests {
         let tail = tail_of("auth npm_AbC123xyz failed\n");
 
         assert_eq!(tail, vec!["auth [redacted] failed"]);
+    }
+
+    #[test]
+    fn a_secret_key_and_api_key_values_are_redacted() {
+        assert_eq!(tail_of("secret=s3cr3t ok\n"), vec!["secret=[redacted] ok"]);
+        assert_eq!(tail_of("api_key=KEY1 ok\n"), vec!["api_key=[redacted] ok"]);
+        assert_eq!(tail_of("apikey=KEY2 ok\n"), vec!["apikey=[redacted] ok"]);
+    }
+
+    #[test]
+    fn a_flag_followed_by_a_space_and_its_value_is_redacted() {
+        assert_eq!(
+            tail_of("run --token abc123 now\n"),
+            vec!["run --token [redacted] now"]
+        );
+        assert_eq!(
+            tail_of("run --password hunter2 now\n"),
+            vec!["run --password [redacted] now"]
+        );
+    }
+
+    #[test]
+    fn a_basic_credential_is_redacted() {
+        assert_eq!(
+            tail_of("sent Basic dXNlcjpwYXNz to host\n"),
+            vec!["sent Basic [redacted] to host"]
+        );
+    }
+
+    #[test]
+    fn a_github_or_openai_style_token_is_redacted() {
+        assert_eq!(
+            tail_of("push ghp_abc123XYZ failed\n"),
+            vec!["push [redacted] failed"]
+        );
+        assert_eq!(
+            tail_of("push gho_abc123XYZ failed\n"),
+            vec!["push [redacted] failed"]
+        );
+        assert_eq!(
+            tail_of("pat github_pat_11AB_x-y failed\n"),
+            vec!["pat [redacted] failed"]
+        );
+        assert_eq!(
+            tail_of("key sk-proj-abc123 failed\n"),
+            vec!["key [redacted] failed"]
+        );
+    }
+
+    #[test]
+    fn a_token_prefix_inside_a_word_is_not_taken_for_a_token() {
+        assert_eq!(
+            tail_of("task-list and risk-sk-x\n"),
+            vec!["task-list and risk-sk-x"]
+        );
+    }
+
+    #[test]
+    fn the_userinfo_of_a_url_is_redacted_and_the_host_kept() {
+        assert_eq!(
+            tail_of("clone https://user:pass@github.com/x ok\n"),
+            vec!["clone https://[redacted]@github.com/x ok"]
+        );
     }
 }

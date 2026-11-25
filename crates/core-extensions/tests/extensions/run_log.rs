@@ -168,3 +168,38 @@ fn a_log_file_that_cannot_be_read_is_empty_and_the_next_run_starts_it_again() {
 
     assert_eq!(s.service.runs("acme.kit").expect("the log").len(), 1);
 }
+
+#[test]
+fn an_oversized_run_log_reads_as_empty_and_the_next_run_starts_it_fresh() {
+    let s = setup(FakeHost::new());
+    let path = s.service.layout().run_log("acme.kit");
+    fs::create_dir_all(path.parent().expect("a folder")).expect("the logs folder");
+    let oversized = json!({
+        "version": 1,
+        "runs": [{ "at_ms": 1, "action": "install", "outcome": "ok", "output": ["x".repeat(300_000)] }]
+    });
+    fs::write(&path, oversized.to_string()).expect("an oversized log");
+    assert!(s.service.runs("acme.kit").expect("the log").is_empty());
+
+    let source = s.package_dir("kit", &kit_manifest("1.2.0"));
+    s.install(&source, false).expect("installs");
+
+    assert_eq!(s.service.runs("acme.kit").expect("the log").len(), 1);
+}
+
+#[test]
+fn a_run_log_of_more_than_twenty_runs_reads_as_its_newest_twenty() {
+    let s = setup(FakeHost::new());
+    let path = s.service.layout().run_log("acme.kit");
+    fs::create_dir_all(path.parent().expect("a folder")).expect("the logs folder");
+    let runs: Vec<Value> = (0..25)
+        .map(|at| json!({ "at_ms": at, "action": "install", "outcome": "ok" }))
+        .collect();
+    fs::write(&path, json!({ "version": 1, "runs": runs }).to_string()).expect("a long log");
+
+    let kept = s.service.runs("acme.kit").expect("the log");
+
+    assert_eq!(kept.len(), 20);
+    assert_eq!(kept[0].at_ms, 5);
+    assert_eq!(kept[19].at_ms, 24);
+}

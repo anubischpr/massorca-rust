@@ -1,7 +1,8 @@
 //! The run log of a package, `logs/<id>-runs.json`: its install, update, rollback and remove runs, for `extensions.log`.
 //! It is best effort: the lockfile is what is installed, so a run that cannot be logged never fails the change.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::Path;
 
 use massorca_ext_package::ids::is_extension_id;
@@ -14,6 +15,8 @@ use crate::service::{Extensions, now_ms};
 /// The newest runs kept per package.
 pub const RUN_LIMIT: usize = 20;
 const RUN_FILE_VERSION: u32 = 1;
+/// Bytes of a run log read at most. A larger file is treated as empty, and the next run rewrites it.
+const RUN_FILE_MAX_BYTES: u64 = 256 * 1024;
 
 /// What a run did to a package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +63,7 @@ impl Extensions {
         if !is_extension_id(id) {
             return Err(Error::NotFound(id.to_owned()));
         }
-        Ok(read_runs(&self.layout.run_log(id)))
+        Ok(newest(read_runs(&self.layout.run_log(id))))
     }
 
     /// Records a run of `id` under the change lock. A run that could not be logged changes nothing else.
@@ -103,11 +106,15 @@ impl Extensions {
     }
 }
 
-/// The runs in a log file, oldest first. A missing or unreadable file has none.
+/// The runs in a log file, oldest first. A missing, unreadable or oversized file has none.
 fn read_runs(path: &Path) -> Vec<RunRecord> {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<RunFile>(&bytes).ok())
+    let mut bytes = Vec::new();
+    let read =
+        File::open(path).and_then(|file| file.take(RUN_FILE_MAX_BYTES + 1).read_to_end(&mut bytes));
+    if read.is_err() || bytes.len() as u64 > RUN_FILE_MAX_BYTES {
+        return Vec::new();
+    }
+    serde_json::from_slice::<RunFile>(&bytes)
         .map(|file| file.runs)
         .unwrap_or_default()
 }
@@ -116,15 +123,19 @@ fn read_runs(path: &Path) -> Vec<RunRecord> {
 fn append_run(path: &Path, run: RunRecord) {
     let mut runs = read_runs(path);
     runs.push(run);
-    let excess = runs.len().saturating_sub(RUN_LIMIT);
-    runs.drain(..excess);
     let file = RunFile {
         version: RUN_FILE_VERSION,
-        runs,
+        runs: newest(runs),
     };
     if let Ok(bytes) = serde_json::to_vec_pretty(&file) {
         let _ = write_atomic(path, &bytes);
     }
+}
+
+/// The newest `RUN_LIMIT` of `runs`, still oldest first.
+fn newest(runs: Vec<RunRecord>) -> Vec<RunRecord> {
+    let excess = runs.len().saturating_sub(RUN_LIMIT);
+    runs.into_iter().skip(excess).collect()
 }
 
 /// The size of a file in bytes, or zero when it does not exist: where a command's output starts.
