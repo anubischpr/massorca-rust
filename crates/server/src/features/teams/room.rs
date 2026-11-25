@@ -1,6 +1,7 @@
 //! `team.room_list` and `team.room_post` (capability `team-room/1`, decision 0102): a team's Conference room. A
 //! person's line becomes a task for one bot, which starts at once; the bot answers in the room, and posts again when the
-//! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead (decision 0121).
+//! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead, and a line
+//! no bot can be picked for gets a choice card (decision 0121, `room_card`).
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -27,6 +28,7 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
+use super::room_card::{card_lines, card_view};
 use super::room_schedule::{Moment, scheduled_moment};
 use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
@@ -83,10 +85,10 @@ async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomLis
 }
 
 /// What starting a person's task needs: the workspaces root, the caller's vault grant, and whether it starts at once.
-struct Start {
-    workspaces: Workspaces,
-    grant: SecretGrant,
-    at_once: bool,
+pub(super) struct Start {
+    pub(super) workspaces: Workspaces,
+    pub(super) grant: SecretGrant,
+    pub(super) at_once: bool,
 }
 
 impl Start {
@@ -211,9 +213,9 @@ fn agent_line(
     insert_line(store, team, Some(&own), text, Some(task.id))
 }
 
-/// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the first bot), starts
+/// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the only bot), starts
 /// the task and stores the bot's answer. A line that asks for a day and a time becomes that bot's one-time routine
-/// instead, unless the routine is refused.
+/// instead, unless the routine is refused. A line no bot can be picked for gets a choice card.
 /// A team without bots refuses the line and stores nothing.
 fn person_line(
     store: &Store,
@@ -225,18 +227,67 @@ fn person_line(
     changes: &mut Changes,
 ) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
     let bots = store.list_bots(&team.id).map_err(store_error)?;
-    let to = to.map(|to| selectors::bot(store, team, to)).transpose()?;
-    let Some(bot) = addressed_bot(&bots, &text, to.as_ref()) else {
+    if bots.is_empty() {
         return Err(ErrorBody::new(codes::TASK_NO_BOT, NO_BOTS));
-    };
+    }
+    let to = to.map(|to| selectors::bot(store, team, to)).transpose()?;
+    match addressed_bot(&bots, &text, to.as_ref()) {
+        Some(bot) => deliver(
+            &Room {
+                store,
+                agents,
+                team,
+                bots: &bots,
+            },
+            start,
+            bot,
+            Request {
+                text,
+                posted: false,
+            },
+            changes,
+        ),
+        None => card_lines(store, team, &bots, text, start.at_once),
+    }
+}
+
+/// The room a request is delivered in: the store, the agents, the team and its bots.
+pub(super) struct Room<'a> {
+    pub(super) store: &'a Store,
+    pub(super) agents: &'a Agents,
+    pub(super) team: &'a TeamRow,
+    pub(super) bots: &'a [BotRow],
+}
+
+/// A person's request: its text, and whether its line is in the room already (a choice card's answer).
+pub(super) struct Request {
+    pub(super) text: String,
+    pub(super) posted: bool,
+}
+
+/// Makes `request` `bot`'s one-time routine when it asks for a day and a time, else `bot`'s task, started unless
+/// `start` says otherwise, and stores the request's line (unless posted) and the bot's answer.
+pub(super) fn deliver(
+    room: &Room<'_>,
+    start: Start,
+    bot: &BotRow,
+    request: Request,
+    changes: &mut Changes,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let Room {
+        store,
+        agents,
+        team,
+        bots,
+    } = *room;
     let now = now_ms();
-    if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&text, today))
+    if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&request.text, today))
         && let Some(lines) = schedule_line(
             store,
             team,
-            &bots,
+            bots,
             bot,
-            text.clone(),
+            &request,
             Asked {
                 moment,
                 admin: start.admin(),
@@ -246,24 +297,27 @@ fn person_line(
     {
         return Ok(lines);
     }
-    let title = task_title(&text, &bots);
+    let title = task_title(&request.text, bots);
     let task = create_task(
         store,
         TaskCreateParams {
             team: team.id.clone(),
             title: title.clone(),
-            body: Some(text),
+            body: Some(request.text.clone()),
             bot: Some(bot.id.clone()),
             project: None,
             origin: Some(TaskOrigin::Room),
         },
     )?;
+    let mut lines = Vec::new();
     // Stored once the task is, so a refused task leaves no line without an answer.
-    let person = insert_line(store, team, None, task.body.clone(), None)?;
+    if !request.posted {
+        lines.push(insert_line(store, team, None, request.text, None)?);
+    }
     if !start.at_once {
         let answer = format!("Added to the Board, not started: {title}");
-        let bot_line = insert_line(store, team, Some(bot), answer, Some(task.id))?;
-        return Ok(vec![person, bot_line]);
+        lines.push(insert_line(store, team, Some(bot), answer, Some(task.id))?);
+        return Ok(lines);
     }
     let answer = match start_task(
         store,
@@ -276,8 +330,8 @@ fn person_line(
         Ok(_) => format!("Added to the Board: {title}"),
         Err(error) => format!("Added to the Board. It did not start: {}", error.message),
     };
-    let bot_line = insert_line(store, team, Some(bot), answer, Some(task.id))?;
-    Ok(vec![person, bot_line])
+    lines.push(insert_line(store, team, Some(bot), answer, Some(task.id))?);
+    Ok(lines)
 }
 
 /// The moment a line asks for, with the poster's host-admin scope and the time it was posted.
@@ -288,18 +342,20 @@ struct Asked {
 }
 
 /// Schedules a person's line that names a day and a time as `bot`'s one-time routine through the path of
-/// `team.routine_add`, then stores the line and the bot's answer about the routine. A routine the path refuses (a
-/// moment already past, an unreadable host zone) stores nothing and is `None`, so the line becomes a task instead.
+/// `team.routine_add`, then stores the line (unless posted) and the bot's answer about the routine. A routine the path
+/// refuses (a moment already past, an unreadable host zone) stores nothing and is `None`, so the line becomes a task
+/// instead.
 fn schedule_line(
     store: &Store,
     team: &TeamRow,
     bots: &[BotRow],
     bot: &BotRow,
-    text: String,
+    request: &Request,
     asked: Asked,
 ) -> Result<Option<Vec<TeamRoomMessageRow>>, ErrorBody> {
+    let text = &request.text;
     let Asked { moment, admin, now } = asked;
-    let title = task_title(&text, bots);
+    let title = task_title(text, bots);
     let (date, time) = (moment.run_date(), moment.clock());
     let added = add_routine(
         store,
@@ -322,7 +378,10 @@ fn schedule_line(
     let Ok(routine) = added else {
         return Ok(None);
     };
-    let person = insert_line(store, team, None, text, None)?;
+    let mut lines = Vec::new();
+    if !request.posted {
+        lines.push(insert_line(store, team, None, text.clone(), None)?);
+    }
     let mut answer = new_line(
         team,
         Some(bot),
@@ -333,7 +392,8 @@ fn schedule_line(
     store
         .insert_team_room_message(&answer)
         .map_err(store_error)?;
-    Ok(Some(vec![person, answer]))
+    lines.push(answer);
+    Ok(Some(lines))
 }
 
 /// Today on the clock a routine without a zone runs on: the host's zone, else UTC, as core-schedule reads it.
@@ -346,7 +406,7 @@ fn host_today(now: i64) -> Option<Date> {
 }
 
 /// The bot a line names with `@name` at the start of a word (the longest name wins), else `to`, else the lead, else the
-/// first bot.
+/// only bot. `None` when the team has several bots and none of those picks one.
 pub(super) fn addressed_bot<'a>(
     bots: &'a [BotRow],
     text: &str,
@@ -368,7 +428,10 @@ pub(super) fn addressed_bot<'a>(
     mentioned
         .or(to)
         .or_else(|| bots.iter().find(|bot| bot.lead))
-        .or_else(|| bots.first())
+        .or(match bots {
+            [only] => Some(only),
+            _ => None,
+        })
 }
 
 /// The task title a line makes: its first line that is not blank without the `@name` of the team's bots, cut to 80
@@ -447,7 +510,7 @@ pub(super) fn insert_line(
 }
 
 /// One line of `team`'s room, not yet stored.
-fn new_line(
+pub(super) fn new_line(
     team: &TeamRow,
     bot: Option<&BotRow>,
     text: String,
@@ -467,8 +530,8 @@ fn new_line(
     }
 }
 
-/// The lines as the room shows them: each bot's name and each task as the Board shows it now.
-fn views(
+/// The lines as the room shows them: each bot's name, each task as the Board shows it now, and each card.
+pub(super) fn views(
     store: &Store,
     agents: &Agents,
     team: &TeamRow,
@@ -509,7 +572,7 @@ fn views(
                 text: row.text.clone(),
                 task,
                 routine,
-                card: None,
+                card: card_view(row),
                 created_at_ms: row.created_at,
             })
         })
@@ -566,6 +629,24 @@ mod tests {
             "a mention wins over the receiver"
         );
         assert!(addressed_bot(&[], "add sign-in", None).is_none());
+    }
+
+    #[test]
+    fn without_a_mention_a_receiver_or_a_lead_only_a_team_of_one_bot_picks_one() {
+        let bots = [bot("Mara", false), bot("Bruno", false)];
+        assert!(
+            addressed_bot(&bots, "add sign-in", None).is_none(),
+            "two bots and no lead: the room asks"
+        );
+        assert_eq!(
+            addressed_bot(&bots, "@bruno add sign-in", None).map(|bot| bot.name.as_str()),
+            Some("Bruno")
+        );
+        assert_eq!(
+            addressed_bot(&bots[..1], "add sign-in", None).map(|bot| bot.name.as_str()),
+            Some("Mara"),
+            "the only bot"
+        );
     }
 
     #[test]
@@ -692,7 +773,11 @@ mod tests {
             admin: true,
             now: now_ms(),
         };
-        let lines = schedule_line(&store, &team, &bots, mara, text.clone(), asked)
+        let request = Request {
+            text: text.clone(),
+            posted: false,
+        };
+        let lines = schedule_line(&store, &team, &bots, mara, &request, asked)
             .unwrap()
             .expect("the routine is made");
 
@@ -740,7 +825,11 @@ mod tests {
             admin: false,
             now: now_ms(),
         };
-        let refused = schedule_line(&store, &team, &bots, &bots[0], text, asked).unwrap();
+        let request = Request {
+            text,
+            posted: false,
+        };
+        let refused = schedule_line(&store, &team, &bots, &bots[0], &request, asked).unwrap();
         assert_eq!(refused, None, "a moment already past");
         assert!(store.list_routines(&team.id).unwrap().is_empty());
         assert!(store.list_team_room(&team.id, None).unwrap().is_empty());

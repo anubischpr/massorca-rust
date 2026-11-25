@@ -1,6 +1,6 @@
 # 0121: Scheduled requests and choice cards in the Conference room
 
-Status: accepted, 2026-11-25.
+Status: accepted, 2026-11-25. Choice cards added 2026-11-25.
 
 ## Context
 
@@ -57,12 +57,49 @@ just to read a date.
   is `--no-start`, and the desktop composer has a Start at once checkbox, on by default. Older hosts ignore the field
   and start the task.
 
+### Choice cards
+
+- A person's line goes to the bot it names with `@name`, else the receiver the composer picked (`to`), else the team's
+  lead, else the team's only bot. Before this decision the first bot took it. When the team has several bots and
+  none of those picks one, the room does not guess: it stores the person's line and a choice card, and makes nothing
+  else. A team without bots still refuses the line.
+- The card is a room line of no bot (author `bot`, no `bot_id`) whose text says what it asks: "No bot was named and
+  the team has no lead. Who should take this? Choose one of the team's bots, another team, or keep it in this team's
+  Todo." It offers, in this order, each bot of the team (`bot:<id>`), each other team (`team:<id>`), and this team's
+  Todo (`todo`), as they are when the card is posted. A scheduled line (above) gets the card too; it is read again
+  when a bot is chosen.
+- The card keeps the line's start setting. Answering it with `team.room_answer {team, message, choice}`:
+  - a bot: the request goes to that bot as a line naming it would, routine or task, started unless start was off,
+    and that bot answers as above ("Added to the Board: …"). The person's line is not posted again;
+  - another team: a task on that team's Board, in Todo, owned by its lead, else its only bot, else no bot. It is not
+    started there: that team starts it. The card's room says "Sent to team {name}, in its Todo: {title}";
+  - Todo: a task on this team's Board with no bot, in Todo. The room says "Kept in this team's Todo: {title}".
+  Each task's title and body follow the rules below, and its origin is the room.
+- A card takes one answer. The answer is recorded in one statement that only sets an unanswered card, so two answers
+  at once record one; a later answer is refused with `team.room_card_answered`. When what the answer was to make
+  cannot be made (the chosen bot or team was removed since), the answer is cleared and the card waits again. A line
+  that is not a card of that team is `team.room_card_not_found`, and a choice the card does not offer is
+  `request.invalid_params`.
+- `team.room_answer` needs the right `team.room_post` needs for a person's line (workspace), and takes no agent token:
+  an agent run answers nothing it could not already post. It publishes `team.room_changed` for the card's team and,
+  for another team, that team's too.
+- Storage is one migration step that adds `card` (the card's options, its request's line id and its start setting)
+  and `card_answer` to `team_room_messages`. `team.room_list` and `team.room_post` carry the optional field `card`
+  (`request_id`, `options` with `choice`, `kind` and `label`, and `answer` once answered). A `kind` this build does
+  not know decodes as `unknown`. Older clients ignore the field and show the card's text as a line of a removed bot.
+- The CLI lists the card's choices after its line and answers with `team room answer <team> <message> <choice>`.
+  The desktop draws the card with a button per option; an answered card shows the choice and no buttons, and a
+  refused answer shows its reason above the composer. The desktop sends the receiver only when the person picked one
+  in the composer; without one, the line goes to the lead, the only bot, or a card.
+
 ## Not done here
 
 - Repeating schedules from the room ("every Monday at 9"). They need a weekday or month-day reading this decision does
   not define; the Routines page makes them.
 - A zone the poster names in the room.
 - Asking before making a routine like one the same bot still has to run (pv96's similar-routine choice).
+- pv96's "create a bot or team" option on the card, and reading the request with an agent query; the card offers only
+  what exists.
 
 ## Consequences
 

@@ -1,6 +1,7 @@
 //! The Conference room over the wire: a person's line that names a day and a time becomes a one-time routine of its
 //! bot, with the bot's answer about it (decision 0121), and a line with start off waits in Todo. None of these lines
-//! starts an agent; a refused routine, which becomes a task, is covered by the CLI tests with the fake agent.
+//! starts an agent; a refused routine, which becomes a task, is covered by the CLI tests with the fake agent. A line
+//! no bot can be picked for gets a choice card.
 
 use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
 use massorca_protocol::methods::tasks::Column;
@@ -22,9 +23,13 @@ fn post(text: &str, bot: Option<&str>) -> TeamRoomPostParams {
 }
 
 async fn team_with_bots(client: &massorca_client::Client) {
+    team_with(client, "alpha", &[("Mara", false), ("Bruno", true)]).await;
+}
+
+async fn team_with(client: &massorca_client::Client, team: &str, bots: &[(&str, bool)]) {
     client
         .team_create(&TeamCreateParams {
-            name: "alpha".to_owned(),
+            name: team.to_owned(),
             purpose: None,
             character: None,
             access: None,
@@ -32,10 +37,10 @@ async fn team_with_bots(client: &massorca_client::Client) {
         })
         .await
         .expect("team.create");
-    for (name, lead) in [("Mara", false), ("Bruno", true)] {
+    for &(name, lead) in bots {
         client
             .team_bot_add(&BotAddParams {
-                team: "alpha".to_owned(),
+                team: team.to_owned(),
                 name: name.to_owned(),
                 job: "Keeps the docs".to_owned(),
                 kind: "claude".to_owned(),
@@ -173,5 +178,38 @@ async fn a_line_with_start_off_waits_in_todo_with_its_mention_left_out_of_the_ti
     assert_eq!(task.body, "@Mara, parse the headers\nthen stop.");
     assert_eq!(task.column, Column::Open, "it waits in Todo");
     assert_eq!(task.session_id, None, "no agent started");
+    stop(running).await;
+}
+
+fn held(text: &str) -> TeamRoomPostParams {
+    let mut params = post(text, None);
+    params.start = Some(false);
+    params
+}
+
+#[tokio::test]
+async fn a_lead_a_mention_or_an_only_bot_still_take_a_line_with_no_card() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    team_with_bots(&client).await;
+    team_with(&client, "solo", &[("Iris", false)]).await;
+
+    let to_lead = client
+        .team_room_post(&held("Check the logs"))
+        .await
+        .expect("team.room_post");
+    assert_eq!(to_lead.messages[1].bot_name.as_deref(), Some("Bruno"));
+    assert!(to_lead.messages.iter().all(|line| line.card.is_none()));
+    let mentioned = client
+        .team_room_post(&held("@Mara check the docs"))
+        .await
+        .expect("team.room_post");
+    assert_eq!(mentioned.messages[1].bot_name.as_deref(), Some("Mara"));
+    let mut solo = held("Check the build");
+    solo.team = "solo".to_owned();
+    let only = client.team_room_post(&solo).await.expect("team.room_post");
+    assert_eq!(only.messages[1].bot_name.as_deref(), Some("Iris"));
+    assert!(only.messages[1].card.is_none());
     stop(running).await;
 }
