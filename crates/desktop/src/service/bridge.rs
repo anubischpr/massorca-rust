@@ -53,6 +53,7 @@ use super::git::{self, Freshness, Watches};
 use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::host_sessions::{self, Followed};
 use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
@@ -166,6 +167,12 @@ pub(crate) enum Command {
     },
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.stop` on a paired host's own connection, answered on its oneshot; never sent to This PC's service.
+    HostAgentStop {
+        host: String,
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
@@ -520,6 +527,7 @@ impl ServiceBridge {
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
             closing: closing.subscribe(),
+            followed: Followed::default(),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -627,11 +635,18 @@ struct Link {
     accounts_order: Arc<AccountsFreshness>,
     /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
     closing: watch::Receiver<bool>,
+    /// The paired hosts a task follows, so the poll leaves them to it (STAT-16).
+    followed: Followed,
 }
 
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
+        hosts::check_hosts_again(
+            self.profile.clone(),
+            self.updates.clone(),
+            self.followed.clone(),
+        );
         let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
@@ -680,7 +695,20 @@ impl Link {
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
             | Command::AcceptOffer { .. } => {
-                hosts::spawn(self.profile.clone(), command, self.updates.clone());
+                hosts::spawn(
+                    self.profile.clone(),
+                    command,
+                    self.updates.clone(),
+                    &self.followed,
+                );
+                None
+            }
+            Command::HostAgentStop {
+                host,
+                session,
+                reply,
+            } => {
+                host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
                 None
             }
             Command::HostedServices {
@@ -1300,6 +1328,9 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::HostAgentStop { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Skills { .. } | Command::HostSkills { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));

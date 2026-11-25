@@ -37,14 +37,55 @@ pub fn sessions_by_workspace(state: &StoreState) -> BTreeMap<String, Vec<Session
 /// The top sessions of the workspaces `keep` accepts, oldest first, each with its children below it (A97).
 /// Sessions are listed by launch time, so a row never jumps while its agent works.
 pub fn top_session_rows(state: &StoreState, keep: impl Fn(&str) -> bool) -> Vec<SessionRow> {
-    let mut ordered: Vec<&AgentSession> = state.agents.iter().collect();
+    rows_of(
+        &state.agents,
+        Listed {
+            workspaces: &state.workspaces,
+            seen_offered: state.agent_seen,
+        },
+        keep,
+    )
+}
+
+/// The sessions a paired host reported as rows: the same tree as This PC's, with no unread dots (the host's
+/// seen state is not read over a check) and each session's workspace from the host's own list.
+pub fn host_session_rows(sessions: &[AgentSession], workspaces: &[Workspace]) -> Vec<SessionRow> {
+    rows_of(
+        sessions,
+        Listed {
+            workspaces,
+            seen_offered: false,
+        },
+        |_| true,
+    )
+}
+
+/// The sessions the rows are built from, and the workspaces they run in.
+#[derive(Clone, Copy)]
+struct Listed<'a> {
+    workspaces: &'a [Workspace],
+    seen_offered: bool,
+}
+
+impl Listed<'_> {
+    fn workspace(&self, id: &str) -> Option<&Workspace> {
+        self.workspaces.iter().find(|workspace| workspace.id == id)
+    }
+}
+
+fn rows_of(
+    sessions: &[AgentSession],
+    listed: Listed<'_>,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<SessionRow> {
+    let mut ordered: Vec<&AgentSession> = sessions.iter().collect();
     ordered.sort_by_key(|session| session.created_at_ms);
-    let listed: HashSet<&str> = ordered.iter().map(|s| s.id.as_str()).collect();
+    let known: HashSet<&str> = ordered.iter().map(|s| s.id.as_str()).collect();
     let mut children: HashMap<&str, Vec<&AgentSession>> = HashMap::new();
     let mut tops: Vec<&AgentSession> = Vec::new();
     for session in ordered {
         match session.parent_id.as_deref() {
-            Some(parent) if listed.contains(parent) => {
+            Some(parent) if known.contains(parent) => {
                 children.entry(parent).or_default().push(session);
             }
             _ => tops.push(session),
@@ -52,7 +93,7 @@ pub fn top_session_rows(state: &StoreState, keep: impl Fn(&str) -> bool) -> Vec<
     }
     tops.into_iter()
         .filter(|session| keep(&session.workspace_id))
-        .map(|session| session_row(session, None, &children, state))
+        .map(|session| session_row(session, None, &children, listed))
         .collect()
 }
 
@@ -62,10 +103,10 @@ fn session_row(
     session: &AgentSession,
     parent: Option<&AgentSession>,
     children: &HashMap<&str, Vec<&AgentSession>>,
-    state: &StoreState,
+    listed: Listed<'_>,
 ) -> SessionRow {
     let status = session_state(session);
-    let workspace = state.workspace(&session.workspace_id);
+    let workspace = listed.workspace(&session.workspace_id);
     SessionRow {
         id: session.id.clone(),
         title: title_of(session, workspace),
@@ -74,18 +115,18 @@ fn session_row(
         workspace_id: session.workspace_id.clone(),
         branch: workspace.and_then(|workspace| workspace.branch.clone()),
         path: workspace.map(|workspace| workspace.path.clone()),
-        place: parent.map(|parent| place_of(session, parent, state)),
+        place: parent.map(|parent| place_of(session, parent, listed)),
         own_worktree: parent.is_some_and(|parent| parent.workspace_id != session.workspace_id),
         // Only a finished child under a parent it can merge into, and only until it is brought back.
         can_bring_back: parent.is_some()
             && session.brought_back_at_ms.is_none()
             && matches!(status, AgentState::Done | AgentState::Error),
-        unread: is_unread(session, state.agent_seen),
+        unread: is_unread(session, listed.seen_offered),
         children: children
             .get(session.id.as_str())
             .into_iter()
             .flatten()
-            .map(|child| session_row(child, Some(session), children, state))
+            .map(|child| session_row(child, Some(session), children, listed))
             .collect(),
     }
 }
@@ -119,11 +160,11 @@ pub fn workspace_title(workspace: &Workspace) -> String {
 }
 
 /// Where a child runs: its parent's worktree, or its own worktree by the branch it is on (DelegationTree).
-fn place_of(child: &AgentSession, parent: &AgentSession, state: &StoreState) -> String {
+fn place_of(child: &AgentSession, parent: &AgentSession, listed: Listed<'_>) -> String {
     if child.workspace_id == parent.workspace_id {
         return CURRENT_WORKTREE.to_owned();
     }
-    state
+    listed
         .workspace(&child.workspace_id)
         .and_then(|workspace| workspace.branch.clone())
         .unwrap_or_else(|| OWN_WORKTREE.to_owned())

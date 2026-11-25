@@ -18,6 +18,7 @@ mod palette;
 mod path_field;
 mod project_sidebar;
 mod rail;
+mod remote_session_view;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
@@ -413,6 +414,11 @@ impl Shell {
             let hosts =
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
+            shell
+                .model
+                .set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+                    store.read(cx).state(),
+                ));
             if shell.service.is_some() {
                 let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
@@ -466,6 +472,9 @@ impl Shell {
         model.set_remote_hosts(crate::model::hosts::host_rows(
             &store.read(cx).state().hosts,
             Instant::now(),
+        ));
+        model.set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+            store.read(cx).state(),
         ));
         model.set_marketplace(marketplace.snapshot());
         if service.is_some() {
@@ -848,6 +857,7 @@ impl Render for Shell {
         .then(|| self.home_frame(cx))
         .flatten();
         let session = self.session_frame(cx);
+        let remote_session = self.remote_session_frame(cx);
         let room = self.room_frame(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
@@ -931,6 +941,7 @@ impl Render for Shell {
                 marketplace,
                 pairing,
                 session,
+                remote_session,
                 room,
             },
             self.conversation_size.clone(),

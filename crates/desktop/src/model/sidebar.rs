@@ -75,6 +75,8 @@ pub enum TreeRow {
         dimmed: bool,
         /// Its host is This PC, so the row's folder can be opened here (Open folder).
         local: bool,
+        /// The paired host the session runs on; None for a session of This PC (STAT-16).
+        host: Option<String>,
     },
     /// A workspace with no session yet: one idle row where its first session will appear (A97).
     Placeholder {
@@ -279,6 +281,7 @@ fn push_session(
         workspace_id: session.workspace_id.clone(),
         dimmed,
         local,
+        host: None,
     });
     for child in &session.children {
         push_session(rows, child, depth + 1, active, dimmed, local);

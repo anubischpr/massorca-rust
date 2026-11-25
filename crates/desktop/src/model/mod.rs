@@ -26,6 +26,7 @@ pub mod project_add;
 pub mod rail;
 pub mod region_cycle;
 pub mod regions;
+pub mod remote_sessions;
 pub mod roving;
 pub mod secret_form;
 pub mod secret_requests;

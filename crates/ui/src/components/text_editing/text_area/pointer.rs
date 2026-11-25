@@ -34,13 +34,13 @@ impl TextArea {
         self.selecting = true;
         let index = self.index_at(event.position);
         let extend = event.modifiers.shift;
+        let clicks = event.click_count;
         self.move_caret(
-            move |buffer| {
-                if extend {
-                    buffer.select_to(index)
-                } else {
-                    buffer.move_to(index)
-                }
+            move |buffer| match (clicks, extend) {
+                (1, true) => buffer.select_to(index),
+                (2, _) => buffer.select_word_at(index),
+                (n, _) if n >= 3 => buffer.select_line_at(index),
+                _ => buffer.move_to(index),
             },
             false,
             window,
