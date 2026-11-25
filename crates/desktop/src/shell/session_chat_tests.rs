@@ -2,7 +2,6 @@
 //! history, and what its composer and approvals send. Each test answers the calls by hand.
 
 use super::session_view_tests::{Rig, chat_s1, draw, kind, queue_rig, s1, session_rig};
-use super::*;
 use crate::service::{ChatCommand, Command, QueueCommand, Refusal, Script, StoreUpdate};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{
@@ -14,8 +13,8 @@ use massorca_protocol::methods::chat::{
     ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams,
     ChatInterrupted, ChatItem, ChatItemBody, ChatSnapshot, ChatUpdate, MessageState,
 };
-use tokio::sync::oneshot;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
+use tokio::sync::oneshot;
 
 fn cursor(seq: u64) -> ChatCursor {
     ChatCursor {
@@ -82,7 +81,10 @@ fn showing_a_chat_session_follows_its_transcript_and_closing_the_view_stops(
         "the open chat is followed once: {calls:?}"
     );
     draw(cx);
-    assert!(chat_calls(&mut rig.script).is_empty(), "a redraw asks nothing");
+    assert!(
+        chat_calls(&mut rig.script).is_empty(),
+        "a redraw asks nothing"
+    );
 
     rig.shell.update(cx, |shell, cx| {
         shell.model.close_session();
@@ -136,24 +138,42 @@ fn older_items_are_asked_for_once_from_the_oldest_held_position_and_join_the_vie
     push(
         &rig,
         cx,
-        snapshot("s1", vec![message("c", 8, "three"), message("d", 9, "four")], true),
+        snapshot(
+            "s1",
+            vec![message("c", 8, "three"), message("d", 9, "four")],
+            true,
+        ),
     );
     chat_calls(&mut rig.script);
 
-    rig.shell.update(cx, |shell, cx| shell.load_older_chat("s1", cx));
-    rig.shell.update(cx, |shell, cx| shell.load_older_chat("s1", cx));
+    rig.shell
+        .update(cx, |shell, cx| shell.load_older_chat("s1", cx));
+    rig.shell
+        .update(cx, |shell, cx| shell.load_older_chat("s1", cx));
     cx.run_until_parked();
 
     let mut asked = Vec::new();
     let mut reply = None;
     while let Some(command) = rig.script.next() {
-        if let Command::Chat(ChatCommand::History { params, reply: sender }) = command {
+        if let Command::Chat(ChatCommand::History {
+            params,
+            reply: sender,
+        }) = command
+        {
             asked.push(params);
             reply = Some(sender);
         }
     }
-    assert_eq!(asked.len(), 1, "a second ask waits for the first: {asked:?}");
-    assert_eq!(asked[0].before, Some(cursor(8)), "before the oldest held item");
+    assert_eq!(
+        asked.len(),
+        1,
+        "a second ask waits for the first: {asked:?}"
+    );
+    assert_eq!(
+        asked[0].before,
+        Some(cursor(8)),
+        "before the oldest held item"
+    );
     let page = ChatHistoryPage {
         epoch: "e1".to_owned(),
         items: vec![message("a", 2, "one")],
@@ -174,7 +194,8 @@ fn older_items_are_asked_for_once_from_the_oldest_held_position_and_join_the_vie
     draw(cx);
 
     assert!(cx.debug_bounds("transcript-row-a").is_some());
-    rig.shell.update(cx, |shell, cx| shell.load_older_chat("s1", cx));
+    rig.shell
+        .update(cx, |shell, cx| shell.load_older_chat("s1", cx));
     assert!(
         history_calls(&mut rig.script).is_empty(),
         "nothing older is left to ask for"
@@ -244,7 +265,11 @@ fn send_in_a_chat_session_is_an_agent_prompt_the_service_receipts_as_sent_to_cha
         }))
         .expect("the shell waits for the receipt");
     cx.run_until_parked();
-    assert_eq!(draft_of(&composer_of(&rig, cx), cx), "", "accepted: cleared");
+    assert_eq!(
+        draft_of(&composer_of(&rig, cx), cx),
+        "",
+        "accepted: cleared"
+    );
 }
 
 #[gpui::test]
@@ -331,7 +356,10 @@ fn a_refused_interrupt_says_why_above_the_composer(cx: &mut TestAppContext) {
     let notice = rig
         .shell
         .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
-    assert_eq!(notice.as_deref(), Some("Could not stop the turn: Not a chat"));
+    assert_eq!(
+        notice.as_deref(),
+        Some("Could not stop the turn: Not a chat")
+    );
 }
 
 #[gpui::test]
@@ -407,8 +435,16 @@ fn the_card_shows_what_always_writes_and_each_button_answers_with_the_seq_it_sho
     cx: &mut TestAppContext,
 ) {
     for (button, decision, scope) in [
-        ("Approve", ApprovalDecision::Allow, Some(ApprovalScope::Once)),
-        ("Always", ApprovalDecision::Allow, Some(ApprovalScope::Always)),
+        (
+            "Approve",
+            ApprovalDecision::Allow,
+            Some(ApprovalScope::Once),
+        ),
+        (
+            "Always",
+            ApprovalDecision::Allow,
+            Some(ApprovalScope::Always),
+        ),
         ("Deny", ApprovalDecision::Deny, None),
     ] {
         let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);

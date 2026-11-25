@@ -115,9 +115,9 @@ mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
-mod session_menu_tests;
-#[cfg(test)]
 mod session_chat_tests;
+#[cfg(test)]
+mod session_menu_tests;
 #[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]

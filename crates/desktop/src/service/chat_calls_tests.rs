@@ -108,7 +108,10 @@ async fn any_other_refusal_of_a_chat_start_is_the_answer_and_starts_nothing_else
     let _ = reply.send(Err(refused("agent.workspace_busy", "Busy")));
 
     let answer = task.await.expect("the task ends");
-    assert_eq!(answer.expect_err("refused").code(), Some("agent.workspace_busy"));
+    assert_eq!(
+        answer.expect_err("refused").code(),
+        Some("agent.workspace_busy")
+    );
     assert!(script.next().is_none(), "no terminal start was tried");
 }
 

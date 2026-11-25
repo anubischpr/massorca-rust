@@ -13,8 +13,8 @@ use crate::model::start_page::{
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
-    ChatCommand, ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
-    TerminalCommand, TerminalStreamItem, TerminalWrite,
+    ChatCommand, ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script,
+    StoreUpdate, TerminalCommand, TerminalStreamItem, TerminalWrite,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
@@ -1917,7 +1917,11 @@ fn send_in_chat_mode_starts_a_chat_without_a_grid_and_gives_its_composer_the_key
     let (params, reply) =
         chat_start_call(&mut rig._script).expect("a chat start is sent to the service");
     assert_eq!(params.prompt.as_deref(), Some("fix the login"));
-    assert_eq!((params.cols, params.rows), (None, None), "a chat has no grid");
+    assert_eq!(
+        (params.cols, params.rows),
+        (None, None),
+        "a chat has no grid"
+    );
     assert_eq!(params.workspace.as_deref(), Some("w1"));
     let session = chat_session("s-chat");
     reply

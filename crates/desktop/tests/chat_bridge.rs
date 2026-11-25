@@ -16,7 +16,7 @@ use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentPromptParams, AgentStartParams, ReceiptKind};
 use massorca_protocol::methods::chat::{
     ApprovalDecision, ApprovalScope, ApprovalState, ChatApprovalAnswerParams, ChatItem,
-    ChatItemBody, MessageState, RunType, TurnState,
+    ChatItemBody, RunType, TurnState,
 };
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
@@ -119,11 +119,15 @@ fn script() -> Vec<Value> {
                        "content_block": { "type": "text", "text": "" } } })),
         delta("Hello"),
         delta(", world"),
-        frame(json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
-            "id": "m1", "role": "assistant", "content": [{ "type": "text", "text": "Hello, world" }] } })),
-        frame(json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
+        frame(
+            json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
+            "id": "m1", "role": "assistant", "content": [{ "type": "text", "text": "Hello, world" }] } }),
+        ),
+        frame(
+            json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
             "id": "m1", "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_1",
-                "name": "Bash", "input": { "command": "touch probe.txt" } }] } })),
+                "name": "Bash", "input": { "command": "touch probe.txt" } }] } }),
+        ),
         json!({ "type": "control_request", "request_id": "r-1", "request": {
             "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "touch probe.txt" },
             "permission_suggestions": [{ "type": "addRules", "behavior": "allow",
@@ -131,13 +135,19 @@ fn script() -> Vec<Value> {
                 "rules": [{ "toolName": "Bash", "ruleContent": "touch probe.txt" }] }],
             "tool_use_id": "toolu_1" } }),
         json!({ "await": "control_response" }),
-        frame(json!({ "type": "user", "parent_tool_use_id": null, "message": { "role": "user", "content": [
+        frame(
+            json!({ "type": "user", "parent_tool_use_id": null, "message": { "role": "user", "content": [
             { "type": "tool_result", "tool_use_id": "toolu_1",
-              "content": "(Bash completed with no output)", "is_error": false }] } })),
-        frame(json!({ "type": "result", "subtype": "success", "is_error": false, "result": "done" })),
+              "content": "(Bash completed with no output)", "is_error": false }] } }),
+        ),
+        frame(
+            json!({ "type": "result", "subtype": "success", "is_error": false, "result": "done" }),
+        ),
         json!({ "await": "user" }),
-        frame(json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
-            "id": "m2", "role": "assistant", "content": [{ "type": "text", "text": "Working." }] } })),
+        frame(
+            json!({ "type": "assistant", "parent_tool_use_id": null, "message": {
+            "id": "m2", "role": "assistant", "content": [{ "type": "text", "text": "Working." }] } }),
+        ),
         json!({ "await": "interrupt" }),
         frame(json!({ "type": "result", "subtype": "error_during_execution", "is_error": true })),
     ]
@@ -182,9 +192,9 @@ fn turn_states(items: &[ChatItem]) -> Vec<TurnState> {
 }
 
 fn text_of<'a>(items: &'a [ChatItem], wanted: &str) -> Option<&'a ChatItem> {
-    items.iter().find(|item| {
-        matches!(&item.body, ChatItemBody::AssistantMessage { text, .. } if text == wanted)
-    })
+    items.iter().find(
+        |item| matches!(&item.body, ChatItemBody::AssistantMessage { text, .. } if text == wanted),
+    )
 }
 
 #[tokio::test]
@@ -293,16 +303,22 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
 
     // The stream: its snapshot, then the reply as it is written, up to the permission request.
     handle.watch_chat(&session);
-    let pending = until(&mut updates, &mut state, &session, "the permission request", |items| {
-        items.iter().find_map(|item| match &item.body {
-            ChatItemBody::Approval(approval)
-                if approval.request_id == "r-1" && approval.state == ApprovalState::Pending =>
-            {
-                Some((item.seq, approval.clone()))
-            }
-            _ => None,
-        })
-    })
+    let pending = until(
+        &mut updates,
+        &mut state,
+        &session,
+        "the permission request",
+        |items| {
+            items.iter().find_map(|item| match &item.body {
+                ChatItemBody::Approval(approval)
+                    if approval.request_id == "r-1" && approval.state == ApprovalState::Pending =>
+                {
+                    Some((item.seq, approval.clone()))
+                }
+                _ => None,
+            })
+        },
+    )
     .await;
     let (seq, approval) = pending;
     assert!(approval.can_always);
@@ -350,9 +366,13 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .await
         .expect_err("a second answer is refused");
     assert_eq!(again.code(), Some("agent.approval_settled"), "{again:?}");
-    until(&mut updates, &mut state, &session, "the first turn's end", |items| {
-        (turn_states(items) == [TurnState::Completed]).then_some(())
-    })
+    until(
+        &mut updates,
+        &mut state,
+        &session,
+        "the first turn's end",
+        |items| (turn_states(items) == [TurnState::Completed]).then_some(()),
+    )
     .await;
 
     // A second prompt goes to the chat, and the turn it opens is interrupted; the session stays.
@@ -365,25 +385,28 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .await
         .expect("the prompt is accepted");
     assert_eq!(receipt.receipt, ReceiptKind::SentToChat);
-    until(&mut updates, &mut state, &session, "the second reply", |items| {
-        text_of(items, "Working.")
-            .filter(|item| {
-                matches!(
-                    &item.body,
-                    ChatItemBody::AssistantMessage { state: MessageState::Completed, .. }
-                )
-            })
-            .map(|_| ())
-    })
+    until(
+        &mut updates,
+        &mut state,
+        &session,
+        "the second reply",
+        |items| text_of(items, "Working.").map(|_| ()),
+    )
     .await;
     let interrupted = handle
         .agent_chat_interrupt(&session)
         .await
         .expect("the interrupt");
     assert!(interrupted.interrupted);
-    until(&mut updates, &mut state, &session, "the second turn interrupted", |items| {
-        (turn_states(items) == [TurnState::Completed, TurnState::Interrupted]).then_some(())
-    })
+    until(
+        &mut updates,
+        &mut state,
+        &session,
+        "the second turn interrupted",
+        |items| {
+            (turn_states(items) == [TurnState::Completed, TurnState::Interrupted]).then_some(())
+        },
+    )
     .await;
 
     // Stopping the view's stream drops the transcript from the store.

@@ -592,7 +592,11 @@ mod tests {
         let TranscriptRow::Approval { approval, .. } = &rows[0] else {
             panic!("an approval row");
         };
-        let lines: Vec<&str> = approval.suggestions.iter().map(|line| line.as_ref()).collect();
+        let lines: Vec<&str> = approval
+            .suggestions
+            .iter()
+            .map(|line| line.as_ref())
+            .collect();
         assert_eq!(
             lines,
             [

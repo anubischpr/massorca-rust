@@ -41,8 +41,12 @@ pub(crate) enum ChatCommand {
         reply: oneshot::Sender<Result<ChatHistoryPage, Refusal>>,
     },
     /// Follows the session's transcript until `Unwatch`, across reconnects.
-    Watch { session: String },
-    Unwatch { session: String },
+    Watch {
+        session: String,
+    },
+    Unwatch {
+        session: String,
+    },
 }
 
 /// A session the start page started, and why it is not the kind of session the person chose.
@@ -158,17 +162,26 @@ pub(super) struct ChatMirrors(Arc<Mutex<HashMap<String, ChatTranscript>>>);
 
 impl ChatMirrors {
     fn apply(&self, session: &str, event: ChatEvent) -> Next {
-        let mut held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         held.entry(session.to_owned()).or_default().apply(event)
     }
 
     fn cursor(&self, session: &str) -> Option<chat::ChatCursor> {
-        let held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         held.get(session)?.cursor().cloned()
     }
 
     pub(super) fn forget(&self, session: &str) {
-        let mut held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         held.remove(session);
     }
 }

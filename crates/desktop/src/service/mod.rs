@@ -39,13 +39,13 @@ pub(crate) use accounts::AccountCommand;
 pub use agent_chat::{ChatUnsupportedReason, KindChat};
 pub use agent_forget::ForgetSessionParams;
 #[cfg(test)]
-pub(crate) use chat::ChatCommand;
-pub use chat::StartedSession;
-#[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
+#[cfg(test)]
+pub(crate) use chat::ChatCommand;
+pub use chat::StartedSession;
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,

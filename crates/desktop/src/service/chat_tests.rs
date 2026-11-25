@@ -61,7 +61,10 @@ fn chat(session: &str, event: ChatEvent) -> StoreUpdate {
 fn the_streams_events_build_each_sessions_transcript_in_the_store() {
     let now = Instant::now();
     let mut state = StoreState::default();
-    state.apply(chat("s1", snapshot(1, vec![message("a", 1, "Hel")], false)), now);
+    state.apply(
+        chat("s1", snapshot(1, vec![message("a", 1, "Hel")], false)),
+        now,
+    );
     state.apply(
         chat(
             "s1",
@@ -78,7 +81,10 @@ fn the_streams_events_build_each_sessions_transcript_in_the_store() {
         ),
         now,
     );
-    state.apply(chat("s2", snapshot(1, vec![message("b", 1, "Other")], false)), now);
+    state.apply(
+        chat("s2", snapshot(1, vec![message("b", 1, "Other")], false)),
+        now,
+    );
 
     let held = &state.chat["s1"];
     assert!(matches!(
@@ -86,14 +92,21 @@ fn the_streams_events_build_each_sessions_transcript_in_the_store() {
         ChatItemBody::AssistantMessage { text, .. } if text == "Hello"
     ));
     assert_eq!(held.cursor(), Some(&cursor(2)));
-    assert_eq!(state.chat["s2"].items().len(), 1, "each session has its own");
+    assert_eq!(
+        state.chat["s2"].items().len(),
+        1,
+        "each session has its own"
+    );
 }
 
 #[test]
 fn a_page_of_history_goes_before_the_items_the_store_holds() {
     let now = Instant::now();
     let mut state = StoreState::default();
-    state.apply(chat("s1", snapshot(9, vec![message("c", 8, "three")], true)), now);
+    state.apply(
+        chat("s1", snapshot(9, vec![message("c", 8, "three")], true)),
+        now,
+    );
 
     state.apply(
         StoreUpdate::ChatHistory {
@@ -120,7 +133,10 @@ fn a_page_of_history_goes_before_the_items_the_store_holds() {
 fn closing_a_session_drops_its_transcript_and_a_refusal_is_kept_until_events_arrive() {
     let now = Instant::now();
     let mut state = StoreState::default();
-    state.apply(chat("s1", snapshot(1, vec![message("a", 1, "x")], false)), now);
+    state.apply(
+        chat("s1", snapshot(1, vec![message("a", 1, "x")], false)),
+        now,
+    );
     state.apply(StoreUpdate::ChatClosed("s1".to_owned()), now);
     assert!(!state.chat.contains_key("s1"));
 

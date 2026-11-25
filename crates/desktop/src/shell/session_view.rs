@@ -11,8 +11,8 @@ use massorca_protocol::methods::agents::{
     AgentSession, AgentSetModeParams, QueuedPrompt,
 };
 use massorca_protocol::methods::chat::{
-    self, ApprovalDecision, ApprovalScope, ApprovalState, ChatApprovalAnswerParams, ChatHistoryParams,
-    ChatItem, ChatItemBody, RunType,
+    self, ApprovalDecision, ApprovalScope, ApprovalState, ChatApprovalAnswerParams,
+    ChatHistoryParams, ChatItem, ChatItemBody, RunType,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{

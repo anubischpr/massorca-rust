@@ -21,13 +21,13 @@ use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::agent_chat::KindChat;
-use crate::model::chat_transcript::ChatTranscript;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
 use super::skills::SkillsRead;
 use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
+use crate::model::chat_transcript::ChatTranscript;
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
