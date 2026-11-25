@@ -13,10 +13,10 @@ use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
-    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
-    ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionRunOutcome, ExtensionState,
-    InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
-    UninstallEffects,
+    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionLog,
+    ExtensionRemoved, ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionRunOutcome,
+    ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind,
+    SourceRef, UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -1440,5 +1440,112 @@ fn without_the_offer_the_row_menu_has_no_roll_back(cx: &mut TestAppContext) {
         rig.shell
             .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
         "no roll back is offered without the service's offer"
+    );
+}
+
+/// A run of the installed package, as the service lists it.
+fn logged_run(
+    action: ExtensionRunAction,
+    from: Option<&str>,
+    to: Option<&str>,
+    output: Vec<String>,
+) -> ExtensionRun {
+    ExtensionRun {
+        at_ms: 1_700_000_000_000,
+        action,
+        from_version: from.map(str::to_owned),
+        to_version: to.map(str::to_owned),
+        outcome: ExtensionRunOutcome::Ok,
+        output,
+    }
+}
+
+/// Chooses View log from the open More menu, and answers the service's read of the package's runs with `runs`.
+fn answer_run_log(rig: &mut Rig, cx: &mut VisualTestContext, runs: Vec<ExtensionRun>) {
+    click(cx, "menu-item-1");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Log { id, reply })) => {
+            assert_eq!(id, "acme.notes");
+            let _ = reply.send(Ok(ExtensionLog { id, runs }));
+        }
+        _ => panic!("View log asks the service for the package's runs"),
+    }
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn view_log_lists_the_runs_and_opens_output_only_for_a_run_that_wrote_some(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(
+        &mut rig,
+        cx,
+        vec![
+            logged_run(ExtensionRunAction::Install, None, Some("0.9.0"), Vec::new()),
+            logged_run(
+                ExtensionRunAction::Update,
+                Some("0.9.0"),
+                Some("1.0.0"),
+                vec!["npm WARN deprecated".to_owned()],
+            ),
+        ],
+    );
+    assert!(
+        !shown(cx, "button:marketplace-run-0-output"),
+        "a run that wrote no output has no details"
+    );
+    assert!(
+        shown(cx, "button:marketplace-run-1-output"),
+        "a run that wrote output opens its details"
+    );
+}
+
+#[gpui::test]
+fn a_package_with_no_runs_says_so(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(&mut rig, cx, Vec::new());
+    assert!(
+        shown(cx, "marketplace-run-log-empty"),
+        "an empty log says no runs are recorded yet"
+    );
+}
+
+#[gpui::test]
+fn copy_details_puts_the_run_log_on_the_clipboard(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(
+        &mut rig,
+        cx,
+        vec![logged_run(
+            ExtensionRunAction::Update,
+            Some("0.9.0"),
+            Some("1.0.0"),
+            vec!["npm WARN deprecated".to_owned()],
+        )],
+    );
+    draw(cx);
+    click(cx, "button:marketplace-run-log-copy");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(
+        copied.as_deref().is_some_and(|text| {
+            text.contains("Updated · 0.9.0 to 1.0.0 · Done\nnpm WARN deprecated")
+        }),
+        "{copied:?}"
     );
 }
