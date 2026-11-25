@@ -197,6 +197,9 @@ Linux only. No automated run opens a visible window.
   the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2). A part that does not
   apply to the item says why in its place. The Information part links the package's website, privacy policy and
   terms of service when it names them.
+- The Installed list (`shell/marketplace/installed.rs`) shows one manager row per installed extension, the
+  `ExtensionManagerRow` of the ui crate (teams-extensions-settings.md 7.4). Its status words come from
+  `status_word` in `model/marketplace/catalogue.rs`. Discover, Updates and the categories keep the card grid.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled

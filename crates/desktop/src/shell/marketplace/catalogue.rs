@@ -3,25 +3,30 @@
 
 use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
+use super::installed::installed_rows;
 use super::item::problem_banner;
 use super::item_images;
+use super::more_menu::{self, MoreMenu};
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
     no_match_text, problem_alert,
 };
 use crate::model::navigation::MarketplacePage;
+use crate::shell::Shell;
 use crate::shell::rail;
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, Window, div,
-    prelude::*, px,
+    AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, WeakEntity, Window,
+    div, prelude::*, px,
 };
 use massorca_ui::components::agent_icon::AgentKind;
 use massorca_ui::components::badge::Badge;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::extension_card::{ExtensionAction, ExtensionCard, ExtensionState};
+use massorca_ui::components::icon_button::{IconButton, IconButtonVariant};
 use massorca_ui::components::list_row::{ListRow, RowLeading};
+use massorca_ui::components::menu::{MenuEntry, MenuItem};
 use massorca_ui::tokens::{
     SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING, TYPE_LABEL,
     TYPE_TITLE_SM,
@@ -265,6 +270,7 @@ fn discover_groups(
 pub(super) fn catalogue_view(
     frame: &MarketplaceFrame,
     page: MarketplacePage,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -297,7 +303,7 @@ pub(super) fn catalogue_view(
         .gap(px(SPACE_2))
         .child(div().w(px(SEARCH_WIDTH)).child(frame.search.clone()))
         .child(host_picker_row(frame, cx))
-        .child(add_extension(frame))
+        .child(add_extension(frame, window, cx))
         .child(
             div()
                 .text_style(TYPE_BODY_SM)
@@ -310,10 +316,10 @@ pub(super) fn catalogue_view(
             .explanation(explanation)
             .into_any_element()
     } else {
-        if page == MarketplacePage::Discover {
-            discover_groups(frame, &items, cx)
-        } else {
-            card_grid(frame, &items, cx)
+        match page {
+            MarketplacePage::Discover => discover_groups(frame, &items, cx),
+            MarketplacePage::Installed => installed_rows(frame, &items, window, cx),
+            _ => card_grid(frame, &items, cx),
         }
     };
     div()
@@ -327,20 +333,81 @@ pub(super) fn catalogue_view(
         .into_any_element()
 }
 
-/// The Add extension control: a package in a folder on This computer, reviewed before it installs.
-fn add_extension(frame: &MarketplaceFrame) -> AnyElement {
+/// The Add extension split button: its main part opens the folder dialog, and its chevron opens More ways to add. The
+/// artboard's Sources button has no service path yet, so the toolbar does not draw it.
+fn add_extension(frame: &MarketplaceFrame, window: &mut Window, cx: &mut App) -> AnyElement {
     let shell = frame.shell.clone();
-    Button::new("marketplace-add-extension", "Add extension")
-        .variant(ButtonVariant::Secondary)
+    let menu = window.use_keyed_state(SharedString::from("marketplace-add-menu"), cx, |_, _| {
+        MoreMenu::default()
+    });
+    let main_shell = shell.clone();
+    let main = Button::new("marketplace-add-extension", "Add extension")
+        .variant(ButtonVariant::Primary)
         .leading_icon(IconName::Plus)
         .on_click(move |_, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.open_add_extension(cx));
-        })
-        .into_any_element()
+            let _ = main_shell.update(cx, |shell, cx| shell.open_add_extension(cx));
+        });
+    let chevron_menu = menu.clone();
+    let chevron = div()
+        .flex_none()
+        .debug_selector(|| "button:marketplace-add-more".to_owned())
+        .child(
+            IconButton::new(
+                "marketplace-add-more",
+                IconName::ChevronDown,
+                "More ways to add",
+            )
+            .variant(IconButtonVariant::Ghost)
+            .on_click(move |window, cx| {
+                let on_choose = shell.clone();
+                more_menu::open(
+                    &chevron_menu,
+                    shell.clone(),
+                    add_menu_entries(),
+                    move |row, window, cx| add_menu_chosen(&on_choose, row, window, cx),
+                    window,
+                    cx,
+                );
+            }),
+        );
+    let mut split = div()
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .child(main)
+        .child(chevron);
+    if let Some(overlay) = MoreMenu::overlay(&menu, cx) {
+        split = split.child(div().absolute().child(overlay));
+    }
+    split.into_any_element()
+}
+
+/// The entries of More ways to add. Creator mode, Sources and a Git URL have no service path yet, so they are left out.
+fn add_menu_entries() -> Vec<MenuEntry> {
+    vec![
+        MenuItem::new("From the Marketplace")
+            .icon(IconName::Store)
+            .into(),
+        MenuItem::new("From a folder").icon(IconName::Folder).into(),
+        MenuItem::new("From a file (.zip)")
+            .icon(IconName::File)
+            .into(),
+    ]
+}
+
+/// Runs the entry a choice names: the Marketplace catalogue, the folder dialog, or the file picker.
+fn add_menu_chosen(shell: &WeakEntity<Shell>, row: usize, window: &mut Window, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| match row {
+        0 => shell.open_marketplace(MarketplacePage::Discover, cx),
+        1 => shell.open_add_extension(cx),
+        2 => shell.pick_extension_file(window, cx),
+        _ => {}
+    });
 }
 
 /// The state of a card's footer: the one action that fits the item's state.
-fn card_state(item: &MarketplaceItem) -> ExtensionState {
+pub(super) fn card_state(item: &MarketplaceItem) -> ExtensionState {
     match &item.state {
         ItemState::NotInstalled => ExtensionState::Catalog,
         ItemState::Installed { enabled, update } => ExtensionState::Installed {

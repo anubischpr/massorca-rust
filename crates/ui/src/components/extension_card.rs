@@ -83,10 +83,10 @@ pub enum ExtensionAction {
     ViewLog,
 }
 
-type ActionHandler = Rc<dyn Fn(ExtensionAction, &mut Window, &mut App)>;
+pub(super) type ActionHandler = Rc<dyn Fn(ExtensionAction, &mut Window, &mut App)>;
 
 /// A press handler for one action.
-fn route(
+pub(super) fn route(
     handler: &Option<ActionHandler>,
     action: ExtensionAction,
 ) -> impl Fn(&mut Window, &mut App) + 'static {
@@ -99,7 +99,7 @@ fn route(
 }
 
 /// A press handler for a plain element, whose click also carries the event.
-fn route_click(
+pub(super) fn route_click(
     handler: &Option<ActionHandler>,
     action: ExtensionAction,
 ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -132,7 +132,9 @@ fn control_group(id: &ElementId, name: &'static str) -> Stateful<Div> {
 }
 
 /// The switch handler: a toggle carries the state it switches to.
-fn route_toggle(handler: &Option<ActionHandler>) -> impl Fn(bool, &mut Window, &mut App) + 'static {
+pub(super) fn route_toggle(
+    handler: &Option<ActionHandler>,
+) -> impl Fn(bool, &mut Window, &mut App) + 'static {
     let handler = handler.clone();
     move |checked, window, cx| {
         if let Some(handler) = &handler {
@@ -500,7 +502,7 @@ fn loading_body(p: &Palette) -> AnyElement {
 }
 
 /// A glyph with a word, the state of a card that needs a decision.
-fn status_word(icon: IconName, ink: Color, word: &str) -> AnyElement {
+pub(super) fn status_word(icon: IconName, ink: Color, word: &str) -> AnyElement {
     div()
         .flex()
         .items_center()

@@ -3,6 +3,8 @@
 
 mod accounts;
 mod add_folder;
+#[cfg(test)]
+mod add_menu_tests;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]
@@ -10,10 +12,12 @@ mod extension_tests;
 mod extension_updates;
 mod host_pick;
 mod import;
+mod installed;
 mod item;
 mod item_images;
 #[cfg(test)]
 mod item_images_tests;
+mod more_menu;
 mod package;
 mod review;
 mod sign_in;
@@ -143,7 +147,7 @@ pub(super) fn page(frame: MarketplaceFrame, window: &mut Window, cx: &mut App) -
     let nav = catalogue::nav_column(&frame, window, cx);
     let content = match frame.page {
         MarketplacePage::Item(id) => item::item_page(&frame, id, cx),
-        page => catalogue::catalogue_view(&frame, page, cx),
+        page => catalogue::catalogue_view(&frame, page, window, cx),
     };
     let content = match &frame.host_note {
         Some(note) => div()
