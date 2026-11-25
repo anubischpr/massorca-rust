@@ -97,6 +97,14 @@ Host entries live in the app's private storage (`filesDir/hosts`). The device ke
 that the Android Keystore holds. The Keystore calls are synchronous, because the Rust store makes them from inside a
 synchronous callback.
 
+## Kotlin bindings on the JVM
+
+`android/bindings-test/` is a small Gradle project that needs no React Native and no `node_modules`. It runs the
+Keystore module's plain classes (`app/src/main/java/dev/massorca/app/keystore/storage/`) under Robolectric, with a
+software key where the phone has the Keystore, and the Kotlin API that `uniffi-bindgen` generates from the host's build of
+`massorca-client-ffi`: it pairs with and connects to a real server, round-trips a sealed key, and expects `Storage` for a
+wrong key. CI runs `scripts/ci/kotlin-bindings-test.sh` (needs `uniffi-bindgen` 0.31.2 and Gradle 8.14 on `PATH`).
+
 ## Not done yet
 
 - **Owner changes to `package.json`** (not made here; the native build needs them):

@@ -336,28 +336,9 @@ fn a_child_cannot_delegate_and_a_wrong_token_is_refused() {
     );
 }
 
-#[test]
-fn a_folder_parent_cannot_delegate_a_writer() {
-    let sandbox = Sandbox::new();
-    declare_fake(&sandbox);
-    let notes = sandbox.home().join("notes");
-    std::fs::create_dir_all(&notes).expect("create folder");
-    let notes_text = notes.to_string_lossy().into_owned();
-    sandbox.json_ok(
-        "default",
-        &["project", "add", notes_text.as_str(), "--folder"],
-    );
-    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
-    let (parent, _) = start_parent(&sandbox, "main");
-
-    assert_eq!(
-        error_code(
-            &sandbox,
-            &["agent", "delegate", "--from", &parent, "--prompt", "write"]
-        ),
-        "agent.delegate_needs_git"
-    );
-}
+// A writing child of a plain folder shares the folder instead of being refused with `agent.delegate_needs_git`
+// (decision 0161): `a_writing_child_of_a_folder_shares_it_while_any_other_writer_is_still_refused` in
+// `agent_delegation_instructions.rs` covers it, with a service that runs on a temporary user home.
 
 #[test]
 fn no_merge_and_no_prompt_each_skip_their_step() {

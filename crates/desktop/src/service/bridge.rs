@@ -53,13 +53,12 @@ use massorca_core_remote::bootstrap::RemoteMachine;
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
+use super::skills;
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
-/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
-const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -100,6 +99,17 @@ pub(crate) enum Command {
         host: String,
         request: u64,
         command: ExtensionCommand,
+    },
+    /// Discovers This computer's skills; the answer is a store update tagged with `request`.
+    Skills {
+        request: u64,
+        refresh: bool,
+    },
+    /// Discovers a paired host's skills on its own connection; the answer is a store update tagged with `request`.
+    HostSkills {
+        host: String,
+        request: u64,
+        refresh: bool,
     },
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
@@ -645,6 +655,20 @@ impl Link {
                 );
                 None
             }
+            Command::HostSkills {
+                host,
+                request,
+                refresh,
+            } => {
+                skills::spawn_host_read(
+                    self.profile.clone(),
+                    host,
+                    request,
+                    refresh,
+                    self.updates.clone(),
+                );
+                None
+            }
             other => Some(other),
         }
     }
@@ -740,7 +764,7 @@ impl Link {
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
         self.emit(StoreUpdate::AgentChatOffered(
-            client.has_capability(AGENT_CHAT_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
         ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
@@ -811,6 +835,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::Skills { request, refresh }) => {
+                                skills::spawn_read(client, request, refresh, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -1167,6 +1194,7 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
