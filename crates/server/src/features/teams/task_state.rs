@@ -198,6 +198,7 @@ mod tests {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: 1,
             execution: Execution {
                 state: execution,

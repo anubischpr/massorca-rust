@@ -53,6 +53,7 @@ pub(super) fn tree_row(
             id: project_id,
             name,
             emoji,
+            owner,
             expanded,
         } => {
             // The "No project" group wears the struck folder, as its project menu row does (A95).
@@ -64,7 +65,7 @@ pub(super) fn tree_row(
             let (click_shell, click_id) = (shell.clone(), project_id.clone());
             let (key_shell, key_id) = (shell.clone(), project_id.clone());
             // A click on the row, or Left and Right on the keyboard, folds the project's rows (A10).
-            SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
+            let row = SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
                 .expanded(*expanded)
                 .on_click(move |_, _, cx| {
                     let id = click_id.clone();
@@ -73,7 +74,12 @@ pub(super) fn tree_row(
                 .on_toggle(move |_, _, cx| {
                     let id = key_id.clone();
                     change(&key_shell, cx, move |shell| shell.toggle_project(&id));
-                })
+                });
+            // The owner or org reads after the name, in the secondary text (A10).
+            match owner {
+                Some(owner) => row.secondary(owner.clone()),
+                None => row,
+            }
         }
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
         TreeRow::RemoteHost { name, state } => remote_host_row(id, name, state),
@@ -89,6 +95,7 @@ pub(super) fn tree_row(
             tooltip,
             workspace_id,
             dimmed,
+            local,
         } => {
             let mut row = session_row(id, title, *agent, *state, *depth, *selected);
             if let Some(tooltip) = tooltip {
@@ -113,12 +120,14 @@ pub(super) fn tree_row(
                     cx.notify();
                 });
             });
-            // Right click or Shift+F10 offers the session's path and folder rows (A97).
-            let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            // Right click or Shift+F10 opens the session's menu (A97).
+            let (menu_shell, menu_session, menu_workspace) =
+                (shell.clone(), session_id.clone(), workspace_id.clone());
+            let local = *local;
             let row = row.on_context_menu(move |window, cx| {
-                let id = menu_workspace.clone();
+                let (session, workspace) = (menu_session.clone(), menu_workspace.clone());
                 let _ = menu_shell.update(cx, |shell, cx| {
-                    shell.open_session_menu(id, window, cx);
+                    shell.open_session_menu(Some(session), workspace, local, window, cx);
                 });
             });
             if *can_bring_back {
@@ -126,6 +135,33 @@ pub(super) fn tree_row(
             } else {
                 row
             }
+        }
+        TreeRow::Placeholder {
+            workspace_id,
+            title,
+            agent,
+            tooltip,
+            dimmed,
+            local,
+        } => {
+            let mut row =
+                SidebarRow::session(id, title.clone(), GlyphState::Idle, agent_kind(*agent))
+                    .level(SESSION_LEVEL);
+            if let Some(tooltip) = tooltip {
+                row = row.tooltip(tooltip.clone());
+            }
+            if *dimmed {
+                row = row.dimmed(true);
+            }
+            // Right click opens the workspace's menu while it has no session, as a session row does (A97).
+            let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            let local = *local;
+            row.on_context_menu(move |window, cx| {
+                let workspace = menu_workspace.clone();
+                let _ = menu_shell.update(cx, |shell, cx| {
+                    shell.open_session_menu(None, workspace, local, window, cx);
+                });
+            })
         }
     };
     item.focus_handle(focus.clone()).tab_stop(true)
@@ -141,6 +177,14 @@ pub(super) fn tree_item(
 ) -> AnyElement {
     let item = tree_row(row, index, focus, shell);
     let wrapper = div().pl(px(indent_padding(row)));
+    // A project with an owner draws its owner line inside a selector of its own, so a rig can see the line.
+    let item = match owner_selector(row) {
+        Some(selector) => div()
+            .debug_selector(move || selector)
+            .child(item)
+            .into_any_element(),
+        None => item.into_any_element(),
+    };
     match row_selector(row) {
         Some(selector) => wrapper
             .debug_selector(move || selector)
@@ -157,8 +201,19 @@ fn indent_padding(row: &TreeRow) -> f32 {
         TreeRow::Project { .. } => return 0.0,
         TreeRow::Host { .. } | TreeRow::RemoteHost { .. } => (HOST_INDENT, HOST_LEVEL),
         TreeRow::Session { depth, .. } => (session_indent(*depth), SESSION_LEVEL + depth),
+        TreeRow::Placeholder { .. } => (session_indent(0), SESSION_LEVEL),
     };
     indent - SPACE_2 - level as f32 * TREE_INDENT
+}
+
+/// The debug selector of a project's owner line, which only a project with an owner has.
+fn owner_selector(row: &TreeRow) -> Option<String> {
+    match row {
+        TreeRow::Project {
+            id, owner: Some(_), ..
+        } => Some(format!("sidebar-project-owner-{id}")),
+        _ => None,
+    }
 }
 
 /// The debug selector of a row a test clicks: a session by its id.
@@ -166,6 +221,9 @@ fn row_selector(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::Project { id, .. } => Some(format!("sidebar-project-{id}")),
         TreeRow::Session { id, .. } => Some(format!("sidebar-session-{id}")),
+        TreeRow::Placeholder { workspace_id, .. } => {
+            Some(format!("sidebar-placeholder-{workspace_id}"))
+        }
         _ => None,
     }
 }

@@ -43,6 +43,7 @@ use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -50,6 +51,7 @@ use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
@@ -112,6 +114,11 @@ pub(crate) enum Command {
         refresh: bool,
     },
     Secret(SecretCommand),
+    /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
+    HostedServices {
+        host: Option<String>,
+        command: ServicesCommand,
+    },
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
     SetConfig {
@@ -145,6 +152,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -632,6 +644,13 @@ impl Link {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
+            Command::HostedServices {
+                host: Some(host),
+                command,
+            } => {
+                hosted_services::spawn_host(self.profile.clone(), host, command);
+                None
+            }
             Command::HostRead { host, request } => {
                 extensions::spawn_host_read(
                     self.profile.clone(),
@@ -763,6 +782,9 @@ impl Link {
         self.emit(StoreUpdate::AgentChatOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
         ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -832,6 +854,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::HostedServices { command, .. }) => {
+                                hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
@@ -1131,6 +1156,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1149,6 +1177,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Secret(_)
+        | Command::HostedServices { .. }
         | Command::Account(_)
         | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -1210,7 +1239,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
@@ -1227,6 +1258,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::HostedServices { command, .. } => {
+            hosted_services::refuse_while_down(command, refusal);
+        }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),

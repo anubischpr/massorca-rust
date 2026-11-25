@@ -115,6 +115,8 @@ mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod session_menu_tests;
+#[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
@@ -247,6 +249,12 @@ pub struct Shell {
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
     /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
+    /// The Services section's reads of the picked host (SKL-35).
+    marketplace_services: crate::model::marketplace::HostedServicesView,
+    /// The connect dialog of a hosted service, if open.
+    marketplace_service_dialog: Option<marketplace::ServiceDialog>,
+    /// A refused disconnect, with the service it concerns.
+    marketplace_service_error: Option<(String, String)>,
     /// The Add extension dialog on screen, if any.
     marketplace_add: Option<marketplace::AddFolderDialog>,
     /// The last refused change to an installed package, with the item it concerns.
@@ -565,6 +573,9 @@ impl Shell {
             marketplace_error: None,
             marketplace_uninstall: None,
             marketplace_review: None,
+            marketplace_services: crate::model::marketplace::HostedServicesView::default(),
+            marketplace_service_dialog: None,
+            marketplace_service_error: None,
             marketplace_add: None,
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
@@ -979,6 +990,11 @@ impl Render for Shell {
             .remove
             .as_ref()
             .map(|flow| workspace_dialog_views::remove_dialog(flow, &shell, cx));
+        let delete_session = self
+            .dialogs
+            .delete_session
+            .as_ref()
+            .map(|flow| workspace_dialog_views::session_delete_dialog(flow, &shell, cx));
         let menu = self
             .dialogs
             .menu
@@ -1086,6 +1102,7 @@ impl Render for Shell {
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))

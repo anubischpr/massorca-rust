@@ -7,6 +7,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
 use crate::extension::ExtensionCommand;
+use crate::marketplace::MarketplaceCommand;
 use crate::skills::SkillCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
@@ -152,6 +153,11 @@ pub enum Commands {
     Skills {
         #[command(subcommand)]
         command: SkillCommand,
+    },
+    /// Lists, connects and disconnects the hosted services, such as GitLab and Gitea, on a host.
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
     },
 }
 

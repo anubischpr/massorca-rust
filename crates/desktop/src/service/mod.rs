@@ -4,12 +4,14 @@
 
 mod accounts;
 mod agent_chat;
+mod agent_forget;
 mod agent_queue;
 mod agents;
 mod bridge;
 mod connection;
 mod extensions;
 mod git;
+mod hosted_services;
 mod hosts;
 mod launch;
 mod quit;
@@ -28,6 +30,7 @@ mod secrets_tests;
 #[cfg(test)]
 pub(crate) use accounts::AccountCommand;
 pub use agent_chat::{ChatUnsupportedReason, KindChat};
+pub use agent_forget::ForgetSessionParams;
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
@@ -40,6 +43,8 @@ pub use connection::{
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+#[cfg(test)]
+pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};

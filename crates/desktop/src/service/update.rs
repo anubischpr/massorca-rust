@@ -50,6 +50,11 @@ pub enum StoreUpdate {
     AgentChanged(AgentSession),
     /// An agent session the service forgot.
     AgentGone(String),
+    /// The agent kind chosen when this app created a workspace; kept until the workspace has a session (A97).
+    WorkspaceKindChosen {
+        workspace: String,
+        kind: String,
+    },
     /// Every agent kind the service declares, after a connect. Replaces what was held.
     AgentKindsResync(Vec<AgentKind>),
     /// Every session's prompt queue after a connect, or `None` when the service offers no queue. Replaces what was held.
@@ -64,6 +69,8 @@ pub enum StoreUpdate {
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
     AgentChatOffered(bool),
+    /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
+    AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
     AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
@@ -255,10 +262,15 @@ pub struct StoreState {
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
     pub agent_chat: bool,
+    /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
+    pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
+    /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
+    /// it). In memory only; a session ends the entry, so no placeholder comes back once its session is archived (A97).
+    pub awaiting_session: BTreeMap<String, Option<String>>,
 }
 
 impl Default for StoreState {
@@ -291,8 +303,10 @@ impl Default for StoreState {
             agent_no_project: false,
             agent_options: false,
             agent_chat: false,
+            agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
+            awaiting_session: BTreeMap::new(),
         }
     }
 }
@@ -323,6 +337,8 @@ impl StoreState {
                 self.workspaces.sort_by(workspace_order);
                 self.git
                     .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
+                self.awaiting_session
+                    .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
                 self.loaded = true;
             }
             StoreUpdate::ProjectChanged(project) => {
@@ -331,12 +347,22 @@ impl StoreState {
             }
             StoreUpdate::ProjectGone(id) => self.projects.retain(|p| p.id != id),
             StoreUpdate::WorkspaceChanged(workspace) => {
+                // Only a workspace that appears after the first list was created while this app runs (A97).
+                if self.loaded
+                    && self.workspace(&workspace.id).is_none()
+                    && !self.workspace_has_session(&workspace.id)
+                {
+                    self.awaiting_session
+                        .entry(workspace.id.clone())
+                        .or_insert(None);
+                }
                 replace_by(&mut self.workspaces, workspace, |w| w.id.clone());
                 self.workspaces.sort_by(workspace_order);
             }
             StoreUpdate::WorkspaceGone(id) => {
                 self.workspaces.retain(|w| w.id != id);
                 self.git.remove(&id);
+                self.awaiting_session.remove(&id);
             }
             StoreUpdate::TerminalsResync(mut terminals) => {
                 terminals.sort_by(terminal_order);
@@ -351,10 +377,18 @@ impl StoreState {
                 sessions.sort_by(agent_order);
                 self.agents = sessions;
                 self.agents_answered = true;
+                self.awaiting_session
+                    .retain(|id, _| !self.agents.iter().any(|s| &s.workspace_id == id));
             }
             StoreUpdate::AgentChanged(session) => {
+                self.awaiting_session.remove(&session.workspace_id);
                 replace_by(&mut self.agents, session, |s| s.id.clone());
                 self.agents.sort_by(agent_order);
+            }
+            StoreUpdate::WorkspaceKindChosen { workspace, kind } => {
+                if !self.workspace_has_session(&workspace) {
+                    self.awaiting_session.insert(workspace, Some(kind));
+                }
             }
             StoreUpdate::AgentGone(id) => {
                 self.agents.retain(|s| s.id != id);
@@ -376,6 +410,7 @@ impl StoreState {
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
+            StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
@@ -432,6 +467,13 @@ impl StoreState {
         self.config
             .iter()
             .find(|value| value.owner == DEFAULT_OWNER && value.key == key)
+    }
+
+    /// Whether the held agent sessions include one in this workspace.
+    pub fn workspace_has_session(&self, workspace_id: &str) -> bool {
+        self.agents
+            .iter()
+            .any(|session| session.workspace_id == workspace_id)
     }
 
     /// Keeps the newest read: an older answer that arrives late changes nothing.
@@ -595,6 +637,7 @@ pub(crate) mod fixtures {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: created,
             execution: Execution {
                 state: TerminalState::Live,
