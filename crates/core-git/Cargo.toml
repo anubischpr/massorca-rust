@@ -18,6 +18,12 @@ tracing.workspace = true
 # A job object kills every process git starts; the suspended spawn into it lives in core-remote.
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true
+# The final path of an open file, to check where a read really lands (decision 0103).
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+# Opening a file without waiting for a writer, so a FIFO cannot block a read (decision 0103).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

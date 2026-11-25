@@ -112,6 +112,17 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             })),
         ),
         command(
+            "git.show-file",
+            "Show the bytes of one file on the working tree, the index or a revision",
+            "git.file_content",
+            workspace_args(json!({
+                "path": { "type": "string" },
+                "side": { "enum": ["worktree", "index", "revision"] },
+                "rev": { "type": "string" },
+                "max_bytes": { "type": "integer", "minimum": 1 }
+            })),
+        ),
+        command(
             "git.branches",
             "List the local branches, the current one first",
             "git.branches",

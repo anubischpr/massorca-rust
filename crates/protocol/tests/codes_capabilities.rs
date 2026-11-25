@@ -70,6 +70,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
     (codes::WORKSPACE_MAIN_WORKTREE, "workspace.main_worktree"),
+    (codes::WORKSPACE_HAS_CHILDREN, "workspace.has_children"),
     (codes::BRANCH_EXISTS, "branch.exists"),
     (codes::BRANCH_NOT_FOUND, "branch.not_found"),
     (codes::BRANCH_NAME_INVALID, "branch.name_invalid"),

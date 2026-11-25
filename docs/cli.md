@@ -49,8 +49,8 @@ machine.
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
 | `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR] [--icon ICON]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. When neither is given and the directory is not inside a repository, a warning on stderr says it was added as a plain folder (text mode only). `--icon ICON` sets the icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`, and the CLI sends the file as an upload. Without it, the first PNG or WebP image in the repository's files, or the icon its `index.html` declares, is used when there is one (decision 0091). |
-| `project list` | Lists every project, ordered by name, with its icon in an `ICON` column. |
-| `project show <PROJECT>` | Shows one project, with its icon when it has one. `PROJECT` is its id, name or path. |
+| `project list` | Lists every project, ordered by name, with its icon in an `ICON` column and the owner of its remote in an `OWNER` column (`-` when there is none). |
+| `project show <PROJECT>` | Shows one project, with its icon when it has one and its remote owner as `owner:` when it has one. The owner is the first path segment group of the primary remote (`origin`, else the first remote), such as `acme` for `git@github.com:acme/widgets.git` or `group/sub` for a nested GitLab group; it is absent for a folder project or a remote URL that does not parse. It is read from git on every call, so a changed remote shows at once. `PROJECT` is its id, name or path. |
 | `project update <PROJECT> (--icon ICON \| --clear-icon)` | Sets the project's icon with `--icon`, which takes the forms of `project add --icon`, or removes it with `--clear-icon`, so the project shows the default icon. Prints the icon. |
 | `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
@@ -58,10 +58,11 @@ machine.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
 | `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
-| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--with-children]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it; `--with-children` first removes the workspaces of delegated children. |
 | `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
 | `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
+| `git show-file <PATH> -w WORKSPACE [--index \| --rev REV] [--out FILE]` | Shows one file's bytes: the working tree file, or with `--index` its index entry, or with `--rev REV` the file at that revision. Prints its size and, for a previewable image, its type, such as `image/png`; a file over 4 MiB, or a side with no file, is said so. `--out FILE` writes the decoded bytes, and refuses with `git.no_bytes` when there are none (decision 0103). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
 | `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
@@ -158,6 +159,11 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+- A workspace whose delegated children write in workspaces of their own, a child's child
+  included, refuses with `workspace.has_children`; the message names them. The workspace's own
+  refusals above are checked first and come before it. `--with-children` removes them first, deepest first, each with the same checks and the other flags given. A
+  refused child stops the removal: the children already removed stay removed, the message names
+  them, and the workspace is kept (decision 0110).
 
 ### Terminals
 

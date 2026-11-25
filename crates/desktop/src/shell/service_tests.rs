@@ -103,6 +103,7 @@ fn removed() -> WorkspaceRemoved {
         branch_deleted: true,
         branch_kept_reason: None,
         directory_kept: false,
+        removed_children: Vec::new(),
     }
 }
 
