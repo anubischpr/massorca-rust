@@ -26,12 +26,7 @@ pub enum AgentState {
     Done,
 }
 
-impl AgentState {
-    /// Waiting, Error and Running never fold (WS-33). Unreachable is a lost link, not a failure.
-    pub fn never_folds(self) -> bool {
-        matches!(self, Self::Waiting | Self::Error | Self::Running)
-    }
-}
+impl AgentState {}
 
 /// Whether the app can reach a host right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +44,12 @@ pub struct SessionRow {
     pub title: String,
     pub agent: Agent,
     pub state: AgentState,
+    /// The workspace the session runs in. It shows in the row's tooltip, never as a row (A97).
+    pub workspace_id: String,
+    /// The branch of the session's worktree; None for a plain folder.
+    pub branch: Option<String>,
+    /// The worktree's path, or the folder's path.
+    pub path: Option<String>,
     /// Where a child session runs: "Current worktree", or the branch of its own worktree. None for a top session.
     pub place: Option<String>,
     /// A child that runs in another worktree than its parent's; its row shows a branch icon (WS-35).
@@ -68,19 +69,22 @@ pub struct WorkspaceRow {
     pub branch: Option<String>,
     /// Label colour, one of the six usage colours (1 to 6), never a status colour (P29).
     pub usage_slot: u8,
-    pub sessions: Vec<SessionRow>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostGroup {
     pub name: String,
     pub reach: HostReach,
+    /// The workspaces the host has, for the palette. The Sidebar lists none of them (A97).
     pub workspaces: Vec<WorkspaceRow>,
+    /// The top sessions the host runs, oldest first, each with its children below it (A97).
+    pub sessions: Vec<SessionRow>,
 }
 
 /// A project is the top level of the Sidebar, with one host row per host (A10).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectGroup {
+    pub id: String,
     pub name: String,
     /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
     pub emoji: Option<String>,
@@ -239,8 +243,7 @@ pub fn find_session<'a>(projects: &'a [ProjectGroup], id: &str) -> Option<&'a Se
     projects
         .iter()
         .flat_map(|project| &project.hosts)
-        .flat_map(|host| &host.workspaces)
-        .flat_map(|workspace| &workspace.sessions)
+        .flat_map(|host| &host.sessions)
         .find_map(|session| find_in(session, id))
 }
 
