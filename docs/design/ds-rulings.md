@@ -1,0 +1,24 @@
+# Design system rulings
+
+Decisions on gaps that build sessions hit when they implement the approved artboards. Each ruling says whether the artboard value is intended. If it is, the ruling names the token or variant added to the design system. If not, it names the existing token the artboard should have used. The artboards are refreshed when they are next edited; until then, build from this table.
+
+| ID | Date | Where | Artboard value | Ruling | Design system change |
+|---|---|---|---|---|---|
+| B10 | 2026-11-25 | bt-board, task card title (`.bt`) | text 13 / 18 / 500 | Not intended. No other artboard uses 13 / 18 / 500, and a card title is a row title. Use the existing `body-strong` token (desktop 13 / 20 / 600, Android 14 / 20 / 600), the same as Sidebar and list row titles. A two-line title takes 40 px instead of 36. | None. The artboard should use `body-strong`. |
+| B9 | 2026-11-25 | bt-board card meta chip "Unassigned" (`.chip`); the same chip appears on 10 bt-* artboards (conference room, extension manager, catalogue, permission review, extension slot and app, routines, keybindings, vault) | 20 px high, 1 px `border.subtle`, `surface.sunken`, `text.secondary`, 11 px text, 0 6 px padding, 4 px radius; accent form `accent.subtle.raised` and `accent.fg` with no border | Intended. It is a recurring metadata chip, distinct from the 16 px status and count Badge. | New Badge variant **tag** (neutral and accent) in components/Badge.md. New token `size.tag.height` = 20 px (Android 24 dp). The other values reuse existing tokens: padding 6 px = `space.1` + `space.half`, gap `space.1`, radius `radius.sm`, text `caption` 11 / 16 / 400, optional icon `size.icon.xs` (12 px). |
+
+## Open for the owner: artboard conflicts from the desktop audit
+
+Each item has a recommendation; answering "as recommended" settles it.
+
+| # | Conflict | Recommendation |
+|---|---|---|
+| O1 | Sidebar width: 224 px on ws-session, 256 px on ws-start | 256 px, as in the spec and the code. A97 adds host and child indent levels, and 256 px leaves room for them. Fix ws-session. |
+| O2 | Agent marks: 14 px on the sh-* rails and ws-session rows, 16 px elsewhere | 16 px (`size.icon.sm`, which the code uses). There is no 14 px icon token. The A85 alignment still holds with a 24 px child step. Update AgentIcon.md and the artboards. |
+| O3 | Sidebar footer: ws-session, ws-start and ws-create-workspace show Help, a spacer, Locate, "Panel"; sh-empty-app shows no spacer and "Toggle panel" | Help on the left, a spacer, Locate and "Toggle panel" on the right. The layout comes from ws-session; the label is a verb, like the Title bar toggles. |
+| O4 | Key hints under the composer: shown on ws-start, absent on sh-empty-app | Not a conflict: show them only once a project is chosen, because Send is disabled before that. Both artboards are right; the code should hide them on the empty start page. |
+| O5 | ws-diff: "Commits in branch" heading over changed-file rows | Two sections, as in D-DF-02: "Changes" with the file rows and their count, then "Commits in branch" with commit rows, a count badge and "See all". Fix the artboard. |
+| O6 | ws-delegation: the Child sessions card lists 5 children, the tree lists 6 | The card lists all 6. Use "Needs you" as the short state word in cards and rows, and "Waiting for you" as the tooltip and accessible name. Fix the artboard. |
+| O7 | Item page order: bt-permission-review (2026-11-20) shows About and a Permissions section; screen doc 7.2 (2026-11-22) puts both under Information | The later screen doc wins. Refresh the artboard. |
+| O8 | Settings "Extensions" row: the Settings artboards, D-ST-09 and A69 show it; the A68 note of 2026-11-24 removes it | The later note wins: no row, Extensions live only in Marketplace > Installed. Mark A69 superseded and refresh the three Settings artboards. |
+| O9 | File-type icons (A46, A47): the audit found generic glyphs on ws-session and ws-diff rows in the repository snapshot | Keep A46 and A47 (typed, coloured badges; generic files grey, A48). The published canvas applied them on 2026-11-13; refresh the repository snapshot of those artboards. |
