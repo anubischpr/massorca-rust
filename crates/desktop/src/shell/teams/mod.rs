@@ -236,4 +236,25 @@ mod tests {
             );
         });
     }
+
+    #[gpui::test]
+    fn the_sidebar_and_the_team_card_draw_the_team_character(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            crate::shell::bind_keys(cx);
+        });
+        let (shell, cx) = cx.add_window_view(|window, cx| {
+            Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+        });
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let name = SampleTeamsSource.teams().teams()[0].name.clone();
+        assert!(
+            cx.debug_bounds("team-character").is_some(),
+            "the team card and the Sidebar row draw {name}'s character"
+        );
+    }
 }
