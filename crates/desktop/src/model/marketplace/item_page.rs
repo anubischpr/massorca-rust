@@ -74,10 +74,11 @@ pub fn banner_tag(mention: Option<&str>, name: &str) -> String {
     }
 }
 
-/// How many palette slots a banner without its own colour picks from.
-pub const BANNER_PALETTE_SLOTS: usize = 6;
+/// How many palette colours (`banner.palette.1` to `.8`) a banner without a listed colour picks from.
+pub const BANNER_PALETTE_SLOTS: usize = 8;
 
-/// The palette slot of a banner whose listing gives no colour: a stable hash of the package id (or the name).
+/// The palette slot, 1 to 8, of a banner whose listing gives no colour: a stable hash of the package id, or of the
+/// name when there is no package.
 pub fn banner_palette_slot(item: &MarketplaceItem) -> usize {
     let seed = item
         .extension
@@ -86,14 +87,14 @@ pub fn banner_palette_slot(item: &MarketplaceItem) -> usize {
     palette_slot_of(seed)
 }
 
-/// FNV-1a of the seed modulo the slot count; unlike the std hasher it gives the same slot on every run.
+/// FNV-1a of the seed, modulo the slot count, plus one; unlike the std hasher it gives the same slot on every run.
 fn palette_slot_of(seed: &str) -> usize {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0100_0000_01b3;
     let hash = seed.bytes().fold(OFFSET_BASIS, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(PRIME)
     });
-    usize::try_from(hash % BANNER_PALETTE_SLOTS as u64).unwrap_or_default()
+    usize::try_from(hash % BANNER_PALETTE_SLOTS as u64).unwrap_or_default() + 1
 }
 
 /// The state chip beside the name. An installed agent shows its active account, and "Connected"
@@ -287,17 +288,23 @@ mod tests {
 
     #[test]
     fn marketplace_banner_palette_slot_is_pinned_for_a_package_id() {
-        assert_eq!(palette_slot_of("acme.notes"), 0);
-        assert_eq!(palette_slot_of("massorca.claude"), 4);
+        assert_eq!(
+            palette_slot_of("acme.notes"),
+            1,
+            "FNV-1a of the id, modulo 8, plus 1"
+        );
+        assert_eq!(palette_slot_of("massorca.codex"), 6);
     }
 
     #[test]
-    fn marketplace_banner_palette_slot_spreads_items_over_the_palette() {
+    fn marketplace_banner_palette_slot_spreads_items_over_all_eight_colours() {
         let slots: std::collections::BTreeSet<usize> = (0..24)
             .map(|index| palette_slot_of(&format!("acme.item-{index}")))
             .collect();
-        assert!(slots.iter().all(|slot| *slot < BANNER_PALETTE_SLOTS));
-        assert!(slots.len() >= 4, "items share too few colours: {slots:?}");
+        assert_eq!(
+            slots.iter().copied().collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
     }
 
     #[test]

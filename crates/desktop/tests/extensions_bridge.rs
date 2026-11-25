@@ -600,8 +600,8 @@ async fn a_folder_package_without_colours_takes_the_palette_slot_of_its_id() {
     );
     assert_eq!(
         banner_palette_slot(item),
-        0,
-        "acme.notes always takes palette slot 0"
+        1,
+        "acme.notes always takes palette slot 1"
     );
     stop_service(service).await;
 }

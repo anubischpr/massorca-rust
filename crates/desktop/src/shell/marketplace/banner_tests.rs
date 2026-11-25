@@ -1,11 +1,12 @@
 //! Element and model tests of an item page's banner: its colours, and what a pill press does.
 
 use super::extension_tests::{catalogue_package, open_listed};
-use super::item::banner_colours;
+use super::item::banner_fill;
 use crate::model::home_start::HOME_START;
 use crate::shell::service_tests::click;
 use gpui::TestAppContext;
 use massorca_protocol::methods::extensions::{Banner, BannerExample, ExtensionItem};
+use massorca_ui::components::invocation_banner::BannerFill;
 use massorca_ui::tokens::{Color, Palette};
 
 /// A catalogue package with two listed colours and one mention example, "@notes summarise my notes".
@@ -31,20 +32,19 @@ fn the_banner_takes_its_listed_colours_or_else_the_palette_colour_of_its_slot() 
         Color::rgba8(0xD9, 0x77, 0x57, 1.0),
         Some(Color::rgba8(0xB5, 0x53, 0x2F, 1.0)),
     );
-    assert_eq!(banner_colours(Some(listed), 3, &palette), listed);
     assert_eq!(
-        banner_colours(None, 3, &palette),
-        (palette.usage.ring_4, None)
+        banner_fill(Some(listed), 3, &palette),
+        BannerFill::Listed(listed.0, listed.1)
     );
     assert_eq!(
-        banner_colours(None, 9, &palette),
-        (palette.usage.ring_4, None),
-        "the slot wraps over the six palette colours"
+        banner_fill(None, 3, &palette),
+        BannerFill::Palette(palette.banner.palette_3),
+        "slot 3 is banner.palette.3"
     );
-    assert_ne!(
-        banner_colours(None, 0, &palette),
-        banner_colours(None, 1, &palette),
-        "two slots give two colours"
+    assert_eq!(
+        banner_fill(None, 8, &palette),
+        BannerFill::Palette(palette.banner.palette_8),
+        "slot 8 is banner.palette.8"
     );
 }
 

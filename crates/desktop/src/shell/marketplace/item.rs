@@ -27,7 +27,7 @@ use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::danger_zone::DangerZone;
 use massorca_ui::components::empty_state::EmptyState;
-use massorca_ui::components::invocation_banner::{InvocationBanner, hex_colour};
+use massorca_ui::components::invocation_banner::{BannerFill, InvocationBanner, hex_colour};
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
@@ -200,8 +200,7 @@ fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         .as_deref()
         .and_then(|entry| entry.listing.mention.as_deref());
     let theme = *cx.theme();
-    let (first, second) =
-        banner_colours(banner_tint(item), banner_palette_slot(item), &theme.palette);
+    let fill = banner_fill(banner_tint(item), banner_palette_slot(item), &theme.palette);
     let shell = frame.shell.clone();
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
@@ -209,7 +208,7 @@ fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         banner_tag(mention, &item.name),
         kind_icon(item.kind),
     )
-    .colours(first, second)
+    .fill(fill)
     .on_select(move |prompt, window, cx| {
         let _ = shell.update(cx, |shell, cx| {
             shell.start_chat_with_prompt(&prompt, window, cx)
@@ -227,27 +226,32 @@ fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         .into_any_element()
 }
 
-/// The banner's colours: the listing's own, or else the palette colour of the item's slot.
-pub(super) fn banner_colours(
+/// Where the banner's gradient starts: the listing's own colours, or else the palette colour of the item's slot.
+pub(super) fn banner_fill(
     listed: Option<(Color, Option<Color>)>,
     slot: usize,
     palette: &Palette,
-) -> (Color, Option<Color>) {
-    listed.unwrap_or_else(|| (palette_colour(palette, slot), None))
+) -> BannerFill {
+    match listed {
+        Some((first, second)) => BannerFill::Listed(first, second),
+        None => BannerFill::Palette(palette_colour(palette, slot)),
+    }
 }
 
-/// The palette colour of a slot: the design's six usage ring hues, the same order in both themes.
+/// The palette colour of a slot: `banner.palette.1` to `.8`, slots counted from one.
 fn palette_colour(palette: &Palette, slot: usize) -> Color {
-    let usage = &palette.usage;
-    let rings = [
-        usage.ring_1,
-        usage.ring_2,
-        usage.ring_3,
-        usage.ring_4,
-        usage.ring_5,
-        usage.ring_6,
+    let banner = &palette.banner;
+    let colours = [
+        banner.palette_1,
+        banner.palette_2,
+        banner.palette_3,
+        banner.palette_4,
+        banner.palette_5,
+        banner.palette_6,
+        banner.palette_7,
+        banner.palette_8,
     ];
-    rings[slot % rings.len()]
+    colours[slot.saturating_sub(1) % colours.len()]
 }
 
 impl Shell {

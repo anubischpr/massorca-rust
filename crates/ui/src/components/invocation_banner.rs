@@ -48,20 +48,33 @@ pub fn readable_stop(colour: Color, canvas: Color, text: Color) -> Color {
         .unwrap_or(canvas)
 }
 
-/// The two gradient stops: each listed colour as readable as it can be; with one colour the end fades halfway
-/// into the Canvas.
-pub fn gradient_stops(
-    first: Color,
-    second: Option<Color>,
-    canvas: Color,
-    text: Color,
-) -> (Color, Color) {
-    let start = readable_stop(first, canvas, text);
-    let end = match second {
-        Some(colour) => readable_stop(colour, canvas, text),
-        None => mix(start, canvas, 0.5),
-    };
-    (start, end)
+/// Where a banner's gradient starts: the item's listed colours, or one palette colour for an item with none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BannerFill {
+    /// One or two listed colours: the gradient runs from the first to the second, or from the first to `banner.end`.
+    Listed(Color, Option<Color>),
+    /// A `banner.palette.N` colour: the gradient runs from it to `banner.end`.
+    Palette(Color),
+}
+
+/// The footer's colour, `text.primary`: the text colour that every gradient stop keeps at 4.5:1.
+pub fn footer_colour(palette: &Palette) -> Color {
+    palette.text.primary
+}
+
+/// The two gradient stops for `fill`. A listed colour is tinted until the footer reads at 4.5:1 (`readable_stop`).
+/// A palette colour already reads at 4.5:1, so it starts the gradient as it is. `banner.end` closes a gradient that
+/// has one colour or none.
+pub fn gradient_stops(fill: BannerFill, palette: &Palette) -> (Color, Color) {
+    let (canvas, text) = (palette.surface.canvas, footer_colour(palette));
+    match fill {
+        BannerFill::Listed(first, Some(second)) => (
+            readable_stop(first, canvas, text),
+            readable_stop(second, canvas, text),
+        ),
+        BannerFill::Listed(first, None) => (readable_stop(first, canvas, text), palette.banner.end),
+        BannerFill::Palette(colour) => (colour, palette.banner.end),
+    }
 }
 
 /// The prompt without the tag that its chip shows; the whole prompt when nothing follows the tag.
@@ -182,7 +195,7 @@ pub struct InvocationBanner {
     chip: TagChip,
     tag: SharedString,
     examples: Vec<SharedString>,
-    colours: Option<(Color, Option<Color>)>,
+    fill: Option<BannerFill>,
     on_select: Option<OnSelect>,
 }
 
@@ -203,7 +216,7 @@ impl InvocationBanner {
             },
             tag: tag.into(),
             examples: Vec::new(),
-            colours: None,
+            fill: None,
             on_select: None,
         }
     }
@@ -214,9 +227,9 @@ impl InvocationBanner {
         self
     }
 
-    /// The item's listed colours: the gradient runs from the first to the second, or fades from the first.
-    pub fn colours(mut self, first: Color, second: Option<Color>) -> Self {
-        self.colours = Some((first, second));
+    /// Where the gradient starts: the item's listed colours, or one palette colour.
+    pub fn fill(mut self, fill: BannerFill) -> Self {
+        self.fill = Some(fill);
         self
     }
 
@@ -247,8 +260,8 @@ impl InvocationBanner {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        let (first, second) = self.colours.unwrap_or((p.surface.raised, None));
-        let (start, end) = gradient_stops(first, second, p.surface.canvas, p.text.secondary);
+        let fill = self.fill.unwrap_or(BannerFill::Palette(p.banner.palette_1));
+        let (start, end) = gradient_stops(fill, p);
         let mut pills = div()
             .w_full()
             .flex()
@@ -289,7 +302,7 @@ impl InvocationBanner {
                         .debug_selector(|| "invocation-footer".to_owned())
                         .w_full()
                         .text_style(TYPE_BODY_SM)
-                        .text_color(p.text.secondary)
+                        .text_color(footer_colour(p))
                         .text_center()
                         .child(mention),
                 ),
@@ -330,19 +343,27 @@ mod tests {
     const GREEN: Color = Color::rgba8(0x3F, 0x9B, 0x6E, 1.0);
     const GREY: Color = Color::rgba8(0x8E, 0x8E, 0x93, 1.0);
 
-    /// Every colour an item can be tinted with: listed brands, and the six slots of both themes.
+    /// The palette's eight banner colours and its end stop.
+    fn palette_tokens(palette: &Palette) -> [Color; 9] {
+        let b = palette.banner;
+        [
+            b.palette_1,
+            b.palette_2,
+            b.palette_3,
+            b.palette_4,
+            b.palette_5,
+            b.palette_6,
+            b.palette_7,
+            b.palette_8,
+            b.end,
+        ]
+    }
+
+    /// Every colour a banner can start from: listed brands, and the palette of both themes.
     fn brands() -> Vec<Color> {
         let mut colours = vec![CLAUDE, GREEN, GREY];
         for palette in [Palette::DARK, Palette::LIGHT] {
-            let usage = palette.usage;
-            colours.extend([
-                usage.ring_1,
-                usage.ring_2,
-                usage.ring_3,
-                usage.ring_4,
-                usage.ring_5,
-                usage.ring_6,
-            ]);
+            colours.extend(palette_tokens(&palette));
         }
         colours
     }
@@ -350,7 +371,7 @@ mod tests {
     fn claude_banner() -> InvocationBanner {
         InvocationBanner::new("banner", "Claude", "@Claude", IconName::Bot)
             .agent(AgentKind::Claude)
-            .colours(CLAUDE, None)
+            .fill(BannerFill::Listed(CLAUDE, None))
             .example("@Claude review my changes")
             .example("@Claude explain the failing test in this project")
             .example("@Claude summarise today's sessions")
@@ -386,38 +407,70 @@ mod tests {
     }
 
     #[test]
-    fn marketplace_invocation_banner_gradient_takes_each_listed_colour_into_its_stop() {
+    fn marketplace_invocation_banner_two_listed_colours_run_from_the_first_to_the_second() {
         let p = Palette::DARK;
-        let (start, end) = gradient_stops(GREEN, Some(GREY), p.surface.canvas, p.text.secondary);
-        assert_eq!(
-            start,
-            readable_stop(GREEN, p.surface.canvas, p.text.secondary)
-        );
-        assert_eq!(end, readable_stop(GREY, p.surface.canvas, p.text.secondary));
+        let (canvas, text) = (p.surface.canvas, footer_colour(&p));
+        let (start, end) = gradient_stops(BannerFill::Listed(GREEN, Some(GREY)), &p);
+        assert_eq!(start, readable_stop(GREEN, canvas, text));
+        assert_eq!(end, readable_stop(GREY, canvas, text));
         assert_ne!(start, end, "two listed colours make a visible gradient");
     }
 
     #[test]
-    fn marketplace_invocation_banner_with_one_colour_fades_its_end_into_the_canvas() {
-        let p = Palette::DARK;
-        let (start, end) = gradient_stops(CLAUDE, None, p.surface.canvas, p.text.secondary);
-        assert_eq!(end, mix(start, p.surface.canvas, 0.5));
-        assert_ne!(start, end);
+    fn marketplace_invocation_banner_one_listed_colour_ends_on_banner_end() {
+        for p in [Palette::DARK, Palette::LIGHT] {
+            let (start, end) = gradient_stops(BannerFill::Listed(CLAUDE, None), &p);
+            assert_eq!(
+                start,
+                readable_stop(CLAUDE, p.surface.canvas, footer_colour(&p))
+            );
+            assert_eq!(
+                end, p.banner.end,
+                "the end is banner.end, not a fade to the Canvas"
+            );
+        }
     }
 
     #[test]
-    fn marketplace_invocation_banner_footer_stays_readable_on_both_stops_in_both_themes() {
-        for palette in [Palette::DARK, Palette::LIGHT] {
-            let (canvas, text) = (palette.surface.canvas, palette.text.secondary);
+    fn marketplace_invocation_banner_no_listed_colour_starts_on_its_palette_colour() {
+        for p in [Palette::DARK, Palette::LIGHT] {
+            let slot = p.banner.palette_4;
+            assert_eq!(
+                gradient_stops(BannerFill::Palette(slot), &p),
+                (slot, p.banner.end)
+            );
+        }
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_footer_is_text_primary() {
+        assert_eq!(footer_colour(&Palette::DARK), Palette::DARK.text.primary);
+        assert_eq!(footer_colour(&Palette::LIGHT), Palette::LIGHT.text.primary);
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_footer_reads_at_4_5_on_every_stop_in_both_themes() {
+        for p in [Palette::DARK, Palette::LIGHT] {
+            let text = footer_colour(&p);
             for brand in brands() {
-                let (start, end) = gradient_stops(brand, Some(brand), canvas, text);
-                let (_, faded) = gradient_stops(brand, None, canvas, text);
-                for stop in [start, end, faded] {
-                    assert!(
-                        text.contrast(stop) >= READABLE_CONTRAST,
-                        "the footer on {stop:?} is below {READABLE_CONTRAST}:1 (brand {brand:?})"
-                    );
+                for fill in [
+                    BannerFill::Listed(brand, None),
+                    BannerFill::Listed(brand, Some(brand)),
+                ] {
+                    let (start, end) = gradient_stops(fill, &p);
+                    for stop in [start, end] {
+                        assert!(
+                            text.contrast(stop) >= READABLE_CONTRAST,
+                            "{stop:?} is under {fill:?}"
+                        );
+                    }
                 }
+            }
+            for token in palette_tokens(&p) {
+                assert!(
+                    text.contrast(token) >= READABLE_CONTRAST,
+                    "the palette or end colour {token:?} is below 4.5:1"
+                );
             }
         }
     }
