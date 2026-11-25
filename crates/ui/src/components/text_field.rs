@@ -20,7 +20,10 @@ use crate::a11y;
 use crate::components::button::ButtonSize;
 use crate::components::icon_button::IconButton;
 use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
+use crate::components::text_editing::keymap::{self, EditShortcut};
 use crate::components::text_editing::masking::{masked_offset, masked_text, text_offset};
+use crate::components::text_editing::undo_history::{EditKind, Snapshot, UndoHistory};
+use crate::components::text_editing::{Redo, Undo};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
@@ -40,6 +43,7 @@ pub struct TextBuffer {
     /// The cursor sits at the start of the selection.
     reversed: bool,
     marked: Option<Range<usize>>,
+    history: UndoHistory,
 }
 
 impl TextBuffer {
@@ -51,6 +55,7 @@ impl TextBuffer {
             selected: end..end,
             reversed: false,
             marked: None,
+            history: UndoHistory::new(true),
         }
     }
 
@@ -96,9 +101,12 @@ impl TextBuffer {
         self.selected = 0..0;
         self.reversed = false;
         self.marked = None;
+        self.history.clear();
     }
 
     /// Replaces the whole text and puts the cursor at its end; `true` when it changed.
+    /// Replaces the whole text and puts the cursor at its end; `true` when it changed. A change drops
+    /// the undo history; an identical text keeps it, so a draft synced on every frame keeps its undo.
     pub fn set_text(&mut self, text: &str) -> bool {
         if self.text == text {
             return false;
@@ -108,10 +116,17 @@ impl TextBuffer {
         self.selected = end..end;
         self.reversed = false;
         self.marked = None;
+        self.history.clear();
         true
     }
 
+    /// Turns undo recording on or off; a masked value turns it off so no copy of it is kept.
+    pub(crate) fn set_history(&mut self, enabled: bool) {
+        self.history.set_enabled(enabled);
+    }
+
     pub fn move_to(&mut self, offset: usize) {
+        self.history.break_group();
         let offset = self.snap_to_grapheme(offset);
         self.selected = offset..offset;
         self.reversed = false;
@@ -119,6 +134,7 @@ impl TextBuffer {
 
     /// Moves the free end of the selection to `offset`, keeping the anchor.
     pub fn select_to(&mut self, offset: usize) {
+        self.history.break_group();
         let anchor = if self.reversed {
             self.selected.end
         } else {
@@ -130,8 +146,64 @@ impl TextBuffer {
     }
 
     pub fn select_all(&mut self) {
+        self.history.break_group();
         self.selected = 0..self.text.len();
         self.reversed = false;
+    }
+
+    /// Steps back to the state before the last edit; `false` when there is no step to undo.
+    pub fn undo(&mut self) -> bool {
+        if !self.history.can_undo() {
+            return false;
+        }
+        let current = self.snapshot();
+        let Some(previous) = self.history.take_undo(current) else {
+            return false;
+        };
+        self.restore(previous);
+        true
+    }
+
+    /// Steps forward again after an undo; `false` when there is no step to redo.
+    pub fn redo(&mut self) -> bool {
+        if !self.history.can_redo() {
+            return false;
+        }
+        let current = self.snapshot();
+        let Some(next) = self.history.take_redo(current) else {
+            return false;
+        };
+        self.restore(next);
+        true
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            selected: self.selected.clone(),
+            reversed: self.reversed,
+        }
+    }
+
+    fn restore(&mut self, state: Snapshot) {
+        self.text = state.text;
+        self.selected = state.selected;
+        self.reversed = state.reversed;
+        self.marked = None;
+    }
+
+    /// Runs `change` as one edit of `kind`, recording the step it starts or extends.
+    fn recorded(&mut self, kind: EditKind, change: impl FnOnce(&mut Self) -> bool) -> bool {
+        if !self.history.enabled() {
+            return change(self);
+        }
+        let settled = self.marked.is_some() || self.selected.is_empty();
+        let before = (!self.history.joins(kind, settled)).then(|| self.snapshot());
+        let changed = change(self);
+        if changed {
+            self.history.record(before, kind);
+        }
+        changed
     }
 
     /// Collapses a selection to its start, or moves one grapheme left.
@@ -178,41 +250,70 @@ impl TextBuffer {
         self.select_to(self.text.len());
     }
 
-    /// Writes `text` over the selection (typing, paste); `true` when the text changed.
+    /// Writes `text` over the selection (paste, cut, a line break); `true` when the text changed.
     pub fn insert(&mut self, text: &str) -> bool {
-        let range = self.selected.clone();
-        self.replace(range, text)
+        self.recorded(EditKind::Other, |buffer| {
+            let range = buffer.selected.clone();
+            buffer.replace(range, text)
+        })
     }
 
     /// Deletes the selection, or the grapheme before the cursor.
     pub fn backspace(&mut self) -> bool {
-        let range = if self.selected.is_empty() {
-            self.prev_boundary(self.cursor())..self.cursor()
+        let kind = if self.selected.is_empty() {
+            EditKind::Backspace
         } else {
-            self.selected.clone()
+            EditKind::Other
         };
-        self.replace(range, "")
+        self.recorded(kind, |buffer| {
+            let range = if buffer.selected.is_empty() {
+                buffer.prev_boundary(buffer.cursor())..buffer.cursor()
+            } else {
+                buffer.selected.clone()
+            };
+            buffer.replace(range, "")
+        })
     }
 
     /// Deletes the selection, or the grapheme after the cursor.
     pub fn delete(&mut self) -> bool {
-        let range = if self.selected.is_empty() {
-            self.cursor()..self.next_boundary(self.cursor())
+        let kind = if self.selected.is_empty() {
+            EditKind::Delete
         } else {
-            self.selected.clone()
+            EditKind::Other
         };
-        self.replace(range, "")
+        self.recorded(kind, |buffer| {
+            let range = if buffer.selected.is_empty() {
+                buffer.cursor()..buffer.next_boundary(buffer.cursor())
+            } else {
+                buffer.selected.clone()
+            };
+            buffer.replace(range, "")
+        })
     }
 
     /// Commits `text` over `range_utf16`, else over the composing range, else over the selection.
     pub fn replace_text(&mut self, range_utf16: Option<Range<usize>>, text: &str) -> bool {
-        let range = self.target_range(range_utf16);
-        self.replace(range, text)
+        self.recorded(typing_kind(text), |buffer| {
+            let range = buffer.target_range(range_utf16);
+            buffer.replace(range, text)
+        })
     }
 
     /// Writes composing text and marks it. `selected_utf16` is the selection inside
     /// the new text, relative to its start, as the platform reports it.
     pub fn replace_and_mark(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+        selected_utf16: Option<Range<usize>>,
+    ) -> bool {
+        self.recorded(EditKind::Typing, |buffer| {
+            buffer.compose(range_utf16, text, selected_utf16)
+        })
+    }
+
+    fn compose(
         &mut self,
         range_utf16: Option<Range<usize>>,
         text: &str,
@@ -241,6 +342,7 @@ impl TextBuffer {
     }
 
     pub fn select_utf16(&mut self, range_utf16: Range<usize>) {
+        self.history.break_group();
         self.selected = self.range_from_utf16(&range_utf16);
         self.reversed = false;
     }
@@ -350,6 +452,15 @@ impl TextBuffer {
     }
 }
 
+/// One typed character joins the typing before it; a longer insert or a line break is a step of its own.
+fn typing_kind(text: &str) -> EditKind {
+    if text != "\n" && grapheme_starts(text).len() == 1 {
+        EditKind::Typing
+    } else {
+        EditKind::Other
+    }
+}
+
 actions!(
     text_field,
     [
@@ -383,7 +494,7 @@ pub fn bind_keys(cx: &mut App) {
     } else {
         ["ctrl-a", "ctrl-c", "ctrl-x", "ctrl-v"]
     };
-    cx.bind_keys([
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("left", MoveLeft, context),
@@ -399,7 +510,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(cut, CutSelection, context),
         KeyBinding::new(paste, PasteText, context),
         KeyBinding::new("enter", Submit, context),
-    ]);
+    ];
+    bindings.extend(keymap::shortcuts(cfg!(target_os = "macos")).iter().map(
+        |&(keys, shortcut)| match shortcut {
+            EditShortcut::Undo => KeyBinding::new(keys, Undo, context),
+            EditShortcut::Redo => KeyBinding::new(keys, Redo, context),
+        },
+    ));
+    cx.bind_keys(bindings);
 }
 
 /// What a [`TextField`] emits; subscribe with `cx.subscribe`.
@@ -548,7 +666,9 @@ impl TextField {
     }
 
     pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
-        self.buffer = TextBuffer::new(text.as_ref());
+        let mut buffer = TextBuffer::new(text.as_ref());
+        buffer.set_history(!self.masked);
+        self.buffer = buffer;
         self
     }
 
@@ -590,6 +710,7 @@ impl TextField {
     /// Hides the text as bullets, one per character, for a secret value (decision 0029).
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self.buffer.set_history(false);
         self
     }
 
@@ -723,6 +844,14 @@ impl TextField {
         self.move_caret(TextBuffer::select_all, window, cx);
     }
 
+    fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(window, cx, TextBuffer::undo);
+    }
+
+    fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(window, cx, TextBuffer::redo);
+    }
+
     /// A masked field gives nothing to the clipboard, so copy and cut do nothing there.
     fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
         let selected = self.buffer.selected_text();
@@ -750,7 +879,11 @@ impl TextField {
     }
 
     fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit(window, cx, |buffer| buffer.set_text(""));
+        // Selecting and deleting keeps the clear undoable, unlike a programmatic `set_text`.
+        self.edit(window, cx, |buffer| {
+            buffer.select_all();
+            buffer.insert("")
+        });
         self.focus(window, cx);
     }
 
@@ -959,6 +1092,8 @@ impl Render for TextField {
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::cut_selection))
             .on_action(cx.listener(Self::paste_text))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::submit))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_move(cx.listener(Self::mouse_move))
@@ -1449,6 +1584,7 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::text_editing::keymap::{REDO_KEYS, UNDO_KEYS};
     use gpui::{EntityInputHandler, Modifiers, TestAppContext, VisualTestContext};
     use std::{cell::RefCell, rc::Rc};
 
@@ -2137,6 +2273,162 @@ mod tests {
         redraw(cx);
         assert!(text_of(&field, cx).is_empty(), "the masked text is cleared");
         assert!(painted_text(&field, cx).is_empty(), "nothing is painted");
+    }
+
+    /// Types `text` one character at a time, as the keyboard does.
+    fn typed_buffer(text: &str) -> TextBuffer {
+        let mut buffer = TextBuffer::new("");
+        for ch in text.chars() {
+            buffer.replace_text(None, &ch.to_string());
+        }
+        buffer
+    }
+
+    #[test]
+    fn a_run_of_typed_characters_undoes_as_one_step() {
+        let mut buffer = typed_buffer("hello");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "");
+        assert!(!buffer.undo(), "nothing is left to undo");
+    }
+
+    #[test]
+    fn redo_replays_the_undone_step_and_a_new_edit_clears_it() {
+        let mut buffer = typed_buffer("ab");
+        assert!(buffer.undo());
+        assert!(buffer.redo());
+        assert_eq!(buffer.text(), "ab");
+        assert!(!buffer.redo(), "nothing is left to redo");
+        assert!(buffer.undo());
+        buffer.insert("x");
+        assert!(!buffer.redo(), "a new edit drops the redo steps");
+    }
+
+    #[test]
+    fn paste_and_cut_are_steps_of_their_own() {
+        let mut buffer = typed_buffer("ab");
+        buffer.insert("xyz");
+        buffer.select_all();
+        buffer.insert("");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "abxyz", "the cut comes back alone");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "ab", "then the paste");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "");
+    }
+
+    #[test]
+    fn a_backspace_run_undoes_as_one_step_and_restores_the_caret() {
+        let mut buffer = TextBuffer::new("abc");
+        buffer.backspace();
+        buffer.backspace();
+        assert_eq!(buffer.text(), "a");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "abc");
+        assert_eq!(buffer.cursor(), 3);
+    }
+
+    #[test]
+    fn moving_the_caret_starts_a_new_typing_step() {
+        let mut buffer = typed_buffer("ab");
+        buffer.move_left();
+        buffer.replace_text(None, "x");
+        assert_eq!(buffer.text(), "axb");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "ab");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "");
+    }
+
+    #[test]
+    fn a_composition_undoes_as_one_step() {
+        let mut buffer = TextBuffer::new("");
+        buffer.replace_and_mark(None, "n", None);
+        buffer.replace_and_mark(None, "ni", None);
+        buffer.replace_text(None, "你");
+        assert_eq!(buffer.text(), "你");
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "");
+        assert!(!buffer.undo());
+    }
+
+    #[test]
+    fn set_text_drops_the_history_only_when_the_text_changes() {
+        let mut buffer = typed_buffer("ab");
+        assert!(!buffer.set_text("ab"), "an identical text is no change");
+        assert!(buffer.undo(), "the history survives an identical set");
+        assert_eq!(buffer.text(), "");
+        let mut buffer = typed_buffer("ab");
+        assert!(buffer.set_text("zz"));
+        assert!(!buffer.undo(), "a changed text starts with no history");
+        assert_eq!(buffer.text(), "zz");
+    }
+
+    #[test]
+    fn a_buffer_without_history_records_nothing() {
+        let mut buffer = TextBuffer::new("");
+        buffer.set_history(false);
+        buffer.replace_text(None, "s");
+        buffer.insert("ecret");
+        assert!(!buffer.undo(), "a masked value keeps no copy of itself");
+        assert_eq!(buffer.text(), "secret");
+    }
+
+    #[test]
+    fn history_keeps_at_most_one_hundred_steps() {
+        let mut buffer = TextBuffer::new("");
+        for _ in 0..150 {
+            buffer.insert("x");
+        }
+        let undone = std::iter::from_fn(|| buffer.undo().then_some(())).count();
+        assert_eq!(undone, 100);
+        assert_eq!(buffer.text(), "x".repeat(50));
+    }
+
+    #[test]
+    fn history_keeps_the_newest_step_even_past_four_mebibytes() {
+        let mut buffer = TextBuffer::new("");
+        let block = "a".repeat(1 << 20);
+        for _ in 0..6 {
+            buffer.insert(&block);
+        }
+        let undone = std::iter::from_fn(|| buffer.undo().then_some(())).count();
+        assert_eq!(undone, 1, "only the newest step fits the budget");
+        assert_eq!(buffer.text(), "a".repeat(5 << 20));
+    }
+
+    #[gpui::test]
+    fn undo_and_redo_keys_step_through_typing(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        focus_and_draw(&field, cx);
+        cx.simulate_input("ab");
+        cx.simulate_keystrokes(UNDO_KEYS);
+        assert_eq!(text_of(&field, cx), "");
+        cx.simulate_keystrokes(REDO_KEYS);
+        assert_eq!(text_of(&field, cx), "ab");
+    }
+
+    #[gpui::test]
+    fn the_clear_button_is_undoable(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm"));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear(window, cx));
+        assert_eq!(text_of(&field, cx), "");
+        cx.simulate_keystrokes(UNDO_KEYS);
+        assert_eq!(text_of(&field, cx), "oppm");
+    }
+
+    #[gpui::test]
+    fn a_masked_field_keeps_no_undo_steps(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked());
+        focus_and_draw(&field, cx);
+        cx.simulate_input("secret");
+        cx.simulate_keystrokes(UNDO_KEYS);
+        assert_eq!(text_of(&field, cx), "secret");
     }
 }
 

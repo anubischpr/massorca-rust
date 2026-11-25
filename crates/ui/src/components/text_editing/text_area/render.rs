@@ -14,7 +14,7 @@ use super::{
     SelectLeft, SelectRight, SelectRowEnd, SelectRowStart, SelectUp, Submit, SubmitWithModifier,
     TextArea, TextAreaEvent, TextAreaKey,
 };
-use crate::components::text_editing::TextBuffer;
+use crate::components::text_editing::{Redo, TextBuffer, Undo};
 
 impl Render for TextArea {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -34,6 +34,12 @@ impl Render for TextArea {
             }))
             .on_action(cx.listener(|this, _: &Delete, window, cx| {
                 this.edit(window, cx, TextBuffer::delete);
+            }))
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.edit(window, cx, TextBuffer::undo);
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.edit(window, cx, TextBuffer::redo);
             }))
             .on_action(cx.listener(|this, _: &MoveLeft, window, cx| {
                 this.move_caret(TextBuffer::move_left, true, window, cx);

@@ -17,8 +17,9 @@ use gpui::{
 };
 
 use super::input::{self, InputHost, impl_input_handler};
+use super::keymap::{self, EditShortcut};
 use super::layout::Shaped;
-use super::{TextBuffer, normalize_line_breaks};
+use super::{Redo, TextBuffer, Undo, normalize_line_breaks};
 use crate::tokens::{SIZE_COMPOSER_MAX_HEIGHT, SIZE_COMPOSER_MIN_HEIGHT};
 
 actions!(
@@ -60,7 +61,7 @@ pub fn bind_keys(cx: &mut App) {
     } else {
         ["ctrl-a", "ctrl-c", "ctrl-x", "ctrl-v", "ctrl-enter"]
     };
-    cx.bind_keys([
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("left", MoveLeft, context),
@@ -83,7 +84,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(submit_with_modifier, SubmitWithModifier, context),
         KeyBinding::new("shift-enter", InsertNewline, context),
         KeyBinding::new("escape", Cancel, context),
-    ]);
+    ];
+    bindings.extend(keymap::shortcuts(cfg!(target_os = "macos")).iter().map(
+        |&(keys, shortcut)| match shortcut {
+            EditShortcut::Undo => KeyBinding::new(keys, Undo, context),
+            EditShortcut::Redo => KeyBinding::new(keys, Redo, context),
+        },
+    ));
+    cx.bind_keys(bindings);
 }
 
 /// A key the owner decides about: sending, queueing or leaving the editor.
@@ -339,6 +347,7 @@ impl_input_handler!(TextArea);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::text_editing::keymap::{REDO_KEYS, UNDO_KEYS};
     use gpui::{ClipboardItem, Entity, EntityInputHandler, TestAppContext, VisualTestContext};
     use std::cell::RefCell;
 
@@ -469,6 +478,18 @@ mod tests {
             assert_eq!(area.text(), "你");
             assert_eq!(area.marked_text_range(window, cx), None);
         });
+    }
+
+    #[gpui::test]
+    fn undo_and_redo_keys_step_through_typing(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        focus_and_draw(&area, cx);
+        cx.simulate_input("ab");
+        cx.simulate_keystrokes(UNDO_KEYS);
+        assert_eq!(text_of(&area, cx), "");
+        cx.simulate_keystrokes(REDO_KEYS);
+        assert_eq!(text_of(&area, cx), "ab");
     }
 
     #[gpui::test]
