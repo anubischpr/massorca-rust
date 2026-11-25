@@ -364,3 +364,328 @@ impl Agents {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use massorca_protocol::codes;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::kind::KindDecl;
+    use crate::packages::{KindPackages, PackageKind, PackageState};
+
+    fn claude_like(model_flag_reuse: bool) -> KindDecl {
+        let mut oneshot = json!({ "args": ["-p", "{prompt}", "--output-format", "text"] });
+        if model_flag_reuse {
+            oneshot["model_flag_reuse"] = json!(true);
+        }
+        KindDecl::from_json(
+            &json!({
+                "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"] },
+                "model": { "flag": "--model", "choices": [{ "id": "sonnet", "label": "Sonnet" }] },
+                "oneshot": oneshot
+            })
+            .to_string(),
+        )
+        .expect("parses")
+    }
+
+    #[test]
+    fn the_title_time_limit_is_thirty_seconds_and_the_test_hook_clamps_it() {
+        assert_eq!(TITLE_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(title_timeout_from(None), Duration::from_secs(30));
+        assert_eq!(title_timeout_from(Some("bogus")), Duration::from_secs(30));
+        assert_eq!(title_timeout_from(Some("5")), Duration::from_millis(100));
+        assert_eq!(title_timeout_from(Some("250")), Duration::from_millis(250));
+        assert_eq!(title_timeout_from(Some("999999")), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn the_prompt_is_one_argument_and_is_never_split_or_scanned_again() {
+        let decl = claude_like(false);
+        let oneshot = decl.oneshot.as_ref().expect("declared");
+        let text = "Name it {prompt} with 'quotes' and \"doubles\"";
+        assert_eq!(
+            oneshot_args(oneshot, text, &[], &[]),
+            vec![
+                "-p".to_owned(),
+                text.to_owned(),
+                "--output-format".to_owned(),
+                "text".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_built_argument_holds_no_carriage_return_or_line_feed() {
+        let decl = claude_like(false);
+        let oneshot = decl.oneshot.as_ref().expect("declared");
+        let text = title_prompt(
+            "Fix\r\nthe login\nbug",
+            Some("I will\r\nread the\nauth module"),
+        );
+        for arg in oneshot_args(oneshot, &text, &[], &[]) {
+            assert!(!arg.contains('\r') && !arg.contains('\n'), "{arg:?}");
+        }
+    }
+
+    #[test]
+    fn the_model_flag_is_passed_only_by_a_kind_that_reuses_it() {
+        let reuse = claude_like(true);
+        let model_args = reuse
+            .option_args(Some("sonnet"), None)
+            .expect("the model is declared");
+        assert_eq!(model_args, ["--model", "sonnet"]);
+        let args = oneshot_args(
+            reuse.oneshot.as_ref().expect("declared"),
+            "text",
+            &[],
+            &model_args,
+        );
+        assert_eq!(&args[args.len() - 2..], ["--model", "sonnet"]);
+
+        let plain = claude_like(false);
+        let plain_args = oneshot_args(plain.oneshot.as_ref().expect("declared"), "text", &[], &[]);
+        assert_eq!(plain_args.len(), 4, "no model argument without the reuse");
+    }
+
+    #[test]
+    fn an_optional_argument_is_passed_only_when_the_help_lists_its_flag() {
+        let optional: Vec<OptionalArgDecl> = serde_json::from_value(json!([
+            { "flag": "--max-turns", "values": ["1"] },
+            { "flag": "--strict-mcp-config" },
+            { "flag": "--no-session-persistence" },
+            { "flag": "--tools", "values": [""] }
+        ]))
+        .expect("parses");
+        let help = "Usage: agent [OPTIONS]\n  --max-turns <N>\n  --strict-mcp-config\n  --disallowedTools <tools...>\n";
+        assert_eq!(
+            optional_args_listed(&optional, help),
+            ["--max-turns", "1", "--strict-mcp-config"]
+        );
+        assert!(optional_args_listed(&optional, "no flags here").is_empty());
+    }
+
+    #[test]
+    fn a_flag_counts_as_listed_only_as_a_whole_word() {
+        let help = "  --strict-mcp-config\n  --disallowedTools <tools...>\n  --tools <list>\n";
+        assert!(!flag_listed(help, "--mcp-config"), "part of a longer flag");
+        assert!(!flag_listed(help, "--Tools"), "the case is kept");
+        assert!(flag_listed(help, "--tools"));
+        assert!(flag_listed("  --max-turns=<n>", "--max-turns"));
+        assert!(!flag_listed("  --max-turns-extra", "--max-turns"));
+    }
+
+    #[test]
+    fn the_optional_arguments_follow_the_template_and_precede_the_model_argument() {
+        let decl = claude_like(true);
+        let oneshot = decl.oneshot.as_ref().expect("declared");
+        let model_args = decl
+            .option_args(Some("sonnet"), None)
+            .expect("the model is declared");
+        let optional = ["--max-turns".to_owned(), "1".to_owned()];
+        let args = oneshot_args(oneshot, "text", &optional, &model_args);
+        assert_eq!(
+            args,
+            [
+                "-p",
+                "text",
+                "--output-format",
+                "text",
+                "--max-turns",
+                "1",
+                "--model",
+                "sonnet"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_run_drops_the_run_identity_the_stripped_names_and_works_in_the_scratch_folder() {
+        let decl = KindDecl::from_json(
+            r#"{
+                "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                "strip_inherited_env": ["PARENT_STAMP"],
+                "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"], "strip_env": ["API_KEY"] }
+            }"#,
+        )
+        .expect("parses");
+        let strip = crate::account_check::account_strip_names(&decl);
+        let profile = tempfile::tempdir().expect("a temporary profile");
+        let scratch = Scratch::create(profile.path()).expect("the scratch folder");
+        let command = oneshot_command(
+            Path::new("fake-agent"),
+            &["-p".to_owned()],
+            Path::new("home"),
+            "FAKE_HOME",
+            &strip,
+            scratch.path(),
+        );
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for name in [
+            "MASSORCA_AGENT_SESSION",
+            "MASSORCA_AGENT_TOKEN",
+            "MASSORCA_AGENT_KIND",
+            "PARENT_STAMP",
+            "API_KEY",
+        ] {
+            assert!(
+                removed.iter().any(|removed| removed == name),
+                "{name} is removed"
+            );
+        }
+        assert_eq!(command.get_current_dir(), Some(scratch.path()));
+    }
+
+    #[test]
+    fn the_scratch_folder_is_under_the_profile_and_is_removed_when_the_run_ends() {
+        let profile = tempfile::tempdir().expect("a temporary profile");
+        let path = {
+            let scratch = Scratch::create(profile.path()).expect("the scratch folder");
+            assert!(scratch.path().is_dir(), "the folder exists during the run");
+            assert!(scratch.path().starts_with(profile.path().join("tmp")));
+            scratch.path().to_path_buf()
+        };
+        assert!(!path.exists(), "the folder is gone afterwards");
+    }
+
+    #[test]
+    fn a_stale_scratch_folder_is_swept_and_a_fresh_one_or_another_folder_is_kept() {
+        let profile = tempfile::tempdir().expect("a temporary profile");
+        let tmp = profile.path().join("tmp");
+        fs::create_dir_all(tmp.join("oneshot-left-behind")).expect("a left-behind folder");
+        fs::create_dir_all(tmp.join("other")).expect("another folder");
+        let now = SystemTime::now();
+        sweep_stale_scratch(profile.path(), now, Duration::from_secs(3600));
+        assert!(
+            tmp.join("oneshot-left-behind").exists(),
+            "a fresh folder is kept"
+        );
+        sweep_stale_scratch(
+            profile.path(),
+            now + Duration::from_secs(7200),
+            Duration::from_secs(3600),
+        );
+        assert!(
+            !tmp.join("oneshot-left-behind").exists(),
+            "a folder older than the limit is swept"
+        );
+        assert!(
+            tmp.join("other").exists(),
+            "a folder that is not scratch is kept"
+        );
+    }
+
+    #[test]
+    fn a_finished_run_with_a_title_names_the_chat_by_its_slug() {
+        let run = OneshotRun::Finished {
+            code: Some(0),
+            output: "Fix login\n".to_owned(),
+        };
+        assert_eq!(title_of(run, "fake").expect("a title"), "fix-login");
+    }
+
+    #[test]
+    fn a_failed_exit_an_empty_output_or_a_program_that_does_not_start_is_oneshot_failed() {
+        for run in [
+            OneshotRun::Finished {
+                code: Some(1),
+                output: "Fix login".to_owned(),
+            },
+            OneshotRun::Finished {
+                code: None,
+                output: String::new(),
+            },
+            OneshotRun::Finished {
+                code: Some(0),
+                output: "  \n\t".to_owned(),
+            },
+            OneshotRun::NotStarted,
+        ] {
+            let error = title_of(run.clone(), "fake").expect_err("refused");
+            assert_eq!(error.code, codes::AGENT_ONESHOT_FAILED, "{run:?}");
+            assert!(
+                !error.message.contains("Fix login"),
+                "output is never in the error"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_past_its_limit_is_oneshot_timeout() {
+        let error = title_of(OneshotRun::TimedOut, "fake").expect_err("refused");
+        assert_eq!(error.code, codes::AGENT_ONESHOT_TIMEOUT);
+    }
+
+    /// Hands one declared kind to a service, installed at this test's own executable.
+    struct OneKind(String);
+
+    impl KindPackages for OneKind {
+        fn kinds(&self) -> Vec<PackageKind> {
+            vec![PackageKind {
+                kind_id: "fake".to_owned(),
+                package_id: "massorca.fake".to_owned(),
+                version: "0.1.0".to_owned(),
+                state: PackageState::Enabled,
+                decl: Ok(self.0.clone()),
+            }]
+        }
+    }
+
+    /// A kind declared at this test's executable, with the given one-shot form if any.
+    fn fake_kind(oneshot: Option<Value>) -> String {
+        let program = std::env::current_exe().expect("the test executable");
+        let mut kind = json!({
+            "id": "fake", "name": "Fake", "program": [program.to_string_lossy()],
+            "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"] }
+        });
+        if let Some(oneshot) = oneshot {
+            kind["oneshot"] = oneshot;
+        }
+        kind.to_string()
+    }
+
+    fn request(kind: &str, account: Option<&str>) -> TitleRequest {
+        TitleRequest {
+            kind: kind.to_owned(),
+            account: account.map(str::to_owned),
+            model: None,
+            prompt: "Fix the login bug".to_owned(),
+            reply: None,
+        }
+    }
+
+    #[test]
+    fn a_kind_without_a_one_shot_form_is_refused_before_any_run() {
+        let (agents, _, _profile) =
+            crate::sessions::tests::service_with(Arc::new(OneKind(fake_kind(None))));
+        let error = agents
+            .generate_title(request("fake", None), Duration::from_secs(1))
+            .expect_err("refused");
+        assert_eq!(error.code, codes::AGENT_ONESHOT_UNSUPPORTED);
+    }
+
+    #[test]
+    fn a_kind_with_no_account_to_run_with_is_refused_with_credentials_invalid() {
+        let oneshot = json!({ "args": ["-p", "{prompt}"] });
+        let (agents, _, _profile) =
+            crate::sessions::tests::service_with(Arc::new(OneKind(fake_kind(Some(oneshot)))));
+        let none = agents
+            .generate_title(request("fake", None), Duration::from_secs(1))
+            .expect_err("refused");
+        assert_eq!(none.code, codes::AGENT_CREDENTIALS_INVALID);
+        let unknown = agents
+            .generate_title(
+                request("fake", Some("no-such-account")),
+                Duration::from_secs(1),
+            )
+            .expect_err("refused");
+        assert_eq!(unknown.code, codes::AGENT_CREDENTIALS_INVALID);
+    }
+}
