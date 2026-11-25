@@ -29,6 +29,7 @@ mod sidebar_rows;
 mod source_control;
 mod source_control_dialogs;
 mod start_page;
+mod start_placement;
 mod status_bar;
 mod teams;
 mod title_bar;

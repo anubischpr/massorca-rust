@@ -29,6 +29,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use std::io::Write;
 
 use super::Shell;
+use super::start_placement::{host_pill, pill, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
@@ -115,46 +116,47 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .child(project_link)
         .child("?");
 
-    let placement = div()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_2))
-        .child(
-            Button::new("start-host", page.host)
-                .variant(ButtonVariant::Ghost)
-                .leading_icon(IconName::Server)
-                .disabled(true)
-                .tooltip("Hosts other than This PC come later."),
+    let host = host_pill("start-host", page.host, &theme);
+    let project = {
+        let shell = frame.shell.clone();
+        pill(
+            "start-project",
+            IconName::Folder,
+            page.project.clone(),
+            None,
+            true,
+            &theme,
         )
-        .child(
-            Button::new("start-project", page.project.clone())
-                .variant(ButtonVariant::Ghost)
-                .trailing_icon(IconName::ChevronDown)
-                .disabled(true)
-                .tooltip("Change the project from the heading."),
-        )
-        .child(
-            Button::new(
-                "start-branch",
-                page.branch
-                    .clone()
-                    .unwrap_or_else(|| "No branch".to_owned()),
-            )
-            .variant(ButtonVariant::Ghost)
-            .leading_icon(IconName::GitBranch)
-            .disabled(true)
-            .tooltip(GIT_LATER),
-        );
-
-    // The real composer: the Chat / Terminal switch sits in its bottom row (A32).
+        .on_click(move |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
+        })
+    };
+    let branch = pill(
+        "start-branch",
+        IconName::GitBranch,
+        page.branch
+            .clone()
+            .unwrap_or_else(|| "No branch".to_owned()),
+        None,
+        false,
+        &theme,
+    )
+    .tooltip(tooltip_view(Tooltip::new(GIT_LATER.to_owned())));
+    let placement = placement_card(host, project, branch, &theme);
+    // The real composer: the Chat / Terminal switch sits in its bottom row (A32). The placement card joins its top edge.
     let composer = div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_2))
-        .child(frame.composer.clone())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(placement)
+                .child(frame.composer.clone()),
+        )
         .when(frame.mode == StartMode::Terminal, |column| {
             column.child(
                 div()
@@ -193,7 +195,6 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .gap(px(SPACE_6))
         .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
-        .child(placement)
         .when(frame.profile_unsafe, |column| {
             column.child(profile_banner())
         })

@@ -1,29 +1,31 @@
-//! The start page with no workspace (D-AG-01, J3), where "+ Create" lands: the question, a
-//! placement row with the project, and the start composer with its agent pick and access chip.
-//! Send creates a workspace in the project, named from the prompt, then starts the agent in it.
+//! The start page with no workspace (D-AG-01, J3), where "+ Create" lands: the question, the placement card with
+//! the host, project and branch, and the start composer with its agent pick and access chip. Send creates a
+//! workspace in the project, named from the prompt, then starts the agent in it.
 
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, Entity, WeakEntity, Window, div, px};
 use massorca_protocol::methods::projects::Project;
-use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::{MenuEntry, MenuItem};
-use massorca_ui::components::popover::OverlayLayer;
+use massorca_ui::components::popover::{
+    OverlayLayer, Popover, PopoverPlacement, PopoverVariant, PopoverWidth,
+};
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_3, SPACE_6, TYPE_CAPTION, TYPE_HEADING,
+    LAYOUT_CONVERSATION_READING, SPACE_2, SPACE_3, SPACE_6, TYPE_CAPTION, TYPE_HEADING,
 };
-use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 use super::Shell;
 use super::start_page::{
     key_hints, profile_banner, project_title_link, refuse_send, starting_line,
 };
+use super::start_placement::{host_pill, pill, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
-    CHOOSE_A_PROJECT, HOME_START, NEEDS_NEWER_SERVICE, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails,
+    CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails, branch_pill,
     create_params, home_project, home_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
@@ -36,21 +38,22 @@ pub(super) struct HomeFrame {
     pub shell: WeakEntity<Shell>,
     /// The project's name, or `None` while there is no project.
     pub project: Option<String>,
+    /// The project's base branch, which a new worktree starts from when the branch menu names none.
+    pub project_base: Option<String>,
     /// The start in flight from this page, shown under the composer.
     pub starting: Option<String>,
     pub mode: StartMode,
     /// The service refused because the data folder is not secured.
     pub profile_unsafe: bool,
-    /// The Advanced section's fields and whether it is open.
+    /// The branch menu's fields and whether it is open.
     pub details: HomeDetails,
 }
 
-/// The Advanced section of the start page with no workspace (D-AG-01, A89): whether it is
-/// open, whether Send reuses a branch, and its text fields. Kept on the shell so a draft
-/// survives redraws.
+/// The branch menu of the start page with no workspace (D-AG-01, A89): whether it is open, whether Send reuses a
+/// branch, and its text fields. Kept on the shell so a draft survives redraws.
 #[derive(Clone, Debug)]
 pub(super) struct HomeDetails {
-    pub expanded: bool,
+    pub branch_menu: bool,
     pub existing_branch: bool,
     pub name: Entity<TextField>,
     pub branch: Entity<TextField>,
@@ -58,10 +61,10 @@ pub(super) struct HomeDetails {
 }
 
 impl HomeDetails {
-    /// The section starts closed, with empty fields.
+    /// The menu starts closed, with empty fields.
     pub(super) fn new(cx: &mut Context<Shell>) -> Self {
         Self {
-            expanded: false,
+            branch_menu: false,
             existing_branch: false,
             name: cx.new(|cx| {
                 TextField::new(cx)
@@ -81,7 +84,7 @@ impl HomeDetails {
         }
     }
 
-    /// What Send reads from the section: the fields' text and the reuse choice.
+    /// What Send reads from the menu: the fields' text and the reuse choice.
     fn values(&self, cx: &App) -> WorkspaceDetails {
         WorkspaceDetails {
             name: self.name.read(cx).text().to_owned(),
@@ -116,22 +119,6 @@ pub(super) fn home_project_menu(
 pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
-    let project = {
-        let shell = frame.shell.clone();
-        Button::new(
-            "home-start-project",
-            frame
-                .project
-                .clone()
-                .unwrap_or_else(|| CHOOSE_A_PROJECT.to_owned()),
-        )
-        .variant(ButtonVariant::Ghost)
-        .leading_icon(IconName::Folder)
-        .trailing_icon(IconName::ChevronDown)
-        .on_click(move |window, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.open_home_project_menu(window, cx));
-        })
-    };
     let title = {
         let shell = frame.shell.clone();
         let heading = div()
@@ -158,12 +145,64 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
             None => heading.child("What should we work on?"),
         }
     };
-    let composer = div()
+    let labels = branch_pill(&frame.details.values(cx), frame.project_base.as_deref());
+    let host = host_pill("home-start-host", LOCAL_HOST, &theme);
+    let project = {
+        let shell = frame.shell.clone();
+        pill(
+            "home-start-project",
+            IconName::Folder,
+            frame
+                .project
+                .clone()
+                .unwrap_or_else(|| CHOOSE_A_PROJECT.to_owned()),
+            None,
+            true,
+            &theme,
+        )
+        .on_click(move |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_home_project_menu(window, cx));
+        })
+    };
+    let branch = {
+        let shell = frame.shell.clone();
+        let trigger = pill(
+            "home-start-branch",
+            IconName::GitBranch,
+            labels.label,
+            Some(labels.detail),
+            true,
+            &theme,
+        )
+        .on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.toggle_branch_menu(cx));
+        });
+        let dismiss = frame.shell.clone();
+        Popover::new("home-start-branch-menu", trigger)
+            .open(frame.details.branch_menu)
+            .variant(PopoverVariant::Form)
+            .width(PopoverWidth::Medium)
+            .placement(PopoverPlacement::Below)
+            .layer(OverlayLayer::Dialog)
+            .child(branch_fields(&frame.details, frame.shell.clone()))
+            .on_dismiss(move |_, cx| {
+                let _ = dismiss.update(cx, |shell, cx| shell.close_branch_menu(cx));
+            })
+    };
+    let placement = placement_card(host, project, branch, &theme);
+    let stack = div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_2))
-        .child(frame.composer.clone())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(placement)
+                .child(frame.composer.clone()),
+        )
         .when(frame.mode == StartMode::Terminal, |column| {
             column.child(
                 div()
@@ -185,87 +224,34 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
         .gap(px(SPACE_6))
         .child(div().flex().justify_center().child(rose_logo()))
         .child(title)
-        .child(div().flex().flex_row().justify_center().child(project))
         .when(frame.profile_unsafe, |column| {
             column.child(profile_banner())
         })
-        .child(composer)
-        .child(advanced_section(
-            &frame.details,
-            frame.shell.clone(),
-            &theme,
-        ))
+        .child(stack)
         .into_any_element()
 }
 
-/// The Advanced toggle, and under it the section's fields while it is open. Host comes first
-/// and is off until the service takes a host for a new workspace.
-fn advanced_section(details: &HomeDetails, shell: WeakEntity<Shell>, theme: &Theme) -> AnyElement {
-    let toggle = {
+/// The branch menu's fields, as Send reads them for `workspace.create`: the name, the branch, the reuse choice and the
+/// base. Host lives in its own pill.
+fn branch_fields(details: &HomeDetails, shell: WeakEntity<Shell>) -> impl IntoElement {
+    let existing = {
         let shell = shell.clone();
-        Button::new("home-start-advanced", "Advanced")
-            .variant(ButtonVariant::Ghost)
-            .trailing_icon(if details.expanded {
-                IconName::ChevronUp
-            } else {
-                IconName::ChevronDown
-            })
-            .on_click(move |_, cx| {
-                let _ = shell.update(cx, |shell, cx| shell.toggle_home_advanced(cx));
+        Checkbox::new("home-start-existing", details.existing_branch)
+            .label("Use an existing branch")
+            .on_change(move |checked, _, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.set_home_existing_branch(checked, cx));
             })
     };
-    let mut column = div()
+    div()
+        .debug_selector(|| "home-start-branch-fields".to_owned())
         .w_full()
         .flex()
         .flex_col()
-        .items_center()
-        .gap(px(SPACE_2))
-        .child(toggle);
-    if details.expanded {
-        let existing = {
-            let shell = shell.clone();
-            Checkbox::new("home-start-existing", details.existing_branch)
-                .label("Use an existing branch")
-                .on_change(move |checked, _, cx| {
-                    let _ =
-                        shell.update(cx, |shell, cx| shell.set_home_existing_branch(checked, cx));
-                })
-        };
-        column = column.child(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_3))
-                .child(host_field(theme))
-                .child(details.name.clone())
-                .child(details.branch.clone())
-                .child(existing)
-                .child(details.base.clone()),
-        );
-    }
-    column.into_any_element()
-}
-
-/// The Host row: this PC, off until the service can take a host for a workspace.
-fn host_field(theme: &Theme) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(SPACE_1))
-        .child(
-            div()
-                .text_style(TYPE_CAPTION)
-                .text_color(theme.palette.text.secondary)
-                .child("Host"),
-        )
-        .child(
-            Button::new("home-start-host", LOCAL_HOST)
-                .variant(ButtonVariant::Secondary)
-                .leading_icon(IconName::Server)
-                .disabled(true)
-                .tooltip(NEEDS_NEWER_SERVICE),
-        )
+        .gap(px(SPACE_3))
+        .child(details.name.clone())
+        .child(details.branch.clone())
+        .child(existing)
+        .child(details.base.clone())
 }
 
 impl Shell {
@@ -278,9 +264,15 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens or closes the Advanced section. It starts closed.
-    pub(super) fn toggle_home_advanced(&mut self, cx: &mut Context<Self>) {
-        self.home_details.expanded = !self.home_details.expanded;
+    /// Opens or closes the branch pill's menu. It starts closed.
+    pub(super) fn toggle_branch_menu(&mut self, cx: &mut Context<Self>) {
+        self.home_details.branch_menu = !self.home_details.branch_menu;
+        cx.notify();
+    }
+
+    /// Closes the branch pill's menu on a click outside it or Escape.
+    pub(super) fn close_branch_menu(&mut self, cx: &mut Context<Self>) {
+        self.home_details.branch_menu = false;
         cx.notify();
     }
 
@@ -294,9 +286,12 @@ impl Shell {
     pub(super) fn home_frame(&mut self, cx: &mut Context<Self>) -> Option<HomeFrame> {
         self.service.as_ref()?;
         let composer = self.start_composer(HOME_START, cx);
-        let project = {
+        let (project, project_base) = {
             let projects = &self.store.read(cx).state().projects;
-            home_project(projects, self.home_project.as_deref()).map(|p| p.name.clone())
+            match home_project(projects, self.home_project.as_deref()) {
+                Some(project) => (Some(project.name.clone()), project.base_ref.clone()),
+                None => (None, None),
+            }
         };
         let starting = self
             .start_pending
@@ -306,6 +301,7 @@ impl Shell {
         Some(HomeFrame {
             shell: cx.entity().downgrade(),
             project,
+            project_base,
             starting,
             mode: self.start_mode(HOME_START),
             profile_unsafe: self.profile_unsafe,
@@ -314,7 +310,7 @@ impl Shell {
         })
     }
 
-    /// The project button's menu, with the page's project checked. It opens where the pointer is.
+    /// The project pill's menu, with the page's project checked. It opens where the pointer is.
     pub(super) fn open_home_project_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let projects = self.store.read(cx).state().projects.clone();
         let chosen = home_project(&projects, self.home_project.as_deref()).map(|p| p.id.clone());

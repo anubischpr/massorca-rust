@@ -152,6 +152,20 @@ fn the_start_page_microphone_is_disabled_and_says_why(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_start_page_places_its_host_project_and_branch_in_one_card(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    for selector in [
+        "start-placement",
+        "start-host",
+        "start-project",
+        "start-branch",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is drawn");
+    }
+}
+
+#[gpui::test]
 fn a_workspace_opens_its_start_page_and_the_page_is_drawn(cx: &mut TestAppContext) {
     let (projects, workspaces) = two_projects();
     let (rig, cx) = rig(cx, projects, workspaces);

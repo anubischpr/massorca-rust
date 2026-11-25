@@ -107,7 +107,7 @@ fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
         );
     });
     assert!(cx.debug_bounds("home-start-column").is_some());
-    assert!(cx.debug_bounds("button:home-start-project").is_some());
+    assert!(cx.debug_bounds("home-start-project").is_some());
 }
 
 #[gpui::test]
@@ -179,18 +179,42 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
 }
 
 #[gpui::test]
-fn the_advanced_section_starts_closed_and_opens_on_its_toggle(cx: &mut TestAppContext) {
+fn the_branch_menu_starts_closed_and_opens_from_the_branch_pill(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
     draw(cx);
-    assert!(cx.debug_bounds("button:home-start-advanced").is_some());
+    assert!(cx.debug_bounds("home-start-branch").is_some());
     assert!(
-        cx.debug_bounds("button:home-start-host").is_none(),
+        cx.debug_bounds("home-start-branch-fields").is_none(),
         "the fields start hidden"
     );
-    click(cx, "button:home-start-advanced");
-    assert!(cx.debug_bounds("button:home-start-host").is_some());
+    click(cx, "home-start-branch");
+    assert!(cx.debug_bounds("home-start-branch-fields").is_some());
     rig.shell
-        .read_with(cx, |shell, _| assert!(shell.home_details.expanded));
+        .read_with(cx, |shell, _| assert!(shell.home_details.branch_menu));
+    click(cx, "home-start-branch");
+    rig.shell
+        .read_with(cx, |shell, _| assert!(!shell.home_details.branch_menu));
+}
+
+#[gpui::test]
+fn the_placement_card_has_the_host_project_and_branch_pills_and_the_host_opens_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = home_rig(cx);
+    draw(cx);
+    for selector in [
+        "start-placement",
+        "home-start-host",
+        "home-start-project",
+        "home-start-branch",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is drawn");
+    }
+    click(cx, "home-start-host");
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.dialogs.menu.is_none());
+        assert!(!shell.home_details.branch_menu);
+    });
 }
 
 #[gpui::test]
@@ -210,7 +234,7 @@ fn an_untouched_advanced_section_sends_the_plain_create_call(cx: &mut TestAppCon
 #[gpui::test]
 fn the_advanced_fields_go_into_the_create_call(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
-    click(cx, "button:home-start-advanced");
+    click(cx, "home-start-branch");
     let (name, branch, base) = rig.shell.read_with(cx, |shell, _| {
         let details = &shell.home_details;
         (
@@ -236,7 +260,7 @@ fn the_advanced_fields_go_into_the_create_call(cx: &mut TestAppContext) {
 #[gpui::test]
 fn reusing_a_branch_needs_its_name_before_send_creates_anything(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
-    click(cx, "button:home-start-advanced");
+    click(cx, "home-start-branch");
     rig.shell
         .update(cx, |shell, cx| shell.set_home_existing_branch(true, cx));
     rig.shell
@@ -337,7 +361,7 @@ fn an_empty_start_page_menu_says_so_and_still_offers_add_a_project() {
 #[gpui::test]
 fn clicking_no_project_chooses_nothing(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
-    click(cx, "button:home-start-project");
+    click(cx, "home-start-project");
     assert!(
         rig.shell
             .read_with(cx, |shell, _| shell.dialogs.menu.is_some())
@@ -359,7 +383,7 @@ fn clicking_no_project_chooses_nothing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_project_added_from_the_page_menu_becomes_the_pages_project(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
-    click(cx, "button:home-start-project");
+    click(cx, "home-start-project");
     // The rows are alpha, beta, No project, a separator, then "Add a project…".
     click(cx, "menu-item-4");
     rig.shell.update(cx, |shell, cx| {
@@ -420,7 +444,7 @@ fn an_unsafe_data_folder_refusal_shows_a_banner_with_the_command_to_run(cx: &mut
 #[gpui::test]
 fn an_unsafe_data_folder_refusal_of_add_project_shows_the_banner_too(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
-    click(cx, "button:home-start-project");
+    click(cx, "home-start-project");
     click(cx, "menu-item-4");
     rig.shell.update(cx, |shell, cx| {
         let dialog = shell

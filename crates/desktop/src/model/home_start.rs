@@ -77,6 +77,31 @@ impl WorkspaceDetails {
     }
 }
 
+/// The branch pill's two labels: the branch Send creates or reuses, and where a new worktree starts (D-AG-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchPill {
+    pub label: String,
+    pub detail: String,
+}
+
+/// The branch pill's labels: a new worktree from the base the menu names, else the project's base, else the default
+/// branch; or the branch the menu reuses.
+pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> BranchPill {
+    if details.existing_branch {
+        return BranchPill {
+            label: non_empty(&details.branch).unwrap_or_else(|| "Existing branch".to_owned()),
+            detail: "existing branch".to_owned(),
+        };
+    }
+    let base = non_empty(&details.base)
+        .or_else(|| project_base.and_then(non_empty))
+        .unwrap_or_else(|| "the default branch".to_owned());
+    BranchPill {
+        label: "New worktree".to_owned(),
+        detail: format!("from {base}"),
+    }
+}
+
 /// The `workspace.create` that Send asks for: a new worktree in `project`.
 pub fn create_params(
     project: &str,
@@ -210,6 +235,36 @@ mod tests {
         let params = create_params("p1", "fix the login", &details);
         assert_eq!(params.branch.as_deref(), Some("feat/login"));
         assert!(params.existing_branch);
+    }
+
+    #[test]
+    fn a_new_worktree_starts_from_the_base_the_menu_names_then_the_project_base() {
+        let mut details = WorkspaceDetails::default();
+        assert_eq!(branch_pill(&details, None).label, "New worktree");
+        assert_eq!(
+            branch_pill(&details, None).detail,
+            "from the default branch"
+        );
+        assert_eq!(branch_pill(&details, Some("main")).detail, "from main");
+        details.base = " develop ".into();
+        assert_eq!(branch_pill(&details, Some("main")).detail, "from develop");
+    }
+
+    #[test]
+    fn reusing_a_branch_shows_the_name_typed_or_asks_for_one() {
+        let mut details = WorkspaceDetails {
+            existing_branch: true,
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(branch_pill(&details, Some("main")).label, "Existing branch");
+        details.branch = " feat/login ".into();
+        assert_eq!(
+            branch_pill(&details, Some("main")),
+            BranchPill {
+                label: "feat/login".into(),
+                detail: "existing branch".into(),
+            }
+        );
     }
 
     #[test]
