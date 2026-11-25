@@ -18,7 +18,7 @@ use gpui::{
 
 use crate::components::menu::MenuView;
 use crate::components::model_picker::{
-    AgentOption, Choice, ModelPicker, ModelPickerEvent, PickerState, RowRef,
+    AgentOption, Choice, ModelPicker, ModelPickerAction, ModelPickerEvent, PickerState, RowRef,
 };
 use crate::components::popover::TriggerBounds;
 use crate::components::text_editing::text_area::{TextArea, TextAreaEvent, TextAreaKey};
@@ -36,7 +36,7 @@ const KEY_CONTEXT: &str = "Composer";
 const PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 const HINT_DURATION: Duration = Duration::from_secs(3);
 
-/// Builds the control shown first in the bottom row, on each render.
+/// Builds the control shown after the access chip in the bottom row, on each render.
 pub type LeadingControl = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// Binds the composer's keys and those of the parts it holds; apps call this once at startup.
@@ -91,6 +91,8 @@ pub enum ComposerEvent {
     SignIn,
     /// The user pressed "Resume" on the composer of an ended session.
     Resume,
+    /// The user pressed "Open Marketplace" in a picker with no agent installed.
+    OpenMarketplace,
     /// Files dropped on the composer.
     DroppedFiles(Vec<PathBuf>),
 }
@@ -106,6 +108,8 @@ pub struct Composer {
     access_index: usize,
     /// A caption after the access chip, such as a mode waiting for the next resume.
     access_note: Option<SharedString>,
+    /// Each access mode's secondary text by index, `None` for none; see `set_access_details`.
+    access_details: Vec<Option<SharedString>>,
     agent_name: SharedString,
     voice: bool,
     /// Whether the attach button, its menu and dropped files are offered.
@@ -127,7 +131,9 @@ pub struct Composer {
     enter_inserts_newline: bool,
     /// Send works with a blank draft (the start page creates a workspace with no prompt).
     sends_empty: bool,
-    /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
+    /// A placement card sits on the top edge: the composer spans the card's column, keeping its rounded corners.
+    joined_top: bool,
+    /// A control shown after the access chip (the start page's Chat / Terminal switch).
     leading: Option<LeadingControl>,
     /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
     send_unavailable: Option<SharedString>,
@@ -143,7 +149,7 @@ pub struct Composer {
     attach_menu: Option<(Entity<MenuView>, Subscription)>,
     _subscriptions: Vec<Subscription>,
     /// The picker's events, kept apart because the owner can rebuild the picker.
-    _picker_events: Subscription,
+    _picker_events: Vec<Subscription>,
 }
 
 impl std::fmt::Debug for Composer {
@@ -171,10 +177,7 @@ impl Composer {
         let text_events = cx.subscribe(&text, |this, _, event: &TextAreaEvent, cx| {
             this.on_text_event(*event, cx);
         });
-        let picker_events = cx.subscribe(&picker, |_, _, event: &ModelPickerEvent, cx| {
-            let ModelPickerEvent::Changed(choice) = event;
-            cx.emit(ComposerEvent::ModelChanged(choice.clone()));
-        });
+        let picker_events = Self::subscribe_picker(&picker, cx);
         Self {
             text,
             picker,
@@ -182,6 +185,7 @@ impl Composer {
             access,
             access_index: 0,
             access_note: None,
+            access_details: Vec::new(),
             agent_name: "Claude".into(),
             voice: true,
             attach_offered: true,
@@ -197,6 +201,7 @@ impl Composer {
             error: None,
             enter_inserts_newline: false,
             sends_empty: false,
+            joined_top: false,
             leading: None,
             send_unavailable: None,
             voice_unavailable: None,
@@ -212,8 +217,39 @@ impl Composer {
         }
     }
 
+    /// The picker's events, as the composer's own: the model choice and the Marketplace link.
+    fn subscribe_picker(picker: &Entity<ModelPicker>, cx: &mut Context<Self>) -> Vec<Subscription> {
+        vec![
+            cx.subscribe(picker, |_, _, event: &ModelPickerEvent, cx| match event {
+                ModelPickerEvent::Changed(choice) => {
+                    cx.emit(ComposerEvent::ModelChanged(choice.clone()));
+                }
+            }),
+            cx.subscribe(
+                picker,
+                |_, _, action: &ModelPickerAction, cx| match action {
+                    ModelPickerAction::OpenMarketplace => cx.emit(ComposerEvent::OpenMarketplace),
+                },
+            ),
+        ]
+    }
+
     pub fn picker(&self) -> &Entity<ModelPicker> {
         &self.picker
+    }
+
+    /// Whether no agent is installed: the picker shows "No agents installed" with its Marketplace
+    /// link, and Send stays off.
+    pub fn set_no_agents_installed(&mut self, none_installed: bool, cx: &mut Context<Self>) {
+        self.picker.update(cx, |picker, cx| {
+            picker.set_no_agents_installed(none_installed, cx)
+        });
+        cx.notify();
+    }
+
+    /// Whether the picker reports that no agent is installed.
+    pub fn no_agents_installed(&self, cx: &App) -> bool {
+        self.picker.read(cx).state().no_agents_installed()
     }
 
     /// The draft text as typed.
@@ -289,6 +325,13 @@ impl Composer {
         cx.notify();
     }
 
+    /// A placement card sits on the top edge: the composer spans the card's column so the card's inset lines up with
+    /// its sides, and keeps its rounded corners, as the start artboard draws it.
+    pub fn joined_top(mut self, joined: bool) -> Self {
+        self.joined_top = joined;
+        self
+    }
+
     /// Lets Send and Enter go through with a blank draft.
     pub fn sends_empty(mut self) -> Self {
         self.sends_empty = true;
@@ -321,14 +364,19 @@ impl Composer {
     /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
     /// otherwise the first model offered is chosen.
     pub fn set_picker_agents(&mut self, agents: Vec<AgentOption>, cx: &mut Context<Self>) {
-        let (choice, favourites) = {
+        let (choice, favourites, none_installed) = {
             let state = self.picker.read(cx).state();
             if state.agents() == agents.as_slice() {
                 return;
             }
-            (state.choice().clone(), state.favourites().to_vec())
+            (
+                state.choice().clone(),
+                state.favourites().to_vec(),
+                state.no_agents_installed(),
+            )
         };
         let mut state = PickerState::new(agents, choice.clone()).with_favourites(favourites);
+        state.set_no_agents_installed(none_installed);
         if state.locate(choice.model.as_ref()).is_none() {
             let first = state
                 .agents()
@@ -339,10 +387,7 @@ impl Composer {
             }
         }
         self.picker = cx.new(|cx| ModelPicker::new(state, cx));
-        self._picker_events = cx.subscribe(&self.picker, |_, _, event: &ModelPickerEvent, cx| {
-            let ModelPickerEvent::Changed(choice) = event;
-            cx.emit(ComposerEvent::ModelChanged(choice.clone()));
-        });
+        self._picker_events = Self::subscribe_picker(&self.picker, cx);
         cx.notify();
     }
 
@@ -351,7 +396,9 @@ impl Composer {
         Situation {
             agent_busy: self.agent_busy,
             host_confirmed: self.host_confirmed,
-            disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
+            disabled: self.disabled_reason.is_some()
+                || self.send_unavailable.is_some()
+                || self.no_agents_installed(cx),
             text_empty: area.text().is_empty() && !self.sends_empty,
             composing: area.is_composing(),
             queueing: self.queueing_offered,
@@ -451,7 +498,9 @@ mod tests {
     use super::*;
     use crate::components::agent_icon::AgentKind;
     use crate::components::model_picker::{AgentAvailability, AgentOption, ModelList, ModelOption};
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{
+        InteractiveElement, IntoElement, ParentElement, TestAppContext, VisualTestContext, div,
+    };
     use std::{cell::RefCell, rc::Rc};
 
     fn picker_state() -> PickerState {
@@ -803,5 +852,179 @@ mod tests {
         composer.update(cx, |composer, cx| composer.set_send_unavailable(None, cx));
         cx.simulate_keystrokes("enter");
         assert_eq!(*events.borrow(), vec![ComposerEvent::Send("hi".into())]);
+    }
+
+    #[gpui::test]
+    fn the_bottom_row_reads_attach_access_leading_then_the_model_chip_and_send(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (_composer, cx) = cx.add_window_view(|_, cx| {
+            Composer::new(picker_state(), access(), cx).leading_control(|_, _| {
+                div()
+                    .debug_selector(|| "composer-leading".to_owned())
+                    .child("Chat")
+                    .into_any_element()
+            })
+        });
+        cx.run_until_parked();
+        let order = [
+            "composer-attach",
+            "composer-access",
+            "composer-leading",
+            "model-picker-trigger",
+            "composer-primary",
+        ];
+        let lefts: Vec<_> = order
+            .iter()
+            .map(|name| {
+                cx.debug_bounds(name)
+                    .unwrap_or_else(|| panic!("{name} is drawn"))
+                    .left()
+            })
+            .collect();
+        assert!(
+            lefts.windows(2).all(|pair| pair[0] < pair[1]),
+            "left to right: {order:?}, drawn at {lefts:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn without_an_installed_agent_send_stays_off_and_the_marketplace_link_reaches_the_owner(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_no_agents_installed(true, cx)
+        });
+        assert!(composer.read_with(cx, |composer, cx| composer.no_agents_installed(cx)));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hi");
+        cx.simulate_keystrokes("enter");
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .all(|event| !matches!(event, ComposerEvent::Send(_))),
+            "Send stays off"
+        );
+        assert_eq!(
+            draft_of(&composer, cx),
+            "hi",
+            "the draft stays in the composer"
+        );
+        assert_eq!(
+            composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+            PrimaryAction::Disabled
+        );
+        let picker = composer.read_with(cx, |composer, _| composer.picker().clone());
+        picker.update_in(cx, |picker, window, cx| picker.open(window, cx));
+        cx.run_until_parked();
+        let link = cx
+            .debug_bounds("model-picker-marketplace")
+            .expect("the link is drawn")
+            .center();
+        cx.simulate_click(link, gpui::Modifiers::none());
+        assert_eq!(*events.borrow(), vec![ComposerEvent::OpenMarketplace]);
+        composer.update(cx, |composer, cx| {
+            composer.set_no_agents_installed(false, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+            PrimaryAction::Send,
+            "Send returns once an agent is installed"
+        );
+    }
+
+    fn same_named_modes() -> Vec<AccessMode> {
+        let auto = || AccessMode {
+            name: "Auto".into(),
+            icon: IconName::Shield,
+            bypass: false,
+        };
+        vec![auto(), auto()]
+    }
+
+    #[gpui::test]
+    fn the_access_detail_tells_two_same_named_modes_apart_in_the_menu_and_the_tooltip(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::components::button::test_support::{focus_and_draw as focus_element, press_key};
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), same_named_modes(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_access_details(vec![Some("The CLI's default".into()), None], cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer
+                .access_detail(0)
+                .map(|text| text.to_string())),
+            Some("The CLI's default".to_owned())
+        );
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(1).cloned()),
+            None
+        );
+        // Keyboard focus on the selected chip shows its detail as the tooltip.
+        let access_focus = composer.read_with(cx, |composer, _| composer.access_focus.clone());
+        cx.update(|window, _| window.activate_window());
+        press_key(cx, "f1");
+        focus_element(cx, &access_focus);
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the chip's tooltip shows on keyboard focus"
+        );
+        // Opening the chip lists both modes; only the first row carries the detail line.
+        let chip = cx
+            .debug_bounds("composer-access")
+            .expect("the chip is drawn")
+            .center();
+        cx.simulate_click(chip, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let with_detail = cx
+            .debug_bounds("menu-item-0")
+            .expect("the default row is drawn")
+            .size
+            .height;
+        let plain = cx
+            .debug_bounds("menu-item-1")
+            .expect("the declared row is drawn")
+            .size
+            .height;
+        assert!(
+            f32::from(with_detail) > f32::from(plain),
+            "the detail adds a second line to its row"
+        );
+    }
+
+    #[gpui::test]
+    fn access_details_stay_with_their_modes_until_the_modes_change(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), access(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_access_details(vec![Some("The CLI's default".into())], cx)
+        });
+        composer.update(cx, |composer, cx| {
+            composer.set_access_modes(access(), 0, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(0).cloned()),
+            Some("The CLI's default".into()),
+            "unchanged modes keep their details"
+        );
+        composer.update(cx, |composer, cx| {
+            composer.set_access_modes(same_named_modes(), 0, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(0).cloned()),
+            None,
+            "changed modes drop the details that named the old list"
+        );
     }
 }

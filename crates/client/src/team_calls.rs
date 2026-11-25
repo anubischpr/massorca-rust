@@ -5,6 +5,9 @@ use massorca_protocol::methods::tasks::{
     self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskStopParams,
     TaskUpdateParams,
 };
+use massorca_protocol::methods::team_room::{
+    self, TeamRoomList, TeamRoomListParams, TeamRoomPostParams, TeamRoomPosted,
+};
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
     Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
@@ -98,6 +101,22 @@ impl Client {
     /// `team.board`: a team's Board, or one project's, in four columns.
     pub async fn team_board(&self, params: &BoardParams) -> Result<Board, ClientError> {
         self.call(teams::BOARD, params).await
+    }
+
+    /// `team.room_list`: a team's Conference room, oldest first (capability `team-room/1`).
+    pub async fn team_room_list(
+        &self,
+        params: &TeamRoomListParams,
+    ) -> Result<TeamRoomList, ClientError> {
+        self.call(team_room::ROOM_LIST, params).await
+    }
+
+    /// `team.room_post`: posts a line to a team's room, as a person (it becomes a task) or as one bot.
+    pub async fn team_room_post(
+        &self,
+        params: &TeamRoomPostParams,
+    ) -> Result<TeamRoomPosted, ClientError> {
+        self.call(team_room::ROOM_POST, params).await
     }
 
     /// `team.memory_list`: a team's memory lines, or one bot's, newest first.

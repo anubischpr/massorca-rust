@@ -18,33 +18,36 @@ use massorca_ui::components::model_picker::{
 };
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
-use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
+use massorca_ui::components::segmented_control::{Segment, SegmentedControl, SegmentedStyle};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_4, SPACE_6, SPACE_8, TYPE_CAPTION,
+    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_CAPTION,
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use std::io::Write;
 
 use super::Shell;
+use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
-use crate::model::agent_kinds::{KindChoice, start_kind_choices};
+use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
-use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
+use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
-use crate::model::permission_modes::{ModeChoice, start_choices};
+use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER,
-    WorkspaceStart, send_reason, start_params,
+    CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
+    StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason,
+    start_options, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::Refusal;
+use crate::ui_state;
 use massorca_protocol::codes;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
@@ -58,17 +61,8 @@ pub(super) struct StartFrame {
     pub starting: Option<String>,
     /// Where the session the composer starts opens.
     pub mode: StartMode,
-    /// Why the chosen agent cannot start, when it cannot.
-    pub kind_notice: Option<KindNotice>,
     /// The service refused because the data folder is not secured.
     pub profile_unsafe: bool,
-}
-
-/// Why the chosen agent cannot start, and the Marketplace page that can install or turn it on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct KindNotice {
-    pub text: String,
-    pub page: MarketplacePage,
 }
 
 /// The banner a data folder that is not secured gets: the service refuses every call until the
@@ -89,40 +83,6 @@ pub(super) fn profile_banner() -> impl IntoElement {
         )
 }
 
-/// What the page says when the service declares no agent at all.
-const NO_AGENTS: &str = "No agent is installed. Add one from the Marketplace.";
-
-/// The refusal Send shows for a kind that cannot start.
-fn cannot_start(name: &str, reason: &str) -> String {
-    format!("{name} cannot start: {reason}.")
-}
-
-/// The notice under a start composer, with its direct action to the Marketplace.
-pub(super) fn kind_notice_row(
-    notice: KindNotice,
-    shell: WeakEntity<Shell>,
-    theme: &Theme,
-) -> impl IntoElement {
-    let page = notice.page;
-    div()
-        .debug_selector(|| "start-kind-notice".to_owned())
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap(px(SPACE_2))
-        .text_style(TYPE_CAPTION)
-        .text_color(theme.palette.text.secondary)
-        .child(notice.text)
-        .child(
-            Button::new("start-kind-marketplace", "Open in Marketplace")
-                .variant(ButtonVariant::Secondary)
-                .on_click(move |_, cx| {
-                    let _ = shell.update(cx, |shell, cx| shell.open_marketplace(page, cx));
-                }),
-        )
-}
-
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
 /// starts a session when the user sends.
 #[derive(Debug)]
@@ -131,26 +91,27 @@ pub(super) struct StartComposer {
     pub mode: StartMode,
     /// The (kind, mode) the person last picked on the chip; the only mode a start can send.
     pub picked: Option<(String, String)>,
+    /// Whether Chat is available for the picked agent, as the page's last frame read it (decision 0101, D11).
+    pub chat: ChatAvailability,
     _events: Subscription,
 }
 
 /// The start page for one workspace, centred in the Canvas.
-pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
+pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
     let page = &frame.page;
 
     let project_link = {
         let shell = frame.shell.clone();
-        div()
-            .id("start-project-link")
-            .debug_selector(|| "start-project-link".to_owned())
-            .cursor_pointer()
-            .underline()
-            .child(page.project.clone())
-            .on_click(move |_, window, cx| {
+        project_title_link(
+            "start-project-link",
+            page.project.clone(),
+            &theme,
+            move |window, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
-            })
+            },
+        )
     };
     let heading = div()
         .flex()
@@ -160,48 +121,55 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .text_style(TYPE_HEADING)
         .text_color(p.text.primary)
         .child("What should we work on in ")
-        .child(project_link);
+        .child(project_link)
+        .child("?");
 
-    let placement = div()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_2))
-        .child(
-            Button::new("start-host", page.host)
-                .variant(ButtonVariant::Ghost)
-                .leading_icon(IconName::Server)
-                .disabled(true)
-                .tooltip("Hosts other than This PC come later."),
+    let host = host_pill(
+        "start-host",
+        page.host,
+        &theme,
+        pill_focus("start-host", window, cx),
+    );
+    let project = {
+        let shell = frame.shell.clone();
+        pill(
+            "start-project",
+            IconName::Folder,
+            page.project.clone(),
+            None,
+            true,
+            &theme,
+            pill_focus("start-project", window, cx),
         )
-        .child(
-            Button::new("start-project", page.project.clone())
-                .variant(ButtonVariant::Ghost)
-                .trailing_icon(IconName::ChevronDown)
-                .disabled(true)
-                .tooltip("Change the project from the heading."),
-        )
-        .child(
-            Button::new(
-                "start-branch",
-                page.branch
-                    .clone()
-                    .unwrap_or_else(|| "No branch".to_owned()),
-            )
-            .variant(ButtonVariant::Ghost)
-            .leading_icon(IconName::GitBranch)
-            .disabled(true)
-            .tooltip(GIT_LATER),
-        );
-
-    // The real composer: the Chat / Terminal switch sits in its bottom row (A32).
+        .on_click(move |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
+        })
+    };
+    let branch = off_pill(
+        "start-branch",
+        IconName::GitBranch,
+        page.branch
+            .clone()
+            .unwrap_or_else(|| "No branch".to_owned()),
+        GIT_LATER,
+        &theme,
+        pill_focus("start-branch", window, cx),
+    );
+    let placement = placement_card(host, project, branch, &theme);
+    // The real composer: the Chat / Terminal switch sits in its bottom row (A32). The placement card joins its top edge.
     let composer = div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_2))
-        .child(frame.composer.clone())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(placement)
+                .child(frame.composer.clone()),
+        )
         .when(frame.mode == StartMode::Terminal, |column| {
             column.child(
                 div()
@@ -210,9 +178,6 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
                     .text_color(p.text.secondary)
                     .child(TERMINAL_NOTE),
             )
-        })
-        .when_some(frame.kind_notice.clone(), |column, notice| {
-            column.child(kind_notice_row(notice, frame.shell.clone(), &theme))
         })
         .child(key_hints(&theme))
         .when_some(frame.starting.clone(), |column, status| {
@@ -243,7 +208,6 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .gap(px(SPACE_6))
         .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
-        .child(placement)
         .when(frame.profile_unsafe, |column| {
             column.child(profile_banner())
         })
@@ -270,6 +234,24 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .p(px(SPACE_8))
         .child(column)
         .into_any_element()
+}
+
+/// The project's name in a page heading: dotted underlined, and clickable to change the project (D-AG-01).
+pub(super) fn project_title_link(
+    id: &'static str,
+    name: String,
+    theme: &Theme,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .cursor_pointer()
+        .border_b_1()
+        .border_dashed()
+        .border_color(theme.palette.text.tertiary)
+        .child(name)
+        .on_click(move |_, window, cx| on_click(window, cx))
 }
 
 /// The start in flight, under the composer until the service answers (D-AG-01 States).
@@ -310,18 +292,22 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .collect()
 }
 
-/// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
-/// service declares no models yet. A kind that cannot start is listed as missing.
+/// The secondary text of each of a kind's mode entries, in the same order as `access_modes`.
+pub(super) fn access_details(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
+    choices
+        .iter()
+        .map(|choice| choice.detail.clone().map(SharedString::from))
+        .collect()
+}
+
+/// The installed, enabled kinds as the picker's rail offers them: one agent each, with the kind as its only row,
+/// since the service declares no models yet.
 fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
     choices
         .iter()
         .map(|choice| AgentOption {
             kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
-            availability: if choice.unavailable.is_some() {
-                AgentAvailability::Missing
-            } else {
-                AgentAvailability::Ready
-            },
+            availability: AgentAvailability::Ready,
             list: ModelList::Loaded,
             models: vec![ModelOption {
                 id: choice.id.clone().into(),
@@ -334,16 +320,33 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
         .collect()
 }
 
-/// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
+/// The model and effort the picker chose for `kind`, as `agent.start` takes them when the service offers them.
+pub(super) fn picked_options(picker: &PickerState, offered: bool, kind: &str) -> StartOptions {
+    let Some(model) = picker.current_model() else {
+        return StartOptions::default();
+    };
+    let efforts: Vec<&str> = model.efforts.iter().map(|label| label.as_ref()).collect();
+    start_options(
+        offered,
+        kind,
+        &picker.choice().model,
+        &efforts,
+        picker.choice().effort,
+    )
+}
+
+/// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
 pub(super) fn key_hints(theme: &Theme) -> impl IntoElement {
     div()
+        .debug_selector(|| "start-key-hints".to_owned())
         .flex()
         .flex_row()
         .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_4))
+        .gap(px(SPACE_3))
         .children(KEY_HINTS.iter().map(|(key, what)| {
+            let selector = format!("start-key-hint-{key}");
             div()
+                .debug_selector(move || selector.clone())
                 .flex()
                 .flex_row()
                 .items_center()
@@ -361,27 +364,40 @@ fn start_mode_switch(
     workspace: String,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_: &mut Window, cx: &mut App| -> AnyElement {
-        let mode = shell
+        let (mode, chat) = shell
             .upgrade()
-            .map(|shell| shell.read(cx).start_mode(&workspace))
-            .unwrap_or_default();
+            .map(|shell| {
+                let shell = shell.read(cx);
+                (
+                    shell.start_mode(&workspace, cx),
+                    shell.chat_availability(&workspace, cx),
+                )
+            })
+            .unwrap_or((StartMode::Terminal, ChatAvailability::new(false, None)));
         let (shell, workspace) = (shell.clone(), workspace.clone());
-        SegmentedControl::new(
-            "start-mode",
-            "start-mode-group",
-            vec![
-                Segment::icon_text(IconName::MessageSquare, "Chat"),
-                Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-            ],
-        )
-        .selected(mode.index())
-        .on_change(move |index, _, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
-            });
-        })
-        .into_any_element()
+        SegmentedControl::new("start-mode", "start-mode-group", mode_segments(&chat))
+            .selected(mode.index())
+            .style(SegmentedStyle::Sunken)
+            .on_change(move |index, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
+                });
+            })
+            .into_any_element()
     }
+}
+
+/// The switch's two segments. Chat is off, with the reason `chat` gives, while Chat is not available.
+pub(super) fn mode_segments(chat: &ChatAvailability) -> Vec<Segment> {
+    let segment = Segment::icon_text(IconName::MessageSquare, "Chat");
+    let segment = match chat.reason() {
+        Some(reason) => segment.disabled(true).tooltip(reason.to_owned()),
+        None => segment,
+    };
+    vec![
+        segment,
+        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+    ]
 }
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
@@ -528,70 +544,91 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
         let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
-        let entity = self
-            .start_composers
-            .entry(workspace_id.to_owned())
-            .or_insert_with(|| {
-                let workspace = workspace_id.to_owned();
-                let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
-                let picker = PickerState::new(
-                    Vec::new(),
-                    Choice {
-                        model: SharedString::default(),
-                        effort: None,
-                        fast: false,
-                    },
-                );
-                let entity = cx.new(|cx| {
-                    Composer::new(picker, Vec::new(), cx)
-                        .leading_control(switch)
-                        .voice_unavailable(VOICE_LATER)
-                        .sends_empty()
-                });
-                let events = cx.subscribe(
-                    &entity,
-                    move |shell, composer, event: &ComposerEvent, cx| match event {
-                        ComposerEvent::DraftChanged if log_drafts => {
-                            let draft = composer.read(cx).draft(cx);
-                            let _ = writeln!(
-                                std::io::stderr(),
-                                "massorca-desktop: debug composer draft={draft:?}"
-                            );
-                        }
-                        ComposerEvent::Send(prompt) => {
-                            // The start page clears the prompt as it sends and gives it back on a refusal.
-                            composer.update(cx, |composer, cx| composer.set_draft("", cx));
-                            if workspace == HOME_START {
-                                shell.start_from_home(prompt, composer.clone(), cx);
-                            } else {
-                                shell.start_session(&workspace, prompt, composer.clone(), cx);
+        let entity =
+            self.start_composers
+                .entry(workspace_id.to_owned())
+                .or_insert_with(|| {
+                    let workspace = workspace_id.to_owned();
+                    let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
+                    let picker = PickerState::new(
+                        Vec::new(),
+                        Choice {
+                            model: SharedString::default(),
+                            effort: None,
+                            fast: false,
+                        },
+                    );
+                    let entity = cx.new(|cx| {
+                        Composer::new(picker, Vec::new(), cx)
+                            .leading_control(switch)
+                            .voice_unavailable(VOICE_LATER)
+                            .sends_empty()
+                            .joined_top(true)
+                    });
+                    let events = cx.subscribe(
+                        &entity,
+                        move |shell, composer, event: &ComposerEvent, cx| match event {
+                            ComposerEvent::DraftChanged if log_drafts => {
+                                let draft = composer.read(cx).draft(cx);
+                                let _ = writeln!(
+                                    std::io::stderr(),
+                                    "massorca-desktop: debug composer draft={draft:?}"
+                                );
                             }
-                        }
-                        ComposerEvent::AccessChanged(index) => {
-                            shell.record_start_pick(&workspace, *index, composer, cx);
-                        }
-                        _ => {}
-                    },
-                );
-                StartComposer {
-                    entity,
-                    mode: StartMode::default(),
-                    picked: None,
-                    _events: events,
-                }
-            })
-            .entity
-            .clone();
+                            ComposerEvent::Send(prompt) => {
+                                // The start page clears the prompt as it sends and gives it back on a refusal.
+                                composer.update(cx, |composer, cx| composer.set_draft("", cx));
+                                if workspace == HOME_START {
+                                    shell.start_from_home(prompt, composer.clone(), cx);
+                                } else {
+                                    shell.start_session(&workspace, prompt, composer.clone(), cx);
+                                }
+                            }
+                            ComposerEvent::OpenMarketplace => shell
+                                .open_marketplace(MarketplacePage::Category(ItemKind::Agent), cx),
+                            ComposerEvent::AccessChanged(index) => {
+                                shell.record_start_pick(&workspace, *index, composer.clone(), cx);
+                                shell.remember_start_mode(&composer, *index, cx);
+                            }
+                            ComposerEvent::ModelChanged(_) => {
+                                // Chat follows the picked agent: the page refreshes it, the composer redraws.
+                                composer.update(cx, |_, cx| cx.notify());
+                                cx.notify();
+                            }
+                            _ => {}
+                        },
+                    );
+                    StartComposer {
+                        entity,
+                        mode: StartMode::default(),
+                        picked: None,
+                        // Set by `refresh_start_composer`, which runs right after this composer is created.
+                        chat: ChatAvailability::Available,
+                        _events: events,
+                    }
+                })
+                .entity
+                .clone();
         self.refresh_start_composer(&entity, workspace_id, cx);
         entity
     }
 
-    /// Where a session started from `workspace`'s page opens; Chat until the switch says otherwise.
-    pub(super) fn start_mode(&self, workspace: &str) -> StartMode {
+    /// Whether Chat is available for `workspace`'s picked agent, as the page's last frame read it (decision 0101).
+    pub(super) fn chat_availability(&self, workspace: &str, cx: &App) -> ChatAvailability {
+        self.start_composers.get(workspace).map_or_else(
+            || ChatAvailability::new(self.store.read(cx).state().agent_chat, None),
+            |start| start.chat.clone(),
+        )
+    }
+
+    /// Where a session started from `workspace`'s page opens: the switch's choice (Chat until it says otherwise),
+    /// or Terminal while Chat is not available for the picked agent.
+    pub(super) fn start_mode(&self, workspace: &str, cx: &App) -> StartMode {
         self.start_composers
             .get(workspace)
             .map(|composer| composer.mode)
             .unwrap_or_default()
+            .offered(self.chat_availability(workspace, cx).is_available())
     }
 
     /// The switch's choice for `workspace`, kept with its composer so it survives redraws.
@@ -610,7 +647,7 @@ impl Shell {
 
     /// Keeps a start composer in step with the store: the kinds it offers, and why Send is off.
     fn refresh_start_composer(
-        &self,
+        &mut self,
         composer: &Entity<Composer>,
         workspace_id: &str,
         cx: &mut Context<Self>,
@@ -618,13 +655,15 @@ impl Shell {
         let (choices, connected, kinds) = {
             let state = self.store.read(cx).state();
             (
-                start_kind_choices(&state.agent_kinds),
+                session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
             )
         };
         composer.update(cx, |composer, cx| {
             composer.set_picker_agents(picker_agents(&choices), cx);
+            // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
+            composer.set_no_agents_installed(connected && choices.is_empty(), cx);
         });
         let chosen = composer
             .read(cx)
@@ -635,19 +674,52 @@ impl Shell {
             .model
             .clone();
         // The mode chip follows the chosen kind; a pick stays while the kind does.
-        let modes = kinds
+        let chosen_kind = kinds
             .iter()
-            .find(|kind| kind.id.as_str() == chosen.as_ref())
-            .map(|kind| access_modes(&start_choices(kind)))
-            .unwrap_or_default();
-        composer.update(cx, |composer, cx| {
-            let keep = if composer.access_modes() == modes.as_slice() {
-                composer.access_index()
+            .find(|kind| kind.id.as_str() == chosen.as_ref());
+        let (modes, details, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
+            let choices = start_choices(kind);
+            // The person's last explicit pick for this kind comes back, while the kind still declares it.
+            let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+            // A bypass mode is never restored from memory: it is sent only when picked on this composer.
+            let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
+                let index = choices
+                    .iter()
+                    .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
+                Some((index, (kind.id.clone(), id.to_owned())))
+            });
+            (access_modes(&choices), access_details(&choices), remembered)
+        });
+        let changed = composer.update(cx, |composer, cx| {
+            let changed = composer.access_modes() != modes.as_slice();
+            let keep = if changed {
+                remembered.as_ref().map_or(0, |(index, _)| *index)
             } else {
-                0
+                composer.access_index()
             };
             composer.set_access_modes(modes, keep, cx);
+            composer.set_access_details(details, cx);
+            changed
         });
+        // A restored chip is the person's pick, so the chip and the start agree; a reset chip sends no mode.
+        if changed && let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.picked = remembered.map(|(_, picked)| picked);
+        }
+        // Chat follows the picked agent: its chat support, or no agent picked yet.
+        let chat = {
+            let state = self.store.read(cx).state();
+            let agent = state
+                .agent_kinds
+                .iter()
+                .find(|kind| kind.id.as_str() == chosen.as_ref());
+            ChatAvailability::new(
+                state.agent_chat,
+                agent.map(|kind| (kind.name.as_str(), state.agent_kind_chat.get(&kind.id))),
+            )
+        };
+        if let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.chat = chat;
+        }
         let kind_chosen = choices
             .iter()
             .any(|choice| choice.id.as_str() == chosen.as_ref());
@@ -655,9 +727,13 @@ impl Shell {
             .start_pending
             .as_ref()
             .filter(|pending| pending.workspace == workspace_id);
-        let no_project =
-            workspace_id == HOME_START && self.store.read(cx).state().projects.is_empty();
-        let reason = send_reason(connected, kind_chosen, starting)
+        let no_project = workspace_id == HOME_START
+            && home_choice(
+                &self.store.read(cx).state().projects,
+                self.home_project.as_ref(),
+            )
+            .is_none();
+        let reason = send_reason(connected, !choices.is_empty(), kind_chosen, starting)
             .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
             .map(SharedString::from);
         composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
@@ -679,8 +755,9 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode);
-        let mode = self.start_mode(workspace);
+        let options = self.chosen_options(&composer, &kind.id, cx);
+        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode, options);
+        let mode = self.start_mode(workspace, cx);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,
@@ -697,15 +774,13 @@ impl Shell {
         cx.notify();
     }
 
-    /// Why the composer's chosen kind cannot start, with where to fix it; or why there is none.
-    pub(super) fn kind_notice(&self, composer: &Entity<Composer>, cx: &App) -> Option<KindNotice> {
-        let state = self.store.read(cx).state();
-        if state.agent_kinds.is_empty() {
-            return state.connection.is_connected().then(|| KindNotice {
-                text: NO_AGENTS.to_owned(),
-                page: MarketplacePage::Category(ItemKind::Agent),
-            });
-        }
+    /// Remembers the explicit mode picked on the chip of `composer`'s kind; picking the CLI's default clears it.
+    fn remember_start_mode(
+        &self,
+        composer: &Entity<Composer>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
         let chosen = composer
             .read(cx)
             .picker()
@@ -713,38 +788,37 @@ impl Shell {
             .state()
             .choice()
             .model
-            .clone();
-        let declared = state
+            .to_string();
+        let Some(declared) = self
+            .store
+            .read(cx)
+            .state()
             .agent_kinds
             .iter()
-            .find(|kind| kind.id == chosen.as_ref())?;
-        let choice = start_kind_choices(std::slice::from_ref(declared)).pop()?;
-        let reason = choice.unavailable?;
-        let item = declared.package.id.as_deref().and_then(|package| {
-            self.marketplace
-                .snapshot()
-                .search("")
-                .into_iter()
-                .find_map(|item| {
-                    (item.kind == ItemKind::Agent
-                        && item
-                            .extension
-                            .as_ref()
-                            .is_some_and(|entry| entry.id == package))
-                    .then_some(item.id)
-                })
-        });
-        Some(KindNotice {
-            text: cannot_start(&choice.name, reason),
-            page: item.map_or(
-                MarketplacePage::Category(ItemKind::Agent),
-                MarketplacePage::Item,
-            ),
-        })
+            .find(|declared| declared.id == chosen)
+        else {
+            return;
+        };
+        let mode = start_choices(declared)
+            .get(index)
+            .and_then(|choice| choice.id.clone());
+        let kind = declared.id.clone();
+        ui_state::remember_start_mode(cx, &kind, mode.as_deref());
+    }
+
+    /// The model and effort `composer`'s picker chose for `kind`, sent only when the service offers them.
+    pub(super) fn chosen_options(
+        &self,
+        composer: &Entity<Composer>,
+        kind: &str,
+        cx: &App,
+    ) -> StartOptions {
+        let offered = self.store.read(cx).state().agent_options;
+        picked_options(composer.read(cx).picker().read(cx).state(), offered, kind)
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
-    /// shows when no kind is chosen or the chosen one cannot start.
+    /// shows when no agent is installed or none is chosen.
     pub(super) fn chosen_start(
         &self,
         composer: &Entity<Composer>,
@@ -759,13 +833,15 @@ impl Shell {
             .model
             .to_string();
         let kinds = &self.store.read(cx).state().agent_kinds;
-        let kind = start_kind_choices(kinds)
+        let installed = session_kind_choices(kinds);
+        if installed.is_empty() {
+            return Err(NO_AGENTS_INSTALLED.to_owned());
+        }
+        let kind = installed
             .into_iter()
             .find(|kind| kind.id == chosen)
             .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
-        if let Some(reason) = kind.unavailable {
-            return Err(cannot_start(&kind.name, reason));
-        }
+        // `session_kind_choices` lists only kinds that can start, so an unavailable kind is refused above.
         let shown = kinds
             .iter()
             .find(|declared| declared.id == kind.id)

@@ -163,6 +163,34 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "team.room.list",
+            "List a team's Conference room, oldest first",
+            "team.room_list",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 0 }
+                }
+            }),
+        ),
+        command(
+            "team.room.post",
+            "Post a line to a team's Conference room; a person's line becomes a started task",
+            "team.room_post",
+            json!({
+                "type": "object",
+                "required": ["team", "text"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "text": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "to": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "team.memory.list",
             "List a team's memory lines, or one bot's",
             "team.memory_list",

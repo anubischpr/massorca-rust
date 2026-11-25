@@ -5,6 +5,7 @@ mod board;
 mod card_menu;
 mod dialogs;
 mod files;
+mod filters;
 mod home;
 mod memory;
 mod new_project;
@@ -16,14 +17,12 @@ mod team_switch;
 
 use super::Shell;
 use super::sidebar::row_focus;
-use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::teams::TeamPage;
 use gpui::{
-    App, ElementId, IntoElement, KeyDownEvent, ParentElement, Role, SharedString, Styled,
-    WeakEntity, Window, div, prelude::*, px,
+    App, IntoElement, KeyDownEvent, ParentElement, Role, Styled, WeakEntity, Window, div,
+    prelude::*, px,
 };
 use massorca_protocol::methods::teams::TeamCharacter;
-use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::team_character::{TeamCharacterMark, TeamShape};
 use massorca_ui::style::FocusRing;
 use massorca_ui::tokens::{
@@ -35,6 +34,7 @@ pub(super) use board::{board_columns, board_page};
 pub(super) use card_menu::OpenTeamMenu;
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
 pub(super) use files::files_page;
+pub(super) use filters::OpenFilterMenu;
 pub(super) use home::bot_teams_home;
 pub(super) use memory::memory_page;
 pub(super) use project::project_page;
@@ -109,18 +109,6 @@ fn team_shape(character: TeamCharacter) -> TeamShape {
         TeamCharacter::Hexagon => TeamShape::Hexagon,
         TeamCharacter::Star => TeamShape::Star,
     }
-}
-
-/// A control whose action waits for a layer that does not exist yet: drawn disabled, and its
-/// tooltip says so.
-fn waiting_icon(
-    id: impl Into<ElementId>,
-    icon: IconName,
-    name: impl Into<SharedString>,
-) -> IconButton {
-    IconButton::new(id, icon, name)
-        .disabled(true)
-        .disabled_reason(NOT_AVAILABLE)
 }
 
 #[cfg(test)]

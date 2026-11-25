@@ -233,7 +233,7 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
     assert_eq!(shown["execution"]["state"], "exited");
     assert_eq!(shown["execution"]["exit"]["reason"], "service_stopped");
     // Either service may record the end: the stopping one with the program's exit code when it saw the program end
-    // (on Windows the stop's console interrupt, 0xC000013A), the next one with no code. Both read "service stopped".
+    // with one, the next one with no code. Both read "service stopped".
     let listed = sandbox.run("default", &["agent", "list"]).success();
     let line = stdout_text(&listed)
         .lines()
@@ -246,6 +246,32 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
         None => "exited (service stopped)".to_owned(),
     };
     assert!(line.contains(&expected), "{line}");
+}
+
+#[test]
+fn a_plain_stop_reads_as_a_signal_with_no_exit_code_on_every_platform() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let started = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
+    );
+    let session = text(&started, "id").to_owned();
+    wait_for_line(&sandbox, text(&started, "terminal_id"), "fake-agent: ready");
+
+    sandbox.json_ok("default", &["agent", "stop", &session]);
+    let exit = eventually("the stopped run to exit", || {
+        let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+        (shown["execution"]["state"] == "exited").then(|| shown["execution"]["exit"].clone())
+    });
+    assert_eq!(exit["reason"], "killed", "{exit}");
+    // Unix records the hangup's signal; Windows the console event's, rather than the code 3221225786.
+    assert!(exit["code"].is_null(), "a stop has no exit code: {exit}");
+    assert!(
+        exit["signal"].is_string(),
+        "a stop names its signal: {exit}"
+    );
 }
 
 /// Starts a fake agent in `main`, waits for its answer, and stops its run; returns the session id and its terminal.
@@ -376,7 +402,7 @@ fn an_explicit_release_of_a_retained_session_clears_the_retain_and_releases_it()
     );
 }
 
-/// Declares kind `tuned`: the fake agent, declaring the flags a model and an effort pass to (decision 0092).
+/// Declares kind `tuned`: the fake agent, declaring the flags a model and an effort pass to (decision 0094).
 fn declare_tuned(sandbox: &Sandbox) {
     let kind = json!({
         "id": "tuned",
@@ -466,10 +492,20 @@ fn a_session_without_a_project_runs_in_its_own_folder_of_the_conversations_folde
     let listed = sandbox.json_ok("default", &["agent", "list"]);
     assert_eq!(listed["sessions"][0]["id"], session.as_str());
     sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
-    let resumed = sandbox.json_ok("default", &["agent", "resume", &session]);
+    // Resumed at the size of the view that will show it.
+    let resumed = sandbox.json_ok(
+        "default",
+        &["agent", "resume", &session, "--cols", "150", "--rows", "60"],
+    );
     assert_eq!(resumed["id"], session.as_str());
     assert_eq!(resumed["workspace_id"], workspace_id.as_str());
     assert_eq!(resumed["execution"]["state"], "live");
+    let shown = sandbox.json_ok(
+        "default",
+        &["terminal", "show", text(&resumed, "terminal_id")],
+    );
+    assert_eq!(shown["cols"], 150, "{shown}");
+    assert_eq!(shown["rows"], 60, "{shown}");
     assert_eq!(canonical_folder_of(&sandbox, &workspace_id), folder);
 }
 
