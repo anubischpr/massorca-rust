@@ -218,6 +218,7 @@ mod tests {
         let room = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =
@@ -246,6 +247,7 @@ mod tests {
         let refused = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
             room: Err(Refusal::unavailable("The service is not connected.")),
         };
         assert!(matches!(
@@ -286,6 +288,7 @@ mod tests {
         let read = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
             room: Ok(vec![
                 message(RoomAuthor::Person, None, "We need sign-in"),
                 answer,
@@ -331,6 +334,7 @@ mod tests {
         let read = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =

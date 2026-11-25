@@ -12,7 +12,7 @@ use crate::model::teams::{
     BotId, EMPTY_ROOM, NO_BOTS, RoomLine, RoomTask, RoomView, Speaker, Team, TeamId, TeamPage,
     receiver, room_view,
 };
-use crate::service::Refusal;
+use crate::service::{NO_CARDS, Refusal};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Pixels, Point,
     Styled, Subscription, WeakEntity, Window, div, prelude::*, px,
@@ -101,6 +101,8 @@ pub(in crate::shell) struct RoomFrame {
     at_once: bool,
     /// The choice card whose answer is on its way.
     answering: Option<String>,
+    /// The host answers choice cards (`team-room/2`).
+    answers_cards: bool,
     shell: WeakEntity<Shell>,
 }
 
@@ -118,6 +120,7 @@ impl Shell {
         };
         let team = self.model.teams().team(team_id)?.clone();
         let key = self.team_key(team_id, cx);
+        let mut answers_cards = false;
         let view = match (&self.service, &key) {
             (Some(service), Some(key)) => {
                 if self.room_page.requested.as_deref() != Some(key.as_str()) {
@@ -125,6 +128,10 @@ impl Shell {
                     service.read_team_room(key.clone());
                 }
                 let state = self.store.read(cx).state();
+                answers_cards = state
+                    .team_rooms
+                    .get(key)
+                    .is_some_and(|read| read.answers_cards);
                 room_view(
                     state.team_rooms.get(key),
                     &team,
@@ -157,6 +164,7 @@ impl Shell {
             notice,
             at_once: !self.room_page.hold,
             answering: self.room_page.answering.clone(),
+            answers_cards,
             shell: cx.entity().downgrade(),
         })
     }
@@ -512,7 +520,10 @@ fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
                     choice_card(
                         card,
                         &line.id,
-                        frame.answering.is_some(),
+                        CardState {
+                            busy: frame.answering.is_some(),
+                            answers: frame.answers_cards,
+                        },
                         team.id,
                         shell,
                         theme,
@@ -600,11 +611,19 @@ fn routine_card(
     )
 }
 
-/// A choice card (decision 0121): a button per option while it waits, else the option it was answered with.
+/// Whether a choice card's options can be pressed: none while an answer is on its way, and none on a host without
+/// `team-room/2`.
+struct CardState {
+    busy: bool,
+    answers: bool,
+}
+
+/// A choice card (decision 0121): a button per option while it waits, else the option it was answered with. A host that
+/// cannot answer cards gets a note instead of the buttons.
 fn choice_card(
     card: &RoomCard,
     line: &str,
-    busy: bool,
+    state: CardState,
     team: TeamId,
     shell: &WeakEntity<Shell>,
     theme: &Theme,
@@ -623,6 +642,11 @@ fn choice_card(
                     .debug_selector(|| "room-card-answer".to_owned())
                     .child(format!("Answered: {label}"))
             }
+            None if !state.answers => div()
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.secondary)
+                .debug_selector(|| "room-card-unanswerable".to_owned())
+                .child(NO_CARDS),
             None => div().flex().flex_wrap().gap(px(SPACE_2)).children(
                 card.options.iter().enumerate().map(|(index, option)| {
                     let (shell, message, choice) =
@@ -630,7 +654,7 @@ fn choice_card(
                     Button::new(format!("room-card-{line}-{index}"), option.label.clone())
                         .variant(ButtonVariant::Secondary)
                         .size(ButtonSize::Compact)
-                        .disabled(busy)
+                        .disabled(state.busy)
                         .on_click(move |_, cx| {
                             let _ = shell.update(cx, |shell, cx| {
                                 shell.answer_room_card(team, message.clone(), choice.clone(), cx);
@@ -875,6 +899,7 @@ mod tests {
         StoreUpdate::TeamRoom(TeamRoomRead {
             team: "t1".into(),
             number: 1,
+            answers_cards: true,
             room: Ok(lines),
         })
     }
@@ -896,6 +921,7 @@ mod tests {
             .send(StoreUpdate::TeamRoom(TeamRoomRead {
                 team: "t1".into(),
                 number: 2,
+                answers_cards: true,
                 room: Ok(vec![
                     line(RoomAuthor::Person, None, "We need sign-in"),
                     line(
@@ -977,6 +1003,7 @@ mod tests {
             .send(StoreUpdate::TeamRoom(TeamRoomRead {
                 team: "t1".into(),
                 number: 1,
+                answers_cards: true,
                 room: Err(Refusal::Failed {
                     code: "service.capability_missing".into(),
                     message: crate::service::NO_ROOM.into(),
@@ -1100,6 +1127,7 @@ mod tests {
             .send(StoreUpdate::TeamRoom(TeamRoomRead {
                 team: "t1".into(),
                 number: 2,
+                answers_cards: true,
                 room: Ok(vec![answered]),
             }))
             .expect("the store listens");
@@ -1146,5 +1174,37 @@ mod tests {
             }
         };
         assert_eq!(params.to, None, "the service answers with a choice card");
+    }
+
+    #[gpui::test]
+    fn a_host_without_card_answers_shows_a_card_with_no_options(cx: &mut TestAppContext) {
+        use massorca_protocol::methods::team_room::{RoomChoice, RoomChoiceKind};
+
+        let (rig, cx) = open_room(cx);
+        let mut card = line(RoomAuthor::Bot, None, "asked");
+        card.card = Some(RoomCard {
+            request_id: "m1".into(),
+            options: vec![RoomChoice {
+                choice: "todo".into(),
+                kind: RoomChoiceKind::Todo,
+                label: "Keep in this team's Todo".into(),
+            }],
+            answer: None,
+        });
+        rig.updates
+            .send(StoreUpdate::TeamRoom(TeamRoomRead {
+                team: "t1".into(),
+                number: 1,
+                answers_cards: false,
+                room: Ok(vec![card]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-card-unanswerable").is_some());
+        assert!(
+            cx.debug_bounds("button:room-card-asked-0").is_none(),
+            "an older host gets no answer"
+        );
     }
 }

@@ -20,6 +20,8 @@ use super::update::StoreUpdate;
 /// What the room of a service that has none says.
 pub const NO_ROOM: &str =
     "This host's service has no Conference room yet. Update MassOrca on the host.";
+/// What a choice card says on a host that cannot answer it.
+pub const NO_CARDS: &str = "This host cannot answer choice cards yet. Update MassOrca on the host.";
 
 /// What one read of a team's room answered: its lines, oldest first, or why they could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub struct TeamRoomRead {
     pub team: String,
     /// Orders the reads of one team: the store keeps the answer with the highest number.
     pub number: u64,
+    /// The host answers choice cards (`team-room/2`); without it a card shows no options.
+    pub answers_cards: bool,
     pub room: Result<Vec<TeamRoomMessage>, Refusal>,
 }
 
@@ -90,10 +94,12 @@ pub(super) async fn read(
     team: String,
 ) -> Result<TeamRoomRead, ClientError> {
     let number = sequence.next();
+    let answers_cards = client.has_capability(capabilities::TEAM_ROOM_CARDS);
     if !client.has_capability(capabilities::TEAM_ROOM) {
         return Ok(TeamRoomRead {
             team,
             number,
+            answers_cards,
             room: Err(no_room()),
         });
     }
@@ -105,11 +111,13 @@ pub(super) async fn read(
         Ok(list) => Ok(TeamRoomRead {
             team,
             number,
+            answers_cards,
             room: Ok(list.messages),
         }),
         Err(error @ (ClientError::Remote(_) | ClientError::Protocol(_))) => Ok(TeamRoomRead {
             team,
             number,
+            answers_cards,
             room: Err(Refusal::from(&error)),
         }),
         Err(error) => Err(error),
@@ -142,13 +150,16 @@ pub(super) fn spawn_call(
             }
             RoomCommand::Answer { params, reply } => {
                 let team = params.team.clone();
-                let answer = if client.has_capability(capabilities::TEAM_ROOM) {
+                let answer = if client.has_capability(capabilities::TEAM_ROOM_CARDS) {
                     client
                         .team_room_answer(&params)
                         .await
                         .map_err(|error| Refusal::from(&error))
                 } else {
-                    Err(no_room())
+                    Err(Refusal::Failed {
+                        code: codes::SERVICE_CAPABILITY_MISSING.to_owned(),
+                        message: NO_CARDS.to_owned(),
+                    })
                 };
                 let _ = reply.send(answer);
                 team
@@ -181,6 +192,7 @@ mod tests {
         TeamRoomRead {
             team: team.to_owned(),
             number,
+            answers_cards: false,
             room: Err(Refusal::Failed {
                 code: "test".to_owned(),
                 message: text.to_owned(),

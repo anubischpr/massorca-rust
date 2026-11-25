@@ -92,6 +92,10 @@ just to read a date.
   and `card_answer` to `team_room_messages`. `team.room_list` and `team.room_post` carry the optional field `card`
   (`request_id`, `options` with `choice`, `kind` and `label`, and `answer` once answered). A `kind` this build does
   not know decodes as `unknown`. Older clients ignore the field and show the card's text as a line of a removed bot.
+- A host that makes choice cards advertises the capability `team-room/2` and keeps `team-room/1`, so older clients
+  still read and post to the room. `team.room_answer` is registered under `team-room/2`. A client checks it before it
+  offers a card's options; the desktop shows a card from a host without it with a note to update the host and no
+  buttons. Clients that send no receiver and predate `team-room/2` get cards they can only read.
 - The CLI lists the card's choices after its line and answers with `team room answer <team> <message> <choice>`.
   The desktop draws the card with a button per option; an answered card shows the choice and no buttons, and a
   refused answer shows its reason above the composer. The desktop sends the receiver only when the person picked one
