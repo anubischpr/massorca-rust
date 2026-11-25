@@ -1388,6 +1388,8 @@ pub const DURATION_TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 pub const DURATION_SPINNER: Duration = Duration::from_millis(800);
 /// `duration.slider-shimmer`
 pub const DURATION_SLIDER_SHIMMER: Duration = Duration::from_millis(1600);
+/// `duration.slider-move`
+pub const DURATION_SLIDER_MOVE: Duration = Duration::from_millis(220);
 
 // easing
 /// `ease.standard`
