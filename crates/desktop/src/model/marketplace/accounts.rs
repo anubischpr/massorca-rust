@@ -275,6 +275,7 @@ mod tests {
             result,
             account: None,
             reason: reason.map(str::to_owned),
+            updated: None,
         }
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Behaviour is a closed set of mechanisms. An unknown field or mechanism fails to parse; it is never ignored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -52,22 +52,73 @@ pub struct KindDecl {
     /// The mode a run gets when its caller names none. Required with modes, never a `bypass` mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
-    /// The flag a start's `model` is passed with (decision 0092), as `{"flag": "--model"}`; the value follows it. Absent
-    /// means the kind takes no model, and a start that names one is refused with `agent.option_unsupported`.
+    /// The `model` a start may name (decision 0094): how it reaches the launch line, and the choices the picker shows
+    /// (decision 0096). Absent means the kind takes no model, and a start that names one is refused with
+    /// `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<OptionFlagDecl>,
-    /// The flag a start's `effort` is passed with (decision 0092), as `model`.
+    pub model: Option<ModelDecl>,
+    /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<OptionFlagDecl>,
+    pub effort: Option<EffortDecl>,
 }
 
-/// The launch flag of a session option such as `model` or `effort` (decision 0092). The value follows the flag as the
-/// next argument, after the mode's arguments and before the caller's.
+/// The `model` option of a kind (decision 0094): how a start's model is passed, and the choices the picker shows
+/// (decision 0096). The value follows `flag`, or is substituted for `{value}` in `args`: exactly one of the two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OptionFlagDecl {
+pub struct ModelDecl {
     /// The flag, starting with `-` and holding no spaces, `=` or control characters: `--model`.
-    pub flag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// Launch arguments with `{value}` exactly once, as `["-m", "{value}"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<ModelChoiceDecl>,
+}
+
+/// One model a kind's picker offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelChoiceDecl {
+    /// The value a start names for this model, passed as declared.
+    pub id: String,
+    pub label: String,
+    /// The model the picker preselects. At most one choice has it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels this model accepts, by id. Absent: every level the kind declares. Empty: the model takes no
+    /// effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+}
+
+/// The `effort` option of a kind (decision 0094): how a start's effort is passed, and the levels the picker shows
+/// (decision 0096). Declared as `ModelDecl` is, with levels and a default in place of choices.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffortDecl {
+    /// The flag, as `ModelDecl::flag`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// The launch arguments, as `ModelDecl::args`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// The levels a start may name, in order. Empty: any value that passes the format check is passed on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<EffortLevelDecl>,
+    /// The level the picker preselects. It is one of `levels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// One effort level of a kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffortLevelDecl {
+    pub id: String,
+    pub label: String,
 }
 
 /// Longest value of a `model` or an `effort` a start may name.
@@ -135,15 +186,71 @@ fn valid_option_value(text: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || "-_.:/".contains(character))
 }
 
-fn option_flag_problems(name: &str, flag: Option<&OptionFlagDecl>, problems: &mut Vec<String>) {
-    if let Some(flag) = flag
-        && !valid_option_flag(&flag.flag)
-    {
-        problems.push(format!(
-            "{name}.flag {:?} must start with - and hold no spaces, = or control characters",
-            flag.flag
-        ));
+/// The placeholder an `args` template uses for the value a start names (decision 0094).
+const VALUE_PLACEHOLDER: &str = "{value}";
+
+/// Every rule a `model` or `effort` launch declaration breaks, named by `name`: exactly one of `flag` and `args`, a valid
+/// flag, and an `args` template that holds [`VALUE_PLACEHOLDER`] exactly once and no other placeholder.
+fn launch_problems(
+    name: &str,
+    flag: Option<&str>,
+    args: Option<&[String]>,
+    problems: &mut Vec<String>,
+) {
+    match (flag, args) {
+        (Some(flag), None) => {
+            if !valid_option_flag(flag) {
+                problems.push(format!(
+                    "{name}.flag {flag:?} must start with - and hold no spaces, = or control characters"
+                ));
+            }
+        }
+        (None, Some(args)) => {
+            let placeholders: usize = args
+                .iter()
+                .map(|arg| arg.matches(VALUE_PLACEHOLDER).count())
+                .sum();
+            if placeholders != 1 {
+                problems.push(format!(
+                    "{name}.args must hold {VALUE_PLACEHOLDER} exactly once, not {placeholders} times"
+                ));
+            }
+            if args
+                .iter()
+                .any(|arg| arg.replace(VALUE_PLACEHOLDER, "").contains(['{', '}']))
+            {
+                problems.push(format!(
+                    "{name}.args may use {VALUE_PLACEHOLDER} as its only placeholder"
+                ));
+            }
+        }
+        _ => problems.push(format!("{name} must declare exactly one of flag and args")),
     }
+}
+
+/// The launch arguments that pass `value` on through a declared `flag`, or through `args` with the value substituted.
+fn launch_args(flag: Option<&str>, args: Option<&[String]>, value: &str) -> Vec<String> {
+    match (flag, args) {
+        (Some(flag), _) => vec![flag.to_owned(), value.to_owned()],
+        (None, Some(args)) => args
+            .iter()
+            .map(|arg| arg.replace(VALUE_PLACEHOLDER, value))
+            .collect(),
+        (None, None) => Vec::new(),
+    }
+}
+
+/// Refuses a `model` or an `effort` value the format rule does not accept (decision 0094).
+fn check_option_value(name: &str, value: &str) -> Result<(), AgentError> {
+    if valid_option_value(value) {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        codes::REQUEST_INVALID_PARAMS,
+        format!(
+            "the {name} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
+        ),
+    ))
 }
 
 fn default_icon() -> String {
@@ -258,6 +365,81 @@ pub struct CredentialsDecl {
     /// Variables removed from the run's environment when the profile home is used.
     #[serde(default)]
     pub strip_env: Vec<String>,
+    /// Declared files an import may skip when they are missing (decision 0097). Every other declared file is required;
+    /// absent means every declared file is required.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional: Vec<String>,
+    /// Where the kind's CLI keeps each declared file by default, for an import without a folder (decision 0097).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<CredentialSource>,
+    /// The declared file that holds the CLI's own state, built on import and repaired before each check and launch
+    /// instead of being copied raw (decision 0099).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateDecl>,
+}
+
+/// Largest `max_source_bytes` a state rule may declare.
+pub const MAX_STATE_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How an account home's state file is made (decision 0099): a JSON object holding only the `keep` keys of the source
+/// file and the `set` keys with their values. The source may be up to `max_source_bytes` long; only the kept keys are
+/// ever written into the home.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateDecl {
+    /// A declared credential file.
+    pub file: String,
+    /// Top-level keys copied from the source file when present.
+    #[serde(default)]
+    pub keep: Vec<String>,
+    /// Top-level keys forced to these values, on import and before each check and launch.
+    #[serde(default)]
+    pub set: BTreeMap<String, serde_json::Value>,
+    /// The largest source file the import reads; defaults to 1 MiB.
+    #[serde(default = "default_state_source_bytes")]
+    pub max_source_bytes: u64,
+}
+
+fn default_state_source_bytes() -> u64 {
+    crate::credentials::MAX_FILE_BYTES
+}
+
+impl CredentialsDecl {
+    /// Whether an import needs `file`: every declared file not listed in `optional`.
+    pub fn required(&self, file: &str) -> bool {
+        !self.optional.iter().any(|name| name == file)
+    }
+
+    /// The largest source of `file` an import reads: the state rule's `max_source_bytes` for its file, else 1 MiB.
+    pub fn source_cap(&self, file: &str) -> u64 {
+        self.state
+            .as_ref()
+            .filter(|state| state.file == file)
+            .map_or(crate::credentials::MAX_FILE_BYTES, |state| {
+                state.max_source_bytes
+            })
+    }
+}
+
+/// Where the kind's CLI keeps one declared credential file (decision 0097). `dir` is the default folder; a platform key
+/// replaces it on that platform. The only placeholder is `{home}`, the user's home folder. When `env` names a variable
+/// that is set to an absolute path, that folder is used instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialSource {
+    /// A declared file name.
+    pub file: String,
+    /// The vendor's own override variable, for example `CLAUDE_CONFIG_DIR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// The default folder template, for example `{home}/.claude`.
+    pub dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<String>,
 }
 
 /// How a kind signs an account in, checks it and signs it out (decision 0059). Every list is an argument list, passed
@@ -294,6 +476,14 @@ pub struct CheckDecl {
     /// A regular expression over the output when signed in; its first group (or the whole match) is the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_pattern: Option<String>,
+    /// For a check that prints a JSON object (decision 0098): the top-level string fields that make up the identity,
+    /// joined with ` / ` in this order, those present only. Declared instead of `identity_pattern`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_json: Option<Vec<String>>,
+    /// For a check that prints a JSON object (decision 0098): a top-level field that is `false` when the login is not
+    /// signed in, which then needs a sign-in whatever the exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in_json: Option<String>,
 }
 
 impl KindDecl {
@@ -396,43 +586,179 @@ impl KindDecl {
             accounts_problems(self.credentials.as_ref(), accounts, &mut problems);
         }
         self.mode_problems(&mut problems);
-        option_flag_problems("model", self.model.as_ref(), &mut problems);
-        option_flag_problems("effort", self.effort.as_ref(), &mut problems);
+        self.model_problems(&mut problems);
+        self.effort_problems(&mut problems);
         problems
     }
 
-    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags (decision 0092).
-    /// An option the kind declares no flag for is `agent.option_unsupported`, naming the kind; a value that could be read
-    /// as a flag, or is empty, too long or has a space, is `request.invalid_params`.
+    /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags or args (decisions
+    /// 0094, 0096). An option the kind declares nothing for is `agent.option_unsupported`, naming the kind. A value that
+    /// could be read as a flag, or is empty, too long or has a space, is `request.invalid_params`, and so is an effort
+    /// that the declared levels, or the named model's own efforts, do not list.
     pub(crate) fn option_args(
         &self,
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Result<Vec<String>, AgentError> {
         let mut args = Vec::new();
-        for (name, value, flag) in [
-            ("model", model, self.model.as_ref()),
-            ("effort", effort, self.effort.as_ref()),
-        ] {
-            let Some(value) = value else { continue };
-            let Some(flag) = flag else {
-                return Err(AgentError::new(
-                    codes::AGENT_OPTION_UNSUPPORTED,
-                    format!("kind {} declares no flag for a {name}", self.id),
-                ));
-            };
-            if !valid_option_value(value) {
-                return Err(AgentError::new(
-                    codes::REQUEST_INVALID_PARAMS,
-                    format!(
-                        "the {name} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
-                    ),
-                ));
-            }
-            args.push(flag.flag.clone());
-            args.push(value.to_owned());
+        if let Some(value) = model {
+            let decl = self
+                .model
+                .as_ref()
+                .ok_or_else(|| self.unsupported("model"))?;
+            check_option_value("model", value)?;
+            args.extend(launch_args(
+                decl.flag.as_deref(),
+                decl.args.as_deref(),
+                value,
+            ));
+        }
+        if let Some(value) = effort {
+            let decl = self
+                .effort
+                .as_ref()
+                .ok_or_else(|| self.unsupported("effort"))?;
+            check_option_value("effort", value)?;
+            self.check_effort(decl, model, value)?;
+            args.extend(launch_args(
+                decl.flag.as_deref(),
+                decl.args.as_deref(),
+                value,
+            ));
         }
         Ok(args)
+    }
+
+    fn unsupported(&self, name: &str) -> AgentError {
+        AgentError::new(
+            codes::AGENT_OPTION_UNSUPPORTED,
+            format!("kind {} declares no flag for a {name}", self.id),
+        )
+    }
+
+    /// The declared choice `id` of the `model` option.
+    fn model_choice(&self, id: &str) -> Option<&ModelChoiceDecl> {
+        self.model
+            .as_ref()?
+            .choices
+            .iter()
+            .find(|choice| choice.id == id)
+    }
+
+    /// Whether the kind declares `id` as one of its effort levels.
+    fn effort_declares(&self, id: &str) -> bool {
+        self.effort
+            .as_ref()
+            .is_some_and(|effort| effort.levels.iter().any(|level| level.id == id))
+    }
+
+    /// Refuses an effort the declared levels do not list, and one the named model does not accept (decision 0096).
+    fn check_effort(
+        &self,
+        decl: &EffortDecl,
+        model: Option<&str>,
+        value: &str,
+    ) -> Result<(), AgentError> {
+        if !decl.levels.is_empty() && !decl.levels.iter().any(|level| level.id == value) {
+            let allowed: Vec<&str> = decl.levels.iter().map(|level| level.id.as_str()).collect();
+            return Err(AgentError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("the effort must be one of {}", allowed.join(", ")),
+            ));
+        }
+        let listed = model
+            .and_then(|id| self.model_choice(id))
+            .and_then(|choice| choice.efforts.as_deref());
+        if let (Some(model), Some(listed)) = (model, listed)
+            && !listed.iter().any(|id| id == value)
+        {
+            let message = if listed.is_empty() {
+                format!("model {model} takes no effort")
+            } else {
+                format!(
+                    "the effort for model {model} must be one of {}",
+                    listed.join(", ")
+                )
+            };
+            return Err(AgentError::new(codes::REQUEST_INVALID_PARAMS, message));
+        }
+        Ok(())
+    }
+
+    /// Every rule the `model` declaration breaks (decision 0094, 0096): its launch, its choices' ids, labels and efforts,
+    /// and at most one default.
+    fn model_problems(&self, problems: &mut Vec<String>) {
+        let Some(model) = &self.model else { return };
+        launch_problems(
+            "model",
+            model.flag.as_deref(),
+            model.args.as_deref(),
+            problems,
+        );
+        let mut seen = std::collections::HashSet::new();
+        let mut defaults = 0;
+        for choice in &model.choices {
+            if !valid_option_value(&choice.id) {
+                problems.push(format!(
+                    "model.choices id {:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -",
+                    choice.id
+                ));
+            } else if !seen.insert(choice.id.as_str()) {
+                problems.push(format!("model.choices repeats id {:?}", choice.id));
+            }
+            if choice.label.trim().is_empty() {
+                problems.push(format!("model.choices {:?} needs a label", choice.id));
+            }
+            if choice.default {
+                defaults += 1;
+            }
+            for effort in choice.efforts.iter().flatten() {
+                if !self.effort_declares(effort) {
+                    problems.push(format!(
+                        "model.choices {:?} names effort {effort:?}, which the effort does not declare",
+                        choice.id
+                    ));
+                }
+            }
+        }
+        if defaults > 1 {
+            problems.push(format!(
+                "model.choices may name one default, not {defaults}"
+            ));
+        }
+    }
+
+    /// Every rule the `effort` declaration breaks (decision 0094, 0096): its launch, its levels' ids and labels, and a
+    /// default that is one of the levels.
+    fn effort_problems(&self, problems: &mut Vec<String>) {
+        let Some(effort) = &self.effort else { return };
+        launch_problems(
+            "effort",
+            effort.flag.as_deref(),
+            effort.args.as_deref(),
+            problems,
+        );
+        let mut seen = std::collections::HashSet::new();
+        for level in &effort.levels {
+            if !valid_option_value(&level.id) {
+                problems.push(format!(
+                    "effort.levels id {:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -",
+                    level.id
+                ));
+            } else if !seen.insert(level.id.as_str()) {
+                problems.push(format!("effort.levels repeats id {:?}", level.id));
+            }
+            if level.label.trim().is_empty() {
+                problems.push(format!("effort.levels {:?} needs a label", level.id));
+            }
+        }
+        if let Some(default) = &effort.default
+            && !self.effort_declares(default)
+        {
+            problems.push(format!(
+                "effort.default {default:?} is not one of effort.levels"
+            ));
+        }
     }
 
     fn mode_problems(&self, problems: &mut Vec<String>) {
@@ -574,6 +900,39 @@ fn accounts_problems(
                 problems.push(format!("accounts.check.{field} does not compile: {error}"));
             }
         }
+        check_json_problems(check, problems);
+    }
+}
+
+/// The problems of a check's JSON fields (decision 0098): `identity_json` lists at least one field, each a non-empty
+/// name once, and is not declared with `identity_pattern`; `signed_in_json` is a non-empty name.
+fn check_json_problems(check: &CheckDecl, problems: &mut Vec<String>) {
+    if let Some(fields) = &check.identity_json {
+        if fields.is_empty() {
+            problems.push("accounts.check.identity_json lists no field".to_owned());
+        }
+        for (index, field) in fields.iter().enumerate() {
+            if field.trim().is_empty() {
+                problems.push("accounts.check.identity_json has an empty field name".to_owned());
+            } else if fields[..index].contains(field) {
+                problems.push(format!(
+                    "accounts.check.identity_json names {field:?} twice"
+                ));
+            }
+        }
+        if check.identity_pattern.is_some() {
+            problems.push(
+                "accounts.check declares both identity_pattern and identity_json; declare one"
+                    .to_owned(),
+            );
+        }
+    }
+    if check
+        .signed_in_json
+        .as_deref()
+        .is_some_and(|field| field.trim().is_empty())
+    {
+        problems.push("accounts.check.signed_in_json is an empty field name".to_owned());
     }
 }
 
@@ -598,6 +957,144 @@ fn credentials_problems(credentials: &CredentialsDecl, problems: &mut Vec<String
             ));
         }
     }
+    sources_problems(credentials, problems);
+    if let Some(state) = &credentials.state {
+        state_problems(credentials, state, problems);
+    }
+}
+
+/// The state rule (decision 0099): `file` is a declared file, `keep` and `set` name plain top-level keys, each once and
+/// in only one of them, and the source cap is between 1 byte and [`MAX_STATE_SOURCE_BYTES`].
+fn state_problems(credentials: &CredentialsDecl, state: &StateDecl, problems: &mut Vec<String>) {
+    if !credentials.files.iter().any(|file| file == &state.file) {
+        problems.push(format!(
+            "credentials.state.file {:?} is not a declared file",
+            state.file
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for key in &state.keep {
+        if !valid_state_key(key) {
+            problems.push(format!(
+                "credentials.state.keep entry {key:?} is not a plain key name"
+            ));
+        }
+        if !seen.insert(key.as_str()) {
+            problems.push(format!("credentials.state.keep lists {key:?} twice"));
+        }
+    }
+    for key in state.set.keys() {
+        if !valid_state_key(key) {
+            problems.push(format!(
+                "credentials.state.set key {key:?} is not a plain key name"
+            ));
+        }
+        if seen.contains(key.as_str()) {
+            problems.push(format!(
+                "credentials.state lists {key:?} in both keep and set"
+            ));
+        }
+    }
+    if state.max_source_bytes == 0 || state.max_source_bytes > MAX_STATE_SOURCE_BYTES {
+        problems.push(format!(
+            "credentials.state.max_source_bytes {} must be between 1 and {MAX_STATE_SOURCE_BYTES}",
+            state.max_source_bytes
+        ));
+    }
+}
+
+/// A top-level state key: 1 to 64 ASCII letters, digits, `_`, `-` or `.`, starting with a letter or `_`.
+fn valid_state_key(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    key.len() <= 64
+        && bytes
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+/// The import source declarations (decision 0097): `optional` and every source name declared files, each file has at
+/// most one source, its variable is a variable name and its templates start with `{home}` or are absolute.
+fn sources_problems(credentials: &CredentialsDecl, problems: &mut Vec<String>) {
+    let declared = |name: &str| credentials.files.iter().any(|file| file == name);
+    let mut seen = BTreeSet::new();
+    for name in &credentials.optional {
+        if !declared(name) {
+            problems.push(format!(
+                "credentials.optional entry {name:?} is not a declared file"
+            ));
+        }
+        if !seen.insert(name.as_str()) {
+            problems.push(format!("credentials.optional lists {name:?} twice"));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for source in &credentials.sources {
+        let file = &source.file;
+        if !declared(file) {
+            problems.push(format!(
+                "credentials.sources entry {file:?} is not a declared file"
+            ));
+        }
+        if !seen.insert(file.as_str()) {
+            problems.push(format!("credentials.sources lists {file:?} twice"));
+        }
+        if let Some(env) = &source.env
+            && !valid_env_name(env)
+        {
+            problems.push(format!(
+                "credentials.sources env {env:?} of {file:?} is not a variable name"
+            ));
+        }
+        let templates = [
+            ("dir", Some(&source.dir)),
+            ("windows", source.windows.as_ref()),
+            ("macos", source.macos.as_ref()),
+            ("linux", source.linux.as_ref()),
+        ];
+        for (key, template) in templates {
+            if let Some(template) = template
+                && !valid_source_template(template)
+            {
+                problems.push(format!(
+                    "credentials.sources {key} {template:?} of {file:?} must start with {{home}} or be a local absolute path"
+                ));
+            }
+        }
+    }
+}
+
+/// A source folder template: `{home}` alone or followed by a separator, or a local absolute path (`/...`, `C:\...` or
+/// `C:/...`), with no other brace. A network or device path (`\\server\...`, `\\?\...`, `\\.\...`, `//server/...`) is
+/// refused, so detection never reaches out to another machine.
+pub(crate) fn valid_source_template(template: &str) -> bool {
+    let rest = if let Some(rest) = template.strip_prefix("{home}") {
+        if !(rest.is_empty() || rest.starts_with(['/', '\\'])) {
+            return false;
+        }
+        rest
+    } else {
+        let bytes = template.as_bytes();
+        let drive = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\');
+        if !((template.starts_with('/') && !remote_path(template)) || drive) {
+            return false;
+        }
+        template
+    };
+    !rest.contains(['{', '}', '\0'])
+}
+
+/// A path that starts with two separators: a UNC share (`\\server\...`, `//server/...`) or a Win32 device or verbatim
+/// prefix (`\\?\...`, `\\.\...`). Opening one may reach another machine.
+pub(crate) fn remote_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('/' | '\\'), Some('/' | '\\'))
+    )
 }
 
 /// `[a-z0-9-]{1,32}`.
@@ -939,6 +1436,41 @@ mod tests {
     }
 
     #[test]
+    fn the_json_fields_of_a_check_are_validated() {
+        let check = |fields: serde_json::Value| {
+            with_accounts(serde_json::json!({ "login": ["login"], "check": fields }))
+        };
+        let fine = check(serde_json::json!({
+            "args": ["status"], "identity_json": ["email", "orgName"], "signed_in_json": "loggedIn"
+        }));
+        assert!(fine.is_empty(), "{fine:?}");
+        let empty = check(serde_json::json!({ "args": ["status"], "identity_json": [] }));
+        assert_eq!(empty, ["accounts.check.identity_json lists no field"]);
+        let twice = check(
+            serde_json::json!({ "args": ["status"], "identity_json": ["email", "", "email"] }),
+        );
+        assert_eq!(
+            twice,
+            [
+                "accounts.check.identity_json has an empty field name",
+                "accounts.check.identity_json names \"email\" twice"
+            ]
+        );
+        let both = check(serde_json::json!({
+            "args": ["status"], "identity_json": ["email"], "identity_pattern": "x"
+        }));
+        assert_eq!(
+            both,
+            ["accounts.check declares both identity_pattern and identity_json; declare one"]
+        );
+        let blank = check(serde_json::json!({ "args": ["status"], "signed_in_json": " " }));
+        assert_eq!(
+            blank,
+            ["accounts.check.signed_in_json is an empty field name"]
+        );
+    }
+
+    #[test]
     fn an_accounts_block_with_login_check_and_logout_is_valid() {
         let problems = with_accounts(serde_json::json!({
             "login": ["login"],
@@ -1180,5 +1712,642 @@ mod tests {
         assert!(KindDecl::from_json(&value.to_string()).is_err());
         value["permission_modes"] = serde_json::json!([{ "id": "a", "label": "A", "flag": "-a" }]);
         assert!(KindDecl::from_json(&value.to_string()).is_err());
+    }
+
+    /// A kind that takes a model and an effort, declared as given, on the minimal declaration.
+    fn options_kind(model: serde_json::Value, effort: serde_json::Value) -> KindDecl {
+        let mut value = minimal();
+        value["model"] = model;
+        value["effort"] = effort;
+        parse(value)
+    }
+
+    /// The code and the message of a refused `option_args`.
+    fn refusal(result: Result<Vec<String>, AgentError>) -> (&'static str, String) {
+        let error = result.expect_err("refused");
+        (error.code, error.message)
+    }
+
+    #[test]
+    fn a_model_or_effort_declares_a_flag_or_args_with_the_value_once() {
+        let flag = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert!(flag.problems().is_empty(), "{:?}", flag.problems());
+        assert_eq!(
+            flag.option_args(Some("opus"), Some("high"))
+                .expect("launch arguments"),
+            ["--model", "opus", "--effort", "high"]
+        );
+
+        let args = options_kind(
+            serde_json::json!({ "args": ["-m", "{value}"] }),
+            serde_json::json!({ "args": ["-c", "model_reasoning_effort={value}"] }),
+        );
+        assert!(args.problems().is_empty(), "{:?}", args.problems());
+        assert_eq!(
+            args.option_args(Some("gpt-5.5"), Some("high"))
+                .expect("launch arguments"),
+            ["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
+        );
+
+        for model in [
+            serde_json::json!({ "args": ["-m"] }),
+            serde_json::json!({ "args": ["{value}", "--x", "{value}"] }),
+            serde_json::json!({ "args": ["-m", "{model}"] }),
+            serde_json::json!({ "args": [] }),
+            serde_json::json!({ "flag": "--model", "args": ["-m", "{value}"] }),
+            serde_json::json!({}),
+        ] {
+            let problems =
+                options_kind(model.clone(), serde_json::json!({ "flag": "--effort" })).problems();
+            assert!(
+                problems.iter().any(|problem| problem.starts_with("model")),
+                "{model}: {problems:?}"
+            );
+        }
+        let effort = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort", "args": ["-c", "{value}"] }),
+        );
+        assert!(
+            effort
+                .problems()
+                .iter()
+                .any(|problem| problem.starts_with("effort")),
+            "{:?}",
+            effort.problems()
+        );
+    }
+
+    #[test]
+    fn model_choices_need_valid_unique_ids_one_default_and_declared_efforts() {
+        let effort = serde_json::json!({
+            "flag": "--effort",
+            "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }]
+        });
+        let valid = options_kind(
+            serde_json::json!({ "flag": "--model", "choices": [
+                { "id": "big", "label": "Big", "default": true, "efforts": ["low", "high"] },
+                { "id": "small", "label": "Small", "efforts": [] },
+                { "id": "plain", "label": "Plain" }
+            ]}),
+            effort.clone(),
+        );
+        assert!(valid.problems().is_empty(), "{:?}", valid.problems());
+
+        let cases = [
+            (
+                "a repeated id",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A" }, { "id": "a", "label": "B" }
+                ]}),
+            ),
+            (
+                "two defaults",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A", "default": true },
+                    { "id": "b", "label": "B", "default": true }
+                ]}),
+            ),
+            (
+                "an id with a space",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "gpt 5", "label": "GPT 5" }
+                ]}),
+            ),
+            (
+                "an effort the kind does not declare",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": "A", "efforts": ["max"] }
+                ]}),
+            ),
+            (
+                "an empty label",
+                serde_json::json!({ "flag": "--model", "choices": [
+                    { "id": "a", "label": " " }
+                ]}),
+            ),
+        ];
+        for (case, model) in cases {
+            let problems = options_kind(model, effort.clone()).problems();
+            assert!(
+                problems
+                    .iter()
+                    .any(|problem| problem.starts_with("model.choices")),
+                "{case}: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn effort_levels_need_valid_unique_ids_and_a_default_that_is_one_of_them() {
+        let valid = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({
+                "flag": "--effort",
+                "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }],
+                "default": "high"
+            }),
+        );
+        assert!(valid.problems().is_empty(), "{:?}", valid.problems());
+
+        let cases = [
+            (
+                "a default that is no level",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "low", "label": "Low" }], "default": "max"
+                }),
+            ),
+            (
+                "a default without levels",
+                serde_json::json!({
+                    "flag": "--effort", "default": "low"
+                }),
+            ),
+            (
+                "a repeated level",
+                serde_json::json!({
+                    "flag": "--effort",
+                    "levels": [{ "id": "low", "label": "Low" }, { "id": "low", "label": "Again" }]
+                }),
+            ),
+            (
+                "a level id with a space",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "very high", "label": "Very high" }]
+                }),
+            ),
+            (
+                "an empty label",
+                serde_json::json!({
+                    "flag": "--effort", "levels": [{ "id": "low", "label": "" }]
+                }),
+            ),
+        ];
+        for (case, effort) in cases {
+            let problems =
+                options_kind(serde_json::json!({ "flag": "--model" }), effort).problems();
+            assert!(
+                problems.iter().any(|problem| problem.starts_with("effort")),
+                "{case}: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_effort_outside_the_declared_levels_is_refused_and_names_the_allowed_ids() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({
+                "flag": "--effort",
+                "levels": [{ "id": "low", "label": "Low" }, { "id": "high", "label": "High" }]
+            }),
+        );
+        assert_eq!(
+            kind.option_args(None, Some("low")).expect("a level passes"),
+            ["--effort", "low"]
+        );
+        let (code, message) = refusal(kind.option_args(None, Some("ultra")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("low, high"), "{message}");
+
+        let free = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert_eq!(
+            free.option_args(None, Some("anything-1"))
+                .expect("no levels declared, so any value passes"),
+            ["--effort", "anything-1"]
+        );
+    }
+
+    #[test]
+    fn a_model_with_its_own_efforts_refuses_the_others_for_that_model() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model", "choices": [
+                { "id": "big", "label": "Big", "efforts": ["low", "high"] },
+                { "id": "small", "label": "Small", "efforts": [] },
+                { "id": "any", "label": "Any" }
+            ]}),
+            serde_json::json!({ "flag": "--effort", "levels": [
+                { "id": "low", "label": "Low" },
+                { "id": "medium", "label": "Medium" },
+                { "id": "high", "label": "High" }
+            ]}),
+        );
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+
+        let (code, message) = refusal(kind.option_args(Some("big"), Some("medium")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("low, high"), "{message}");
+
+        let (code, message) = refusal(kind.option_args(Some("small"), Some("low")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert!(message.contains("takes no effort"), "{message}");
+
+        assert_eq!(
+            kind.option_args(Some("big"), Some("high")).expect("listed"),
+            ["--model", "big", "--effort", "high"]
+        );
+        assert_eq!(
+            kind.option_args(Some("small"), None).expect("no effort"),
+            ["--model", "small"]
+        );
+        assert_eq!(
+            kind.option_args(Some("any"), Some("medium"))
+                .expect("every level"),
+            ["--model", "any", "--effort", "medium"]
+        );
+        assert_eq!(
+            kind.option_args(Some("unlisted"), Some("low"))
+                .expect("a model the declaration does not list"),
+            ["--model", "unlisted", "--effort", "low"]
+        );
+    }
+
+    #[test]
+    fn a_flag_only_declaration_launches_and_refuses_as_it_did_before_the_choices() {
+        let kind = options_kind(
+            serde_json::json!({ "flag": "--model" }),
+            serde_json::json!({ "flag": "--effort" }),
+        );
+        assert_eq!(
+            kind.option_args(Some("opus"), Some("max"))
+                .expect("a flag-only effort passes any value the format rule accepts"),
+            ["--model", "opus", "--effort", "max"]
+        );
+        let (code, message) = refusal(kind.option_args(None, Some("bad value!")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert_eq!(
+            message,
+            "the effort must be 1 to 128 letters, digits, - _ . : or /, not starting with -"
+        );
+
+        let plain = parse(minimal());
+        let (code, message) = refusal(plain.option_args(Some("opus"), None));
+        assert_eq!(code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert_eq!(message, "kind fake declares no flag for a model");
+    }
+
+    #[test]
+    fn the_built_in_kinds_declare_the_reference_model_and_effort_choices() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let model = claude.model.as_ref().expect("claude takes a model");
+        assert_eq!(model.flag.as_deref(), Some("--model"));
+        let choices: Vec<(&str, bool)> = model
+            .choices
+            .iter()
+            .map(|choice| (choice.id.as_str(), choice.default))
+            .collect();
+        assert_eq!(
+            choices,
+            [
+                ("fable", false),
+                ("opus", false),
+                ("sonnet", true),
+                ("haiku", false)
+            ]
+        );
+        assert_eq!(model.choices[3].efforts, Some(Vec::new()));
+        assert_eq!(model.choices[1].efforts, None);
+        let effort = claude.effort.as_ref().expect("claude takes an effort");
+        let levels: Vec<&str> = effort
+            .levels
+            .iter()
+            .map(|level| level.id.as_str())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(effort.default.as_deref(), Some("high"));
+
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex parses");
+        assert!(codex.problems().is_empty(), "{:?}", codex.problems());
+        let model = codex.model.as_ref().expect("codex takes a model");
+        assert_eq!(
+            model.args.as_deref(),
+            Some(&["-m".to_owned(), "{value}".to_owned()][..])
+        );
+        assert!(model.choices.iter().all(|choice| !choice.default));
+        let ceiling = |id: &str| {
+            model
+                .choices
+                .iter()
+                .find(|choice| choice.id == id)
+                .and_then(|choice| choice.efforts.as_ref())
+                .and_then(|efforts| efforts.last())
+                .cloned()
+        };
+        assert_eq!(ceiling("gpt-5.6-sol").as_deref(), Some("ultra"));
+        assert_eq!(ceiling("gpt-5.6-terra").as_deref(), Some("ultra"));
+        assert_eq!(ceiling("gpt-5.6-luna").as_deref(), Some("max"));
+        assert_eq!(ceiling("gpt-5.5").as_deref(), Some("xhigh"));
+        assert_eq!(ceiling("gpt-5.2-codex").as_deref(), Some("xhigh"));
+        assert_eq!(
+            codex
+                .effort
+                .as_ref()
+                .and_then(|effort| effort.default.as_deref()),
+            Some("medium")
+        );
+        let (code, _) = refusal(codex.option_args(Some("gpt-5.5"), Some("ultra")));
+        assert_eq!(code, codes::REQUEST_INVALID_PARAMS);
+        assert_eq!(
+            codex
+                .option_args(Some("gpt-5.6-sol"), Some("ultra"))
+                .expect("sol goes up to ultra"),
+            ["-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=ultra"]
+        );
+
+        let antigravity = KindDecl::from_json(include_str!("../kinds/antigravity.json"))
+            .expect("antigravity parses");
+        assert!(
+            antigravity.problems().is_empty(),
+            "{:?}",
+            antigravity.problems()
+        );
+        assert!(
+            antigravity
+                .model
+                .as_ref()
+                .is_some_and(|model| model.choices.is_empty())
+        );
+        let levels: Vec<&str> = antigravity
+            .effort
+            .as_ref()
+            .expect("antigravity takes an effort")
+            .levels
+            .iter()
+            .map(|level| level.id.as_str())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high"]);
+
+        let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
+            .expect("gentle-shell parses");
+        assert!(gentle.model.is_none() && gentle.effort.is_none());
+    }
+
+    fn with_sources(credentials: serde_json::Value) -> Vec<String> {
+        problems_of(|value| value["credentials"] = credentials.clone())
+    }
+
+    #[test]
+    fn import_sources_name_declared_files_once_with_home_or_absolute_templates() {
+        let good = serde_json::json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.fake", "extra.fake"],
+            "optional": ["extra.fake"],
+            "sources": [
+                { "file": "token.fake", "env": "FAKE_VENDOR_DIR", "dir": "{home}/.fake",
+                  "windows": "C:/Fake", "macos": "/opt/fake", "linux": "{home}" },
+                { "file": "extra.fake", "dir": "{home}" }
+            ]
+        });
+        assert!(
+            with_sources(good.clone()).is_empty(),
+            "{:?}",
+            with_sources(good.clone())
+        );
+
+        let cases = [
+            (
+                "/optional",
+                serde_json::json!(["other.fake"]),
+                "credentials.optional entry \"other.fake\" is not a declared file",
+            ),
+            (
+                "/optional",
+                serde_json::json!(["extra.fake", "extra.fake"]),
+                "credentials.optional lists \"extra.fake\" twice",
+            ),
+            (
+                "/sources/1/file",
+                serde_json::json!("other.fake"),
+                "credentials.sources entry \"other.fake\" is not a declared file",
+            ),
+            (
+                "/sources/1/file",
+                serde_json::json!("token.fake"),
+                "credentials.sources lists \"token.fake\" twice",
+            ),
+            (
+                "/sources/0/env",
+                serde_json::json!("NOT A NAME"),
+                "credentials.sources env \"NOT A NAME\" of \"token.fake\" is not a variable name",
+            ),
+            (
+                "/sources/0/dir",
+                serde_json::json!("relative/.fake"),
+                "credentials.sources dir \"relative/.fake\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+            (
+                "/sources/0/windows",
+                serde_json::json!("{home}/{user}"),
+                "credentials.sources windows \"{home}/{user}\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+            (
+                "/sources/0/linux",
+                serde_json::json!("{homes}"),
+                "credentials.sources linux \"{homes}\" of \"token.fake\" must start with {home} or be a local absolute path",
+            ),
+        ];
+        let mut cases = cases.to_vec();
+        // Network and device paths: detection would reach another machine through them.
+        let remote = [
+            r"\\server\share",
+            r"\\?\C:\Fake",
+            r"\\.\pipe\fake",
+            "//server/share",
+            r"/\server\share",
+        ];
+        let messages: Vec<String> = remote
+            .iter()
+            .map(|template| {
+                format!(
+                    "credentials.sources dir {template:?} of \"token.fake\" must start with {{home}} or be a local absolute path"
+                )
+            })
+            .collect();
+        for (template, message) in remote.iter().zip(&messages) {
+            cases.push((
+                "/sources/0/dir",
+                serde_json::json!(template),
+                message.as_str(),
+            ));
+        }
+        for (pointer, bad, expected) in cases {
+            let mut credentials = good.clone();
+            *credentials.pointer_mut(pointer).expect("a field to break") = bad;
+            let problems = with_sources(credentials);
+            assert!(
+                problems.iter().any(|problem| problem == expected),
+                "{pointer}: {problems:?}"
+            );
+        }
+        assert!(
+            KindDecl::from_json(
+                &serde_json::json!({
+                    "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                    "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.fake"],
+                        "sources": [{ "file": "token.fake", "dir": "{home}", "path": "x" }] }
+                })
+                .to_string()
+            )
+            .is_err(),
+            "an unknown source field does not parse"
+        );
+    }
+
+    #[test]
+    fn a_state_rule_names_a_declared_file_and_plain_keys_once_with_a_sane_cap() {
+        let good = serde_json::json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.fake", "state.fake"],
+            "optional": ["state.fake"],
+            "state": { "file": "state.fake", "keep": ["account", "theme"],
+                       "set": { "onboarded": true }, "max_source_bytes": 2048 }
+        });
+        assert!(
+            with_sources(good.clone()).is_empty(),
+            "{:?}",
+            with_sources(good.clone())
+        );
+        let cases = [
+            (
+                "/state/file",
+                serde_json::json!("other.fake"),
+                "credentials.state.file \"other.fake\" is not a declared file",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["theme", "theme"]),
+                "credentials.state.keep lists \"theme\" twice",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["a/b"]),
+                "credentials.state.keep entry \"a/b\" is not a plain key name",
+            ),
+            (
+                "/state/keep",
+                serde_json::json!(["onboarded"]),
+                "credentials.state lists \"onboarded\" in both keep and set",
+            ),
+            (
+                "/state/set",
+                serde_json::json!({ "": 1 }),
+                "credentials.state.set key \"\" is not a plain key name",
+            ),
+            (
+                "/state/max_source_bytes",
+                serde_json::json!(0),
+                "credentials.state.max_source_bytes 0 must be between 1 and 67108864",
+            ),
+            (
+                "/state/max_source_bytes",
+                serde_json::json!(MAX_STATE_SOURCE_BYTES + 1),
+                "credentials.state.max_source_bytes 67108865 must be between 1 and 67108864",
+            ),
+        ];
+        for (pointer, bad, expected) in cases {
+            let mut credentials = good.clone();
+            *credentials.pointer_mut(pointer).expect("a field to break") = bad;
+            let problems = with_sources(credentials);
+            assert!(
+                problems.iter().any(|problem| problem == expected),
+                "{pointer}: {problems:?}"
+            );
+        }
+        let mut unknown = good.clone();
+        unknown["state"]["copy"] = serde_json::json!(true);
+        assert!(
+            KindDecl::from_json(
+                &serde_json::json!({
+                    "id": "fake", "name": "Fake", "program": ["fake-agent"], "credentials": unknown
+                })
+                .to_string()
+            )
+            .is_err(),
+            "an unknown state field does not parse"
+        );
+    }
+
+    #[test]
+    fn claude_builds_its_state_file_with_onboarding_done_and_only_three_kept_keys() {
+        for text in [
+            include_str!("../kinds/claude.json"),
+            include_str!("../../../packages/agents/massorca.claude/agents/claude.json"),
+        ] {
+            let claude = KindDecl::from_json(text).expect("claude parses");
+            let credentials = claude.credentials.as_ref().expect("claude has credentials");
+            let state = credentials
+                .state
+                .as_ref()
+                .expect("claude declares a state rule");
+            assert_eq!(state.file, ".claude.json");
+            assert_eq!(state.keep, ["oauthAccount", "theme", "mcpServers"]);
+            assert_eq!(
+                serde_json::to_value(&state.set).unwrap(),
+                serde_json::json!({ "hasCompletedOnboarding": true })
+            );
+            assert_eq!(state.max_source_bytes, 16 * 1024 * 1024);
+            assert!(!credentials.required(".claude.json"));
+        }
+        for kind in [
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/antigravity.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ] {
+            let decl = KindDecl::from_json(kind).expect("the kind parses");
+            assert!(
+                decl.credentials
+                    .is_none_or(|credentials| credentials.state.is_none())
+            );
+        }
+    }
+
+    #[test]
+    fn claude_and_codex_declare_where_their_clis_keep_each_file() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        let credentials = claude.credentials.as_ref().expect("claude has credentials");
+        assert!(credentials.required(".credentials.json"));
+        assert!(!credentials.required(".claude.json"));
+        let dirs: Vec<(&str, Option<&str>, &str)> = credentials
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.file.as_str(),
+                    source.env.as_deref(),
+                    source.dir.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (
+                    ".credentials.json",
+                    Some("CLAUDE_CONFIG_DIR"),
+                    "{home}/.claude"
+                ),
+                (".claude.json", Some("CLAUDE_CONFIG_DIR"), "{home}"),
+            ]
+        );
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex parses");
+        let credentials = codex.credentials.as_ref().expect("codex has credentials");
+        assert!(credentials.required("auth.json") && !credentials.required("config.toml"));
+        assert!(
+            credentials
+                .sources
+                .iter()
+                .all(|source| source.env.as_deref() == Some("CODEX_HOME")
+                    && source.dir == "{home}/.codex")
+        );
+        assert_eq!(credentials.sources.len(), 2);
     }
 }

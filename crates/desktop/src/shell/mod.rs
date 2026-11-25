@@ -20,6 +20,7 @@ mod rail;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
+mod session_grid;
 mod session_view;
 mod settings;
 mod settings_remove_dialog;
@@ -30,6 +31,7 @@ mod sidebar_rows;
 mod source_control;
 mod source_control_dialogs;
 mod start_page;
+mod start_placement;
 mod status_bar;
 mod teams;
 mod title_bar;
@@ -52,9 +54,10 @@ use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use std::collections::BTreeSet;
+
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -113,7 +116,7 @@ mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
-mod sidebar_fold_tests;
+mod sidebar_session_rows_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -193,6 +196,8 @@ pub struct Shell {
     start_pending: Option<crate::model::start_page::StartingSession>,
     /// The start page with no workspace's choice: a project or "No project"; `None` stands for the first project.
     home_project: Option<ProjectChoice>,
+    /// The Advanced section of the start page with no workspace: its fields and open state.
+    home_details: home_start::HomeDetails,
     /// The system's file or folder picker, which Browse asks; tests put a fake in its place.
     path_picker: path_field::PathPicker,
     /// The last start-page call was refused because the data folder is not secured.
@@ -248,6 +253,8 @@ pub struct Shell {
     _marketplace_host_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The grid the session view last drew its terminal at (`session_grid`).
+    session_grid: Option<(u16, u16)>,
     /// The terminal whose closing waits for the stop question.
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
@@ -262,8 +269,8 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
-    sidebar_folds: SidebarFolds,
+    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    collapsed_projects: BTreeSet<String>,
 }
 
 impl Shell {
@@ -315,6 +322,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let width = f32::from(window.viewport_size().width);
+        let home_details = home_start::HomeDetails::new(cx);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // A close the OS asks for waits on the confirm while a session runs or waits for the person (PLAT-10).
@@ -507,6 +515,7 @@ impl Shell {
             start_composers: HashMap::new(),
             start_pending: None,
             home_project: None,
+            home_details,
             path_picker: path_field::system_picker(),
             profile_unsafe: false,
             session_composers: HashMap::new(),
@@ -538,6 +547,7 @@ impl Shell {
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
+            session_grid: None,
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,
@@ -545,7 +555,7 @@ impl Shell {
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
-            sidebar_folds: SidebarFolds::default(),
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -740,10 +750,8 @@ impl Render for Shell {
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
             let mode = self.start_mode(&page.id);
-            let kind_notice = self.kind_notice(&composer, cx);
             start_page::StartFrame {
                 profile_unsafe: self.profile_unsafe,
-                kind_notice,
                 page,
                 composer,
                 shell: shell.clone(),
@@ -874,7 +882,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -900,7 +908,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         true,
                         self.rail.morph_generation(),
@@ -923,12 +931,6 @@ impl Render for Shell {
             (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
             _ => None,
         };
-        let projects = self.store.read(cx).state().projects.clone();
-        let create = self
-            .dialogs
-            .create
-            .as_ref()
-            .map(|dialog| workspace_dialog_views::create_dialog(dialog, &projects, &shell, cx));
         let add_project = self
             .dialogs
             .add_project
@@ -1040,7 +1042,6 @@ impl Render for Shell {
             )
             .when_some(resize_grabs, |el, grabs| el.child(grabs))
             .when_some(palette, |el, palette| el.child(palette))
-            .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))

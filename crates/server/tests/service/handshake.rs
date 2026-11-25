@@ -27,6 +27,7 @@ async fn welcome_offers_the_registered_capabilities() {
     assert_eq!(
         welcome.capabilities,
         [
+            capabilities::AGENT_IMPORT_DETECT,
             capabilities::AGENT_MODES,
             capabilities::AGENT_NO_PROJECT,
             capabilities::AGENT_OPTIONS,
@@ -39,6 +40,8 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::CONFIG,
             capabilities::DEVICES,
             capabilities::EVENTS,
+            capabilities::EXTENSIONS_LOG,
+            capabilities::EXTENSIONS_ROLLBACK,
             capabilities::EXTENSIONS,
             capabilities::GIT,
             capabilities::HOST,

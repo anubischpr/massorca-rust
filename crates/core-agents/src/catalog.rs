@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials, PackageState};
 
 use crate::credentials;
-use crate::kind::{KindDecl, PermissionModeDecl, StatusMechanism};
+use crate::kind::{EffortDecl, KindDecl, ModelDecl, PermissionModeDecl, StatusMechanism};
 use crate::packages::{BuiltInPackages, FIRST_PARTY_PREFIX, KindPackages, PackageKind};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
@@ -249,6 +249,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             problems: entry.problems.clone(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            model: None,
+            effort: None,
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -274,6 +276,39 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
+        model: decl.model.as_ref().map(model_view),
+        effort: decl.effort.as_ref().map(effort_view),
+    }
+}
+
+/// A declared `model` as `agent.kinds` lists it: its choices, and never its flag.
+fn model_view(model: &ModelDecl) -> wire::KindModel {
+    wire::KindModel {
+        choices: model
+            .choices
+            .iter()
+            .map(|choice| wire::KindModelChoice {
+                id: choice.id.clone(),
+                label: choice.label.clone(),
+                default: choice.default,
+                efforts: choice.efforts.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// A declared `effort` as `agent.kinds` lists it: its levels and default, and never its flag.
+fn effort_view(effort: &EffortDecl) -> wire::KindEffort {
+    wire::KindEffort {
+        levels: effort
+            .levels
+            .iter()
+            .map(|level| wire::KindEffortLevel {
+                id: level.id.clone(),
+                label: level.label.clone(),
+            })
+            .collect(),
+        default: effort.default.clone(),
     }
 }
 
@@ -561,9 +596,33 @@ mod tests {
         let accounts = claude.accounts.as_ref().unwrap();
         assert_eq!(accounts.login, ["auth", "login"]);
         let check = accounts.check.as_ref().unwrap();
-        assert_eq!(check.args, ["auth", "status"]);
+        assert_eq!(check.args, ["auth", "status", "--json"]);
         assert_eq!(check.signed_in_exit, 0);
         assert_eq!(check.expired_pattern, None);
+        // The identity is the `email` and `orgName` of `auth status --json` (decision 0098), so a second import of the same login
+        // updates the account it already is.
+        let status = "{
+  \"loggedIn\": true,
+  \"email\": \"someone@example.test\",
+  \"orgName\": null
+}";
+        let found = crate::account_check::verdict(check, Some(0), status);
+        assert_eq!(found.state, wire::AccountState::SignedIn);
+        assert_eq!(found.identity.as_deref(), Some("someone@example.test"));
+        let without_email = crate::account_check::verdict(check, Some(0), "{\"loggedIn\": true}");
+        assert_eq!(without_email.identity, None);
+        // One email in two organisations is two logins, so the organisation is part of the identity.
+        let with_org = crate::account_check::verdict(
+            check,
+            Some(0),
+            "{\"loggedIn\": true, \"email\": \"someone@example.test\", \"orgName\": \"Acme\"}",
+        );
+        assert_eq!(
+            with_org.identity.as_deref(),
+            Some("someone@example.test / Acme")
+        );
+        let logged_out = crate::account_check::verdict(check, Some(0), "{\"loggedIn\": false}");
+        assert_eq!(logged_out.state, wire::AccountState::NeedsSignIn);
         assert_eq!(check.identity_pattern, None);
         assert_eq!(
             accounts.logout,
