@@ -80,6 +80,10 @@ fn method_names_match_the_wire_table() {
         (agents::ACCOUNTS_ADD, "agent.accounts.add"),
         (agents::ACCOUNTS_SIGN_IN, "agent.accounts.sign_in"),
         (agents::ACCOUNTS_IMPORT, "agent.accounts.import"),
+        (
+            agents::ACCOUNTS_IMPORT_CANDIDATES,
+            "agent.accounts.import_candidates",
+        ),
         (agents::ACCOUNTS_ACTIVATE, "agent.accounts.activate"),
         (agents::ACCOUNTS_REMOVE, "agent.accounts.remove"),
         (agents::ACCOUNTS_CHECK, "agent.accounts.check"),
@@ -883,5 +887,60 @@ fn release_and_retain_flags_are_absent_until_set_and_an_archive_reads_back() {
     assert_wire(
         &withheld,
         &json!({ "session": "s1", "released": true, "truncated": false, "withheld": true }),
+    );
+}
+
+#[test]
+fn import_candidates_and_an_import_without_a_folder_omit_absent_fields() {
+    use agents::{AccountsImportParams, CandidateFile, ImportCandidate, ImportCandidates};
+
+    assert_wire(
+        &AccountsImportParams {
+            kind: "claude".to_owned(),
+            from: None,
+            label: None,
+        },
+        &json!({ "kind": "claude" }),
+    );
+    assert_wire(&agents::ImportCandidatesParams::default(), &json!({}));
+    let candidates = ImportCandidates {
+        candidates: vec![ImportCandidate {
+            kind: "claude".to_owned(),
+            ready: true,
+            folder: Some("<home>/.claude".to_owned()),
+            files: vec![
+                CandidateFile {
+                    name: ".credentials.json".to_owned(),
+                    required: true,
+                    found: true,
+                    path: Some("<home>/.claude/.credentials.json".to_owned()),
+                    env: Some("CLAUDE_CONFIG_DIR".to_owned()),
+                    reason: None,
+                },
+                CandidateFile {
+                    name: ".claude.json".to_owned(),
+                    required: false,
+                    found: false,
+                    path: None,
+                    env: None,
+                    reason: Some("a link".to_owned()),
+                },
+            ],
+        }],
+    };
+    assert_wire(
+        &candidates,
+        &json!({ "candidates": [{
+            "kind": "claude",
+            "ready": true,
+            "folder": "<home>/.claude",
+            "files": [
+                {
+                    "name": ".credentials.json", "required": true, "found": true,
+                    "path": "<home>/.claude/.credentials.json", "env": "CLAUDE_CONFIG_DIR"
+                },
+                { "name": ".claude.json", "required": false, "found": false, "reason": "a link" }
+            ]
+        }] }),
     );
 }

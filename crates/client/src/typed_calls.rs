@@ -10,8 +10,8 @@ use massorca_protocol::methods::agents::{
     AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
     AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
     AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
-    QueuedPrompt,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
@@ -505,12 +505,39 @@ impl Client {
         self.call(agents::ACCOUNTS_SIGN_IN, params).await
     }
 
-    /// `agent.accounts.import`: imports the kind's declared files into a new account.
+    /// `agent.accounts.import`: imports the kind's declared files into a new account. Without `from`, each file comes from
+    /// where the kind's CLI keeps it, which needs capability `agent-import-detect/1` (decision 0097); a service that does
+    /// not offer it is refused before anything is sent.
     pub async fn agent_accounts_import(
         &self,
         params: &AccountsImportParams,
     ) -> Result<AccountsImported, ClientError> {
+        if params.from.is_none() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_IMPORT_DETECT),
+                capabilities::AGENT_IMPORT_DETECT,
+                "an import without a folder",
+            )?;
+        }
         self.call(agents::ACCOUNTS_IMPORT, params).await
+    }
+
+    /// `agent.accounts.import_candidates`: where an import without a folder would copy each kind's files from (decision
+    /// 0097). Needs capability `agent-import-detect/1`; a service that does not offer it is refused before anything is
+    /// sent.
+    pub async fn agent_accounts_import_candidates(
+        &self,
+        kind: Option<&str>,
+    ) -> Result<ImportCandidates, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_IMPORT_DETECT),
+            capabilities::AGENT_IMPORT_DETECT,
+            "import source detection",
+        )?;
+        let params = ImportCandidatesParams {
+            kind: kind.map(str::to_owned),
+        };
+        self.call(agents::ACCOUNTS_IMPORT_CANDIDATES, &params).await
     }
 
     /// `agent.accounts.activate`: makes an account the kind's active one, or a project's choice.

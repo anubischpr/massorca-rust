@@ -40,6 +40,9 @@ pub const AGENT_RELEASE: &str = "agent-release/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
+/// `from`, which copies each declared file from where the kind's CLI keeps it.
+pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
