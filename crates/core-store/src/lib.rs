@@ -2,6 +2,7 @@
 //! devices and vault rows, with versioned migrations and a backup taken before each migration.
 
 mod agent_accounts;
+mod agent_chat;
 mod agent_prompt_queue;
 mod agent_sessions;
 mod backup;
@@ -25,6 +26,9 @@ mod workspaces;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
+pub use agent_chat::{
+    ChatAppend, ChatItemRow, ChatJournalHead, NewChatItem, SessionRun, SessionRunType,
+};
 pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
 pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,

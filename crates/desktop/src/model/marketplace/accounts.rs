@@ -149,6 +149,14 @@ pub fn import_outcome(imported: &AccountsImported) -> Result<(), String> {
     Err(as_sentence(imported.reason.as_deref().unwrap_or(fallback)))
 }
 
+/// The sentence an import shows when it updated an existing account instead of adding one; None for a new account.
+pub fn import_update_sentence(imported: &AccountsImported, agent: &str) -> Option<String> {
+    imported
+        .updated
+        .as_ref()
+        .map(|_| format!("Updated your existing {agent} account."))
+}
+
 /// The service's lower-case reason as a sentence: capitalised, with a full stop.
 fn as_sentence(reason: &str) -> String {
     let mut chars = reason.trim().chars();
@@ -306,6 +314,20 @@ mod tests {
         assert_eq!(
             import_outcome(&imported(ImportResult::Failed, None)),
             Err("The import failed.".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_import_that_updated_an_account_says_so_and_a_new_one_says_nothing() {
+        let mut updated = imported(ImportResult::Imported, None);
+        updated.updated = Some("account-1".to_owned());
+        assert_eq!(
+            import_update_sentence(&updated, "Claude"),
+            Some("Updated your existing Claude account.".to_owned())
+        );
+        assert_eq!(
+            import_update_sentence(&imported(ImportResult::Imported, None), "Claude"),
+            None
         );
     }
 
