@@ -949,7 +949,7 @@ impl Render for Shell {
         let team_dialog = self
             .team_dialog
             .as_ref()
-            .map(|dialog| teams::team_dialog_view(dialog, self.model.teams().hosts(), &shell, cx));
+            .map(|dialog| teams::team_dialog_view(dialog, self.model.teams(), &shell, cx));
         let team_confirm = self
             .team_confirm
             .as_ref()

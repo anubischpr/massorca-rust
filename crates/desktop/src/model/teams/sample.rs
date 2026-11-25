@@ -2,13 +2,14 @@
 //! (team Desarrollo, bots Mara, Bruno and Iris); `--sample` selects it the way it selects the
 //! sample workspaces. It stands in for the service until Bot Teams exists there.
 
+use super::agent_of_kind;
 use super::state::TeamsState;
 use super::types::{
     AddressId, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId, MemoryTab,
     Project, ProjectId, Routine, RoutineId, RunOutcome, Task, TaskId, Team, TeamFile, TeamId,
     WebAddress, Weekday,
 };
-use crate::model::shell::{Agent, HostReach};
+use crate::model::shell::HostReach;
 use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 /// The host the sample team runs on, named as the shell names it.
@@ -59,12 +60,13 @@ const MARA: BotId = BotId(1);
 const BRUNO: BotId = BotId(2);
 const IRIS: BotId = BotId(3);
 
-fn bot(id: BotId, name: &str, role: &str, agent: Agent) -> Bot {
+fn bot(id: BotId, name: &str, role: &str, kind: &str) -> Bot {
     Bot {
         id,
         name: name.into(),
         role: role.into(),
-        agent: Some(agent),
+        agent: agent_of_kind(kind),
+        kind: kind.into(),
         kind_unavailable: None,
     }
 }
@@ -169,10 +171,10 @@ fn desarrollo() -> Team {
                 MARA,
                 "Mara",
                 "Leads the team. Splits a composite requirement by competence.",
-                Agent::Claude,
+                "claude",
             ),
-            bot(BRUNO, "Bruno", "API and server work.", Agent::Codex),
-            bot(IRIS, "Iris", "Copy and product text.", Agent::Antigravity),
+            bot(BRUNO, "Bruno", "API and server work.", "codex"),
+            bot(IRIS, "Iris", "Copy and product text.", "antigravity"),
         ],
         lead: Some(MARA),
         workspaces: false,
