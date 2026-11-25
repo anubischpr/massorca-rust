@@ -57,18 +57,31 @@ pub fn access_notice(team: &Team) -> Option<String> {
 
 pub fn bot_line(bot: &Bot, verb: &str) -> String {
     let lead = if bot.lead { " (lead)" } else { "" };
+    let skills = if bot.skills.is_empty() {
+        String::new()
+    } else {
+        format!(" with skills {}", bot.skills.join(", "))
+    };
     format!(
-        "{verb} bot {}{lead} in team {} ({})",
+        "{verb} bot {}{lead} in team {} ({}){skills}",
         bot.name, bot.team_id, bot.id
     )
 }
 
-/// One bot per line: name, agent kind, lead, job, id.
+/// One bot per line: name, agent kind, lead, job, id, and its skills joined by commas or `-`.
 pub fn bot_table(bots: &[Bot]) -> Vec<String> {
     bots.iter()
         .map(|bot| {
             let lead = if bot.lead { "lead" } else { "-" };
-            format!("{}	{}	{lead}	{}	{}", bot.name, bot.kind, bot.job, bot.id)
+            let skills = if bot.skills.is_empty() {
+                "-".to_owned()
+            } else {
+                bot.skills.join(",")
+            };
+            format!(
+                "{}	{}	{lead}	{}	{}	{skills}",
+                bot.name, bot.kind, bot.job, bot.id
+            )
         })
         .collect()
 }

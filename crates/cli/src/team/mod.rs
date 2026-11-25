@@ -179,6 +179,9 @@ pub struct BotAddArgs {
     /// Make the bot the team's lead. Refused while another bot leads.
     #[arg(long)]
     pub lead: bool,
+    /// The bot's skills, by name, separated by commas (at most 50).
+    #[arg(long, value_name = "SKILLS")]
+    pub skills: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,6 +328,9 @@ pub struct BotUpdateArgs {
     /// Make the bot the lead (true), or clear its lead (false). Refused while another bot leads.
     #[arg(long, value_name = "BOOL", value_parser = clap::value_parser!(bool))]
     pub lead: Option<bool>,
+    /// Replaces the bot's skills with these names, separated by commas. An empty value clears them.
+    #[arg(long, value_name = "SKILLS")]
+    pub skills: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -472,6 +478,16 @@ async fn board_without_projects(client: &Client, team: String) -> Result<Board, 
     Ok(board)
 }
 
+/// The names of a `--skills` value; blanks are dropped, so an empty value is an empty list.
+fn skill_names(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result<(), CliError> {
     match command {
         BotCommand::List { team } => {
@@ -493,6 +509,7 @@ async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result
                     model: None,
                     effort: None,
                     lead: args.lead,
+                    skills: args.skills.as_deref().map(skill_names).unwrap_or_default(),
                 })
                 .await?;
             output.success(&bot, &[text::bot_line(&bot, "added")]);
@@ -508,6 +525,7 @@ async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result
                     model: args.model,
                     effort: args.effort,
                     lead: args.lead,
+                    skills: args.skills.as_deref().map(skill_names),
                 })
                 .await?;
             output.success(&bot, &[text::bot_line(&bot, "updated")]);

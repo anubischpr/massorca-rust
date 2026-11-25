@@ -869,3 +869,69 @@ fn the_board_without_a_project_lists_only_the_cards_no_project_holds() {
         )
         .failure();
 }
+
+#[test]
+fn a_bot_takes_skills_on_add_and_update_and_shows_them_in_text() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+
+    let plain = sandbox.json_ok(
+        "default",
+        &[
+            "team", "bot", "add", "alpha", "ada", "--agent", "codex", "--job", "Reviews",
+        ],
+    );
+    assert!(plain.get("skills").is_none(), "{plain}");
+
+    let added = stdout_text(
+        &sandbox
+            .run(
+                "default",
+                &[
+                    "team",
+                    "bot",
+                    "add",
+                    "alpha",
+                    "mara",
+                    "--agent",
+                    "claude",
+                    "--job",
+                    "Writes the parser",
+                    "--skills",
+                    "review, deploy",
+                ],
+            )
+            .success(),
+    );
+    assert!(added.contains("with skills review, deploy"), "{added}");
+
+    let renamed = sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "mara", "--job", "Ships"],
+    );
+    assert_eq!(renamed["skills"], serde_json::json!(["review", "deploy"]));
+    let replaced = sandbox.json_ok(
+        "default",
+        &[
+            "team", "bot", "update", "alpha", "mara", "--skills", "notes",
+        ],
+    );
+    assert_eq!(replaced["skills"], serde_json::json!(["notes"]));
+
+    let listed = stdout_text(
+        &sandbox
+            .run("default", &["team", "bot", "list", "alpha"])
+            .success(),
+    );
+    let lines: Vec<&str> = listed.lines().collect();
+    assert!(lines[0].ends_with("	-"), "{listed}");
+    assert!(lines[1].ends_with("	notes"), "{listed}");
+
+    let cleared = sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "mara", "--skills", ""],
+    );
+    assert!(cleared.get("skills").is_none(), "{cleared}");
+}

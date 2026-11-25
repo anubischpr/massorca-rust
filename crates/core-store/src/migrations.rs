@@ -519,6 +519,19 @@ CREATE INDEX team_room_by_team ON team_room_messages(team_id, created_at);
 "#,
         foreign_keys_off: false,
     },
+    // A bot's skills (decision 0120): skill names in the order chosen; a bot's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE bot_skills (
+    bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    skill TEXT NOT NULL,
+    PRIMARY KEY (bot_id, position),
+    UNIQUE (bot_id, skill)
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

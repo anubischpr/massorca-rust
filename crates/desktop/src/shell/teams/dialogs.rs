@@ -728,6 +728,7 @@ impl Shell {
             model,
             effort,
             lead: false,
+            skills: Vec::new(),
         };
         cx.spawn(async move |this, cx| {
             let answer = service.add_bot(params).await;
@@ -777,6 +778,7 @@ impl Shell {
             model: change.model,
             effort: change.effort,
             lead: None,
+            skills: None,
         };
         cx.spawn(async move |this, cx| {
             let answer = service.update_bot(params).await;
@@ -1888,6 +1890,7 @@ mod tests {
             effort: None,
             lead: true,
             created_at_ms: 1,
+            skills: Vec::new(),
         });
         record
     }

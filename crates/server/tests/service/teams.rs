@@ -51,6 +51,7 @@ fn bot_params(team: &str, name: &str, lead: bool) -> BotAddParams {
         model: None,
         effort: None,
         lead,
+        skills: Vec::new(),
     }
 }
 
@@ -243,6 +244,7 @@ async fn bots_are_added_updated_and_removed_and_their_names_are_unique_within_a_
                 model: Some("opus".to_owned()),
                 effort: Some("high".to_owned()),
                 lead: None,
+                skills: None,
             },
         )
         .await
@@ -263,6 +265,7 @@ async fn bots_are_added_updated_and_removed_and_their_names_are_unique_within_a_
                 model: Some(String::new()),
                 effort: None,
                 lead: None,
+                skills: None,
             },
         )
         .await
@@ -286,6 +289,7 @@ async fn bots_are_added_updated_and_removed_and_their_names_are_unique_within_a_
                 model: None,
                 effort: None,
                 lead: None,
+                skills: None,
             },
         )
         .await
@@ -357,6 +361,7 @@ async fn a_team_has_one_lead_and_the_lead_moves_only_by_clearing_it_first() {
                 model: None,
                 effort: None,
                 lead: Some(true),
+                skills: None,
             },
         )
         .await
@@ -375,6 +380,7 @@ async fn a_team_has_one_lead_and_the_lead_moves_only_by_clearing_it_first() {
                 model: None,
                 effort: None,
                 lead: Some(false),
+                skills: None,
             },
         )
         .await
@@ -391,6 +397,7 @@ async fn a_team_has_one_lead_and_the_lead_moves_only_by_clearing_it_first() {
                 model: None,
                 effort: None,
                 lead: Some(true),
+                skills: None,
             },
         )
         .await
@@ -521,6 +528,7 @@ async fn unknown_teams_bots_and_projects_are_refused_with_typed_codes() {
                 model: None,
                 effort: None,
                 lead: None,
+                skills: None,
             },
         )
         .await
@@ -1219,5 +1227,99 @@ async fn removing_the_workspaces_project_clears_the_link_and_keeps_the_team_proj
     assert_eq!(kept.source_project, None);
     assert_eq!(kept.source_project_name, None);
     assert_eq!(kept.source_kind, None);
+    stop(running).await;
+}
+
+fn skills_update(skills: Option<Vec<String>>) -> BotUpdateParams {
+    BotUpdateParams {
+        team: "alpha".to_owned(),
+        bot: "mara".to_owned(),
+        name: None,
+        job: None,
+        kind: None,
+        model: None,
+        effort: None,
+        lead: None,
+        skills,
+    }
+}
+
+fn skill_list(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn a_bot_keeps_its_skills_in_order_and_an_update_replaces_or_clears_them() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("team.create");
+
+    let plain: Bot = client
+        .call(teams::BOT_ADD, &bot_params("alpha", "bruno", false))
+        .await
+        .expect("a bot without skills");
+    assert!(plain.skills.is_empty());
+
+    let added: Bot = client
+        .call(
+            teams::BOT_ADD,
+            &BotAddParams {
+                skills: skill_list(&[" review ", "deploy", "", "review"]),
+                ..bot_params("alpha", "mara", false)
+            },
+        )
+        .await
+        .expect("a bot with skills");
+    assert_eq!(added.skills, skill_list(&["review", "deploy"]));
+
+    let renamed: Bot = client
+        .call(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                job: Some("Reviews".to_owned()),
+                ..skills_update(None)
+            },
+        )
+        .await
+        .expect("an update without skills");
+    assert_eq!(renamed.skills, skill_list(&["review", "deploy"]));
+
+    let replaced: Bot = client
+        .call(
+            teams::BOT_UPDATE,
+            &skills_update(Some(skill_list(&["notes"]))),
+        )
+        .await
+        .expect("an update that replaces the skills");
+    assert_eq!(replaced.skills, skill_list(&["notes"]));
+    let listed: BotList = client
+        .call(teams::BOT_LIST, &alpha_team())
+        .await
+        .expect("team.bot_list");
+    let skills: Vec<Vec<String>> = listed.bots.into_iter().map(|bot| bot.skills).collect();
+    assert_eq!(skills, vec![Vec::new(), skill_list(&["notes"])]);
+
+    let too_many = client
+        .call::<_, Bot>(
+            teams::BOT_UPDATE,
+            &skills_update(Some(
+                (0..=teams::MAX_BOT_SKILLS)
+                    .map(|n| format!("skill-{n}"))
+                    .collect(),
+            )),
+        )
+        .await
+        .expect_err("more skills than a bot takes");
+    assert_eq!(remote_code(&too_many), codes::REQUEST_INVALID_PARAMS);
+
+    let cleared: Bot = client
+        .call(teams::BOT_UPDATE, &skills_update(Some(Vec::new())))
+        .await
+        .expect("an empty list clears the skills");
+    assert!(cleared.skills.is_empty());
     stop(running).await;
 }

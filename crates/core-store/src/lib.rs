@@ -5,6 +5,7 @@ mod agent_accounts;
 mod agent_prompt_queue;
 mod agent_sessions;
 mod backup;
+mod bot_skills;
 mod bots;
 mod devices;
 mod error;

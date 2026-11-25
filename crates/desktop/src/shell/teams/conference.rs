@@ -580,6 +580,7 @@ mod tests {
             effort: None,
             lead,
             created_at_ms: 1,
+            skills: Vec::new(),
         }
     }
 

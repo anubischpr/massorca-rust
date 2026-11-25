@@ -461,6 +461,7 @@ mod tests {
             effort: None,
             lead: false,
             created_at_ms: 1,
+            skills: Vec::new(),
         }
     }
 
