@@ -61,8 +61,10 @@ pub fn thinking(
     toggle: ThinkingToggle,
     p: Palette,
 ) -> AnyElement {
+    let toggle_key = format!("{id}-thinking-toggle");
     let toggle_row = div()
-        .id(format!("{id}-thinking-toggle"))
+        .id(toggle_key.clone())
+        .debug_selector(move || toggle_key)
         .flex()
         .items_center()
         .gap(px(SPACE_2))
@@ -92,8 +94,10 @@ pub fn thinking(
         .gap(px(SPACE_1))
         .child(toggle_row)
         .when(expanded, |col| {
+            let text_key = format!("{id}-thinking-text");
             col.child(
                 div()
+                    .debug_selector(move || text_key)
                     .text_style(TYPE_BODY_SM)
                     .text_color(p.text.secondary)
                     .child(text.clone()),
