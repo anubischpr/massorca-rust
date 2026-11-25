@@ -72,7 +72,7 @@ impl Workspaces {
             no_setup: false,
             unique_name: false,
         };
-        self.create_folder(&project, &params)
+        self.create_folder(&project, &params, false)
     }
 }
 

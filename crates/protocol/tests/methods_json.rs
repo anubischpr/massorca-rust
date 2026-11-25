@@ -57,6 +57,7 @@ fn sample_workspace() -> workspaces::Workspace {
         base_refresh: None,
         comment: None,
         setup: None,
+        name_generated: false,
     }
 }
 
@@ -107,6 +108,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::REMOVE, "workspace.remove");
     assert_eq!(workspaces::UPDATE, "workspace.update");
     assert_eq!(workspaces::CHECK, "workspace.check");
+    assert_eq!(workspaces::RENAME, "workspace.rename");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");
     assert_eq!(config::SET, "config.set");
@@ -870,4 +872,42 @@ fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
     let newer: workspaces::WorkspaceSetup =
         serde_json::from_value(json!({ "outcome": "queued" })).expect("decodes");
     assert_eq!(newer, workspaces::WorkspaceSetup::Unknown);
+}
+
+#[test]
+fn workspace_carries_name_generated_only_when_it_holds() {
+    let mut workspace = sample_workspace();
+    assert!(
+        serde_json::to_value(&workspace)
+            .unwrap()
+            .get("name_generated")
+            .is_none()
+    );
+    workspace.name_generated = true;
+    assert_eq!(
+        serde_json::to_value(&workspace).unwrap()["name_generated"],
+        true
+    );
+}
+
+#[test]
+fn workspace_rename_params_have_the_documented_shape() {
+    assert_wire(
+        &workspaces::WorkspaceRenameParams {
+            workspace: "otter".to_owned(),
+            name: "fix-login".to_owned(),
+            from_generated: true,
+            expected_branch: Some("otter".to_owned()),
+        },
+        &json!({
+            "workspace": "otter",
+            "name": "fix-login",
+            "from_generated": true,
+            "expected_branch": "otter"
+        }),
+    );
+    let decoded: workspaces::WorkspaceRenameParams =
+        serde_json::from_value(json!({ "workspace": "otter", "name": "x" })).unwrap();
+    assert!(!decoded.from_generated);
+    assert_eq!(decoded.expected_branch, None);
 }

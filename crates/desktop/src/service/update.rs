@@ -677,6 +677,7 @@ pub(crate) mod fixtures {
             base_refresh: None,
             comment: None,
             setup: None,
+            name_generated: false,
         }
     }
 

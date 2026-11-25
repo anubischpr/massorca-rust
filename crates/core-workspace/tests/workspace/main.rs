@@ -11,6 +11,7 @@ mod generated_names;
 mod inspect;
 mod interrupted_create;
 mod layout;
+mod name_generated;
 mod names;
 mod names_and_paths;
 mod project_base;
