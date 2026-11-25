@@ -1,4 +1,4 @@
-//! The routine calls of the Bot Teams pages: add, edit, remove, pause or resume, and a routine's run history.
+//! The routine calls of the Bot Teams pages: add, edit, remove, pause or resume, run now, and a routine's run history.
 //! A write answers its caller first and then reads the teams again, so the pages follow the service.
 
 use std::sync::Arc;
@@ -34,6 +34,12 @@ pub(crate) enum RoutineCommand {
         routine: String,
         paused: bool,
         reply: oneshot::Sender<Result<Routine, Refusal>>,
+    },
+    /// `team.routine_run`: one run now, without moving the schedule. Answers with the run it made.
+    Run {
+        team: String,
+        routine: String,
+        reply: oneshot::Sender<Result<RoutineRun, Refusal>>,
     },
     /// `team.routine_runs`: the newest runs, answered to the caller and not kept by the store.
     Runs {
@@ -87,6 +93,15 @@ pub(super) fn spawn_call(
                 }
             });
         }
+        RoutineCommand::Run {
+            team,
+            routine,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_routine_run(&RoutineRef { team, routine }).await
+            });
+        }
         RoutineCommand::Runs {
             team,
             routine,
@@ -116,6 +131,9 @@ pub(super) fn refuse(command: RoutineCommand, refusal: Refusal) {
         | RoutineCommand::Update { reply, .. }
         | RoutineCommand::Remove { reply, .. }
         | RoutineCommand::SetPaused { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        RoutineCommand::Run { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         RoutineCommand::Runs { reply, .. } => {
@@ -161,6 +179,22 @@ impl ServiceHandle {
                 team,
                 routine,
                 paused,
+                reply,
+            })
+        })
+        .await
+    }
+
+    /// `team.routine_run`: makes one run of a routine now. The run shows in the history and on the card when the read lands.
+    pub async fn run_routine_now(
+        &self,
+        team: String,
+        routine: String,
+    ) -> Result<RoutineRun, Refusal> {
+        self.ask(|reply| {
+            Command::Routine(RoutineCommand::Run {
+                team,
+                routine,
                 reply,
             })
         })
