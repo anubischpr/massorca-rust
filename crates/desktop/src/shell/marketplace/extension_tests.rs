@@ -124,6 +124,7 @@ fn open_listed(
             number: 1,
             installed: Ok(installed),
             catalogue: Ok(catalogue),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -354,6 +355,7 @@ fn the_enabled_switch_sends_the_change_and_shows_only_what_the_service_then_repo
             number: 2,
             installed: Ok(vec![installed_package(false)]),
             catalogue: Ok(vec![installed_package(false)]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -426,6 +428,7 @@ fn uninstall_sends_the_removal_and_closes_the_confirm_when_the_service_answers(
             number: 2,
             installed: Ok(Vec::new()),
             catalogue: Ok(vec![catalogue_package()]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -627,6 +630,7 @@ fn open_agent<'a>(
             number: 1,
             installed: Ok(installed),
             catalogue: Ok(catalogue),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -1034,6 +1038,7 @@ fn update_sends_the_consent_of_the_checked_review_and_the_list_refreshes(cx: &mu
             number: 2,
             installed: Ok(vec![updated_folder_package()]),
             catalogue: Ok(Vec::new()),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -1139,6 +1144,7 @@ fn add_account_turns_on_after_the_install_without_a_restart(cx: &mut TestAppCont
             number: 2,
             installed: Ok(vec![installed_agent("codex", true)]),
             catalogue: Ok(vec![installed_agent("codex", true)]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();

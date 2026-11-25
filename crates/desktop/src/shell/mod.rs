@@ -370,6 +370,12 @@ impl Shell {
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
                 let (installed, catalogue) = state.extension_lists();
                 shell.marketplace.follow_extensions(installed, catalogue);
+                let history = state
+                    .extensions
+                    .as_ref()
+                    .map(|read| read.history.clone())
+                    .unwrap_or_default();
+                shell.marketplace.follow_history(&history);
                 let checks = state
                     .extensions
                     .as_ref()

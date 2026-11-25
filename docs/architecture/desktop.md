@@ -248,6 +248,12 @@ Linux only. No automated run opens a visible window.
   Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
   sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
   not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
+- Rollback and the run log (`service/extensions.rs`, `model/marketplace/run_log.rs`): each list read also reads every
+  installed package's run log when the service offers `extensions-log/1`, and records which of `extensions-rollback/1`
+  and `extensions-log/1` it offers. A package's rollback target is the version its newest run that worked replaced, when
+  that run was an update or a rollback; an install or a removal since leaves nothing kept. `extensions.rollback` without
+  consent answers with the restored version and its consent (`RollbackAnswer`), and the call is sent again with that
+  consent. Paired hosts' packages get neither yet.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

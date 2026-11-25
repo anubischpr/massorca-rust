@@ -13,6 +13,7 @@ mod item_images;
 mod item_page;
 mod package_problem;
 mod remove_review;
+mod run_log;
 mod sample;
 mod service_accounts;
 mod service_source;

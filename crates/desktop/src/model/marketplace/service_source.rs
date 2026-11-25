@@ -13,12 +13,13 @@ use super::extension_items::{
     ExtensionIds, banner_prompts, extension_items, permissions_text, provides_agent, source_of,
     state_of as package_state, update_version,
 };
+use super::run_log::kept_version;
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
     Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
     MarketplaceSnapshot,
 };
-use crate::service::Refusal;
+use crate::service::{ExtensionHistory, Refusal};
 
 /// The Marketplace a connected service makes up. It is empty until a connect reads its lists.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -31,6 +32,8 @@ pub struct ServiceMarketplace {
     catalogue: Vec<ExtensionItem>,
     /// The current update checks: each installed package's review, from the last read.
     reviews: Vec<ExtensionReview>,
+    /// What the service offers for rollback and the run log, and each installed package's runs.
+    history: ExtensionHistory,
     ids: ExtensionIds,
     /// The accounts of every kind, as the service lists them.
     accounts: ServiceAccounts,
@@ -58,9 +61,27 @@ impl ServiceMarketplace {
             .items
             .into_iter()
             .map(|agent| with_package(agent, &self.installed, &self.catalogue, &self.reviews));
-        let items = agents.chain(extensions).collect();
-        self.snapshot = MarketplaceSnapshot { items, ..base };
+        let items = agents
+            .chain(extensions)
+            .map(|item| with_kept_version(item, &self.history))
+            .collect();
+        self.snapshot = MarketplaceSnapshot {
+            items,
+            rollback_offered: self.history.rollback_offered,
+            log_offered: self.history.log_offered,
+            ..base
+        };
     }
+}
+
+/// Names the version a rollback of an installed item restores, from the run log of its package.
+fn with_kept_version(mut item: MarketplaceItem, history: &ExtensionHistory) -> MarketplaceItem {
+    item.previous_version = item
+        .extension
+        .as_ref()
+        .and_then(|entry| history.runs.get(&entry.id))
+        .and_then(|runs| kept_version(runs));
+    item
 }
 
 impl ServiceMarketplace {
@@ -122,6 +143,8 @@ fn agent_snapshot_on(host: &HostTarget, kinds: &[AgentKind]) -> MarketplaceSnaps
         accounts: Vec::new(),
         sign_in: None,
         default_agent_available: false,
+        rollback_offered: false,
+        log_offered: false,
     }
 }
 
@@ -219,6 +242,11 @@ impl MarketplaceSource for ServiceMarketplace {
 
     fn follow_update_reviews(&mut self, reviews: &[ExtensionReview]) {
         self.reviews = reviews.to_vec();
+        self.rebuild();
+    }
+
+    fn follow_history(&mut self, history: &ExtensionHistory) {
+        self.history = history.clone();
         self.rebuild();
     }
 
