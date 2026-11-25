@@ -258,6 +258,19 @@ impl Host {
         format!("dir:{}", dir.display())
     }
 
+    /// Writes `package` as a folder named after its id with `kind` as its agent declaration, and returns its `dir:`
+    /// source. For a test whose package kind must run, such as one that signs in or checks an account.
+    pub fn write_dir_with_kind(&self, package: Package, kind: &Value) -> String {
+        let source = self.write_dir(package, &[]);
+        let dir = self.packages.path().join(package.id);
+        fs::write(
+            dir.join("agents").join(format!("{}.json", package.agent)),
+            kind.to_string(),
+        )
+        .expect("the agent declaration");
+        source
+    }
+
     /// Writes `package` as an archive, and returns its `file:` source.
     pub fn write_archive(&self, package: Package, install: &[&str]) -> String {
         let manifest = package.manifest(self.bin.path(), install);

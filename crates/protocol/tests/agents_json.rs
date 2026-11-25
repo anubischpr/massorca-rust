@@ -944,3 +944,24 @@ fn import_candidates_and_an_import_without_a_folder_omit_absent_fields() {
         }] }),
     );
 }
+
+#[test]
+fn an_import_that_updated_an_account_names_it_and_a_new_one_omits_the_field() {
+    let updated: agents::AccountsImported = serde_json::from_value(json!({
+        "result": "imported",
+        "updated": "0195c0de-0000-7000-8000-000000000002"
+    }))
+    .expect("an updated import decodes");
+    assert_eq!(
+        updated.updated.as_deref(),
+        Some("0195c0de-0000-7000-8000-000000000002")
+    );
+    let older: agents::AccountsImported =
+        serde_json::from_value(json!({ "result": "imported" })).expect("an older result decodes");
+    assert_eq!(older.updated, None);
+    assert_eq!(
+        serde_json::to_value(&older).expect("encodes"),
+        json!({ "result": "imported" }),
+        "a new account's result has no `updated`"
+    );
+}
