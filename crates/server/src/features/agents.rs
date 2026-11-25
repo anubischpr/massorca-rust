@@ -532,6 +532,8 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| {
+        // A chat resume probes its CLI's version, which can take seconds: before the gate (decision 0101).
+        agents.prepare_chat_resume(&params.session);
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
         agents.resume_at(

@@ -821,18 +821,18 @@ impl Agents {
         cols: Option<u16>,
         rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
-        let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
-        // A chat session resumes as a chat (decision 0101, D9), which lands with chat starts; never as a terminal run.
-        if self.run_type_of(&row.id)? == RunType::Chat {
-            return Err(AgentError::new(
-                codes::AGENT_CHAT_UNSUPPORTED,
-                format!(
-                    "session {} is a chat, and chat sessions cannot be resumed yet",
-                    row.id
-                ),
-            ));
-        }
+        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run. Its kind's version probe can take
+        // seconds, so it runs before the start gate is taken; a chat resume needs the same support as a chat start.
+        let chat = self.run_type_of(&row.id)? == RunType::Chat;
+        let mut adapter = if chat {
+            let (decl, program) = self.resumable_kind(&row)?;
+            Some(self.chat_adapter_of(&decl, &program)?)
+        } else {
+            None
+        };
+        let _gate = lock(&self.inner.start_gate);
+        let row = self.resolve(&row.id)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
             return Err(AgentError::new(
                 codes::AGENT_BUSY,
@@ -963,44 +963,67 @@ impl Agents {
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
-        live.insert(
-            row.id.clone(),
-            LiveRun {
-                token,
-                rules: HookRules::of(&decl),
-                prompt: PromptRules::of(&decl),
-                pending: None,
-                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
-                typed_since_report: false,
-                switching: false,
-                delivering: false,
-                account: access.account.clone(),
-            },
-        );
+        // A chat run reports through its journal, not hooks (decision 0101).
+        if !chat {
+            live.insert(
+                row.id.clone(),
+                LiveRun {
+                    token,
+                    rules: HookRules::of(&decl),
+                    prompt: PromptRules::of(&decl),
+                    pending: None,
+                    pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
+                    typed_since_report: false,
+                    switching: false,
+                    delivering: false,
+                    account: access.account.clone(),
+                },
+            );
+        }
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
             cols: cols.unwrap_or(DEFAULT_COLS),
             rows: rows.unwrap_or(DEFAULT_ROWS),
         };
-        let terminal_id = self
-            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
-            .inspect_err(|_| {
-                live.remove(&row.id);
-                remove_dir(&run_dir);
-            })?;
+        let started = match adapter.take() {
+            None => self
+                .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+                .map(Started::Terminal),
+            Some(adapter) => self
+                .spawn_chat_run(&row.id, plan, &workspace.id, &workspace.path, adapter)
+                .map(Started::Chat),
+        }
+        .inspect_err(|_| {
+            live.remove(&row.id);
+            remove_dir(&run_dir);
+        })?;
         crash_point("agent-resume-spawned");
-        let restarted = self.store().restart_agent_session(
-            &row.id,
-            &terminal_id,
-            holds_secrets,
-            &mode.mode,
-            still_pending.as_deref(),
-        );
+        let restarted = match &started {
+            Started::Terminal(terminal_id) => self.store().restart_agent_session(
+                &row.id,
+                terminal_id,
+                holds_secrets,
+                &mode.mode,
+                still_pending.as_deref(),
+            ),
+            Started::Chat(chat_run) => self.store().restart_chat_agent_session(
+                &row.id,
+                &chat_run.run_id,
+                holds_secrets,
+                &mode.mode,
+                still_pending.as_deref(),
+            ),
+        };
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
             drop(live);
-            let _ = self.inner.config.terminals.close(&terminal_id);
+            match &started {
+                Started::Terminal(terminal_id) => {
+                    let _ = self.inner.config.terminals.close(terminal_id);
+                }
+                Started::Chat(chat_run) => self.abandon_chat_run(&row.id, chat_run),
+            }
             remove_dir(&run_dir);
             restarted?;
             return Err(AgentError::new(
@@ -1009,19 +1032,35 @@ impl Agents {
             ));
         }
         clear_starting(&run_dir);
-        if let Some(previous) = row.terminal_id.as_deref().filter(|old| *old != terminal_id) {
-            // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited terminal.
-            let _ = self.inner.config.terminals.pin(previous, false);
-        }
         // A session run again is in use again: its archive is cleared, so lists show it (decision 0163).
         self.store().set_agent_session_archived(&row.id, None)?;
         let fresh = self.reload(&row.id)?;
-        if fresh.retained {
-            // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
-            let _ = self.inner.config.terminals.pin(&terminal_id, true);
+        if let Started::Terminal(terminal_id) = &started {
+            if let Some(previous) = row.terminal_id.as_deref().filter(|old| old != terminal_id) {
+                // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited
+                // terminal.
+                let _ = self.inner.config.terminals.pin(previous, false);
+            }
+            if fresh.retained {
+                // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
+                let _ = self.inner.config.terminals.pin(terminal_id, true);
+            }
         }
         let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
+        drop(live);
+        if let Started::Chat(chat_run) = &started {
+            // The journal carries on in its epoch; the run's output is let in now that the row names it (decision
+            // 0101, D9). A resume sends no prompt.
+            drop((_gate, gate));
+            if let Err(mut error) = self.begin_chat(&row.id, chat_run, None) {
+                self.abandon_chat_run(&row.id, chat_run);
+                error
+                    .data
+                    .get_or_insert_with(|| json!({ "session": row.id }));
+                return Err(error);
+            }
+        }
         session.secrets_withheld = withheld(grant);
         Ok(session)
     }
@@ -1212,6 +1251,10 @@ impl Agents {
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
+        // A chat session takes a stream-json message instead of typing (decision 0101, D7).
+        if self.run_type_of(&row.id)? == RunType::Chat {
+            return self.chat_prompt(&row, text, force, lift_queue_pauses);
+        }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.
         let (session_id, terminal, bytes) = {

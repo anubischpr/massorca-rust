@@ -31,6 +31,8 @@ pub const CHAT_UNSUPPORTED: &str = codes::AGENT_CHAT_UNSUPPORTED;
 pub const NOT_CHAT: &str = codes::AGENT_NOT_CHAT;
 /// The approval is not pending; [`codes::AGENT_APPROVAL_SETTLED`].
 pub const APPROVAL_SETTLED: &str = codes::AGENT_APPROVAL_SETTLED;
+/// The approval changed since the `seq` the answer names; [`codes::AGENT_APPROVAL_CHANGED`].
+pub const APPROVAL_CHANGED: &str = codes::AGENT_APPROVAL_CHANGED;
 /// A cursor from another journal epoch; [`codes::AGENT_CURSOR_STALE`].
 pub const CURSOR_STALE: &str = codes::AGENT_CURSOR_STALE;
 
@@ -253,16 +255,27 @@ pub enum ChatItemBody {
     /// One tool call.
     ToolUse(ToolUse),
     /// The agent's plan or checklist, as a whole list each time it changes.
-    Plan { entries: Vec<PlanEntry> },
+    Plan {
+        entries: Vec<PlanEntry>,
+        /// The file the plan was written to, when the agent wrote it to one (a path as the agent names it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        document: Option<String>,
+    },
     /// A file change the agent made.
     Diff {
         path: String,
+        /// What happened to the file; `modified` when a peer leaves it out.
+        #[serde(default)]
+        status: DiffStatus,
+        /// The file's earlier path, for a `renamed` file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        old_path: Option<String>,
         /// A unified diff, at most [`MAX_SUMMARY_BYTES`].
         patch: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         truncated: bool,
     },
-    /// A sub-agent the agent started; the items it produces name this item as `parent`.
+    /// A sub-agent the agent started; the items it produces name this item's `id` as their `parent`.
     Subagent {
         /// The id of the tool call that started it.
         tool_use_id: String,
@@ -328,6 +341,24 @@ pub enum ToolStatus {
     Unknown,
 }
 
+/// What a [`ChatItemBody::Diff`] did to its file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffStatus {
+    /// The file is new.
+    Added,
+    /// The file existed and changed.
+    #[default]
+    Modified,
+    /// The file was removed.
+    Deleted,
+    /// The file moved from `old_path`.
+    Renamed,
+    /// A value from a newer peer that this build does not know; never sent by this build. Read it as `modified`.
+    #[serde(other)]
+    Unknown,
+}
+
 /// One entry of a plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanEntry {
@@ -374,9 +405,14 @@ pub struct Approval {
     /// The tool call the request is for, when the CLI names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
-    /// The CLI offered rules that would allow such calls from now on, so the `always` scope is accepted.
+    /// The CLI offered rules that would allow such calls from now on, so the `always` scope is accepted: true only when
+    /// `suggestions` lists at least one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_always: bool,
+    /// What an `always` answer writes, each listed so the person sees it before accepting. Only these are written; the
+    /// service drops every other change the CLI offered (a mode switch, another destination).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<ApprovalSuggestion>,
     pub state: ApprovalState,
     /// The scope of an `allowed` answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,6 +420,19 @@ pub struct Approval {
     /// Service clock when the request left `pending`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_at_ms: Option<i64>,
+}
+
+/// One change an `always` answer writes (decision 0101, as amended): the CLI's own type for it, the rules as text, and
+/// where they are written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalSuggestion {
+    /// The CLI's type of change, for example `addRules`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Each rule as `Tool` or `Tool(rule)`, for example `Bash(touch probe.txt)`.
+    pub rules: Vec<String>,
+    /// Where the rules are written, for example `session` or `localSettings`.
+    pub destination: String,
 }
 
 /// Where a permission request is.
@@ -488,7 +537,8 @@ pub struct ChatHistoryPage {
 }
 
 /// Params of `agent.chat.approval.answer`. The first answer to a pending request wins; any later one, and any answer to
-/// a cancelled request, is refused with [`APPROVAL_SETTLED`].
+/// a cancelled request, is refused with [`APPROVAL_SETTLED`]. With `seq`, the answer applies only to the item as it was
+/// at that `seq`: a request the CLI sent again since (with new input) is refused with [`APPROVAL_CHANGED`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatApprovalAnswerParams {
     pub session: String,
@@ -501,6 +551,9 @@ pub struct ChatApprovalAnswerParams {
     /// For `deny` only: what the agent is told, so it can change course.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The `seq` of the approval item the person answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 /// Result of `agent.chat.interrupt`. The session and its run stay; only the running turn ends.

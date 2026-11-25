@@ -234,6 +234,9 @@ pub const AGENT_NOT_CHAT: &str = "agent.not_chat";
 /// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (decision 0101).
 /// The error's `data` is the approval item when it exists.
 pub const AGENT_APPROVAL_SETTLED: &str = "agent.approval_settled";
+/// `agent.chat.approval.answer` names a `seq` the approval item no longer has: the CLI sent the request again, with new
+/// input, since the person saw it (decision 0101). The error's `data` is the item as it is now.
+pub const AGENT_APPROVAL_CHANGED: &str = "agent.approval_changed";
 /// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes (decision 0101).
 pub const AGENT_CURSOR_STALE: &str = "agent.cursor_stale";
 
