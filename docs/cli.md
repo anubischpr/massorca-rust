@@ -58,7 +58,7 @@ machine.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
 | `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
-| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--with-children]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it; `--with-children` first removes the workspaces of delegated children. |
 | `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
 | `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
@@ -158,6 +158,11 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+- A workspace whose delegated children write in workspaces of their own, a child's child
+  included, refuses with `workspace.has_children`; the message names them. `--with-children`
+  removes them first, deepest first, each with the same checks and the other flags given. A
+  refused child stops the removal: the children already removed stay removed, the message names
+  them, and the workspace is kept (decision 0098).
 
 ### Terminals
 

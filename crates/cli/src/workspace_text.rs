@@ -208,7 +208,13 @@ pub fn workspace_table(workspaces: &[Workspace]) -> Vec<String> {
 /// What a removal did: the workspace, the branch when it was deleted or kept, and a directory left in place.
 pub fn removal_lines(removed: &WorkspaceRemoved) -> Vec<String> {
     let workspace = &removed.workspace;
-    let mut lines = vec![format!("removed workspace {}", workspace.name)];
+    // Children were removed first, so their lines come first.
+    let mut lines: Vec<String> = removed
+        .removed_children
+        .iter()
+        .flat_map(removal_lines)
+        .collect();
+    lines.push(format!("removed workspace {}", workspace.name));
     if removed.branch_deleted {
         if let Some(branch) = &workspace.branch {
             lines.push(format!("deleted branch {branch}"));

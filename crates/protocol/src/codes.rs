@@ -38,6 +38,9 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// Delegated children run in workspaces of their own under this one; removal needs `with_children` (decision 0098).
+/// `data.children` names them.
+pub const WORKSPACE_HAS_CHILDREN: &str = "workspace.has_children";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";

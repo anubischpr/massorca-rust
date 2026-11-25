@@ -1,6 +1,7 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! With `with_children`, the workspaces of delegated children are removed first the same way (decision 0098).
 //! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use massorca_protocol::methods::workspaces::{
     WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
+use serde_json::json;
 
 use massorca_core_workspace::RemovalWaivers;
 
@@ -202,17 +204,92 @@ async fn remove(
         discard_ignored: params.discard_ignored,
         forget_orphan: params.forget_orphan,
     };
-    let selector = params.workspace;
-    let begun = {
+    let (target, children) = {
         let domain = Arc::clone(&domain);
+        let selector = params.workspace.clone();
+        blocking(move || domain.delegated_child_workspaces(&selector)).await?
+    };
+    if !children.is_empty() && !params.with_children {
+        return Err(has_children(&target, &children));
+    }
+    let mut removed_children = Vec::new();
+    for child in &children {
+        match remove_one(&ctx, &domain, child.id.clone(), waivers).await {
+            Ok(removed) => removed_children.push(removed),
+            // A child removed or forgotten since the list was read is skipped.
+            Err(error) if error.code == codes::WORKSPACE_NOT_FOUND => {}
+            Err(error) => return Err(child_refused(error, &target, child, &removed_children)),
+        }
+    }
+    let mut removed = remove_one(&ctx, &domain, target.id, waivers).await?;
+    removed.removed_children = removed_children;
+    Ok(removed)
+}
+
+/// One removal: the checks, the `removing` event, stopping its runs, then the removal and the `removed` event.
+async fn remove_one(
+    ctx: &RequestCtx,
+    domain: &Arc<massorca_core_workspace::Workspaces>,
+    selector: String,
+    waivers: RemovalWaivers,
+) -> Result<WorkspaceRemoved, ErrorBody> {
+    let begun = {
+        let domain = Arc::clone(domain);
         blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
-    publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
-    stop_runs(&ctx, &begun.id).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
+    let domain = Arc::clone(domain);
     let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
-    publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
+    publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
+}
+
+/// `workspace.has_children`: the message and `data.children` name the child workspaces, deepest first.
+fn has_children(target: &Workspace, children: &[Workspace]) -> ErrorBody {
+    let names: Vec<&str> = children.iter().map(|child| child.name.as_str()).collect();
+    ErrorBody {
+        data: Some(json!({ "children": names })),
+        ..ErrorBody::new(
+            codes::WORKSPACE_HAS_CHILDREN,
+            format!(
+                "{} has workspaces of delegated children: {}; remove with with_children to remove them first",
+                target.name,
+                names.join(", ")
+            ),
+        )
+    }
+}
+
+/// A child's refusal keeps its code; the message and data say which child refused and which were removed before it.
+fn child_refused(
+    error: ErrorBody,
+    target: &Workspace,
+    child: &Workspace,
+    removed: &[WorkspaceRemoved],
+) -> ErrorBody {
+    let removed: Vec<&str> = removed
+        .iter()
+        .map(|done| done.workspace.name.as_str())
+        .collect();
+    let before = if removed.is_empty() {
+        String::new()
+    } else {
+        format!("; removed before it: {}", removed.join(", "))
+    };
+    let mut data = json!({ "child": child.name, "removed_children": removed });
+    if let Some(cause) = error.data {
+        data["cause"] = cause;
+    }
+    ErrorBody {
+        code: error.code,
+        message: format!(
+            "child workspace {}: {}; {} is kept{before}",
+            child.name, error.message, target.name
+        ),
+        data: Some(data),
+    }
 }
 
 async fn update(ctx: RequestCtx, params: WorkspaceUpdateParams) -> Result<Workspace, ErrorBody> {

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceListParams,
     WorkspaceRef, WorkspaceRemoveParams, WorkspaceSetup, WorkspaceUpdateParams,
@@ -76,6 +77,7 @@ pub async fn execute(
             force,
             discard_ignored,
             forget_orphan,
+            with_children,
         } => {
             let removed = client
                 .workspace_remove(&WorkspaceRemoveParams {
@@ -83,8 +85,10 @@ pub async fn execute(
                     force,
                     discard_ignored,
                     forget_orphan,
+                    with_children,
                 })
-                .await?;
+                .await
+                .map_err(|error| with_children_hint(CliError::from(error), &workspace))?;
             output.success(&removed, &workspace_text::removal_lines(&removed));
         }
         WorkspaceCommand::Update {
@@ -174,4 +178,15 @@ fn current_path(path: Option<&Path>, paths: PathRules) -> Result<String, CliErro
             paths.path(&current)
         }
     }
+}
+
+/// Names the command line flag in a `workspace.has_children` refusal; the service names the protocol field.
+fn with_children_hint(mut error: CliError, workspace: &str) -> CliError {
+    if error.code == codes::WORKSPACE_HAS_CHILDREN {
+        error.message = format!(
+            "{}; run `massorca workspace rm {workspace} --with-children`",
+            error.message
+        );
+    }
+    error
 }

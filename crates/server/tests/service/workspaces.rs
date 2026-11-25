@@ -20,7 +20,7 @@ use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
 
-fn git_repo(dir: &Path) {
+pub(super) fn git_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create repository dir");
     git(dir, &["init", "-q"]);
     std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
@@ -28,7 +28,7 @@ fn git_repo(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
-fn git(dir: &Path, args: &[&str]) {
+pub(super) fn git(dir: &Path, args: &[&str]) {
     let output = massorca_process::command("git")
         .args([
             "-c",
@@ -49,7 +49,7 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
+pub(super) fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
         project: project.to_owned(),
         name: name.to_owned(),
@@ -63,16 +63,17 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     }
 }
 
-fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
+pub(super) fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
     WorkspaceRemoveParams {
         workspace: workspace.to_owned(),
         force,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
     }
 }
 
-async fn next_event(events: &mut Subscription) -> ChangeEvent {
+pub(super) async fn next_event(events: &mut Subscription) -> ChangeEvent {
     timeout(Duration::from_secs(10), events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
@@ -81,7 +82,11 @@ async fn next_event(events: &mut Subscription) -> ChangeEvent {
 }
 
 /// A git project at `repo` whose workspaces go under `<home>/ws`.
-async fn add_repo_project(client: &massorca_client::Client, home: &Path, repo: &Path) -> Project {
+pub(super) async fn add_repo_project(
+    client: &massorca_client::Client,
+    home: &Path,
+    repo: &Path,
+) -> Project {
     client
         .call(
             projects::ADD,
@@ -426,6 +431,7 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
                 force: true,
                 discard_ignored: true,
                 forget_orphan: false,
+                with_children: false,
             },
         )
         .await

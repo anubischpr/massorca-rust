@@ -424,6 +424,7 @@ fn workspace_remove_params_default_force_to_false() {
             force: false,
             discard_ignored: false,
             forget_orphan: false,
+            with_children: false,
         }
     );
     assert_wire(&params, &json!({ "workspace": "feat-x", "force": false }));
@@ -437,12 +438,14 @@ fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
             force: true,
             discard_ignored: true,
             forget_orphan: true,
+            with_children: true,
         },
         &json!({
             "workspace": "feat-x",
             "force": true,
             "discard_ignored": true,
-            "forget_orphan": true
+            "forget_orphan": true,
+            "with_children": true
         }),
     );
 }
@@ -650,8 +653,34 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             branch_deleted: true,
             branch_kept_reason: None,
             directory_kept: false,
+            removed_children: Vec::new(),
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
+    );
+}
+
+#[test]
+fn workspace_removed_lists_the_child_workspaces_removed_first() {
+    let child = workspaces::WorkspaceRemoved {
+        workspace: sample_workspace(),
+        branch_deleted: true,
+        branch_kept_reason: None,
+        directory_kept: false,
+        removed_children: Vec::new(),
+    };
+    assert_wire(
+        &workspaces::WorkspaceRemoved {
+            workspace: sample_workspace(),
+            branch_deleted: true,
+            branch_kept_reason: None,
+            directory_kept: false,
+            removed_children: vec![child],
+        },
+        &json!({
+            "workspace": sample_workspace_json(),
+            "branch_deleted": true,
+            "removed_children": [{ "workspace": sample_workspace_json(), "branch_deleted": true }]
+        }),
     );
 }
 
@@ -663,6 +692,7 @@ fn workspace_removed_says_when_a_directory_was_kept() {
             branch_deleted: false,
             branch_kept_reason: None,
             directory_kept: true,
+            removed_children: Vec::new(),
         },
         &json!({
             "workspace": sample_workspace_json(),
@@ -680,6 +710,7 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
             directory_kept: false,
+            removed_children: Vec::new(),
         },
         &json!({
             "workspace": sample_workspace_json(),
