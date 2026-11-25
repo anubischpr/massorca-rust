@@ -424,12 +424,16 @@ removes the folder's PATH entry only when nothing else is in that folder.
 | `installed` | The command runs this binary and its folder is on PATH. |
 | `not_on_path` | The command runs this binary, but its folder is not on PATH. |
 | `different_binary` | The command runs another binary. `cli install` points it at this one. |
+| `stale` | The command runs a binary that is no longer there, such as one an update moved. The desktop's service start points it at the binary that started (decision 0113); `cli install` does it at once. |
 | `not_installed` | No command is installed. |
 | `conflict` | A file massorca did not make is at the command path. |
 
 The result also has `command`, `target`, `points_to`, `bin_dir`, `bin_dir_on_path` (`null` when the Windows user PATH
-could not be read) and `changed`. The command runs the binary that ran `cli install`: an update that moves that binary
-leaves the command on the old path (`different_binary`, or a broken link) until `cli install` runs again.
+could not be read) and `changed`. The command runs the binary that ran `cli install`. When an update moves that binary,
+the command is `stale` until the desktop starts its service: the desktop runs its bundled `massorca` with a hidden
+`--repair-command` flag, which points a stale command at that binary and changes nothing else (decision 0113). A binary
+that an update leaves at its old path still runs, so the command keeps it, and `different_binary` shows that until
+`cli install` runs.
 
 ## Logs and files
 

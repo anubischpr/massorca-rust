@@ -52,6 +52,9 @@ fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
     if access == RootAccess::Repaired {
         tracing::warn!(path = %profile.dir().display(), "profile directory access was repaired: it is now private to its owner");
     }
+    if args.repair_command {
+        crate::cli_install::repair_on_service_start();
+    }
     tracing::info!(took_ms = root_check.as_millis(), "profile root checked");
     if std::env::var_os(START_TIMING_ENV).is_some() {
         let _ = writeln!(

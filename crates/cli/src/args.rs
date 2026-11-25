@@ -224,6 +224,9 @@ pub struct RunArgs {
     /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
     #[arg(long)]
     pub allow_all_interfaces: bool,
+    /// Repoints a stale `massorca` command at this binary (decision 0113); set by the desktop, not by people.
+    #[arg(long, hide = true)]
+    pub repair_command: bool,
     /// Where an autostarting client reads why the service did not start; set by the client, not by people.
     #[arg(long, hide = true, value_name = "FILE")]
     pub start_status: Option<PathBuf>,
