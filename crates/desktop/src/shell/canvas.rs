@@ -19,7 +19,6 @@ use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
-use crate::model::remote_sessions::RemoteSessionView;
 use crate::model::shell::{ServiceNotice, ServiceTone};
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, TeamPage};
@@ -57,7 +56,7 @@ pub(super) struct PageFrames<'a> {
     /// The open session's view, while the Canvas shows a session.
     pub session: Option<SessionFrame>,
     /// The open session of a paired host, while the Canvas shows one that This PC does not run (STAT-16).
-    pub remote_session: Option<RemoteSessionView>,
+    pub remote_session: Option<remote_session::RemoteSessionFrame>,
     /// The Conference room, while the Canvas shows one.
     pub room: Option<teams::RoomFrame>,
 }
@@ -205,7 +204,7 @@ fn conversation(
         },
         Canvas::Session(_) => match (pages.session, pages.remote_session) {
             (Some(frame), _) => session_view::session_page(frame, cx),
-            (None, Some(view)) => remote_session::remote_session_page(&view, cx),
+            (None, Some(frame)) => remote_session::remote_session_page(frame, cx),
             (None, None) if model.open_remote_session().is_some() => {
                 placeholder("Session", "This session is not listed by its host.", theme)
                     .into_any_element()

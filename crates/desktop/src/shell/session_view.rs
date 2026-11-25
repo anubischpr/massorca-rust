@@ -28,6 +28,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
+use super::remote_session_view::RemoteSessionFrame;
 use super::sidebar_rows::glyph_state;
 use super::transcript_rows::transcript_rows;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
@@ -35,7 +36,6 @@ use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
 use crate::model::permission_modes::{SessionModes, mode_to_set, session_modes};
-use crate::model::remote_sessions::RemoteSessionView;
 use crate::model::session_ended::{
     ENDED, ENDED_NOT_RESUMABLE, START_NEW, ended_offer, refusal_says_conversation_gone,
     screen_says_conversation_gone,
@@ -536,17 +536,53 @@ impl Shell {
         })
     }
 
-    /// The header's mode chip of `session` for its kind's modes, kept while the kind lists the same names. It shows the
-    /// mode the service reports, and a pick calls `set_session_mode`, as the composer's chip does.
-    /// The view of the open remote session, while the Canvas shows a session This PC does not run (STAT-16).
-    pub(super) fn remote_session_frame(&self, cx: &App) -> Option<RemoteSessionView> {
-        if !matches!(self.model.canvas(), Canvas::Session(_)) {
+    /// The view of the open remote session, while the Canvas shows a session This PC does not run (STAT-16). Its
+    /// terminal is attached the first time the view is drawn, as a local session's is, and dropped with the view.
+    pub(super) fn remote_session_frame(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<RemoteSessionFrame> {
+        let open = self
+            .model
+            .open_remote_session()
+            .filter(|_| matches!(self.model.canvas(), Canvas::Session(_)))
+            .map(|(host, id)| (host.to_owned(), id.to_owned()));
+        let view = open.and_then(|(host, id)| {
+            crate::model::remote_sessions::remote_session_view(
+                self.store.read(cx).state(),
+                &host,
+                &id,
+            )
+        });
+        let Some(view) = view else {
+            self.remote_terminal = None;
             return None;
+        };
+        let terminal = view.terminal.clone();
+        if let Some(terminal) = terminal.as_deref()
+            && !self
+                .remote_terminal
+                .as_ref()
+                .is_some_and(|attached| attached.is(&view.host, terminal))
+        {
+            self.attach_remote_terminal(&view.host, terminal, cx);
         }
-        let (host, id) = self.model.open_remote_session()?;
-        crate::model::remote_sessions::remote_session_view(self.store.read(cx).state(), host, id)
+        let shown = terminal.as_deref().and_then(|terminal| {
+            self.remote_terminal
+                .as_ref()
+                .filter(|attached| attached.is(&view.host, terminal))
+        });
+        Some(RemoteSessionFrame {
+            surface: shown.map(|attached| attached.surface.clone()),
+            out_of_contact: shown.is_some_and(|attached| attached.out_of_contact),
+            failure: shown.and_then(|attached| attached.failure.clone()),
+            shell: cx.entity().downgrade(),
+            view,
+        })
     }
 
+    /// The header's mode chip of `session` for its kind's modes, kept while the kind lists the same names. It shows the
+    /// mode the service reports, and a pick calls `set_session_mode`, as the composer's chip does.
     fn session_mode_chip(
         &mut self,
         session: &str,

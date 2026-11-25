@@ -18,6 +18,7 @@ mod path_field;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;
+mod remote_terminal;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
@@ -283,6 +284,8 @@ pub struct Shell {
     marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal of the open remote session, attached over its paired host's own connection (STAT-16).
+    remote_terminal: Option<remote_terminal::RemoteTerminal>,
     /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
     work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
@@ -607,6 +610,7 @@ impl Shell {
             marketplace_skills_request: 0,
             marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
+            remote_terminal: None,
             work_panel_size: Rc::default(),
             work_panel_applied: None,
             pane_waits: 0,
