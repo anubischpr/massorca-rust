@@ -35,5 +35,15 @@
       "bypass": true
     }
   ],
-  "default_permission_mode": "auto"
+  "default_permission_mode": "auto",
+  "model": { "flag": "--model", "choices": [] },
+  "effort": {
+    "flag": "--effort",
+    "levels": [
+      { "id": "low", "label": "Low" },
+      { "id": "medium", "label": "Medium" },
+      { "id": "high", "label": "High" }
+    ],
+    "default": "high"
+  }
 }

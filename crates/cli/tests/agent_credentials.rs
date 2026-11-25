@@ -180,9 +180,18 @@ fn a_missing_declared_file_fails_and_leaves_the_home_unchanged() {
     fs::write(source.join("token.json"), r#"{"fake":2}"#).unwrap();
     let error = error_of(&sandbox, &import);
     assert_eq!(error["code"], "agent.credentials_invalid");
-    assert_eq!(
-        error["data"]["files"],
-        json!([{ "name": "config.toml", "reason": "missing" }])
+    // Each refused file names where it was looked for (decision 0097).
+    let files = error["data"]["files"]
+        .as_array()
+        .expect("the refused files");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0]["name"], "config.toml");
+    assert_eq!(files[0]["reason"], "missing");
+    assert!(
+        files[0]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("config.toml")),
+        "{files:?}"
     );
     assert_eq!(
         fs::read_to_string(home(&sandbox).join("token.json")).unwrap(),
