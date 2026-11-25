@@ -9,6 +9,7 @@ import {
   type Host,
   type HostSummary,
   type ProtocolInfo,
+  type TerminalSummary,
   type TerminalView,
   type WhoAmI,
   type Watch,
@@ -48,6 +49,21 @@ export function workspace(overrides: Partial<WorkspaceSummary> & { readonly id: 
     branch: 'feat/example',
     state: 'ready',
     missing: false,
+    ...overrides,
+  };
+}
+
+export function terminalSummary(overrides: Partial<TerminalSummary> & { readonly id: string }): TerminalSummary {
+  return {
+    workspaceId: 'ws-1',
+    state: 'live',
+    title: undefined,
+    cols: 120,
+    rows: 40,
+    shell: 'zsh',
+    cwd: '/repos/ws-1',
+    createdAtMs: 1n,
+    holdsSecrets: false,
     ...overrides,
   };
 }
@@ -99,6 +115,10 @@ class StalledHost implements Host {
     return new Promise<WorkspaceSummary[]>(() => undefined);
   }
 
+  terminals(workspaceId?: string): Promise<TerminalSummary[]> {
+    return this.inner.terminals(workspaceId);
+  }
+
   gitStatus(workspaceId: string): Promise<GitStatusSummary> {
     return this.inner.gitStatus(workspaceId);
   }
@@ -142,6 +162,10 @@ class StalledStatusHost implements Host {
     return this.inner.workspaces(project);
   }
 
+  terminals(workspaceId?: string): Promise<TerminalSummary[]> {
+    return this.inner.terminals(workspaceId);
+  }
+
   gitStatus(): Promise<GitStatusSummary> {
     return new Promise<GitStatusSummary>(() => undefined);
   }
@@ -162,5 +186,52 @@ class StalledStatusHost implements Host {
 export class StalledGitStatusFake extends FakeMassOrca {
   override async connect(hostName: string): Promise<Host> {
     return new StalledStatusHost(await super.connect(hostName));
+  }
+}
+
+/** A host whose terminal list never arrives, for the loading state of the Terminal view. */
+class StalledTerminalsHost implements Host {
+  constructor(private readonly inner: Host) {}
+
+  name(): string {
+    return this.inner.name();
+  }
+
+  whoami(): Promise<WhoAmI> {
+    return this.inner.whoami();
+  }
+
+  protocol(): ProtocolInfo {
+    return this.inner.protocol();
+  }
+
+  workspaces(project?: string): Promise<WorkspaceSummary[]> {
+    return this.inner.workspaces(project);
+  }
+
+  terminals(): Promise<TerminalSummary[]> {
+    return new Promise<TerminalSummary[]>(() => undefined);
+  }
+
+  gitStatus(workspaceId: string): Promise<GitStatusSummary> {
+    return this.inner.gitStatus(workspaceId);
+  }
+
+  watchGit(workspaceId: string): Watch<GitEvent> {
+    return this.inner.watchGit(workspaceId);
+  }
+
+  watchAgents(workspaceId?: string): Watch<AgentEvent> {
+    return this.inner.watchAgents(workspaceId);
+  }
+
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<TerminalView> {
+    return this.inner.attachTerminal(terminal, cols, rows);
+  }
+}
+
+export class StalledTerminalsFake extends FakeMassOrca {
+  override async connect(hostName: string): Promise<Host> {
+    return new StalledTerminalsHost(await super.connect(hostName));
   }
 }
