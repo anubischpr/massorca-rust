@@ -42,6 +42,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
+use super::agent_chat::kind_chats;
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -57,6 +58,8 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
+/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
+const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -733,11 +736,15 @@ impl Link {
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
+        self.emit(StoreUpdate::AgentChatOffered(
+            client.has_capability(AGENT_CHAT_CAPABILITY),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
+        self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
@@ -904,6 +911,7 @@ impl Link {
                             &self.accounts_order,
                         );
                     }
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
                     self.emit(StoreUpdate::AgentKindsResync(kinds));
                     extensions::read(client, &self.extension_reads)
                         .await
