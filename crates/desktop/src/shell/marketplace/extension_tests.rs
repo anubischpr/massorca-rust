@@ -6,15 +6,17 @@ use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, probl
 use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
 use crate::service::{
-    AccountCommand, Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate,
+    AccountCommand, Command, ExtensionCommand, ExtensionHistory, ExtensionsRead, Refusal,
+    RollbackAnswer, StoreUpdate,
 };
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
-    ExtensionReview, ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk,
-    RiskLevel, SourceKind, SourceRef, UninstallEffects,
+    ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionRunOutcome, ExtensionState,
+    InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
+    UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -1277,4 +1279,166 @@ fn an_agent_page_header_draws_the_agents_own_mark(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("marketplace-header-agent").is_some());
     assert!(cx.debug_bounds("marketplace-header-icon").is_none());
+}
+
+/// The service's history of the installed package: rollback and the log offered, and an update that replaced 0.9.0.
+fn kept_history() -> ExtensionHistory {
+    let update = ExtensionRun {
+        at_ms: 1_700_000_000_000,
+        action: ExtensionRunAction::Update,
+        from_version: Some("0.9.0".to_owned()),
+        to_version: Some("1.0.0".to_owned()),
+        outcome: ExtensionRunOutcome::Ok,
+        output: Vec::new(),
+    };
+    ExtensionHistory {
+        rollback_offered: true,
+        log_offered: true,
+        runs: [("acme.notes".to_owned(), vec![update])]
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The package as a rollback answers it: the version it restores, installed.
+fn restored_package() -> ExtensionInstalled {
+    ExtensionInstalled {
+        id: "acme.notes".to_owned(),
+        version: "0.9.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        enabled: true,
+        installed_at_ms: 1_700_000_000_000,
+        cli: Vec::new(),
+    }
+}
+
+/// Opens the More menu of the installed package's row, after the service's next read sends `history`.
+fn open_installed_menu(rig: &mut Rig, cx: &mut VisualTestContext, history: ExtensionHistory) {
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![installed_package(true)]),
+            catalogue: Ok(vec![installed_package(true)]),
+            history,
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    click(cx, "button:marketplace-row-1000-more");
+}
+
+#[gpui::test]
+fn roll_back_asks_without_consent_then_sends_the_consent_the_confirm_shows(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    assert!(
+        shown(cx, "menu-item-0"),
+        "the menu offers Roll back to 0.9.0 first"
+    );
+    click(cx, "menu-item-0");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert_eq!(params.consent, None, "the first call names no consent");
+            let _ = reply.send(Ok(RollbackAnswer::ConsentNeeded {
+                version: "0.9.0".to_owned(),
+                consent: CONSENT.to_owned(),
+            }));
+        }
+        _ => panic!("Roll back sends the rollback to the service"),
+    }
+    cx.run_until_parked();
+    let confirm = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_rollback.clone())
+        .expect("the confirm opens with the consent the service named");
+    assert_eq!(
+        (confirm.from.as_str(), confirm.version.as_str()),
+        ("1.0.0", "0.9.0")
+    );
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { params, reply })) => {
+            assert_eq!(
+                params.consent.as_deref(),
+                Some(CONSENT),
+                "the confirm sends the consent it shows"
+            );
+            let _ = reply.send(Ok(RollbackAnswer::Restored(restored_package())));
+        }
+        _ => panic!("the confirm sends the rollback again"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "a rollback that worked closes the confirm"
+    );
+}
+
+#[gpui::test]
+fn a_rollback_with_no_version_kept_says_so_and_opens_no_confirm(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    click(cx, "menu-item-0");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.no_previous_version".to_owned(),
+                message: "nothing is kept".to_owned(),
+            }));
+        }
+        _ => panic!("Roll back sends the rollback to the service"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "nothing kept opens no confirm"
+    );
+    let error = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone())
+        .map(|(_, text)| text);
+    assert_eq!(
+        error.as_deref(),
+        Some("There is no earlier version of this package to roll back to.")
+    );
+}
+
+#[gpui::test]
+fn without_the_offer_the_row_menu_has_no_roll_back(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, ExtensionHistory::default());
+    assert!(!shown(cx, "menu-item-1"), "Remove is the only entry");
+    click(cx, "menu-item-0");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "the first entry is Remove, which asks the uninstall confirm"
+    );
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "no roll back is offered without the service's offer"
+    );
 }
