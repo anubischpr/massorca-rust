@@ -95,6 +95,7 @@ pub(super) fn tree_row(
             tooltip,
             workspace_id,
             dimmed,
+            local,
         } => {
             let mut row = session_row(id, title, *agent, *state, *depth, *selected);
             if let Some(tooltip) = tooltip {
@@ -119,12 +120,14 @@ pub(super) fn tree_row(
                     cx.notify();
                 });
             });
-            // Right click or Shift+F10 offers the session's path and folder rows (A97).
-            let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            // Right click or Shift+F10 opens the session's menu (A97).
+            let (menu_shell, menu_session, menu_workspace) =
+                (shell.clone(), session_id.clone(), workspace_id.clone());
+            let local = *local;
             let row = row.on_context_menu(move |window, cx| {
-                let id = menu_workspace.clone();
+                let (session, workspace) = (menu_session.clone(), menu_workspace.clone());
                 let _ = menu_shell.update(cx, |shell, cx| {
-                    shell.open_session_menu(id, window, cx);
+                    shell.open_session_menu(Some(session), workspace, local, window, cx);
                 });
             });
             if *can_bring_back {
@@ -139,6 +142,7 @@ pub(super) fn tree_row(
             agent,
             tooltip,
             dimmed,
+            local,
         } => {
             let mut row =
                 SidebarRow::session(id, title.clone(), GlyphState::Idle, agent_kind(*agent))
@@ -149,11 +153,14 @@ pub(super) fn tree_row(
             if *dimmed {
                 row = row.dimmed(true);
             }
-            // Right click offers the workspace's path and folder rows, as a session row does (A97).
+            // Right click opens the workspace's menu while it has no session, as a session row does (A97).
             let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            let local = *local;
             row.on_context_menu(move |window, cx| {
-                let id = menu_workspace.clone();
-                let _ = menu_shell.update(cx, |shell, cx| shell.open_session_menu(id, window, cx));
+                let workspace = menu_workspace.clone();
+                let _ = menu_shell.update(cx, |shell, cx| {
+                    shell.open_session_menu(None, workspace, local, window, cx);
+                });
             })
         }
     };

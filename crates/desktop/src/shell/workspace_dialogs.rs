@@ -2,18 +2,23 @@
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
+use std::path::Path;
+
 use super::Shell;
 use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_LABEL};
+use crate::model::regions::Region;
+use crate::model::session_menu::{SessionFacts, SessionMenuFacts, SessionMenuId, session_menu};
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry, WorkspaceMenuId,
-    chosen_workspace_item, project_menu_rows, session_menu, workspace_menu,
+    chosen_workspace_item, project_menu_rows, workspace_menu,
 };
 use crate::service::Refusal;
 use gpui::{
-    AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
+    App, AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::IconName;
 use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
@@ -75,6 +80,13 @@ pub(super) enum MenuTarget {
         id: String,
         rows: Vec<WorkspaceMenuEntry>,
     },
+    /// A session row's menu: the session it acts on (None while its workspace has none), the workspace whose
+    /// folder it names, and its rows.
+    Session {
+        session: Option<String>,
+        workspace: String,
+        rows: Vec<SessionMenuId>,
+    },
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
     /// The start page's project menu: the rows of the project menu, chosen to open a start page.
@@ -133,6 +145,23 @@ fn item_entry(id: WorkspaceMenuId, label: &'static str, off: Option<&'static str
     item.into()
 }
 
+/// The session menu's rows as the ui menu draws them: each action with its icon and words (A97).
+fn session_menu_entries(rows: &[SessionMenuId]) -> Vec<MenuEntry> {
+    rows.iter()
+        .map(|id| MenuEntry::from(session_item(*id)))
+        .collect()
+}
+
+fn session_item(id: SessionMenuId) -> MenuItem {
+    let (label, icon) = match id {
+        SessionMenuId::Stop => ("Stop", IconName::Square),
+        SessionMenuId::CopyPath => ("Copy path", IconName::Copy),
+        SessionMenuId::OpenFolder => ("Open folder", IconName::Folder),
+        SessionMenuId::RevealInWorkPanel => ("Reveal in Work panel", IconName::PanelRight),
+    };
+    MenuItem::new(label).icon(icon)
+}
+
 fn menu_icon(id: WorkspaceMenuId) -> IconName {
     match id {
         WorkspaceMenuId::NewSession => IconName::MessageSquare,
@@ -140,7 +169,6 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
         WorkspaceMenuId::OpenFileManager => IconName::Folder,
         WorkspaceMenuId::OpenTerminal => IconName::SquareTerminal,
         WorkspaceMenuId::OpenEditor | WorkspaceMenuId::Developer => IconName::Code,
-        WorkspaceMenuId::OpenFolder => IconName::Folder,
         WorkspaceMenuId::Rename | WorkspaceMenuId::EditWorkspace => IconName::Pencil,
         WorkspaceMenuId::SourceControl | WorkspaceMenuId::CopyBranch => IconName::GitBranch,
         WorkspaceMenuId::CopyPath => IconName::Copy,
@@ -183,21 +211,45 @@ impl Shell {
         );
     }
 
-    /// The context menu of a session row (A97): its workspace's path, folder and Work panel rows.
+    /// The context menu of a session row (A97), or of a workspace's row while it has no session.
     pub(super) fn open_session_menu(
         &mut self,
-        workspace_id: String,
+        session: Option<String>,
+        workspace: String,
+        local: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.service.is_none() {
             return;
         }
-        let rows = session_menu();
+        let rows = {
+            let state = self.store.read(cx).state();
+            if state.workspace(&workspace).is_none() {
+                return;
+            }
+            let facts = match session.as_deref() {
+                Some(id) => {
+                    let Some(agent) = state.agents.iter().find(|agent| agent.id == id) else {
+                        return;
+                    };
+                    Some(SessionFacts {
+                        running: agent.execution.state != TerminalState::Exited,
+                        has_terminal: agent.terminal_id.is_some(),
+                    })
+                }
+                None => None,
+            };
+            session_menu(SessionMenuFacts {
+                session: facts,
+                local,
+            })
+        };
         self.open_menu(
-            menu_entries(&rows),
-            MenuTarget::Workspace {
-                id: workspace_id,
+            session_menu_entries(&rows),
+            MenuTarget::Session {
+                session,
+                workspace,
                 rows,
             },
             OverlayLayer::Page,
@@ -237,9 +289,64 @@ impl Shell {
             | WorkspaceMenuId::EditWorkspace
             | WorkspaceMenuId::SourceControl
             | WorkspaceMenuId::Developer
-            | WorkspaceMenuId::OpenFolder
             | WorkspaceMenuId::RevealInWorkPanel => {}
         }
+    }
+
+    /// Runs a chosen session row. Stop reaches the service; the other rows act on this PC.
+    pub(super) fn run_session_action(
+        &mut self,
+        session: Option<&str>,
+        workspace: &str,
+        action: SessionMenuId,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SessionMenuId::Stop => {
+                let (Some(session), Some(service)) = (session, self.service.clone()) else {
+                    return;
+                };
+                let session = session.to_owned();
+                cx.spawn(async move |_, _| {
+                    // The store follows the service's own event; a refusal leaves the session as it was.
+                    let _ = service.agent_stop(&session).await;
+                })
+                .detach();
+            }
+            SessionMenuId::CopyPath => {
+                if let Some(path) = self.workspace_path(workspace, cx) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(path));
+                }
+            }
+            SessionMenuId::OpenFolder => {
+                if let Some(path) = self.workspace_path(workspace, cx) {
+                    cx.open_with_system(Path::new(&path));
+                }
+            }
+            SessionMenuId::RevealInWorkPanel => {
+                let terminal = session.and_then(|id| {
+                    self.store
+                        .read(cx)
+                        .state()
+                        .agents
+                        .iter()
+                        .find(|agent| agent.id == id)
+                        .and_then(|agent| agent.terminal_id.clone())
+                });
+                if let Some(terminal) = terminal {
+                    self.model.show_region(Region::WorkPanel);
+                    self.reveal_terminal(workspace, &terminal, cx);
+                }
+            }
+        }
+    }
+
+    fn workspace_path(&self, workspace: &str, cx: &App) -> Option<String> {
+        self.store
+            .read(cx)
+            .state()
+            .workspace(workspace)
+            .map(|workspace| workspace.path.clone())
     }
 
     /// "Add a project…": a dialog for the path of a folder or repository (A38). Needs a service.
@@ -410,6 +517,15 @@ impl Shell {
             MenuTarget::Workspace { id, rows } => {
                 if let Some(action) = chosen_workspace_item(&rows, row, choice.child) {
                     self.run_workspace_action(&id, action, cx);
+                }
+            }
+            MenuTarget::Session {
+                session,
+                workspace,
+                rows,
+            } => {
+                if let Some(action) = rows.get(row).copied() {
+                    self.run_session_action(session.as_deref(), &workspace, action, cx);
                 }
             }
             MenuTarget::StartProject(choices) => match choices.get(row).cloned().flatten() {

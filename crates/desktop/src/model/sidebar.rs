@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use super::navigation::{Mode, Page};
+use super::service_view::LOCAL_HOST;
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
 use super::workspace_flow::NO_PROJECT_LABEL;
 
@@ -72,6 +73,8 @@ pub enum TreeRow {
         workspace_id: String,
         /// Its host is unreachable, so the row dims (A10).
         dimmed: bool,
+        /// Its host is This PC, so the row's folder can be opened here (Open folder).
+        local: bool,
     },
     /// A workspace with no session yet: one idle row where its first session will appear (A97).
     Placeholder {
@@ -84,6 +87,8 @@ pub enum TreeRow {
         tooltip: Option<String>,
         /// Its host is unreachable, so the row dims (A10).
         dimmed: bool,
+        /// Its host is This PC, so the row's folder can be opened here (Open folder).
+        local: bool,
     },
 }
 
@@ -200,8 +205,9 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
                 reach: host.reach,
             });
             let dimmed = matches!(host.reach, HostReach::Unreachable { .. });
+            let local = host.name == LOCAL_HOST;
             for session in &host.sessions {
-                push_session(&mut rows, session, 0, active, dimmed);
+                push_session(&mut rows, session, 0, active, dimmed, local);
             }
             for placeholder in &host.placeholders {
                 rows.push(TreeRow::Placeholder {
@@ -213,6 +219,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
                         placeholder.path.as_deref(),
                     ),
                     dimmed,
+                    local,
                 });
             }
         }
@@ -257,6 +264,7 @@ fn push_session(
     depth: usize,
     active: Option<&str>,
     dimmed: bool,
+    local: bool,
 ) {
     rows.push(TreeRow::Session {
         id: session.id.clone(),
@@ -270,9 +278,10 @@ fn push_session(
         tooltip: tooltip_of(session),
         workspace_id: session.workspace_id.clone(),
         dimmed,
+        local,
     });
     for child in &session.children {
-        push_session(rows, child, depth + 1, active, dimmed);
+        push_session(rows, child, depth + 1, active, dimmed, local);
     }
 }
 
@@ -580,8 +589,33 @@ mod tests {
                 agent: Agent::Codex,
                 tooltip: Some("feat/new · D:/new".into()),
                 dimmed: false,
+                local: true,
             }
         );
+    }
+
+    #[test]
+    fn a_session_on_another_host_is_not_on_this_pc() {
+        let mut remote = host_with(vec![sample_session("r1")], HostReach::Connected);
+        remote.name = "vps".into();
+        let rows = tree_of(&snapshot_of(vec![ProjectGroup {
+            id: "p".into(),
+            name: "p".into(),
+            emoji: None,
+            owner: None,
+            hosts: vec![
+                host_with(vec![sample_session("s1")], HostReach::Connected),
+                remote,
+            ],
+        }]));
+        let local: Vec<bool> = rows
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Session { local, .. } => Some(*local),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(local, [true, false]);
     }
 
     #[test]
