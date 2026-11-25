@@ -8,6 +8,7 @@ pub mod accounts;
 pub mod catalog;
 pub mod credentials;
 pub mod event;
+pub mod instructions;
 pub mod kind;
 pub mod launch;
 mod modes;

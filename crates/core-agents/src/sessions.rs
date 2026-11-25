@@ -32,11 +32,12 @@ use massorca_protocol::methods::agents::{
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceState};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
+use crate::instructions::{self, DELEGATION_INSTRUCTIONS};
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::modes;
@@ -52,6 +53,8 @@ use crate::status::{self, HookRules};
 
 mod delegation;
 mod queue;
+
+use delegation::DelegationView;
 
 pub use delegation::{
     DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING,
@@ -576,9 +579,16 @@ impl Agents {
                 (workspace, Some(made))
             }
         };
+        // A delegated child in a plain folder writes beside its delegation tree, which counts as one writer (decision 0161).
+        let group = match parent {
+            Some(parent) if workspace.kind == WorkspaceKind::Folder => {
+                Some(self.tree_root_of(parent)?)
+            }
+            _ => None,
+        };
         if !params.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -587,6 +597,14 @@ impl Agents {
             error.data = Some(json!({ "session": holder }));
             return Err(error);
         }
+        // The run is told how to delegate only when it may (decision 0161).
+        let depth = match parent {
+            Some(parent) => self.delegation_depth_of(parent)? + 1,
+            None => 0,
+        };
+        let (instructions, instructions_withheld) =
+            self.instructions_for(&decl, &program, depth)?;
+        let inherited_path = std::env::var("PATH").ok();
 
         // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
         let provided = self.provided_env(&workspace.project_id, grant)?;
@@ -613,12 +631,15 @@ impl Agents {
             provided_env: &provided,
             holds_secrets,
             caller_env: &params.env,
+            instructions,
+            inherited_path: inherited_path.as_deref(),
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
         // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
             .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
@@ -788,9 +809,15 @@ impl Agents {
                 format!("the workspace directory is missing: {}", workspace.path),
             ));
         }
+        // In a plain folder the session's delegation tree counts as one writer (decision 0161).
+        let group = if workspace.kind == WorkspaceKind::Folder {
+            Some(self.tree_root_of(&row)?)
+        } else {
+            None
+        };
         if !row.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -800,6 +827,10 @@ impl Agents {
             return Err(error);
         }
 
+        let depth = self.delegation_depth_of(&row)?;
+        let (instructions, instructions_withheld) =
+            self.instructions_for(&decl, &program, depth)?;
+        let inherited_path = std::env::var("PATH").ok();
         // Before the homes gate and the status lock, as in `start`.
         let provided = self.provided_env(&workspace.project_id, grant)?;
         let parent_holds = match &row.parent_id {
@@ -834,10 +865,13 @@ impl Agents {
             provided_env: &provided,
             holds_secrets,
             caller_env: &no_env,
+            instructions,
+            inherited_path: inherited_path.as_deref(),
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1684,9 +1718,38 @@ impl Agents {
     }
 
     /// The live writing session of a workspace, if any.
-    fn live_writer(&self, workspace_id: &str) -> Result<Option<String>, AgentError> {
+    /// The instructions a run of `decl` at `depth` gets, and the note its session records when its CLI fails the
+    /// channel's support probe (decision 0161). None while the session may not delegate, or the kind has no channel.
+    fn instructions_for(
+        &self,
+        decl: &KindDecl,
+        program: &Path,
+        depth: i64,
+    ) -> Result<(Option<&'static str>, Option<String>), AgentError> {
+        if decl.instructions.is_none() || !self.may_delegate_at(depth)? {
+            return Ok((None, None));
+        }
+        Ok(if instructions::channel_supported(decl, program) {
+            (Some(DELEGATION_INSTRUCTIONS), None)
+        } else {
+            (None, Some(instructions::withheld_note(decl)))
+        })
+    }
+
+    /// A session whose run writes in the workspace now, outside the delegation tree rooted at `group` when one is given
+    /// (decision 0161).
+    fn live_writer(
+        &self,
+        workspace_id: &str,
+        group: Option<&str>,
+    ) -> Result<Option<String>, AgentError> {
         for row in self.store().list_agent_sessions(Some(workspace_id))? {
             if row.read_only {
+                continue;
+            }
+            if let Some(root) = group
+                && self.tree_root_of(&row)? == root
+            {
                 continue;
             }
             let session = self.view(row)?;
@@ -1779,7 +1842,8 @@ impl Agents {
             }
         };
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
-        Ok(record(row, execution, resume))
+        let placement = self.delegation_view(&row);
+        Ok(record(row, execution, resume, placement))
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -1863,18 +1927,25 @@ impl Agents {
         row.exit = Some(exit);
         if let Some(catalog) = &catalog {
             let resume = self.resume_of(row, true, Some(catalog));
+            let placement = self.delegation_view(row);
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
                 resume,
+                placement,
             ))));
         }
         Ok(execution)
     }
 }
 
-/// The wire record of a row with its execution.
-fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> AgentSession {
+/// The wire record of a row with its execution, its resume state and what it may delegate.
+fn record(
+    row: AgentSessionRow,
+    execution: Execution,
+    resume: ResumeState,
+    placement: DelegationView,
+) -> AgentSession {
     AgentSession {
         id: row.id,
         kind: row.kind,
@@ -1898,6 +1969,8 @@ fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> Ag
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
         resume: Some(resume),
+        delegation: placement.options,
+        notes: placement.notes,
     }
 }
 

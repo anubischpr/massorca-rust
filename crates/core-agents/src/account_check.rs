@@ -267,7 +267,32 @@ pub(crate) fn run_program(
     strip_env: &[String],
 ) -> RunOutput {
     let mut command = account_command(program, args, home, home_env, strip_env);
-    let Ok((mut child, mut tree)) = process_tree::spawn(&mut command) else {
+    run_command(&mut command, CHECK_TIMEOUT)
+}
+
+/// Runs `program` with `args` and the stripped names removed, without any account home, for at most `timeout`: the
+/// support probe of a kind's instruction channel (decision 0161). The output and exit are as [`run_program`]'s.
+pub(crate) fn run_probe(
+    program: &Path,
+    args: &[String],
+    strip_env: &[String],
+    timeout: Duration,
+) -> RunOutput {
+    let mut command = massorca_process::command(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for name in strip_env {
+        command.env_remove(name);
+    }
+    run_command(&mut command, timeout)
+}
+
+/// Runs `command` for at most `timeout`, then stops its whole process tree and collects its output.
+fn run_command(command: &mut Command, timeout: Duration) -> RunOutput {
+    let Ok((mut child, mut tree)) = process_tree::spawn(command) else {
         return RunOutput {
             exit: None,
             output: String::new(),
@@ -275,7 +300,7 @@ pub(crate) fn run_program(
     };
     let stdout = read_limited(child.stdout.take());
     let stderr = read_limited(child.stderr.take());
-    let exit = wait_with_deadline(&mut child);
+    let exit = wait_with_deadline(&mut child, timeout);
     tree.stop();
     let mut output = collect(stdout);
     output.push_str(&collect(stderr));
@@ -301,12 +326,12 @@ fn collect(stream: mpsc::Receiver<String>) -> String {
 }
 
 /// The program's exit code, when it exits before the deadline; at the deadline it is killed and has none.
-fn wait_with_deadline(child: &mut Child) -> Option<i32> {
+fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.code(),
-            Ok(None) if started.elapsed() < CHECK_TIMEOUT => {
+            Ok(None) if started.elapsed() < timeout => {
                 thread::sleep(Duration::from_millis(25));
             }
             _ => {
