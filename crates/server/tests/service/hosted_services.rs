@@ -1,5 +1,5 @@
-//! `marketplace.service.*` for the vault-backed services and the status-only rows. Each call names one service, so no
-//! test runs `glab`. No reply or refusal carries the token.
+//! `marketplace.service.*` for the vault-backed services and the status-only rows. Each call names one service other
+//! than GitLab, so no test runs `glab`; the CLI tests run a fake one. No reply or refusal carries the token.
 
 use std::path::Path;
 

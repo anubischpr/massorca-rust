@@ -1,6 +1,6 @@
-//! `marketplace.service.*` (capability `services/1`, SKL-35, decision 0094). Bitbucket, Azure DevOps and Gitea keep a
-//! token, a base URL and an email in the vault, write-only; GitLab, Linear and Jira are status-only rows here. No reply,
-//! error or log carries a token.
+//! `marketplace.service.*` (capability `services/1`, SKL-35, decision 0094). GitLab signs `glab` in; Bitbucket, Azure
+//! DevOps and Gitea keep a token, a base URL and an email in the vault, write-only; Linear and Jira are status-only rows.
+//! No reply, error or log carries a token.
 
 use std::sync::Arc;
 
@@ -11,6 +11,7 @@ use massorca_protocol::methods::hosted_services::{
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
+use super::glab_login::{self, GlabOutcome};
 use super::secret_params::Redacted;
 use super::secret_refusals::refusal;
 use crate::context::{Registries, RequestCtx};
@@ -71,7 +72,7 @@ fn known(id: &str) -> Result<&'static str, ErrorBody> {
 }
 
 fn is_status_only(id: &str) -> bool {
-    matches!(id, "gitlab" | "linear" | "jira")
+    matches!(id, "linear" | "jira")
 }
 
 fn row(id: &str, state: ServiceState, source: ServiceSource) -> ServiceStatus {
@@ -101,6 +102,9 @@ async fn status(ctx: RequestCtx, params: ServiceStatusParams) -> Result<ServiceL
 }
 
 async fn status_of(ctx: &RequestCtx, id: &'static str) -> ServiceStatus {
+    if id == "gitlab" {
+        return gitlab_status(ctx).await;
+    }
     if is_status_only(id) {
         return ServiceStatus {
             detail: Some("not connected from MassOrca yet".to_owned()),
@@ -126,6 +130,33 @@ async fn status_of(ctx: &RequestCtx, id: &'static str) -> ServiceStatus {
     }
 }
 
+async fn gitlab_status(ctx: &RequestCtx) -> ServiceStatus {
+    let base = row("gitlab", ServiceState::Unknown, ServiceSource::None);
+    match on_programs(ctx, glab_login::status).await {
+        GlabOutcome::Ok => ServiceStatus {
+            state: ServiceState::Connected,
+            source: ServiceSource::External,
+            cli_installed: Some(true),
+            ..base
+        },
+        GlabOutcome::Refused => ServiceStatus {
+            state: ServiceState::NotConnected,
+            cli_installed: Some(true),
+            ..base
+        },
+        GlabOutcome::NotInstalled => ServiceStatus {
+            state: ServiceState::NotConnected,
+            cli_installed: Some(false),
+            detail: Some("glab is not installed".to_owned()),
+            ..base
+        },
+        GlabOutcome::Failed => ServiceStatus {
+            detail: Some("glab did not answer".to_owned()),
+            ..base
+        },
+    }
+}
+
 async fn connect(ctx: RequestCtx, params: ServiceConnect) -> Result<ServiceStatus, ErrorBody> {
     let ServiceConnect {
         service,
@@ -146,6 +177,25 @@ async fn connect(ctx: RequestCtx, params: ServiceConnect) -> Result<ServiceStatu
     if is_status_only(id) {
         return Err(unavailable(id, "is not connected from MassOrca yet"));
     }
+    if id == "gitlab" {
+        let host = address.map_or_else(|| glab_login::DEFAULT_HOST.to_owned(), |(_, host)| host);
+        let outcome = on_programs(&ctx, move |programs| {
+            glab_login::login(programs, token.expose(), &host)
+        })
+        .await;
+        return match outcome {
+            GlabOutcome::Ok => Ok(gitlab_status(&ctx).await),
+            GlabOutcome::Refused => Err(ErrorBody::new(
+                codes::SERVICE_REJECTED,
+                "glab refused the token",
+            )),
+            GlabOutcome::NotInstalled => Err(unavailable(id, "needs glab on this host")),
+            GlabOutcome::Failed => Err(ErrorBody::new(
+                codes::SERVICE_FAILED,
+                "glab could not be run or did not finish",
+            )),
+        };
+    }
     let base_url = address.map(|(url, _)| url);
     on_vault(&ctx, move |vault| {
         vault.set_service(
@@ -164,6 +214,12 @@ async fn connect(ctx: RequestCtx, params: ServiceConnect) -> Result<ServiceStatu
 
 async fn disconnect(ctx: RequestCtx, params: ServiceName) -> Result<ServiceStatus, ErrorBody> {
     let id = known(&params.service)?;
+    if id == "gitlab" {
+        return Err(unavailable(
+            id,
+            "keeps its sign-in in glab; run `glab auth logout` on the host",
+        ));
+    }
     if is_status_only(id) {
         return Err(unavailable(id, "is not connected from MassOrca yet"));
     }
@@ -214,4 +270,18 @@ where
     })
     .await
     .unwrap_or(Err(VaultError::Cipher))
+}
+
+async fn on_programs<F>(ctx: &RequestCtx, call: F) -> GlabOutcome
+where
+    F: FnOnce(&super::extension_process::HostPrograms) -> GlabOutcome + Send + 'static,
+{
+    let programs = Arc::clone(&ctx.state.host_programs);
+    let work = ctx.state.activity.enter();
+    tokio::task::spawn_blocking(move || {
+        let _work = work;
+        call(&programs)
+    })
+    .await
+    .unwrap_or(GlabOutcome::Failed)
 }

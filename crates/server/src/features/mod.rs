@@ -10,6 +10,7 @@ mod events;
 pub(crate) mod extension_process;
 mod extensions;
 mod git;
+mod glab_login;
 mod host;
 mod hosted_services;
 mod projects;

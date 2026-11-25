@@ -236,7 +236,7 @@ impl Service {
         let extensions = Arc::new(Extensions::new(
             &profile,
             host_programs.clone(),
-            host_programs,
+            host_programs.clone(),
         ));
         let agents = Agents::new(AgentsConfig {
             store: store.clone(),
@@ -292,6 +292,7 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
             network: network_state,

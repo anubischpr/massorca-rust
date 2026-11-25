@@ -53,6 +53,8 @@ pub struct AppState {
     pub agents: Agents,
     /// Installed extensions of the profile (decision 0062). Other features register remove guards and cleanups here.
     pub extensions: Arc<Extensions>,
+    /// Finds and runs host programs, such as `glab` for a GitLab connection (decision 0094).
+    pub(crate) host_programs: Arc<crate::features::extension_process::HostPrograms>,
     /// Skill discovery's inputs and the scan it shares for ten seconds (SKL-01).
     pub(crate) skills: crate::features::skills::SkillScans,
     /// Keeps the agents' remove guard registered on `extensions` while the service runs: a package whose kind a live or
