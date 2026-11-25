@@ -3818,6 +3818,7 @@ dependencies = [
  "image",
  "jiff",
  "massorca-client",
+ "massorca-core-agents",
  "massorca-core-remote",
  "massorca-net",
  "massorca-process",
