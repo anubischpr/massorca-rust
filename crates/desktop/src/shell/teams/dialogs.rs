@@ -1415,9 +1415,11 @@ mod tests {
     use crate::service::{
         Command, ProjectRecord, Refusal, StoreUpdate, TeamCommand, TeamRecord, TeamsRead,
     };
-    use crate::shell::service_tests::{click, draw, rig};
+    use crate::shell::service_tests::{Rig, click, draw, rig};
     use gpui::{Entity, TestAppContext, VisualTestContext};
-    use massorca_protocol::methods::agents::PackageState;
+    use massorca_protocol::methods::agents::{
+        AgentKind, KindEffort, KindEffortLevel, KindModel, KindModelChoice, PackageState,
+    };
     use massorca_protocol::methods::teams::{Board, TeamCharacter, TeamProject};
     use massorca_ui::{Appearance, Theme};
 
@@ -2125,6 +2127,281 @@ mod tests {
                 }
                 other => panic!("the Edit bot form should stay open, found {other:?}"),
             });
+    }
+
+    /// Claude as `agent.kinds` lists it: Haiku takes only low effort, and the kind offers two effort levels.
+    fn claude_options() -> AgentKind {
+        AgentKind {
+            model: Some(KindModel {
+                choices: vec![
+                    model_choice("opus", "Opus", None),
+                    model_choice("haiku", "Haiku", Some(vec!["low"])),
+                ],
+            }),
+            effort: Some(KindEffort {
+                levels: vec![level("low", "Low"), level("high", "High")],
+                default: None,
+            }),
+            ..agent_kind("claude", "Claude", PackageState::Enabled)
+        }
+    }
+
+    /// Codex as `agent.kinds` lists it: one model, and one effort level.
+    fn codex_options() -> AgentKind {
+        AgentKind {
+            model: Some(KindModel {
+                choices: vec![model_choice("gpt", "GPT", None)],
+            }),
+            effort: Some(KindEffort {
+                levels: vec![level("high", "High")],
+                default: None,
+            }),
+            ..agent_kind("codex", "Codex", PackageState::Enabled)
+        }
+    }
+
+    fn model_choice(id: &str, label: &str, efforts: Option<Vec<&str>>) -> KindModelChoice {
+        KindModelChoice {
+            id: id.into(),
+            label: label.into(),
+            default: false,
+            efforts: efforts.map(|ids| ids.into_iter().map(str::to_owned).collect()),
+        }
+    }
+
+    fn level(id: &str, label: &str) -> KindEffortLevel {
+        KindEffortLevel {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    /// Team t1 with Nora, who runs as Claude on `model` and `effort`.
+    fn team_with_nora_on(model: &str, effort: &str) -> TeamRecord {
+        let mut record = team_with_nora();
+        record.bots[0].model = Some(model.into());
+        record.bots[0].effort = Some(effort.into());
+        record
+    }
+
+    /// Sends the service's agent kinds and team `record` to the store, as a connect does.
+    fn connect(rig: &Rig, kinds: Vec<AgentKind>, record: TeamRecord, cx: &mut VisualTestContext) {
+        rig.updates
+            .send(StoreUpdate::AgentKindsResync(kinds))
+            .expect("the store listens");
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![record]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+    }
+
+    /// The bot form on screen, read with `pick`.
+    fn bot_form<T>(
+        shell: &Entity<Shell>,
+        cx: &mut VisualTestContext,
+        pick: impl FnOnce(&AddBotDialog) -> T,
+    ) -> T {
+        shell.read_with(cx, |shell, _| match &shell.team_dialog {
+            Some(TeamDialog::AddBot(form)) => pick(form),
+            other => panic!("the bot form should be open, found {other:?}"),
+        })
+    }
+
+    /// Picks row `index` of `select` as the menu does: the value moves to it and the owner hears the change.
+    fn choose(select: &Entity<SelectView>, index: usize, cx: &mut VisualTestContext) {
+        select.update(cx, |select, cx| {
+            select.set_selected(Some(index), cx);
+            cx.emit(SelectEvent::Changed(index));
+        });
+        cx.run_until_parked();
+    }
+
+    /// Opens the Edit bot form of team 1's first bot from the team's Edit form, as a person does.
+    fn open_first_bot_edit(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+        shell.update_in(cx, |shell, window, cx| {
+            shell.open_team_edit(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        let bot = first_bot(shell, cx);
+        shell.update_in(cx, |shell, window, cx| {
+            shell.open_edit_bot(TeamId(1), bot, window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+    }
+
+    #[gpui::test]
+    fn a_new_bot_sends_the_model_and_effort_its_advanced_options_set(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options(), codex_options()],
+            team("t1", "Desarrollo"),
+            cx,
+        );
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_add_bot(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        let name = bot_form(&rig.shell, cx, |form| form.name.clone());
+        name.update_in(cx, |field, window, cx| field.set_text("Ada", window, cx));
+        click(cx, "button:bot-form-advanced");
+        let model = bot_form(&rig.shell, cx, |form| form.advanced.model.clone());
+        choose(&model, 1, cx);
+        // The effort select is offered again once the model is chosen, so it is read after that.
+        let effort = bot_form(&rig.shell, cx, |form| form.advanced.effort.clone());
+        choose(&effort, 2, cx);
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = rig.script.next() else {
+            panic!("the bot goes to the service");
+        };
+        assert_eq!(
+            (params.model.as_deref(), params.effort.as_deref()),
+            (Some("opus"), Some("high"))
+        );
+    }
+
+    #[gpui::test]
+    fn a_new_bot_sends_no_model_or_effort_while_its_advanced_options_are_untouched(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(&rig, vec![claude_options()], team("t1", "Desarrollo"), cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_add_bot(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            !bot_form(&rig.shell, cx, |form| form.advanced.open),
+            "the Advanced options start collapsed"
+        );
+        let name = bot_form(&rig.shell, cx, |form| form.name.clone());
+        name.update_in(cx, |field, window, cx| field.set_text("Ada", window, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = rig.script.next() else {
+            panic!("the bot goes to the service");
+        };
+        assert_eq!((params.model, params.effort), (None, None));
+    }
+
+    #[gpui::test]
+    fn editing_a_bot_prefills_its_stored_model_and_effort(cx: &mut TestAppContext) {
+        let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options()],
+            team_with_nora_on("opus", "high"),
+            cx,
+        );
+        open_first_bot_edit(&rig.shell, cx);
+        rig.shell
+            .read_with(cx, |shell, app| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) => {
+                    let sent = form.form(app);
+                    assert_eq!(
+                        (sent.model.as_deref(), sent.effort.as_deref()),
+                        (Some("opus"), Some("high"))
+                    );
+                    let shown = |select: &Entity<SelectView>| {
+                        select
+                            .read(app)
+                            .selected_label()
+                            .map(|label| label.to_string())
+                    };
+                    assert_eq!(shown(&form.advanced.model), Some("Opus".to_owned()));
+                    assert_eq!(shown(&form.advanced.effort), Some("High".to_owned()));
+                    assert!(!form.advanced.open, "the Advanced options start collapsed");
+                }
+                other => panic!("the Edit bot form should open, found {other:?}"),
+            });
+    }
+
+    #[gpui::test]
+    fn an_edit_that_only_renames_the_bot_sends_no_model_or_effort(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options()],
+            team_with_nora_on("opus", "high"),
+            cx,
+        );
+        open_first_bot_edit(&rig.shell, cx);
+        let name = bot_form(&rig.shell, cx, |form| form.name.clone());
+        name.update_in(cx, |field, window, cx| field.set_text("Lucia", window, cx));
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(
+            (params.name.as_deref(), params.model, params.effort),
+            (Some("Lucia"), None, None)
+        );
+    }
+
+    #[gpui::test]
+    fn choosing_the_job_for_a_stored_model_sends_an_empty_model(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options()],
+            team_with_nora_on("opus", "high"),
+            cx,
+        );
+        open_first_bot_edit(&rig.shell, cx);
+        click(cx, "button:bot-form-advanced");
+        let model = bot_form(&rig.shell, cx, |form| form.advanced.model.clone());
+        choose(&model, 0, cx);
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(
+            (params.model.as_deref(), params.effort),
+            (Some(""), None),
+            "the model clears, and the effort the new model still offers is untouched"
+        );
+    }
+
+    #[gpui::test]
+    fn changing_the_kind_drops_a_stored_model_the_new_kind_does_not_offer(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options(), codex_options()],
+            team_with_nora_on("opus", "high"),
+            cx,
+        );
+        open_first_bot_edit(&rig.shell, cx);
+        let agent = bot_form(&rig.shell, cx, |form| form.agent_select.clone());
+        choose(&agent, 1, cx);
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(
+            (
+                params.kind.as_deref(),
+                params.model.as_deref(),
+                params.effort
+            ),
+            (Some("codex"), Some(""), None)
+        );
     }
 
     #[test]
