@@ -27,6 +27,9 @@ use crate::tokens::{
     TYPE_LABEL,
 };
 
+/// Why Fast is off for a model that offers none, when the service gave no reason of its own.
+const NO_FAST_MODEL: &str = "This model has no Fast mode.";
+
 /// What one model row shows.
 struct ModelRow {
     row: RowRef,
@@ -503,6 +506,14 @@ impl ModelPicker {
         let p = cx.theme().palette;
         let fast = self.state.choice().fast;
         let supports_fast = self.state.current_model().is_some_and(|model| model.fast);
+        let mut fast_segment = Segment::icon_text(IconName::Zap, "Fast").disabled(!supports_fast);
+        if !supports_fast {
+            let reason = self
+                .state
+                .fast_reason()
+                .map_or_else(|| NO_FAST_MODEL.to_owned(), |reason| reason.to_string());
+            fast_segment = fast_segment.tooltip(reason);
+        }
         let picker = cx.entity();
         div()
             .flex()
@@ -516,10 +527,7 @@ impl ModelPicker {
                 SegmentedControl::new(
                     "model-picker-speed",
                     "Speed",
-                    vec![
-                        Segment::text("Standard"),
-                        Segment::icon_text(IconName::Zap, "Fast").disabled(!supports_fast),
-                    ],
+                    vec![Segment::text("Standard"), fast_segment],
                 )
                 .style(SegmentedStyle::Sunken)
                 .size(SegmentedSize::Default)

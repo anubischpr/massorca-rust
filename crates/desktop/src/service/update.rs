@@ -69,6 +69,10 @@ pub enum StoreUpdate {
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
     AgentChatOffered(bool),
+    /// Whether the service offers a fast speed on `agent.start` (`agent-fast/1`), read on each connect.
+    AgentFastOffered(bool),
+    /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`), read on each connect.
+    WorkspaceUniqueNameOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
@@ -262,6 +266,11 @@ pub struct StoreState {
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
     pub agent_chat: bool,
+    /// Whether the service offers a fast speed (`agent-fast/1`); without it Fast is off, with its reason.
+    pub agent_fast: bool,
+    /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`); without it a derived
+    /// name is retried with a suffix on the client.
+    pub workspace_unique_name: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
@@ -303,6 +312,8 @@ impl Default for StoreState {
             agent_no_project: false,
             agent_options: false,
             agent_chat: false,
+            agent_fast: false,
+            workspace_unique_name: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
@@ -410,6 +421,10 @@ impl StoreState {
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
+            StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
+            StoreUpdate::WorkspaceUniqueNameOffered(offered) => {
+                self.workspace_unique_name = offered;
+            }
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
@@ -789,6 +804,28 @@ mod tests {
         );
         state.apply(StoreUpdate::AgentChatOffered(true), Instant::now());
         assert!(state.agent_chat);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_makes_workspace_names_unique() {
+        let mut state = StoreState::default();
+        assert!(
+            !state.workspace_unique_name,
+            "no read yet: the client retries"
+        );
+        state.apply(
+            StoreUpdate::WorkspaceUniqueNameOffered(true),
+            Instant::now(),
+        );
+        assert!(state.workspace_unique_name);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_offers_agent_fast() {
+        let mut state = StoreState::default();
+        assert!(!state.agent_fast, "no read yet: Fast stays off");
+        state.apply(StoreUpdate::AgentFastOffered(true), Instant::now());
+        assert!(state.agent_fast);
     }
 
     fn resynced() -> StoreState {

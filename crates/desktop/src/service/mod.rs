@@ -21,6 +21,7 @@ mod skills;
 mod teams;
 mod terminals;
 mod update;
+mod workspace_create;
 
 #[cfg(test)]
 mod git_tests;
@@ -63,6 +64,7 @@ pub use update::{
     GitUpdate, HostEntry, HostLink, SecretsState, SecretsUpdate, StoreState, StoreUpdate,
     WorkspaceGit,
 };
+pub use workspace_create::create_for_start;
 
 #[cfg(test)]
 pub(crate) use update::fixtures;
