@@ -10,7 +10,7 @@ import type { WorkspaceRow } from './workspace-sections';
 
 /**
  * One workspace row (M-WS-01): glyph, name, No Git, then the state word. Without contact the word is the last known state.
- * Tapping it opens the workspace's source control.
+ * Tapping it opens the workspace's views: its source control and its terminals.
  */
 export function WorkspaceRowView({ row, onOpen }: { readonly row: WorkspaceRow; readonly onOpen: () => void }) {
   const palette = usePalette();

@@ -681,3 +681,34 @@ fn an_attach_to_a_missing_terminal_is_refused_by_the_host() {
     assert!(matches!(refused, FfiError::Remote { .. }), "{refused:?}");
     test.block_on(stop(rig.running));
 }
+
+#[test]
+fn the_host_lists_its_terminals_by_workspace() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().expect("a runtime");
+    let rig = Rig::new(&test, &home);
+
+    let all = within(&test, rig.host.terminals(None)).expect("the terminals are listed");
+    let listed = all
+        .iter()
+        .find(|terminal| terminal.id == rig.terminal)
+        .expect("the terminal is listed");
+    assert_eq!(listed.state, "live");
+    assert!(!listed.workspace_id.is_empty());
+    assert!(listed.cols > 0 && listed.rows > 0);
+
+    let in_workspace = within(&test, rig.host.terminals(Some(listed.workspace_id.clone())))
+        .expect("the workspace's terminals are listed");
+    assert!(
+        in_workspace
+            .iter()
+            .all(|terminal| terminal.workspace_id == listed.workspace_id),
+        "only the workspace's terminals: {in_workspace:?}"
+    );
+    assert!(
+        in_workspace
+            .iter()
+            .any(|terminal| terminal.id == rig.terminal)
+    );
+    test.block_on(stop(rig.running));
+}
