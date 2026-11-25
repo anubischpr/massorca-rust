@@ -1,4 +1,4 @@
-//! The state and actions behind the create-workspace and remove-workspace dialogs, and the menus
+//! The state and actions behind the add-project and remove-workspace dialogs, and the menus
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
@@ -6,29 +6,18 @@ use super::Shell;
 use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_LABEL};
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
-    CreateForm, ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry,
-    WorkspaceMenuId, chosen_workspace_item, project_menu_rows, workspace_menu,
+    ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry, WorkspaceMenuId,
+    chosen_workspace_item, project_menu_rows, workspace_menu,
 };
 use crate::service::Refusal;
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::IconName;
 use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
-
-/// The create form with the text fields it owns.
-#[derive(Debug)]
-pub(super) struct CreateDialog {
-    pub form: CreateForm,
-    pub name: Entity<TextField>,
-    pub branch: Entity<TextField>,
-    pub base: Entity<TextField>,
-    _subscriptions: Vec<Subscription>,
-}
 
 /// The "Add a project" dialog: its path field, and the form the field feeds.
 #[derive(Debug)]
@@ -39,8 +28,8 @@ pub(super) struct AddProjectDialog {
 }
 
 /// The rows of a project menu: every project with `chosen` checked, a caption when there are no
-/// projects, then a separator and "Add a project…" last (A38). Shared by the create form and by
-/// the start page, so both menus list the same rows.
+/// projects, then a separator and "Add a project…" last (A38). Both start pages use it, so
+/// their menus list the same rows.
 pub(super) fn project_menu(
     projects: &[Project],
     chosen: Option<&ProjectChoice>,
@@ -81,8 +70,6 @@ pub(super) enum ProjectMenuChoice {
 /// What an open menu's rows stand for.
 #[derive(Debug)]
 pub(super) enum MenuTarget {
-    /// One entry per menu row, with `None` for captions and separators.
-    Projects(Vec<Option<ProjectMenuChoice>>),
     /// A workspace's menu: its rows, and the workspace they act on.
     Workspace {
         id: String,
@@ -104,11 +91,10 @@ pub(super) struct OpenMenu {
     _subscription: Subscription,
 }
 
-/// Which workspace dialogs and menus are open: at most one create form, one add-project dialog and
-/// one remove flow.
+/// Which workspace dialogs and menus are open: at most one add-project dialog and one remove
+/// flow.
 #[derive(Debug, Default)]
 pub(super) struct WorkspaceDialogs {
-    pub create: Option<CreateDialog>,
     pub add_project: Option<AddProjectDialog>,
     pub remove: Option<RemoveFlow>,
     pub menu: Option<OpenMenu>,
@@ -163,145 +149,6 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
 }
 
 impl Shell {
-    /// Opens "New workspace". Sample data has no service to ask, so nothing opens.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "A88: \"+ Create\" opens the start page; the form stays as reference"
-        )
-    )]
-    pub(super) fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.service.is_none() || self.dialogs.create.is_some() {
-            return;
-        }
-        let projects = self.store.read(cx).state().projects.clone();
-        let name = cx.new(|cx| TextField::new(cx).label("Name").placeholder("fix-login"));
-        let branch = cx.new(|cx| {
-            TextField::new(cx)
-                .label("Branch")
-                .placeholder("Same as the name")
-        });
-        let base = cx.new(|cx| {
-            TextField::new(cx)
-                .label("Base")
-                .placeholder("The default branch")
-        });
-        let mut subscriptions = Vec::new();
-        for (field, submits) in [(&name, true), (&branch, false), (&base, false)] {
-            subscriptions.push(cx.subscribe_in(
-                field,
-                window,
-                move |shell, _, event: &TextFieldEvent, _, cx| match event {
-                    TextFieldEvent::Changed => shell.read_create_fields(cx),
-                    TextFieldEvent::Submitted if submits => shell.submit_create(cx),
-                    TextFieldEvent::Submitted => {}
-                },
-            ));
-        }
-        self.dialogs.create = Some(CreateDialog {
-            form: CreateForm::new(&projects),
-            name,
-            branch,
-            base,
-            _subscriptions: subscriptions,
-        });
-        cx.notify();
-    }
-
-    /// Copies what is typed into the form, and clears a name error once the name changes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "A88: \"+ Create\" opens the start page; the form stays as reference"
-        )
-    )]
-    fn read_create_fields(&mut self, cx: &mut Context<Self>) {
-        let Some(dialog) = self.dialogs.create.as_mut() else {
-            return;
-        };
-        dialog.form.name = dialog.name.read(cx).text().to_owned();
-        dialog.form.branch = dialog.branch.read(cx).text().to_owned();
-        dialog.form.base = dialog.base.read(cx).text().to_owned();
-        if dialog.form.name_error.take().is_some() {
-            dialog
-                .name
-                .update(cx, |field, cx| field.set_error(None, cx));
-        }
-        cx.notify();
-    }
-
-    pub(super) fn set_existing_branch(&mut self, existing: bool, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.dialogs.create.as_mut() {
-            dialog.form.existing_branch = existing;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn close_create(&mut self, cx: &mut Context<Self>) {
-        if self.dialogs.create.as_ref().is_some_and(|d| !d.form.busy) {
-            self.dialogs.create = None;
-            cx.notify();
-        }
-    }
-
-    /// Sends the form. It stays open and busy until the service answers.
-    pub(super) fn submit_create(&mut self, cx: &mut Context<Self>) {
-        let (Some(handle), Some(dialog)) = (self.service.clone(), self.dialogs.create.as_mut())
-        else {
-            return;
-        };
-        let Some(params) = dialog.form.params() else {
-            return;
-        };
-        dialog.form.begin();
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = handle.create_workspace(params).await;
-            this.update(cx, |shell, cx| shell.finish_create(result, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    fn finish_create(&mut self, result: Result<Workspace, Refusal>, cx: &mut Context<Self>) {
-        match result {
-            // The new row arrives as an event, not from this answer.
-            Ok(_) => self.dialogs.create = None,
-            Err(refusal) => {
-                if let Some(dialog) = self.dialogs.create.as_mut() {
-                    dialog.form.refused(&refusal);
-                    if let Refusal::NameProblem { message } = &refusal {
-                        let message = message.clone();
-                        dialog
-                            .name
-                            .update(cx, |field, cx| field.set_error(Some(message.into()), cx));
-                    }
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    /// The project menu of the create form: every project, then "No project" (A95), a separator
-    /// and "Add a project…" last (A38). With no project, a caption says so.
-    pub(super) fn open_project_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let projects = self.store.read(cx).state().projects.clone();
-        let Some(chosen) = self.dialogs.create.as_ref().map(|d| d.form.project.clone()) else {
-            return;
-        };
-        let (entries, choices) = project_menu(&projects, chosen.as_ref());
-        self.open_menu(
-            entries,
-            MenuTarget::Projects(choices),
-            OverlayLayer::Dialog,
-            window.mouse_position(),
-            window,
-            cx,
-        );
-    }
-
     /// The context menu of a workspace row (D-WS-02), built from the workspace's record.
     pub(super) fn open_workspace_menu(
         &mut self,
@@ -427,17 +274,14 @@ impl Shell {
         .detach();
     }
 
-    /// A new project closes the dialog and is chosen in the create form that asked for it. A
+    /// A new project closes the dialog and becomes the project of the page with no workspace. A
     /// refusal keeps the dialog open with its reason shown.
     fn finish_add_project(&mut self, result: Result<Project, Refusal>, cx: &mut Context<Self>) {
         self.note_refusal(result.as_ref().err());
         match result {
             Ok(project) => {
                 self.dialogs.add_project = None;
-                self.home_project = Some(ProjectChoice::Project(project.id.clone()));
-                if let Some(create) = self.dialogs.create.as_mut() {
-                    create.form.project = Some(ProjectChoice::Project(project.id));
-                }
+                self.home_project = Some(ProjectChoice::Project(project.id));
             }
             Err(refusal) => {
                 if let Some(dialog) = self.dialogs.add_project.as_mut() {
@@ -528,17 +372,6 @@ impl Shell {
     ) {
         let row = choice.row;
         match target {
-            MenuTarget::Projects(choices) => match choices.get(row).cloned().flatten() {
-                Some(ProjectMenuChoice::Project(choice)) => {
-                    if let Some(dialog) = self.dialogs.create.as_mut() {
-                        dialog.form.project = Some(choice);
-                        let focus = dialog.name.read(cx).focus_handle(cx);
-                        window.focus(&focus, cx);
-                    }
-                }
-                Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
-                None => {}
-            },
             MenuTarget::StatusItems(rows) => {
                 if let Some(item) = rows.get(row).copied().flatten() {
                     self.model.toggle_status_item(item);
