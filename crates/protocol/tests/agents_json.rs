@@ -13,11 +13,11 @@ use massorca_protocol::methods::agents::{
     KindPackage, ModeApplied, ModeSource, Outcome, PackageState, PermissionMode, PromptReceipt,
     ReceiptKind, StatusMechanism,
 };
-use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::agents::{
     AgentArchiveSessionParams, AgentForgetParams, AgentForgetPreview, AgentForgotten,
     AgentListParams, ForgetPreviewWorkspace, ModeTone, WorkspaceRemovalError,
 };
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use massorca_protocol::methods::workspaces::WorkspaceKind;
 use serde::{Serialize, de::DeserializeOwned};
