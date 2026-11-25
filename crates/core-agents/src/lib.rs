@@ -12,6 +12,7 @@ pub mod event;
 pub mod instructions;
 pub mod kind;
 pub mod launch;
+mod model_catalog;
 mod modes;
 pub mod packages;
 pub mod paths;
