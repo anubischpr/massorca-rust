@@ -4,6 +4,9 @@
 //! tab asks first; "Keep running" drops the view and the process goes on in the service (decision
 //! 0033), so its tab stays and "Show terminal" attaches it again.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::prelude::*;
 use gpui::{AnyElement, App, AsyncApp, Context, Entity, Task, WeakEntity, Window, div, px};
 use massorca_client::AttachUpdate;
@@ -13,20 +16,23 @@ use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
 use massorca_ui::components::terminal_surface::TerminalSurface;
 use massorca_ui::components::terminal_surface::feed::FeedOutcome;
+use massorca_ui::components::terminal_surface::grid_paint;
 use massorca_ui::components::work_panel_tabs::{
     WorkPanelTabs, WorkTab, WorkTabKind, WorkTabsAction,
 };
-use massorca_ui::tokens::{SPACE_2, TYPE_BODY_SM};
+use massorca_ui::tokens::{SIZE_CONTROL_DEFAULT, SPACE_2, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 use tokio::sync::watch;
 
 use super::Shell;
+use super::session_grid::pane_grid;
 use crate::model::regions::Region;
 use crate::model::session_ended::is_agent_run_terminal;
 use crate::model::terminals::new_terminal_params;
 use crate::model::work_panel::{
     BROWSER_LATER, CloseStep, MARKDOWN_LATER, MOBILE_LATER, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS,
-    TerminalStrip, close_step, detached_text, status_banner, terminal_strip, terminal_unavailable,
+    TerminalStrip, close_step, detached_text, new_terminal_grid, status_banner, terminal_strip,
+    terminal_unavailable,
 };
 use crate::service::{
     AttachRole, ConnectionState, Refusal, ServiceHandle, StoreState, StreamEnd, TerminalStream,
@@ -54,10 +60,15 @@ pub(super) struct WorkFrame {
     notice: Option<(String, String)>,
 }
 
+/// How many frames a new terminal waits for the Work panel's pane to paint before it opens at the fixed size.
+pub(super) const PANE_WAIT_FRAMES: u8 = 3;
+
 /// The body under the strip, for the selected tab.
 enum WorkBody {
     /// No terminal to show: the strip alone, with its empty state when it has no tabs.
     Empty,
+    /// A new terminal waits for the pane to paint its size: a blank pane, measured by the probe.
+    Measuring { size: Rc<Cell<Option<(f32, f32)>>> },
     /// The selected terminal has no view; "Show terminal" attaches it.
     Detached {
         workspace: String,
@@ -72,6 +83,8 @@ enum WorkBody {
         surface: Entity<TerminalSurface>,
         banner: Option<&'static str>,
         failure: Option<String>,
+        /// Where the pane records its size as it paints (`Shell::work_panel_size`).
+        size: Rc<Cell<Option<(f32, f32)>>>,
     },
 }
 
@@ -110,26 +123,33 @@ impl Shell {
             (WorkTabKind::Markdown, MARKDOWN_LATER),
             (WorkTabKind::MobileEmulator, MOBILE_LATER),
         ]);
-        let body = match (
-            workspace,
-            strip.selected.and_then(|index| strip.tabs.get(index)),
-        ) {
-            (Some(workspace), Some(tab)) => match self.terminal_views.get(&tab.id) {
-                Some(view) => WorkBody::Pane {
-                    workspace,
-                    terminal: tab.id.clone(),
-                    surface: view.surface.clone(),
-                    banner: status_banner(tab.status),
-                    failure: view.failure.clone(),
+        let body = if self.pane_waits > 0 {
+            WorkBody::Measuring {
+                size: self.work_panel_size.clone(),
+            }
+        } else {
+            match (
+                workspace,
+                strip.selected.and_then(|index| strip.tabs.get(index)),
+            ) {
+                (Some(workspace), Some(tab)) => match self.terminal_views.get(&tab.id) {
+                    Some(view) => WorkBody::Pane {
+                        workspace,
+                        terminal: tab.id.clone(),
+                        surface: view.surface.clone(),
+                        banner: status_banner(tab.status),
+                        failure: view.failure.clone(),
+                        size: self.work_panel_size.clone(),
+                    },
+                    None => WorkBody::Detached {
+                        workspace,
+                        terminal: tab.id.clone(),
+                        text: detached_text(tab.status),
+                        banner: status_banner(tab.status),
+                    },
                 },
-                None => WorkBody::Detached {
-                    workspace,
-                    terminal: tab.id.clone(),
-                    text: detached_text(tab.status),
-                    banner: status_banner(tab.status),
-                },
-            },
-            _ => WorkBody::Empty,
+                _ => WorkBody::Empty,
+            }
         };
         WorkFrame {
             shell,
@@ -159,11 +179,53 @@ impl Shell {
 
     /// `terminal.create` in `workspace`. The new terminal is selected and focused once the service
     /// answers; a refusal says why under the strip.
+    ///
+    /// The grid comes from the pane's measured size, which only a paint records. Until the Work
+    /// panel has painted once, the create waits for that frame: a ConPTY that grows after its first
+    /// draw leaves a gap under a TUI, so the terminal must open at the grid its pane will show.
     fn create_terminal(&mut self, workspace: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.service.is_none() {
+            return;
+        }
+        if self.work_panel_size.get().is_some() {
+            self.send_create(workspace, window, cx);
+        } else {
+            self.pane_waits += 1;
+            self.await_pane(workspace, PANE_WAIT_FRAMES, window, cx);
+        }
+    }
+
+    /// Runs on the next frame, before it draws: sends the create once the pane has a size, or once
+    /// `frames` more frames have passed without one (the panel is hidden), which opens it at the fallback grid.
+    fn await_pane(
+        &mut self,
+        workspace: String,
+        frames: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let shell = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                if shell.work_panel_size.get().is_some() || frames == 0 {
+                    shell.pane_waits -= 1;
+                    shell.send_create(workspace, window, cx);
+                } else {
+                    shell.await_pane(workspace, frames - 1, window, cx);
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    /// `terminal.create` in `workspace` at the grid `work_panel_grid` gives now.
+    fn send_create(&mut self, workspace: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let params = new_terminal_params(&workspace, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS);
+        let (cols, rows) = self.work_panel_grid(cx);
+        let params = new_terminal_params(&workspace, cols, rows);
         let window_handle = window.window_handle();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -175,6 +237,21 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// The grid a new Work panel terminal opens at (`new_terminal_grid`): the grid its pane fits now, else the grid a
+    /// Work panel pane last applied, else the fixed size.
+    pub(super) fn work_panel_grid(&self, cx: &App) -> (u16, u16) {
+        let measured = self.work_panel_size.get().and_then(|(width, height)| {
+            let cell = grid_paint::cell_metrics(cx)?;
+            Some(pane_grid(width, height, cell))
+        });
+        new_terminal_grid(measured, self.work_panel_applied)
+    }
+
+    /// Remembers the grid a Work panel pane applied, the fallback for a new terminal's grid.
+    fn note_work_panel_grid(&mut self, cols: u16, rows: u16) {
+        self.work_panel_applied = Some((cols, rows));
     }
 
     fn show_created_terminal(
@@ -435,6 +512,7 @@ fn new_surface(
                 let known = noting
                     .update(cx, |shell, cx| {
                         shell.note_terminal_grid(&sized, cols, rows, cx);
+                        shell.note_work_panel_grid(cols, rows);
                         // A pane that fits to the grid the service already reports needs no resize request.
                         shell.terminal_has_grid(&sized, cols, rows, cx)
                     })
@@ -622,12 +700,17 @@ pub(super) fn work_panel(frame: WorkFrame, cx: &mut App) -> AnyElement {
                 ),
         );
     }
-    column = if has_tabs {
+    // While a new terminal waits for its pane, the strip's row is blank so the pane's probe lands where the
+    // first terminal's pane will be.
+    let measuring = matches!(body, WorkBody::Measuring { .. });
+    column = if measuring {
+        column.child(div().flex_none().h(px(SIZE_CONTROL_DEFAULT)))
+    } else if has_tabs {
         column.child(div().flex_none().child(strip))
     } else {
         column.child(div().flex_1().min_h_0().child(strip))
     };
-    if has_tabs {
+    if has_tabs || measuring {
         column = column.child(body_element(body, &shell, &theme));
     }
     column.into_any_element()
@@ -639,6 +722,7 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
     let pane = div().flex_1().min_h_0().min_w_0().flex().flex_col();
     match body {
         WorkBody::Empty => pane.into_any_element(),
+        WorkBody::Measuring { size } => pane.child(measured_pane(size, div())).into_any_element(),
         WorkBody::Detached {
             workspace,
             terminal,
@@ -681,6 +765,7 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
             surface,
             banner,
             failure,
+            size,
         } => {
             let retry = shell.clone();
             let pane = pane.when_some(banner, |pane, message| {
@@ -698,12 +783,35 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
                         },
                     ))
                     .into_any_element(),
-                None => pane
-                    .child(div().flex_1().min_h_0().child(surface))
-                    .into_any_element(),
+                None => pane.child(measured_pane(size, surface)).into_any_element(),
             }
         }
     }
+}
+
+/// A terminal's pane: `content`, over a probe that records the pane's size as it paints (the probe takes no room).
+fn measured_pane(
+    size: Rc<Cell<Option<(f32, f32)>>>,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), _, _| {
+                    size.set(Some((
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height),
+                    )));
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
+        .child(content)
 }
 
 /// The banner of a terminal whose host cannot be reached: it may still run, and it never says it
