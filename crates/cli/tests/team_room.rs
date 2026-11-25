@@ -276,3 +276,27 @@ fn a_line_with_a_day_and_a_time_becomes_a_one_time_routine_instead_of_a_task() {
             routine["id"].as_str().expect("routine id")
         )));
 }
+
+#[test]
+fn a_refused_routine_or_a_time_only_mentioned_leaves_the_line_a_task() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    for text in [
+        "Rotate the logs on 2000-01-01 at 09:00",
+        "The 5pm deploy today will break login, please fix now",
+    ] {
+        let posted = sandbox.json_ok("default", &["team", "room", "post", "alpha", text]);
+        let answer = &posted["messages"][1];
+        assert!(answer.get("routine").is_none(), "{posted}");
+        assert!(
+            answer["text"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("Added to the Board")),
+            "{posted}"
+        );
+        assert_eq!(answer["task"]["body"], text, "{posted}");
+    }
+    let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
+    assert_eq!(routines["routines"].as_array().map(Vec::len), Some(0));
+}

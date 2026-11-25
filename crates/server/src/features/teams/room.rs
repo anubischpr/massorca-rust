@@ -6,7 +6,6 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use massorca_core_agents::{Agents, SecretGrant};
-use massorca_core_schedule::host_zone_used;
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::{
@@ -211,7 +210,8 @@ fn agent_line(
 }
 
 /// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the first bot), starts
-/// the task and stores the bot's answer. A line that names a day and a time becomes that bot's one-time routine instead.
+/// the task and stores the bot's answer. A line that asks for a day and a time becomes that bot's one-time routine
+/// instead, unless the routine is refused.
 /// A team without bots refuses the line and stores nothing.
 fn person_line(
     store: &Store,
@@ -228,8 +228,11 @@ fn person_line(
         return Err(ErrorBody::new(codes::TASK_NO_BOT, NO_BOTS));
     };
     let now = now_ms();
-    if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&text, today)) {
-        return schedule_line(store, team, bot, text, moment, start.admin(), now);
+    if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&text, today))
+        && let Some(lines) =
+            schedule_line(store, team, bot, text.clone(), moment, start.admin(), now)?
+    {
+        return Ok(lines);
     }
     let title = task_title(&text);
     let task = create_task(
@@ -260,8 +263,9 @@ fn person_line(
     Ok(vec![person, bot_line])
 }
 
-/// Stores a person's line that names a day and a time, schedules it as `bot`'s one-time routine through the path of
-/// `team.routine_add`, and stores the bot's answer: the routine, or why it was not made (such as a moment already past).
+/// Schedules a person's line that names a day and a time as `bot`'s one-time routine through the path of
+/// `team.routine_add`, then stores the line and the bot's answer about the routine. A routine the path refuses (a
+/// moment already past, an unreadable host zone) stores nothing and is `None`, so the line becomes a task instead.
 fn schedule_line(
     store: &Store,
     team: &TeamRow,
@@ -270,7 +274,7 @@ fn schedule_line(
     moment: Moment,
     admin: bool,
     now: i64,
-) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+) -> Result<Option<Vec<TeamRoomMessageRow>>, ErrorBody> {
     let title = task_title(&text);
     let (date, time) = (moment.run_date(), moment.clock());
     let added = add_routine(
@@ -291,27 +295,26 @@ fn schedule_line(
         now,
         &HostZone::read(),
     );
+    let Ok(routine) = added else {
+        return Ok(None);
+    };
     let person = insert_line(store, team, None, text, None)?;
-    let mut answer = new_line(team, Some(bot), String::new(), None);
-    match added {
-        Ok(routine) => {
-            answer.text = format!("Routine created: {title}. It runs once on {date} at {time}.");
-            answer.routine_id = Some(routine.id);
-        }
-        Err(error) => answer.text = format!("Not scheduled: {}", error.message),
-    }
+    let mut answer = new_line(
+        team,
+        Some(bot),
+        format!("Routine created: {title}. It runs once on {date} at {time}."),
+        None,
+    );
+    answer.routine_id = Some(routine.id);
     store
         .insert_team_room_message(&answer)
         .map_err(store_error)?;
-    Ok(vec![person, answer])
+    Ok(Some(vec![person, answer]))
 }
 
-/// Today on the clock a routine without a zone runs on: the host's zone, else UTC.
+/// Today on the clock a routine without a zone runs on: the host's zone, else UTC, as core-schedule reads it.
 fn host_today(now: i64) -> Option<Date> {
-    let zone = host_zone_used()
-        .0
-        .and_then(|name| TimeZone::get(&name).ok())
-        .unwrap_or(TimeZone::UTC);
+    let zone = TimeZone::try_system().unwrap_or(TimeZone::UTC);
     Some(
         zone.to_datetime(Timestamp::from_millisecond(now).ok()?)
             .date(),
@@ -597,8 +600,9 @@ mod tests {
         let mara = bots.iter().find(|bot| bot.name == "Mara").unwrap();
         let text = "Back up the docs on 2099-01-02 at 09:00".to_owned();
         let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
-        let lines =
-            schedule_line(&store, &team, mara, text.clone(), moment, true, now_ms()).unwrap();
+        let lines = schedule_line(&store, &team, mara, text.clone(), moment, true, now_ms())
+            .unwrap()
+            .expect("the routine is made");
 
         assert_eq!(lines[0].author, "person");
         assert_eq!(lines[0].text, text);
@@ -634,18 +638,15 @@ mod tests {
     }
 
     #[test]
-    fn a_moment_already_past_is_answered_and_schedules_nothing() {
+    fn a_refused_routine_stores_nothing_so_the_line_becomes_a_task() {
         let (store, team, _) = store_with_room_task();
         let bots = store.list_bots(&team.id).unwrap();
         let text = "2000-01-01 at 9am rotate logs".to_owned();
         let moment = scheduled_moment(&text, Date::constant(2030, 1, 2)).unwrap();
-        let lines = schedule_line(&store, &team, &bots[0], text, moment, false, now_ms()).unwrap();
-        assert_eq!(
-            lines[1].text,
-            "Not scheduled: the one-time run on 2000-01-01 has already passed"
-        );
-        assert_eq!(lines[1].routine_id, None);
+        let refused =
+            schedule_line(&store, &team, &bots[0], text, moment, false, now_ms()).unwrap();
+        assert_eq!(refused, None, "a moment already past");
         assert!(store.list_routines(&team.id).unwrap().is_empty());
-        assert_eq!(store.list_team_room(&team.id, None).unwrap().len(), 2);
+        assert!(store.list_team_room(&team.id, None).unwrap().is_empty());
     }
 }

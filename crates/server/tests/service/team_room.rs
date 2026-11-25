@@ -1,5 +1,6 @@
 //! The Conference room over the wire: a person's line that names a day and a time becomes a one-time routine of its
-//! bot, with the bot's answer about it (decision 0121). None of these lines starts an agent.
+//! bot, with the bot's answer about it (decision 0121). None of these lines starts an agent; a refused routine, which
+//! becomes a task, is covered by the CLI tests with the fake agent.
 
 use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
 use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomListParams, TeamRoomPostParams};
@@ -118,26 +119,11 @@ async fn a_line_with_a_day_and_a_time_becomes_a_one_time_routine_of_its_bot() {
 }
 
 #[tokio::test]
-async fn a_moment_already_past_is_answered_and_a_bot_line_is_never_scheduled() {
+async fn a_bot_line_is_never_scheduled() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
     team_with_bots(&client).await;
-
-    let past = client
-        .team_room_post(&post("rotate the logs on 2000-01-01 at 09:00", None))
-        .await
-        .expect("team.room_post");
-    assert_eq!(
-        past.messages[1].text,
-        "Not scheduled: the one-time run on 2000-01-01 has already passed"
-    );
-    assert_eq!(
-        past.messages[1].bot_name.as_deref(),
-        Some("Bruno"),
-        "the lead"
-    );
-    assert!(past.messages[1].routine.is_none());
 
     let as_bot = client
         .team_room_post(&post(

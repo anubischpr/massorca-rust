@@ -251,8 +251,9 @@ pub enum TeamRoomCommand {
     },
     /// Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with
     /// @name, else --to, else the lead, else the first bot, and the task starts. A person's line that names one day
-    /// (YYYY-MM-DD, today, tomorrow or a weekday) and one time (HH:MM, 9am, "at 9," or "a las 9") becomes that bot's
-    /// one-time routine instead of a task. With --bot, that bot posts the line.
+    /// (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any time
+    /// in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a
+    /// routine the host refuses leaves it a task. With --bot, that bot posts the line.
     /// Inside an agent run, the line is posted as the bot of the run's own task, and naming another bot is refused.
     Post {
         /// Team id or name.
