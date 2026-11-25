@@ -213,6 +213,60 @@ fn the_placement_card_sits_on_the_composer_inset_twelve_px_from_each_side(cx: &m
 }
 
 #[gpui::test]
+fn the_placement_pills_are_tab_stops_and_enter_opens_the_project_menu(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+    // A click focuses the off host pill and does nothing else; Tab then reaches the project pill.
+    click(cx, "start-host");
+    cx.update(|window, cx| window.focus_next(cx));
+    // Enter is a keyboard click only when its press and release both reach the focused pill.
+    let keystroke = gpui::Keystroke::parse("enter").expect("enter is a keystroke");
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("menu-panel").is_some(),
+        "Enter on the focused project pill opens the project menu"
+    );
+}
+
+#[gpui::test]
+fn an_off_pill_names_its_reason_when_keyboard_focus_reaches_it(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+    click(cx, "start-host");
+    // Focus events reach the tip only in an active window; a key press makes the next focus a keyboard focus.
+    cx.update(|window, _| window.activate_window());
+    let keystroke = gpui::Keystroke::parse("f1").expect("f1 is a keystroke");
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.update(|window, cx| window.focus_next(cx));
+    cx.update(|window, cx| window.focus_prev(cx));
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the host pill's reason shows when keyboard focus reaches it"
+    );
+}
+
+#[gpui::test]
 fn the_chosen_agent_stays_chosen_when_the_installed_kinds_are_listed_again(
     cx: &mut TestAppContext,
 ) {

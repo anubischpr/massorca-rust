@@ -22,7 +22,7 @@ use super::Shell;
 use super::start_page::{
     key_hints, profile_banner, project_title_link, refuse_send, starting_line,
 };
-use super::start_placement::{host_pill, pill, placement_card};
+use super::start_placement::{host_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails, branch_pill,
@@ -116,7 +116,7 @@ pub(super) fn home_project_menu(
 }
 
 /// The page, centred in the Canvas.
-pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
+pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
     let title = {
@@ -146,7 +146,12 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
         }
     };
     let labels = branch_pill(&frame.details.values(cx), frame.project_base.as_deref());
-    let host = host_pill("home-start-host", LOCAL_HOST, &theme);
+    let host = host_pill(
+        "home-start-host",
+        LOCAL_HOST,
+        &theme,
+        pill_focus("home-start-host", window, cx),
+    );
     let project = {
         let shell = frame.shell.clone();
         pill(
@@ -159,6 +164,7 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
             None,
             true,
             &theme,
+            pill_focus("home-start-project", window, cx),
         )
         .on_click(move |_, window, cx| {
             let _ = shell.update(cx, |shell, cx| shell.open_home_project_menu(window, cx));
@@ -173,6 +179,7 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
             Some(labels.detail),
             true,
             &theme,
+            pill_focus("home-start-branch", window, cx),
         )
         .on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| shell.toggle_branch_menu(cx));

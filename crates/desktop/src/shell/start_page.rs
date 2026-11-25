@@ -29,7 +29,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use std::io::Write;
 
 use super::Shell;
-use super::start_placement::{host_pill, pill, placement_card};
+use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
@@ -92,7 +92,7 @@ pub(super) struct StartComposer {
 }
 
 /// The start page for one workspace, centred in the Canvas.
-pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
+pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
     let page = &frame.page;
@@ -119,7 +119,12 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .child(project_link)
         .child("?");
 
-    let host = host_pill("start-host", page.host, &theme);
+    let host = host_pill(
+        "start-host",
+        page.host,
+        &theme,
+        pill_focus("start-host", window, cx),
+    );
     let project = {
         let shell = frame.shell.clone();
         pill(
@@ -129,22 +134,22 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
             None,
             true,
             &theme,
+            pill_focus("start-project", window, cx),
         )
         .on_click(move |_, window, cx| {
             let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
         })
     };
-    let branch = pill(
+    let branch = off_pill(
         "start-branch",
         IconName::GitBranch,
         page.branch
             .clone()
             .unwrap_or_else(|| "No branch".to_owned()),
-        None,
-        false,
+        GIT_LATER,
         &theme,
-    )
-    .tooltip(tooltip_view(Tooltip::new(GIT_LATER.to_owned())));
+        pill_focus("start-branch", window, cx),
+    );
     let placement = placement_card(host, project, branch, &theme);
     // The real composer: the Chat / Terminal switch sits in its bottom row (A32). The placement card joins its top edge.
     let composer = div()

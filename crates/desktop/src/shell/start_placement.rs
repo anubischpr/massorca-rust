@@ -2,9 +2,9 @@
 //! bottom edge meets the composer. The pills are drawn here; each page attaches what its pill does.
 
 use gpui::prelude::*;
-use gpui::{Div, Stateful, div, px};
-use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
-use massorca_ui::style::Surface;
+use gpui::{App, Div, FocusHandle, Role, Stateful, Window, div, px};
+use massorca_ui::components::tooltip::TooltipTrigger;
+use massorca_ui::style::{FocusRing, Surface};
 use massorca_ui::tokens::{
     Color, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_LABEL,
 };
@@ -40,8 +40,18 @@ fn pill_text(enabled: bool, theme: &Theme) -> PillText {
     }
 }
 
-/// A placement pill: its icon, its label, an optional second label, and a chevron. A pill that is not `enabled` takes
-/// no hover fill; the page attaches a click only where the pill acts.
+/// The focus handle of pill `id`, kept across frames as a Tab stop, as the ui crate's buttons keep theirs.
+pub(super) fn pill_focus(id: &'static str, window: &mut Window, cx: &mut App) -> FocusHandle {
+    window
+        .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone()
+        .tab_stop(true)
+}
+
+/// A placement pill: its icon, its label, an optional second label, and a chevron. It is a Tab stop with a focus ring,
+/// and Enter or Space clicks it. A pill that is not `enabled` takes no hover fill; the page attaches a click only where
+/// the pill acts.
 pub(super) fn pill(
     id: &'static str,
     icon: IconName,
@@ -49,12 +59,21 @@ pub(super) fn pill(
     secondary: Option<String>,
     enabled: bool,
     theme: &Theme,
+    focus: FocusHandle,
 ) -> Stateful<Div> {
     let hover = Surface::Raised.fills(theme).hover;
     let text = pill_text(enabled, theme);
+    let name = match &secondary {
+        Some(secondary) => format!("{label} {secondary}"),
+        None => label.clone(),
+    };
     let mut row = div()
         .id(id)
         .debug_selector(move || id.to_owned())
+        .role(Role::Button)
+        .aria_label(name)
+        .track_focus(&focus)
+        .focus_ring(theme)
         .flex()
         .flex_row()
         .flex_none()
@@ -89,11 +108,39 @@ pub(super) fn pill(
     )
 }
 
+/// A pill that is off: its reason shows on hover and on keyboard focus, as the ui crate's disabled buttons show theirs.
+pub(super) fn off_pill(
+    id: &'static str,
+    icon: IconName,
+    label: String,
+    reason: &'static str,
+    theme: &Theme,
+    focus: FocusHandle,
+) -> impl IntoElement {
+    TooltipTrigger::new(
+        format!("{id}-reason"),
+        reason,
+        pill(id, icon, label, None, false, theme, focus.clone()),
+    )
+    .focus_handle(focus)
+}
+
 /// The host pill: the host the workspace would run on, off with its reason until the service takes a host for a
 /// workspace.
-pub(super) fn host_pill(id: &'static str, host: &str, theme: &Theme) -> Stateful<Div> {
-    pill(id, IconName::Server, host.to_owned(), None, false, theme)
-        .tooltip(tooltip_view(Tooltip::new(NEEDS_NEWER_SERVICE.to_owned())))
+pub(super) fn host_pill(
+    id: &'static str,
+    host: &str,
+    theme: &Theme,
+    focus: FocusHandle,
+) -> impl IntoElement {
+    off_pill(
+        id,
+        IconName::Server,
+        host.to_owned(),
+        NEEDS_NEWER_SERVICE,
+        theme,
+        focus,
+    )
 }
 
 /// The card the three pills sit in: raised, bordered on its top, sides and top corners but not its bottom, so it
