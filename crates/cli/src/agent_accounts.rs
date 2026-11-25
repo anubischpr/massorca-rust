@@ -6,10 +6,11 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 use massorca_client::Client;
+use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountState, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList,
-    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, ImportResult,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, ImportCandidates, ImportResult,
 };
 
 use crate::cwd_path;
@@ -48,16 +49,23 @@ pub enum AccountsCommand {
         #[arg(long)]
         no_attach: bool,
     },
-    /// Imports the kind's declared login files from a directory into a new account, then checks it.
+    /// Imports the kind's declared login files into a new account, then checks it. Without `--from`, each file is copied
+    /// from where the kind's CLI keeps it (see `accounts candidates`), and the files it will copy are printed first.
     Import {
         /// Agent kind, for example claude.
         kind: String,
-        /// The directory holding the kind's login files.
+        /// A directory holding every declared login file, instead of where the kind's CLI keeps each one.
         #[arg(long, value_name = "DIR")]
-        from: PathBuf,
+        from: Option<PathBuf>,
         /// The account's label, for example work.
         #[arg(long)]
         label: Option<String>,
+    },
+    /// Shows where an import without `--from` would copy each kind's login files from: per kind its folder, and each
+    /// file's name, whether it is required, whether it was found, and its path. Nothing is read or copied.
+    Candidates {
+        /// Agent kind, for example claude; every kind that declares login files when absent.
+        kind: Option<String>,
     },
     /// Makes an account the kind's active one, or the account a project uses with `--project`.
     Activate {
@@ -122,14 +130,23 @@ pub async fn execute(
             report_sign_in(target, client, output, &added, no_attach).await?;
         }
         AccountsCommand::Import { kind, from, label } => {
+            let from = match from {
+                Some(from) => Some(cwd_path::absolute(&from)?),
+                None => {
+                    announce_detected(client, output, &kind).await?;
+                    None
+                }
+            };
             let imported = client
-                .agent_accounts_import(&AccountsImportParams {
-                    kind,
-                    from: cwd_path::absolute(&from)?,
-                    label,
-                })
+                .agent_accounts_import(&AccountsImportParams { kind, from, label })
                 .await?;
             output.success(&imported, &import_lines(&imported));
+        }
+        AccountsCommand::Candidates { kind } => {
+            let candidates = client
+                .agent_accounts_import_candidates(kind.as_deref())
+                .await?;
+            output.success(&candidates, &candidates_lines(&candidates));
         }
         AccountsCommand::Activate {
             kind,
@@ -159,6 +176,102 @@ pub async fn execute(
         }
     }
     Ok(())
+}
+
+/// Before an import without `--from`: prints each file it will copy, or refuses with the missing required files and
+/// where each was looked for, so nothing is sent for a kind that is not ready.
+async fn announce_detected(client: &Client, output: Output, kind: &str) -> Result<(), CliError> {
+    let detected = client.agent_accounts_import_candidates(Some(kind)).await?;
+    let Some(candidate) = detected.candidates.iter().find(|found| found.kind == kind) else {
+        return Err(CliError::new(
+            codes::AGENT_CREDENTIALS_UNSUPPORTED,
+            format!("agent kind {kind} declares no login files to import"),
+            crate::error::exit::ERROR,
+        ));
+    };
+    if !candidate.ready {
+        let missing: Vec<String> = candidate
+            .files
+            .iter()
+            .filter(|file| file.required && !file.found)
+            .map(|file| match &file.path {
+                Some(path) => format!("{} (looked for at {})", file.name, printable(path)),
+                None => format!("{} (the kind declares no location for it)", file.name),
+            })
+            .collect();
+        return Err(CliError::new(
+            codes::AGENT_CREDENTIALS_INVALID,
+            format!(
+                "nothing was imported for agent kind {kind}; a required file is missing: {}; sign in with the vendor's \
+                 CLI or pass --from DIR",
+                missing.join(", ")
+            ),
+            crate::error::exit::ERROR,
+        ));
+    }
+    for file in candidate.files.iter().filter(|file| file.found) {
+        output.progress(&format!(
+            "copying {} from {}",
+            file.name,
+            printable(file.path.as_deref().unwrap_or("its usual place"))
+        ));
+    }
+    for file in candidate.files.iter().filter(|file| !file.found) {
+        match &file.reason {
+            Some(reason) => output.progress(&format!(
+                "skipping {} (optional, not usable: {reason})",
+                file.name
+            )),
+            None => output.progress(&format!("skipping {} (optional, not found)", file.name)),
+        }
+    }
+    Ok(())
+}
+
+/// Per kind its readiness and folder, then each declared file: required or optional, found or missing, and its path.
+fn candidates_lines(candidates: &ImportCandidates) -> Vec<String> {
+    if candidates.candidates.is_empty() {
+        return vec!["no agent kind declares login files to import".to_owned()];
+    }
+    let mut lines = Vec::new();
+    for candidate in &candidates.candidates {
+        let folder = candidate
+            .folder
+            .as_deref()
+            .map(|folder| format!(", folder {}", printable(folder)))
+            .unwrap_or_default();
+        lines.push(format!(
+            "{}: {}{folder}",
+            candidate.kind,
+            if candidate.ready {
+                "ready"
+            } else {
+                "not ready"
+            }
+        ));
+        for file in &candidate.files {
+            let path = file
+                .path
+                .as_deref()
+                .map_or_else(|| "no location".to_owned(), printable);
+            let env = file
+                .env
+                .as_deref()
+                .map(|env| format!(" (from {env})"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {}: {}, {}, {path}{env}",
+                file.name,
+                if file.required {
+                    "required"
+                } else {
+                    "optional"
+                },
+                if file.found { "found" } else { "missing" },
+            ));
+        }
+    }
+    lines
 }
 
 /// The attach rule of a sign-in, shared by `add` and `sign-in`: it attaches to a terminal, which has no `--json` form, so
@@ -259,7 +372,7 @@ fn import_lines(imported: &AccountsImported) -> Vec<String> {
             "not imported: {}",
             reason
                 .as_deref()
-                .unwrap_or("none of the declared files is in the source")
+                .unwrap_or("a required file is missing from the source")
         )],
         (_, _, reason) => vec![format!(
             "not imported: {}",

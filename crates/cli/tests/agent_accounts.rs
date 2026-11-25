@@ -1805,3 +1805,317 @@ fn a_sign_in_of_a_login_already_added_is_discarded_without_signing_out() {
     assert_eq!(listed[0]["state"], "signed_in");
     assert!(!marker.exists(), "a duplicate login is not signed out");
 }
+
+/// The fake vendor's override variable: when set to an absolute folder, both of kind `fake`'s files are looked for there.
+const FAKE_VENDOR_ENV: &str = "FAKE_VENDOR_DIR";
+
+/// Declares kind `fake` with a required `token.json` kept in `{home}/.fakevendor` and an optional `extra.json` kept in
+/// `{home}`, both moved by [`FAKE_VENDOR_ENV`] (decision 0097).
+fn declare_detectable(sandbox: &Sandbox) {
+    let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
+    fs::create_dir_all(&dir).expect("create the kinds directory");
+    let fake = json!({
+        "id": "fake",
+        "name": "Fake agent",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "prompt": { "mode": "argv" },
+        "credentials": {
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.json", "extra.json"],
+            "optional": ["extra.json"],
+            "sources": [
+                { "file": "token.json", "env": FAKE_VENDOR_ENV, "dir": "{home}/.fakevendor" },
+                { "file": "extra.json", "env": FAKE_VENDOR_ENV, "dir": "{home}" }
+            ]
+        },
+        "accounts": {
+            "login": ["login"],
+            "check": {
+                "args": ["whoami"],
+                "signed_in_exit": 0,
+                "expired_pattern": "expired",
+                "identity_pattern": "signed in as (\\S+)"
+            }
+        }
+    });
+    fs::write(dir.join("fake.json"), fake.to_string()).expect("write the fake kind");
+}
+
+/// A fake user home for the service: `HOME` and `USERPROFILE` point at it, so detection never sees the real one.
+fn fake_user_home(sandbox: &Sandbox) -> PathBuf {
+    let home = sandbox.home().join("user");
+    fs::create_dir_all(home.join(".fakevendor")).expect("create the fake user home");
+    // Windows resolves the service's own known folders below `USERPROFILE`, and refuses them when they are absent.
+    for known in [["AppData", "Roaming"], ["AppData", "Local"]] {
+        fs::create_dir_all(home.join(known[0]).join(known[1])).expect("create a known folder");
+    }
+    home
+}
+
+/// Starts the service with its home at `user_home`, [`FAKE_VENDOR_ENV`] unset unless `env` sets it.
+fn spawn_service_in_home(sandbox: &Sandbox, user_home: &Path, env: &[(&str, &str)]) -> ChildGuard {
+    sandbox.track("default");
+    let mut command = massorca_in(sandbox.home());
+    command
+        .args(["--profile", "default", "service", "run"])
+        .env_remove("FAKE_AGENT_HOME")
+        .env_remove(FAKE_VENDOR_ENV)
+        .env("HOME", user_home)
+        .env("USERPROFILE", user_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // The vendor override and home variables the built-in kinds declare: a developer's own must never reach detection.
+    for name in BUILT_IN_VENDOR_ENV {
+        command.env_remove(name);
+    }
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let guard = ChildGuard::new(command.spawn().expect("the service starts"));
+    sandbox.wait_for_running("default", true);
+    guard
+}
+
+/// Every override or home variable a built-in kind declares (`credentials.home_env` and `credentials.sources[].env`).
+const BUILT_IN_VENDOR_ENV: [&str; 3] = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR"];
+
+fn stderr_text(outcome: &assert_cmd::assert::Assert) -> String {
+    String::from_utf8_lossy(&outcome.get_output().stderr).into_owned()
+}
+
+#[test]
+fn candidates_show_each_file_in_its_own_folder_as_text_and_json() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    fs::write(user.join(".fakevendor").join("token.json"), FAKE_TOKEN).unwrap();
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let token = user.join(".fakevendor").join("token.json");
+    let extra = user.join("extra.json");
+    let shown = sandbox.json_ok("default", &["agent", "accounts", "candidates", "fake"]);
+    assert_eq!(
+        shown,
+        json!({ "candidates": [{
+            "kind": "fake",
+            "ready": true,
+            "folder": path_text(&user.join(".fakevendor")),
+            "files": [
+                { "name": "token.json", "required": true, "found": true, "path": path_text(&token) },
+                { "name": "extra.json", "required": false, "found": false, "path": path_text(&extra) }
+            ]
+        }] })
+    );
+
+    let text = stdout_text(
+        &sandbox
+            .run("default", &["agent", "accounts", "candidates", "fake"])
+            .success(),
+    );
+    assert!(
+        text.contains(&format!(
+            "fake: ready, folder {}",
+            path_text(&user.join(".fakevendor"))
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "  token.json: required, found, {}",
+            path_text(&token)
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "  extra.json: optional, missing, {}",
+            path_text(&extra)
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("fake\":true"), "no contents: {text}");
+}
+
+#[test]
+fn import_without_from_copies_each_file_from_its_own_folder() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    let token = user.join(".fakevendor").join("token.json");
+    let extra = user.join("extra.json");
+    fs::write(&token, FAKE_TOKEN).unwrap();
+    fs::write(&extra, r#"{"fake":"extra"}"#).unwrap();
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let outcome = sandbox
+        .run(
+            "default",
+            &["agent", "accounts", "import", "fake", "--label", "work"],
+        )
+        .success();
+    let progress = stderr_text(&outcome);
+    assert!(
+        progress.contains(&format!("copying token.json from {}", path_text(&token)))
+            && progress.contains(&format!("copying extra.json from {}", path_text(&extra))),
+        "{progress}"
+    );
+    let account = account_labelled(&sandbox, "work");
+    assert_eq!(account["state"], "signed_in", "{account}");
+    let home = account_home(&sandbox, account["id"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(home.join("token.json")).unwrap(),
+        FAKE_TOKEN
+    );
+    assert_eq!(
+        fs::read_to_string(home.join("extra.json")).unwrap(),
+        r#"{"fake":"extra"}"#
+    );
+}
+
+#[test]
+fn the_override_variable_moves_where_both_files_are_looked_for() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    // A token in the default place that must not be used while the variable is set.
+    fs::write(user.join(".fakevendor").join("token.json"), EXPIRED_TOKEN).unwrap();
+    let elsewhere = source_with(&sandbox, "vendor-override", &[("token.json", FAKE_TOKEN)]);
+    let _service =
+        spawn_service_in_home(&sandbox, &user, &[(FAKE_VENDOR_ENV, path_text(&elsewhere))]);
+
+    let shown = sandbox.json_ok("default", &["agent", "accounts", "candidates", "fake"]);
+    let candidate = &shown["candidates"][0];
+    assert_eq!(candidate["folder"], path_text(&elsewhere), "{shown}");
+    assert_eq!(candidate["files"][0]["env"], FAKE_VENDOR_ENV, "{shown}");
+    assert_eq!(
+        candidate["files"][0]["path"],
+        path_text(&elsewhere.join("token.json"))
+    );
+    assert_eq!(candidate["files"][1]["env"], FAKE_VENDOR_ENV, "{shown}");
+
+    let imported = sandbox.json_ok("default", &["agent", "accounts", "import", "fake"]);
+    assert_eq!(imported["result"], "imported", "{imported}");
+    assert_eq!(
+        imported["account"]["state"], "signed_in",
+        "the override's token was used"
+    );
+}
+
+#[test]
+fn import_without_from_refuses_a_missing_required_file_by_name_and_skips_a_missing_optional_one() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    fs::write(user.join("extra.json"), "{}").unwrap();
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let token = user.join(".fakevendor").join("token.json");
+    let shown = sandbox.json_ok("default", &["agent", "accounts", "candidates", "fake"]);
+    assert_eq!(shown["candidates"][0]["ready"], false, "{shown}");
+    let text = stdout_text(
+        &sandbox
+            .run("default", &["agent", "accounts", "candidates", "fake"])
+            .success(),
+    );
+    assert!(text.contains("fake: not ready"), "{text}");
+    assert!(text.contains("  token.json: required, missing"), "{text}");
+
+    let error = error_of(&sandbox, &["agent", "accounts", "import", "fake"]);
+    assert_eq!(error["code"], "agent.credentials_invalid", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "a required file is missing: token.json (looked for at {})",
+            path_text(&token)
+        )),
+        "{message}"
+    );
+    assert!(accounts(&sandbox).is_empty(), "nothing is imported");
+
+    fs::remove_file(user.join("extra.json")).unwrap();
+    fs::write(&token, FAKE_TOKEN).unwrap();
+    let outcome = sandbox
+        .run(
+            "default",
+            &["agent", "accounts", "import", "fake", "--label", "solo"],
+        )
+        .success();
+    assert!(
+        stderr_text(&outcome).contains("skipping extra.json (optional, not found)"),
+        "{}",
+        stderr_text(&outcome)
+    );
+    let account = account_labelled(&sandbox, "solo");
+    let home = account_home(&sandbox, account["id"].as_str().unwrap());
+    assert!(home.join("token.json").is_file());
+    assert!(
+        !home.join("extra.json").exists(),
+        "the missing optional file is skipped"
+    );
+}
+
+#[test]
+fn import_from_a_folder_still_works_and_names_a_missing_required_file() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let only_extra = source_with(&sandbox, "only-extra", &[("extra.json", "{}")]);
+    let none = import(&sandbox, &only_extra, "none");
+    assert_eq!(none["result"], "not_found", "{none}");
+    assert_eq!(
+        none["reason"],
+        format!(
+            "nothing was imported for agent kind fake; a required file is missing: token.json (looked for at {})",
+            path_text(&only_extra.join("token.json"))
+        )
+    );
+
+    let only_token = source_with(&sandbox, "only-token", &[("token.json", FAKE_TOKEN)]);
+    let imported = import(&sandbox, &only_token, "folder");
+    assert_eq!(imported["result"], "imported", "{imported}");
+    assert_eq!(accounts(&sandbox).len(), 1);
+}
+
+#[test]
+fn import_without_from_skips_an_oversized_optional_file_and_says_why() {
+    let sandbox = Sandbox::new();
+    declare_detectable(&sandbox);
+    let user = fake_user_home(&sandbox);
+    fs::write(user.join(".fakevendor").join("token.json"), FAKE_TOKEN).unwrap();
+    let extra = fs::File::create(user.join("extra.json")).unwrap();
+    extra.set_len(1024 * 1024 + 1).unwrap();
+    drop(extra);
+    let _service = spawn_service_in_home(&sandbox, &user, &[]);
+
+    let shown = sandbox.json_ok("default", &["agent", "accounts", "candidates", "fake"]);
+    let candidate = &shown["candidates"][0];
+    assert_eq!(candidate["ready"], true, "{shown}");
+    assert_eq!(candidate["files"][1]["found"], false, "{shown}");
+    assert_eq!(
+        candidate["files"][1]["reason"], "larger than 1 MiB",
+        "{shown}"
+    );
+
+    let outcome = sandbox
+        .run(
+            "default",
+            &["agent", "accounts", "import", "fake", "--label", "big"],
+        )
+        .success();
+    let progress = stderr_text(&outcome);
+    assert!(
+        progress.contains("skipping extra.json (optional, not usable: larger than 1 MiB)"),
+        "{progress}"
+    );
+    let account = account_labelled(&sandbox, "big");
+    let home = account_home(&sandbox, account["id"].as_str().unwrap());
+    assert!(home.join("token.json").is_file());
+    assert!(
+        !home.join("extra.json").exists(),
+        "the oversized optional file is skipped"
+    );
+}

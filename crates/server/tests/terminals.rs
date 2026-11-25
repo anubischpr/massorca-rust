@@ -294,7 +294,9 @@ async fn a_terminal_is_created_in_its_workspace_listed_and_shown() {
         .terminal_list(Some(&workspace.id))
         .await
         .expect("the terminals are listed");
-    assert_eq!(listed.terminals, vec![created.clone()]);
+    // The shell sets its window title on its own, so the title can change between two snapshots.
+    let listed: Vec<Terminal> = listed.terminals.into_iter().map(without_title).collect();
+    assert_eq!(listed, vec![without_title(created.clone())]);
     let everywhere = client
         .terminal_list(None)
         .await
@@ -304,7 +306,7 @@ async fn a_terminal_is_created_in_its_workspace_listed_and_shown() {
         .terminal_show(&created.id)
         .await
         .expect("the terminal is shown");
-    assert_eq!(shown, created);
+    assert_eq!(without_title(shown), without_title(created.clone()));
 
     client
         .terminal_close(&created.id)
@@ -681,5 +683,14 @@ async fn service_shutdown_kills_the_live_terminals() {
             "the terminal's process {pid} outlived the service"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// The terminal with its title cleared: the shell sets its window title asynchronously (pwsh does on Windows), so a
+/// comparison of two snapshots leaves it out and keeps every other field.
+fn without_title(terminal: Terminal) -> Terminal {
+    Terminal {
+        title: None,
+        ..terminal
     }
 }

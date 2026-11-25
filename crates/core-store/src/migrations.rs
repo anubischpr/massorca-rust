@@ -495,7 +495,7 @@ ALTER TABLE projects ADD COLUMN icon TEXT;
 "#,
         foreign_keys_off: false,
     },
-    // The project a conversations folder is registered under (decision 0092): a conversation without a project is a
+    // The project a conversations folder is registered under (decision 0094): a conversation without a project is a
     // folder workspace of its own in that folder. The flag keeps the project out of every project list.
     Migration {
         sql: r#"
