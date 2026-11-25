@@ -194,7 +194,9 @@ struct Seen {
 impl Seen {
     /// Reads one event. A cursor query in the output gets its answer, as an emulator gives it; the shell waits for it.
     fn read_one(&mut self, test: &Runtime, view: &TerminalView) -> TerminalEvent {
-        let event = within(test, view.next())
+        let event = test
+            .block_on(async { timeout(WAIT, view.next()).await })
+            .unwrap_or_else(|_| panic!("no event in time; {}", self.recent()))
             .expect("the view reports no error")
             .expect("the view is open");
         if let TerminalEvent::Output { bytes, .. } = &event {
@@ -209,6 +211,32 @@ impl Seen {
         self.answer_cursor_queries(test, view);
         self.events.push(event.clone());
         event
+    }
+
+    /// The last events and output read, for a stuck test's message.
+    fn recent(&self) -> String {
+        let events: Vec<String> = self
+            .events
+            .iter()
+            .rev()
+            .take(4)
+            .map(|event| match event {
+                TerminalEvent::Output { offset, bytes } => {
+                    format!("Output@{offset}+{}", bytes.len())
+                }
+                TerminalEvent::Snapshot { offset, bytes, .. } => {
+                    format!("Snapshot@{offset}+{}", bytes.len())
+                }
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let tail = &self.output[self.output.len().saturating_sub(200)..];
+        format!(
+            "last events (newest first) {events:?}, link down {}, unanswered {}, output tail {:?}",
+            self.link_down,
+            self.unanswered,
+            String::from_utf8_lossy(tail)
+        )
     }
 
     /// Answers the cursor queries read so far; a refused answer waits for the link to return.
