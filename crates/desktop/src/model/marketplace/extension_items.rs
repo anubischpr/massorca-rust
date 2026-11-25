@@ -115,6 +115,7 @@ fn item(
 fn kind_of(category: &str) -> ItemKind {
     match category {
         "agents" => ItemKind::Agent,
+        "tools" => ItemKind::Tool,
         "skills" => ItemKind::Skill,
         "services" => ItemKind::Service,
         "themes" => ItemKind::Theme,
@@ -727,5 +728,11 @@ pub(super) mod tests {
             CLI_REMOVAL_SENTENCE,
             "This removes the CLI from this computer, so it stops working outside MassOrca too."
         );
+    }
+
+    #[test]
+    fn a_tool_package_lists_under_tools() {
+        assert_eq!(kind_of("tools"), ItemKind::Tool);
+        assert_eq!(ItemKind::Tool.plural(), "Tools");
     }
 }

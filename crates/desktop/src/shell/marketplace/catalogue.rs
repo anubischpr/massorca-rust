@@ -40,6 +40,7 @@ const SEARCH_WIDTH: f32 = 280.0;
 pub(super) fn kind_icon(kind: ItemKind) -> IconName {
     match kind {
         ItemKind::Extension => IconName::Puzzle,
+        ItemKind::Tool => IconName::Terminal,
         ItemKind::Agent => IconName::Bot,
         ItemKind::Skill => IconName::WandSparkles,
         ItemKind::Service => IconName::Server,
@@ -125,6 +126,7 @@ pub(super) fn nav_column(
 fn category_id(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Extension => "marketplace-nav-extensions",
+        ItemKind::Tool => "marketplace-nav-tools",
         ItemKind::Agent => "marketplace-nav-agents",
         ItemKind::Skill => "marketplace-nav-skills",
         ItemKind::Service => "marketplace-nav-services",
@@ -205,9 +207,10 @@ fn card_grid(frame: &MarketplaceFrame, items: &[&MarketplaceItem], cx: &mut App)
     grid.into_any_element()
 }
 
-/// The order of Discover's sections: agents first, then the other categories.
-const DISCOVER_ORDER: [ItemKind; 5] = [
+/// The order of Discover's sections: agents first, then tools, then the other categories.
+const DISCOVER_ORDER: [ItemKind; 6] = [
     ItemKind::Agent,
+    ItemKind::Tool,
     ItemKind::Extension,
     ItemKind::Skill,
     ItemKind::Service,

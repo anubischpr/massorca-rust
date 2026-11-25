@@ -61,7 +61,9 @@ pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
         .cli
         .iter()
         .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }));
-    let body = if detected {
+    let body = if detected && review.listing.category == "tools" {
+        format!("MassOrca will add the {name} you already have installed on this computer.")
+    } else if detected {
         format!("MassOrca will add the {name} agent you already have installed on this computer.")
     } else {
         format!("MassOrca will add {name} to this computer.")
@@ -236,5 +238,19 @@ pub(super) mod tests {
         );
         assert_eq!(outcome.button(), "Add to MassOrca");
         assert_nothing_removed_shows(&outcome);
+    }
+
+    #[test]
+    fn a_detected_tool_is_added_without_calling_it_an_agent() {
+        let mut tool = detected_review();
+        tool.listing.category = "tools".to_owned();
+        assert_eq!(
+            review_outcome(&tool, "Git"),
+            ReviewOutcome::Add {
+                title: "Add Git to MassOrca".to_owned(),
+                body: "MassOrca will add the Git you already have installed on this computer."
+                    .to_owned(),
+            }
+        );
     }
 }

@@ -470,7 +470,7 @@ async fn a_not_installed_built_in_agent_shows_its_example_prompts_and_colours() 
 }
 
 #[tokio::test]
-async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
+async fn a_real_services_discover_lists_the_built_in_agents_and_tools_as_their_categories() {
     use massorca_desktop::model::marketplace::{
         ItemKind, MarketplaceSource, ServiceMarketplace, listed,
     };
@@ -500,10 +500,17 @@ async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
         .iter()
         .filter(|item| item.kind == ItemKind::Agent)
         .count();
+    let tools = discover
+        .iter()
+        .filter(|item| item.kind == ItemKind::Tool)
+        .count();
     assert!(
-        discover.iter().all(|item| item.kind == ItemKind::Agent),
-        "a fresh profile's Discover has no other category, so no other section"
+        discover
+            .iter()
+            .all(|item| matches!(item.kind, ItemKind::Agent | ItemKind::Tool)),
+        "a fresh profile's Discover has only the Agents and Tools sections"
     );
     assert!(agents >= 4, "the built-in agents are one Agents group");
+    assert_eq!(tools, 3, "Git, GitHub CLI and Node.js are one Tools group");
     stop_service(service).await;
 }
