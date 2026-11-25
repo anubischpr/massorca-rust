@@ -240,6 +240,8 @@ pub struct Shell {
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
+    /// The request number of the newest skills read; only its answer is shown.
+    marketplace_skills_request: u64,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -530,6 +532,7 @@ impl Shell {
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
+            marketplace_skills_request: 0,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,

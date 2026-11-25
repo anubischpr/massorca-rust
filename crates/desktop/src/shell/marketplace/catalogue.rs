@@ -5,6 +5,7 @@ use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
 use super::item::problem_banner;
 use super::item_images;
+use super::skills;
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
@@ -249,15 +250,19 @@ pub(super) fn catalogue_view(
         }
         grid.into_any_element()
     };
-    div()
+    let column = div()
         .flex()
         .flex_col()
         .gap(px(SPACE_6))
         .min_w_0()
         .child(header)
-        .child(toolbar)
-        .child(body)
-        .into_any_element()
+        .child(toolbar);
+    let column = if page == MarketplacePage::Category(ItemKind::Skill) {
+        column.child(skills::skills_section(frame, cx))
+    } else {
+        column
+    };
+    column.child(body).into_any_element()
 }
 
 /// The Add extension control: a package in a folder on This computer, reviewed before it installs.

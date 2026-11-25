@@ -208,6 +208,11 @@ Linux only. No automated run opens a visible window.
   returns when the host connects. A pick is saved by its stable key in the UI state store (SET-02, `ui_state.rs`) and
   restored at start; a saved host that is gone shows This computer without being overwritten. Accounts and update
   checks stay on This computer.
+- The Skills section (`shell/marketplace/skills.rs`) sits on the Skills category under the toolbar and lists the skills
+  `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). It
+  reads when the page opens, when the picked host changes, and on Refresh with `refresh: true`. This computer reads
+  through its own service; a paired host through its own connection (`service/skills.rs`). The store keeps the newest
+  answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first."
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.
