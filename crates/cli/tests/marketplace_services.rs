@@ -113,16 +113,22 @@ fn gitlab_connects_through_glab_with_the_token_on_stdin_only() {
         (&"connected".into(), &"external".into())
     );
 
+    // Disconnect starts no glab: signing glab out would sign the person out for everything else on the computer.
+    let runs_before = fs::read_to_string(bin.path().join("args.txt")).expect("glab runs");
     let refused = sandbox
         .run(
             "default",
             &with_json(&["marketplace", "services", "disconnect", "gitlab"]),
         )
         .code(1);
+    let error = &single_document(&refused)["error"];
+    assert_eq!(error["code"], "marketplace.service_unavailable");
     assert_eq!(
-        single_document(&refused)["error"]["code"],
-        "marketplace.service_unavailable"
+        error["message"],
+        "MassOrca does not sign you out of GitLab: glab keeps its own sign-in for everything on this computer. To sign out, run `glab auth logout` yourself."
     );
+    let runs_after = fs::read_to_string(bin.path().join("args.txt")).expect("glab runs");
+    assert_eq!(runs_after, runs_before, "disconnect started glab");
     assert_token_absent_from_files(sandbox.home());
 }
 

@@ -30,8 +30,12 @@ need its own key, backups and redaction.
 - **GitLab.** `glab` keeps its own sign-in, as in pv96. Connect runs `glab auth login --hostname <host> --stdin` through
   `massorca_process`, with the token written to stdin and the output discarded, because it may repeat the host or the
   token. A host with a port goes in `GITLAB_HOST` instead, since `--hostname` refuses one. Without a base URL the host
-  is `gitlab.com`. Status runs `glab auth status`, and a missing `glab` says so. Disconnect is refused with
-  `marketplace.service_unavailable`, as in pv96, because there is nothing of MassOrca's to delete.
+  is `gitlab.com`. Status runs `glab auth status`, and a missing `glab` says so.
+- **GitLab disconnect is refused** (orchestrator ruling, 2026-11-24): "keep pv96's refusal. MassOrca never runs `glab
+  auth logout`: that would sign the person out of glab for everything else on the machine." The refusal,
+  `marketplace.service_unavailable`, says glab keeps its own sign-in and that the person signs out by running `glab
+  auth logout` themselves. Disconnect starts no `glab` process. Connect and disconnect both apply to the services whose
+  token MassOrca stores: Bitbucket, Azure DevOps and Gitea.
 - **Bitbucket, Azure DevOps and Gitea** store the token, and the base URL and, for Bitbucket, the email when given. A
   connect replaces every field; a field left out is cleared.
 - **Linear and Jira** are status-only rows that report `unknown` until the providers-and-trackers rows connect them.
@@ -48,4 +52,4 @@ need its own key, backups and redaction.
 
 - MassOrca's own source-control calls can read a stored token from the vault later. No method returns one to a client.
 - The vault key now protects service tokens too, so losing it locks them with the secrets.
-- Whether MassOrca should sign `glab` out on disconnect is open; pv96 does not.
+- A person who wants GitLab signed out does it in `glab`; MassOrca's GitLab row then reads not connected.

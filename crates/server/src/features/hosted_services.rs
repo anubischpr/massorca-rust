@@ -214,10 +214,11 @@ async fn connect(ctx: RequestCtx, params: ServiceConnect) -> Result<ServiceStatu
 
 async fn disconnect(ctx: RequestCtx, params: ServiceName) -> Result<ServiceStatus, ErrorBody> {
     let id = known(&params.service)?;
+    // Never `glab auth logout`: it would sign the person out of glab for everything else on the computer.
     if id == "gitlab" {
-        return Err(unavailable(
-            id,
-            "keeps its sign-in in glab; run `glab auth logout` on the host",
+        return Err(ErrorBody::new(
+            codes::SERVICE_UNAVAILABLE,
+            "MassOrca does not sign you out of GitLab: glab keeps its own sign-in for everything on this computer. To sign out, run `glab auth logout` yourself.",
         ));
     }
     if is_status_only(id) {
