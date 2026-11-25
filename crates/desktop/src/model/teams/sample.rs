@@ -103,6 +103,8 @@ fn routine(
         host: VPS.into(),
         enabled: true,
         last_run: None,
+        run_date: None,
+        next_run_at_ms: None,
     }
 }
 

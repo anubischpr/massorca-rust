@@ -777,6 +777,7 @@ pub(crate) mod fixtures {
             },
             bots: Vec::new(),
             projects: Vec::new(),
+            routines: Vec::new(),
         }
     }
 

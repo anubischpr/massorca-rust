@@ -13,6 +13,12 @@ mod memory;
 mod memory_menu;
 mod new_project;
 mod project;
+mod routine_confirm;
+mod routine_form;
+mod routine_form_page;
+mod routine_history;
+mod routine_menu;
+mod routine_service;
 mod routines;
 mod sidebar;
 mod team_bots;
@@ -43,6 +49,11 @@ pub(super) use home::bot_teams_home;
 pub(super) use memory::memory_page;
 pub(super) use memory_menu::OpenMemoryMenu;
 pub(super) use project::project_page;
+pub(super) use routine_confirm::{RoutineConfirm, routine_confirm_view};
+pub(super) use routine_form::RoutineForm;
+pub(super) use routine_form_page::routine_form_page;
+pub(super) use routine_history::routine_history_page;
+pub(super) use routine_menu::OpenRoutineMenu;
 pub(super) use routines::routines_page;
 pub(super) use sidebar::teams_list;
 pub(super) use team_switch::OpenTeamSwitch;
@@ -117,11 +128,14 @@ fn team_shape(character: TeamCharacter) -> TeamShape {
 }
 
 #[cfg(test)]
+mod routine_tests;
+
+#[cfg(test)]
 mod tests {
     use super::team_shape;
     use crate::data::SampleDataSource;
     use crate::model::canvas::Canvas;
-    use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
+    use crate::model::teams::{ProjectId, RoutineId, SampleTeamsSource, TeamId, TeamPage};
     use massorca_protocol::methods::teams::TeamCharacter;
     use massorca_ui::components::team_character::TeamShape;
 
@@ -163,6 +177,8 @@ mod tests {
             TeamPage::Files(team),
             TeamPage::Project(team, ProjectId(1)),
             TeamPage::NewRoutine(team),
+            TeamPage::EditRoutine(team, RoutineId(3)),
+            TeamPage::RoutineHistory(team, RoutineId(3)),
         ];
         for page in pages {
             shell.update(cx, |shell, cx| {

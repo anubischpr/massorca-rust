@@ -59,6 +59,7 @@ use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
 use super::team_room::{self, RoomCommand};
+use super::team_routines::{self, RoutineCommand};
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -104,6 +105,8 @@ pub(crate) enum Command {
     Team(TeamCommand),
     /// A team's Conference room: a read, or a post answered on its oneshot (decision 0102).
     Room(RoomCommand),
+    /// A team routine call: a write answered on its oneshot, or a run history read.
+    Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
@@ -903,6 +906,14 @@ impl Link {
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
                             }
+                            Some(Command::Routine(command)) => {
+                                team_routines::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.team_reads,
+                                );
+                            }
                             Some(Command::Room(command)) => {
                                 team_room::spawn_call(client, command, &self.updates, &self.room_reads);
                             }
@@ -1263,6 +1274,7 @@ fn spawn_call(
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_)
         | Command::Team(_)
+        | Command::Routine(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1308,6 +1320,7 @@ fn refuse_while_down(command: Command) {
         }
         Command::Team(command) => teams::refuse(command, refusal),
         Command::Room(command) => team_room::refuse(command, refusal),
+        Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
