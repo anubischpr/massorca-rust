@@ -203,6 +203,14 @@ impl ModelPicker {
         }
     }
 
+    /// Why Fast is off on every model, while the service does not offer it; `None` keeps each model's own reason.
+    pub fn set_fast_reason(&mut self, reason: Option<gpui::SharedString>, cx: &mut Context<Self>) {
+        if self.state.fast_reason() != reason.as_ref() {
+            self.state.set_fast_reason(reason);
+            cx.notify();
+        }
+    }
+
     /// Closes the popover and asks the owner to open the Marketplace.
     fn open_marketplace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close(window, cx);

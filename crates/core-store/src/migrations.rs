@@ -519,6 +519,50 @@ CREATE INDEX team_room_by_team ON team_room_messages(team_id, created_at);
 "#,
         foreign_keys_off: false,
     },
+    // Structured chat runs and their journal (decision 0101). A session records how its run talks to the service, and a
+    // chat run's id, which plays the part a terminal id plays for a terminal run (decision 0058). The journal keeps a
+    // session's epoch, its newest change and the newest change of an item it dropped to keep its cap; an item keeps the
+    // change it was added at (its position), its last change, and its body as JSON, with the text of a message that grows
+    // kept apart: its base text and byte length on the item, and each append as its own chunk keyed by the byte it starts
+    // at, so an append writes only its own bytes. A replace of the text folds the chunks back into the base.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN run_type TEXT NOT NULL DEFAULT 'terminal' CHECK(run_type IN ('terminal','chat'));
+ALTER TABLE agent_sessions ADD COLUMN run_id TEXT;
+CREATE TABLE agent_chat_journals (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    epoch TEXT NOT NULL,
+    seq INTEGER NOT NULL CHECK(seq >= 0),
+    pruned_seq INTEGER NOT NULL DEFAULT 0 CHECK(pruned_seq >= 0)
+);
+CREATE TABLE agent_chat_items (
+    session_id TEXT NOT NULL REFERENCES agent_chat_journals(session_id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    turn_id TEXT,
+    parent_id TEXT,
+    at_ms INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    body TEXT NOT NULL,
+    text TEXT,
+    text_len INTEGER NOT NULL DEFAULT 0 CHECK(text_len >= 0),
+    PRIMARY KEY (session_id, id),
+    UNIQUE (session_id, position)
+);
+CREATE INDEX agent_chat_items_by_seq ON agent_chat_items(session_id, seq);
+CREATE INDEX agent_chat_items_by_turn ON agent_chat_items(session_id, turn_id);
+CREATE TABLE agent_chat_text_chunks (
+    session_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    start_byte INTEGER NOT NULL CHECK(start_byte >= 0),
+    text TEXT NOT NULL,
+    PRIMARY KEY (session_id, item_id, start_byte),
+    FOREIGN KEY (session_id, item_id) REFERENCES agent_chat_items(session_id, id) ON DELETE CASCADE
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

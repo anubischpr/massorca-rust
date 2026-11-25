@@ -10,7 +10,8 @@ use super::team_pill;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{
-    BoardMove, BoardOwner, CardView, Column, PickStep, ProjectFilter, TaskId, TeamError, board_move,
+    BoardMove, BoardOwner, CardView, Column, PickStep, ProjectFilter, TaskId, TeamError, TeamPage,
+    board_move,
 };
 use crate::service::{Refusal, ServiceHandle};
 use gpui::{
@@ -42,8 +43,9 @@ pub(in crate::shell) fn board_page(
 ) -> AnyElement {
     let theme = *cx.theme();
     let state = model.teams();
-    let team = match owner {
-        BoardOwner::Team(team) | BoardOwner::Project(team, _) => team,
+    let (team, page) = match owner {
+        BoardOwner::Team(team) => (team, TeamPage::Board(team)),
+        BoardOwner::Project(team, project) => (team, TeamPage::Project(team, project)),
     };
     let team_data = state.team(team);
     let team_name = team_data.map_or("", |team| team.name.as_str());
@@ -66,7 +68,7 @@ pub(in crate::shell) fn board_page(
                 .text_color(theme.palette.text.primary)
                 .child("Board"),
         )
-        .child(team_pill(team_name, character, &theme))
+        .child(team_pill(page, team_name, character, shell, window, cx))
         .children(team_data.map(|team| {
             access_control(
                 team,

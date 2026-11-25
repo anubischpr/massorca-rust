@@ -172,9 +172,17 @@ impl Store {
     /// Inserts a session. Conflicts on id or request id are `StoreError::Conflict`; an unknown workspace or parent is
     /// `StoreError::Constraint`.
     pub fn insert_agent_session(&self, row: &AgentSessionRow) -> Result<(), StoreError> {
+        Self::insert_agent_session_in(&self.lock(), row)
+    }
+
+    /// [`Store::insert_agent_session`] on `connection`, which may be a transaction's.
+    pub(crate) fn insert_agent_session_in(
+        connection: &rusqlite::Connection,
+        row: &AgentSessionRow,
+    ) -> Result<(), StoreError> {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
-        self.lock().execute(
+        connection.execute(
             "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode, retained, released_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 row.id,

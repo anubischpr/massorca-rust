@@ -115,7 +115,7 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
 }
 
 /// A connected shell whose lists hold these packages, with the page of the catalogue's first one open.
-fn open_listed(
+pub(super) fn open_listed(
     cx: &mut TestAppContext,
     installed: Vec<ExtensionItem>,
     catalogue: Vec<ExtensionItem>,

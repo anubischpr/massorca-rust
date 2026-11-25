@@ -269,6 +269,15 @@ Linux only. No automated run opens a visible window.
   (`shell/marketplace/log_view.rs`, `model/marketplace/run_log.rs`). Each run is one line: its time in UTC to the minute
   (the desktop keeps no time zone), its action, its versions and its outcome, in the service's order. A run that wrote
   output shows it under Show details; Copy details copies the whole log. No runs says "No runs recorded yet."
+- Hosted services (SKL-35, decision 0097): the Services category draws a Hosted services section
+  (`shell/marketplace/services.rs`) below its packages. It reads `marketplace.service.status` of the picked host
+  (`service/hosted_services.rs`, on a paired host's own connection), numbered in `HostedServicesView` so a late answer
+  is dropped. Each row shows Connected, Not connected or Unknown, the account or base URL when the host shows them, and
+  Connect, Replace token or Disconnect. Linear and Jira are status-only, GitLab without `glab` cannot connect, and a
+  refused GitLab disconnect shows the service's sentence under its row. The connect dialog takes the token in a masked
+  field, a base URL for GitLab, Azure DevOps and Gitea, and an email for Bitbucket; the token field is cleared the
+  moment the token is sent. Services live in the Marketplace only: Settings has no hosted-service rows and no entry that
+  only opens this section.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

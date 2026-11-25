@@ -11,15 +11,18 @@ mod bridge;
 mod connection;
 mod extensions;
 mod git;
+mod hosted_services;
 mod hosts;
 mod launch;
 mod quit;
 mod refusal;
 mod secrets;
 mod skills;
+mod team_room;
 mod teams;
 mod terminals;
 mod update;
+mod workspace_create;
 
 #[cfg(test)]
 mod git_tests;
@@ -44,6 +47,8 @@ pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{
     ExtensionHistory, ExtensionsRead, HostListing, HostLists, HostMarketplaceRead, RollbackAnswer,
 };
+#[cfg(test)]
+pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
@@ -52,6 +57,9 @@ pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
 pub use skills::{SkillsListing, SkillsRead};
+#[cfg(test)]
+pub(crate) use team_room::RoomCommand;
+pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
@@ -62,6 +70,7 @@ pub use update::{
     GitUpdate, HostEntry, HostLink, SecretsState, SecretsUpdate, StoreState, StoreUpdate,
     WorkspaceGit,
 };
+pub use workspace_create::create_for_start;
 
 #[cfg(test)]
 pub(crate) use update::fixtures;

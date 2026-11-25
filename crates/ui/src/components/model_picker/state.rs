@@ -78,6 +78,7 @@ pub struct PickerState {
     expanded: bool,
     highlight: usize,
     no_agents_installed: bool,
+    fast_reason: Option<SharedString>,
 }
 
 impl PickerState {
@@ -99,7 +100,17 @@ impl PickerState {
             expanded: false,
             highlight: 0,
             no_agents_installed: false,
+            fast_reason: None,
         }
+    }
+
+    /// Why Fast is off on every model while the service does not offer it; the Fast segment names it on hover.
+    pub fn fast_reason(&self) -> Option<&SharedString> {
+        self.fast_reason.as_ref()
+    }
+
+    pub fn set_fast_reason(&mut self, reason: Option<SharedString>) {
+        self.fast_reason = reason;
     }
 
     /// Starred models, in the order the user starred them.
@@ -472,6 +483,20 @@ mod tests {
             Some(3),
             "Max is offered, so it stays"
         );
+    }
+
+    #[test]
+    fn a_fast_reason_is_kept_until_it_is_cleared_and_standard_stays_chosen() {
+        let mut state = sample();
+        assert_eq!(state.fast_reason(), None);
+        state.set_fast_reason(Some("Fast mode needs a newer service.".into()));
+        assert_eq!(
+            state.fast_reason().map(|reason| reason.as_ref()),
+            Some("Fast mode needs a newer service.")
+        );
+        assert!(!state.choice().fast, "Standard stays chosen");
+        state.set_fast_reason(None);
+        assert_eq!(state.fast_reason(), None);
     }
 
     #[test]
