@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use massorca_desktop::service::{ServiceBridge, StoreState, StoreUpdate, connect_options};
@@ -65,7 +65,7 @@ fn fake_user_home(root: &Path) -> PathBuf {
 
 /// The service child, given `user` as its only home.
 fn spawn_service(profile_home: &Path, user: &Path) -> Child {
-    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    let mut command = massorca_process::command(std::env::current_exe().expect("the test binary"));
     command
         .args(["--exact", "serve_until_the_parent_lets_go", "--ignored"])
         .env(SERVE_HOME, profile_home)
