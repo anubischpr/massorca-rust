@@ -310,3 +310,30 @@ fn an_expired_code_fails_the_sign_in_and_try_again_restarts_it(cx: &mut TestAppC
         "Try again starts the sign-in from the browser step"
     );
 }
+
+#[gpui::test]
+fn discover_groups_its_cards_under_a_heading_per_category_agents_first(cx: &mut TestAppContext) {
+    let (_shell, cx) = open_shell(cx);
+    click(cx, "rail-marketplace");
+    draw(cx);
+    let top = |cx: &mut VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector).map(|bounds| bounds.origin.y)
+    };
+    let agents = top(cx, "marketplace-group-Agents").expect("the agents have a section");
+    let extensions =
+        top(cx, "marketplace-group-Extensions").expect("the extensions have a section");
+    assert!(agents < extensions, "agents come first");
+    for card in CARDS {
+        assert!(shown(cx, card), "{card} is under a heading");
+    }
+}
+
+#[gpui::test]
+fn only_discover_has_category_sections(cx: &mut TestAppContext) {
+    let (_shell, cx) = open_shell(cx);
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    draw(cx);
+    assert!(cx.debug_bounds("marketplace-group-Agents").is_none());
+    assert!(cx.debug_bounds("marketplace-group-Extensions").is_none());
+}
