@@ -474,6 +474,7 @@ mod tests {
             request_id: None,
             created_at: now_ms(),
             comment: None,
+            name_generated: false,
         };
         store.insert_workspace(&workspace).unwrap();
         let row = AgentSessionRow {
