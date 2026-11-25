@@ -1,4 +1,4 @@
-//! `marketplace.service.*` (capability `services/1`, SKL-35, decision 0094). GitLab signs `glab` in; Bitbucket, Azure
+//! `marketplace.service.*` (capability `services/1`, SKL-35, decision 0097). GitLab signs `glab` in; Bitbucket, Azure
 //! DevOps and Gitea keep a token, a base URL and an email in the vault, write-only; Linear and Jira are status-only rows.
 //! No reply, error or log carries a token.
 

@@ -1,4 +1,4 @@
-//! Hosted-service connections (decision 0094): a token, and optionally a base URL and an email, per service. They are
+//! Hosted-service connections (decision 0097): a token, and optionally a base URL and an email, per service. They are
 //! sealed rows of the `secrets` table under the scope `service:<id>`, which no `secret.*` scope can name. The token
 //! is write-only, and no agent receives any of them.
 

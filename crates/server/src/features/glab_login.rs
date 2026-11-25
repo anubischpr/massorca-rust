@@ -1,4 +1,4 @@
-//! The GitLab CLI as a service connection (decision 0094): `glab auth status` for the state and `glab auth login
+//! The GitLab CLI as a service connection (decision 0097): `glab auth status` for the state and `glab auth login
 //! --stdin` for a token, which is written to its stdin and never to an argument, the environment or a log.
 
 use std::io;

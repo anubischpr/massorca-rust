@@ -1,4 +1,4 @@
-//! Hosted-service connections from the Marketplace (capability `services/1`, SKL-35, decision 0094): GitLab, Bitbucket,
+//! Hosted-service connections from the Marketplace (capability `services/1`, SKL-35, decision 0097): GitLab, Bitbucket,
 //! Azure DevOps and Gitea connect and disconnect; Linear and Jira are status-only rows. A token travels inward once,
 //! in `connect`, and no result carries it.
 
