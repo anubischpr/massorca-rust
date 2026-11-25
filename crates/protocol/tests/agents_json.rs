@@ -53,6 +53,7 @@ fn live_session() -> AgentSession {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        resume: None,
     }
 }
 
@@ -142,6 +143,7 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        resume: None,
         ..live_session()
     };
     assert_wire(

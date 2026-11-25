@@ -1096,7 +1096,7 @@ pub(crate) fn not_regular(meta: &fs::Metadata) -> Result<(), String> {
 }
 
 /// A symbolic link, or on Windows any reparse point (junctions included).
-fn is_link(meta: &fs::Metadata) -> bool {
+pub(crate) fn is_link(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

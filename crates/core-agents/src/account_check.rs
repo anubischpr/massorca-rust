@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use massorca_protocol::methods::agents::AccountState;
 
 use crate::kind::{CheckDecl, KindDecl};
+use crate::launch::RUN_IDENTITY_ENV;
 use crate::process_tree;
+use crate::provided_env::same_name;
 
 /// How long an account check may run before it is stopped; a check that does not finish has state `unknown`.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -191,21 +193,27 @@ pub(crate) struct RunOutput {
 const OUTPUT_GRACE: Duration = Duration::from_secs(1);
 
 /// The variables the account commands (check, sign-in, sign-out) remove from their environment: the credentials'
-/// `strip_env`, then the accounts' `strip_env`, each name once. Agent runs keep their environment (decision 0059, amended
+/// `strip_env`, the accounts' `strip_env`, the kind's `strip_inherited_env`, then the run identity the service may have
+/// inherited (decision 0160), each name once. Agent runs keep the rest of their environment (decision 0059, amended
 /// 2026-11-22).
 pub(crate) fn account_strip_names(decl: &KindDecl) -> Vec<String> {
     let credentials = decl
         .credentials
         .iter()
-        .flat_map(|credentials| credentials.strip_env.iter());
+        .flat_map(|credentials| credentials.strip_env.iter().map(String::as_str));
     let accounts = decl
         .accounts
         .iter()
-        .flat_map(|accounts| accounts.strip_env.iter());
+        .flat_map(|accounts| accounts.strip_env.iter().map(String::as_str));
+    let inherited = decl.strip_inherited_env.iter().map(String::as_str);
     let mut names: Vec<String> = Vec::new();
-    for name in credentials.chain(accounts) {
-        if !names.contains(name) {
-            names.push(name.clone());
+    for name in credentials
+        .chain(accounts)
+        .chain(inherited)
+        .chain(RUN_IDENTITY_ENV)
+    {
+        if !names.iter().any(|listed| same_name(listed, name)) {
+            names.push(name.to_owned());
         }
     }
     names
@@ -478,10 +486,11 @@ mod tests {
     }
 
     #[test]
-    fn the_three_account_commands_apply_both_strip_lists() {
+    fn the_three_account_commands_apply_every_strip_list_and_the_run_identity() {
         let decl = KindDecl::from_json(
             r#"{
                 "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                "strip_inherited_env": ["PARENT_STAMP", "ACCOUNT_ONE"],
                 "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"], "strip_env": ["CRED_ONE"] },
                 "accounts": {
                     "login": ["login"], "check": { "args": ["whoami"] }, "logout": ["logout"],
@@ -491,7 +500,18 @@ mod tests {
         )
         .expect("parses");
         let names = account_strip_names(&decl);
-        assert_eq!(names, ["CRED_ONE", "ACCOUNT_ONE", "ACCOUNT_TWO"]);
+        assert_eq!(
+            names,
+            [
+                "CRED_ONE",
+                "ACCOUNT_ONE",
+                "ACCOUNT_TWO",
+                "PARENT_STAMP",
+                "MASSORCA_AGENT_SESSION",
+                "MASSORCA_AGENT_TOKEN",
+                "MASSORCA_AGENT_KIND"
+            ]
+        );
         let home = Path::new("account-home");
 
         // The check and the sign-out are plain processes: both names are removed from their environment.
