@@ -804,4 +804,356 @@ mod tests {
         }
     }
 
+    #[test]
+    fn lines_list_each_valid_model_once_with_its_label_or_its_id() {
+        let stdout = "id\tlabel\n\
+            gemini-4-argon-high\tGemini 4 Argon (High)\n\
+            claude-x\t\n\
+            bad id\tSpaces are not a value\n\
+            -flag\tA flag\n\
+            no tab here\n\
+            gemini-4-argon-high\tDuplicate\n";
+        assert_eq!(
+            parse_listing(ListingFormat::Lines, stdout),
+            vec![
+                Listed {
+                    id: "gemini-4-argon-high".to_owned(),
+                    label: "Gemini 4 Argon (High)".to_owned(),
+                    efforts: None,
+                },
+                Listed {
+                    id: "claude-x".to_owned(),
+                    label: "claude-x".to_owned(),
+                    efforts: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_control_lists_the_picker_rows_with_the_efforts_they_take() {
+        let stdout = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\"}\n",
+            "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
+            "\"request_id\":\"massorca-model-discovery\",\"response\":{\"models\":[",
+            "{\"value\":\"default\",\"displayName\":\"Default\"},",
+            "{\"value\":\"opus\",\"displayName\":\"Opus\",\"supportsEffort\":true,",
+            "\"supportedEffortLevels\":[\"low\",\"high\",\"turbo bad\"]},",
+            "{\"value\":\"haiku\",\"displayName\":\"Haiku\",\"supportsEffort\":false},",
+            "{\"value\":\"cc-update-required-1\",\"displayName\":\"Fable 5.1 (disabled)\",\"disabled\":true},",
+            "{\"value\":\"opus[1m]\",\"displayName\":\"Opus (1M context)\"}",
+            "]}}}\n"
+        );
+        assert_eq!(
+            parse_listing(ListingFormat::ClaudeControl, stdout),
+            vec![
+                Listed {
+                    id: "opus".to_owned(),
+                    label: "Opus".to_owned(),
+                    efforts: Some(vec!["low".to_owned(), "high".to_owned()]),
+                },
+                Listed {
+                    id: "haiku".to_owned(),
+                    label: "Haiku".to_owned(),
+                    efforts: Some(Vec::new()),
+                },
+            ],
+            "the default row, the disabled row and the bracketed id (not a valid option value) are skipped"
+        );
+    }
+
+    #[test]
+    fn a_claude_error_answer_or_a_line_that_is_not_json_lists_nothing() {
+        let stdout = "{\"type\":\"control_response\",\"response\":{\"subtype\":\"error\"}}\n\
+            control_response but not json\n";
+        assert!(parse_listing(ListingFormat::ClaudeControl, stdout).is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_the_declared_rows_and_adds_only_the_models_the_declaration_does_not_name() {
+        let declared = vec![
+            choice("opus", "Opus", false, None),
+            choice("sonnet", "Sonnet", true, Some(&["low"])),
+            choice("haiku", "Haiku", false, Some(&[])),
+        ];
+        let listed = vec![
+            Listed {
+                id: "sonnet".to_owned(),
+                label: "Sonnet (listed)".to_owned(),
+                efforts: Some(vec!["high".to_owned()]),
+            },
+            Listed {
+                id: "opus-new".to_owned(),
+                label: "Opus New".to_owned(),
+                efforts: None,
+            },
+        ];
+        let models = merge(&declared, &listed);
+        let shape: Vec<(&str, ModelSource, bool)> = models
+            .iter()
+            .map(|model| (model.id.as_str(), model.source, model.default))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("opus", ModelSource::Declared, false),
+                ("sonnet", ModelSource::Declared, true),
+                ("haiku", ModelSource::Declared, false),
+                ("opus-new", ModelSource::Discovered, false),
+            ]
+        );
+        assert_eq!(models[1].label, "Sonnet");
+        assert_eq!(models[1].efforts, Some(vec!["low".to_owned()]));
+    }
+
+    #[test]
+    fn a_listing_is_served_until_it_is_stale_and_no_account_answers_for_another() {
+        let cache = ModelCache::default();
+        cache.record_listing(key("claude", Some("a")), 1_000, listed("opus-a"));
+        let hit = cache
+            .fresh(&key("claude", Some("a")), 1_000 + LISTING_FRESH_MS - 1)
+            .expect("a listing inside its window is served");
+        assert_eq!(
+            hit.listed.map(|listing| listing.models[0].id.clone()),
+            Some("opus-a".to_owned())
+        );
+        assert!(
+            cache
+                .fresh(&key("claude", Some("a")), 1_000 + LISTING_FRESH_MS)
+                .is_none(),
+            "at the end of its window the vendor CLI is asked again"
+        );
+        assert!(cache.fresh(&key("claude", Some("b")), 1_001).is_none());
+        assert!(cache.fresh(&key("claude", None), 1_001).is_none());
+    }
+
+    #[test]
+    fn a_refresh_replaces_the_listing_and_a_failure_keeps_the_last_answer() {
+        let cache = ModelCache::default();
+        let usual = key("claude", None);
+        cache.record_listing(usual.clone(), 0, listed("old"));
+        cache.record_failure(
+            usual.clone(),
+            5_000,
+            failure(ModelListingFailure::TimedOut, "late"),
+        );
+        let entry = cache
+            .fresh(&usual, 5_001)
+            .expect("a fresh failure is served");
+        assert_eq!(
+            entry.failed.map(|failed| failed.error.code),
+            Some(ModelListingFailure::TimedOut)
+        );
+        assert_eq!(
+            entry.listed.map(|listing| listing.models[0].id.clone()),
+            Some("old".to_owned()),
+            "the earlier answer rides along with the failure"
+        );
+        assert!(
+            cache.fresh(&usual, 5_000 + FAILURE_FRESH_MS).is_none(),
+            "a stale failure is asked again"
+        );
+        cache.record_listing(usual.clone(), 40_000, listed("new"));
+        let entry = cache.fresh(&usual, 40_001).expect("a new listing is fresh");
+        assert!(entry.failed.is_none(), "a listing clears the failure");
+        assert_eq!(
+            entry.listed.map(|listing| listing.models[0].id.clone()),
+            Some("new".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_failed_listing_with_no_answer_is_held_for_the_short_window_only() {
+        let cache = ModelCache::default();
+        let k = key("antigravity", None);
+        cache.record_failure(
+            k.clone(),
+            0,
+            failure(ModelListingFailure::CliMissing, "gone"),
+        );
+        assert!(cache.fresh(&k, FAILURE_FRESH_MS - 1).is_some());
+        assert!(cache.fresh(&k, FAILURE_FRESH_MS).is_none());
+        assert!(cache.get(&k).is_some(), "get reads an entry however old");
+    }
+
+    #[test]
+    fn the_view_carries_the_fetch_time_and_the_latest_failure_beside_the_models() {
+        let declared = [choice("sonnet", "Sonnet", true, None)];
+        let nothing = view(&declared, None);
+        assert_eq!(nothing.models.len(), 1);
+        assert_eq!((nothing.fetched_at_ms, nothing.error), (None, None));
+
+        let entry = Entry {
+            listed: Some(Fetched {
+                at_ms: 7,
+                models: listed("opus-x"),
+            }),
+            failed: Some(Failed {
+                at_ms: 9,
+                error: failure(ModelListingFailure::Failed, "exit 2"),
+            }),
+        };
+        let shown = view(&declared, Some(&entry));
+        assert_eq!(shown.fetched_at_ms, Some(7));
+        assert_eq!(
+            shown.error.map(|error| error.code),
+            Some(ModelListingFailure::Failed)
+        );
+        let ids: Vec<&str> = shown.models.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, ["sonnet", "opus-x"]);
+    }
+
+    #[test]
+    fn an_account_change_drops_its_own_answer_and_the_default_ones_and_no_other() {
+        let cache = ModelCache::default();
+        let alpha = key("claude", Some("alpha"));
+        let beta = key("claude", Some("beta"));
+        let usual = key("claude", None);
+        let other_kind = key("codex", Some("alpha"));
+        for listing_key in [&alpha, &beta, &usual, &other_kind] {
+            cache.record_listing(listing_key.clone(), 1_000, listed("opus"));
+        }
+
+        cache.invalidate_account("claude", "alpha");
+        assert!(
+            cache.get(&alpha).is_none(),
+            "signed in, imported or removed: its answer goes"
+        );
+        assert!(cache.get(&beta).is_some() && cache.get(&usual).is_some());
+
+        cache.invalidate_defaults("claude", Some("beta"), Some("gamma"));
+        assert!(
+            cache.get(&usual).is_none(),
+            "the no-account answer goes when the active account moves"
+        );
+        assert!(
+            cache.get(&beta).is_none(),
+            "the previous active account's answer goes"
+        );
+        assert!(
+            cache.get(&other_kind).is_some(),
+            "another kind keeps its answers"
+        );
+
+        cache.record_listing(beta.clone(), 2_000, listed("opus"));
+        cache.invalidate_kind("claude");
+        assert!(
+            cache.get(&beta).is_none(),
+            "a removed package takes every answer of its kind"
+        );
+        assert!(cache.get(&other_kind).is_some());
+    }
+
+    #[test]
+    fn a_listing_invalidated_while_it_runs_answers_its_callers_but_caches_nothing() {
+        let cache = ModelCache::default();
+        let alpha = key("claude", Some("alpha"));
+        let Claim::Lead(leader) = cache.claim(&alpha, 1_000, false) else {
+            panic!("the first call leads the listing");
+        };
+        cache.invalidate_account("claude", "alpha");
+        let answer = leader.finish(Ok(listed("opus")));
+        assert_eq!(
+            answer.listed.map(|listing| listing.models[0].id.clone()),
+            Some("opus".to_owned())
+        );
+        assert!(
+            cache.get(&alpha).is_none(),
+            "the answer of a superseded listing is not cached"
+        );
+        assert!(
+            matches!(cache.claim(&alpha, 1_001, false), Claim::Lead(_)),
+            "the next call lists again"
+        );
+    }
+
+    #[test]
+    fn concurrent_first_requests_share_the_listing_that_is_running() {
+        let cache = ModelCache::default();
+        let alpha = key("claude", Some("alpha"));
+        let Claim::Lead(leader) = cache.claim(&alpha, 1_000, false) else {
+            panic!("the first call leads the listing");
+        };
+        let (joined, joined_rx) = mpsc::channel();
+        let answer = thread::scope(|scope| {
+            let waiter = scope.spawn(|| {
+                let Claim::Waiting(running) = cache.claim(&alpha, 1_001, false) else {
+                    panic!("a call during the listing waits for it");
+                };
+                joined.send(()).expect("the test is listening");
+                running.wait()
+            });
+            joined_rx.recv().expect("the waiter joined");
+            leader.finish(Ok(listed("opus")));
+            waiter.join().expect("the waiter finished")
+        });
+        assert_eq!(
+            answer.listed.map(|listing| listing.models[0].id.clone()),
+            Some("opus".to_owned())
+        );
+        assert!(
+            matches!(cache.claim(&alpha, 1_002, false), Claim::Fresh(_)),
+            "the shared answer is cached for the next call"
+        );
+    }
+
+    #[test]
+    fn a_listing_its_leader_abandons_answers_its_waiters_with_a_failure() {
+        let cache = ModelCache::default();
+        let alpha = key("claude", Some("alpha"));
+        let Claim::Lead(leader) = cache.claim(&alpha, 1_000, false) else {
+            panic!("the first call leads the listing");
+        };
+        let (joined, joined_rx) = mpsc::channel();
+        let answer = thread::scope(|scope| {
+            let waiter = scope.spawn(|| {
+                let Claim::Waiting(running) = cache.claim(&alpha, 1_001, false) else {
+                    panic!("a call during the listing waits for it");
+                };
+                joined.send(()).expect("the test is listening");
+                running.wait()
+            });
+            joined_rx.recv().expect("the waiter joined");
+            drop(leader);
+            waiter.join().expect("the waiter finished")
+        });
+        assert_eq!(
+            answer.failed.map(|failed| failed.error.code),
+            Some(ModelListingFailure::Failed)
+        );
+    }
+
+    #[test]
+    fn a_refresh_lists_again_even_while_the_answer_is_fresh() {
+        let cache = ModelCache::default();
+        let alpha = key("claude", Some("alpha"));
+        cache.record_listing(alpha.clone(), 1_000, listed("opus"));
+        assert!(matches!(cache.claim(&alpha, 1_001, false), Claim::Fresh(_)));
+        let Claim::Lead(leader) = cache.claim(&alpha, 1_001, true) else {
+            panic!("a refresh runs the listing again");
+        };
+        leader.finish(Ok(listed("sonnet")));
+        assert_eq!(
+            cache
+                .get(&alpha)
+                .and_then(|entry| entry.listed)
+                .map(|listing| listing.models[0].id.clone()),
+            Some("sonnet".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_listing_time_limit_is_read_in_milliseconds_and_defaults_otherwise() {
+        assert_eq!(
+            listing_timeout_from(Some("500")),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            listing_timeout_from(Some(" 250 ")),
+            Duration::from_millis(250)
+        );
+        assert_eq!(listing_timeout_from(Some("0")), LISTING_TIMEOUT);
+        assert_eq!(listing_timeout_from(Some("soon")), LISTING_TIMEOUT);
+        assert_eq!(listing_timeout_from(None), LISTING_TIMEOUT);
+    }
 }
