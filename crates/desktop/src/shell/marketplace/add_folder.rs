@@ -67,7 +67,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Reviews the folder the field holds with the catalogue install's review; nothing installs until Allow and install.
+    /// Reviews the folder the field holds with the catalogue install's review; nothing installs until its button is pressed.
     pub(super) fn submit_add_extension(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.marketplace_add.as_ref() else {
             return;
