@@ -22,6 +22,7 @@ use tokio::sync::watch;
 
 use super::Shell;
 use crate::model::regions::Region;
+use crate::model::session_ended::is_agent_run_terminal;
 use crate::model::terminals::new_terminal_params;
 use crate::model::work_panel::{
     BROWSER_LATER, CloseStep, MARKDOWN_LATER, MOBILE_LATER, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS,
@@ -232,11 +233,14 @@ impl Shell {
             return;
         };
         let shell = cx.entity().downgrade();
+        // An agent run's exit is answered by its session view, so its pane offers no Restart.
+        let restart = !is_agent_run_terminal(&self.store.read(cx).state().agents, terminal);
         let surface = new_surface(
             shell,
             service.clone(),
             workspace.to_owned(),
             terminal.to_owned(),
+            restart,
             cx,
         );
         let (pane, id) = (surface.clone(), terminal.to_owned());
@@ -411,19 +415,20 @@ pub(super) fn attach_failed_banner(
         .into_any_element()
 }
 
-/// A pane for `terminal`: keys and resizes go to the service, and the Restart of its exit row
-/// creates a new terminal in the same workspace.
+/// A pane for `terminal`: keys and resizes go to the service. With `restart`, the Restart of its exit row creates
+/// a new terminal in the same workspace; an agent run has none, since its session view answers its exit.
 fn new_surface(
     shell: WeakEntity<Shell>,
     service: ServiceHandle,
     workspace: String,
     terminal: String,
+    restart: bool,
     cx: &mut App,
 ) -> Entity<TerminalSurface> {
     cx.new(|cx| {
         let (typing, typed_into) = (service.clone(), terminal.clone());
         let (sizing, sized) = (service, terminal);
-        TerminalSurface::new(NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS, cx)
+        let surface = TerminalSurface::new(NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS, cx)
             .on_input(move |bytes, _, _| typing.send_terminal_input(&typed_into, bytes.to_vec()))
             .on_resize(move |cols, rows, _, cx| {
                 let (service, terminal) = (sizing.clone(), sized.clone());
@@ -431,12 +436,15 @@ fn new_surface(
                     let _ = service.resize_terminal(&terminal, cols, rows).await;
                 })
                 .detach();
-            })
-            .on_restart(move |window, cx| {
-                let _ = shell.update(cx, |shell, cx| {
-                    shell.create_terminal(workspace.clone(), window, cx);
-                });
-            })
+            });
+        if !restart {
+            return surface;
+        }
+        surface.on_restart(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.create_terminal(workspace.clone(), window, cx);
+            });
+        })
     })
 }
 

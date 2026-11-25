@@ -134,6 +134,15 @@ pub fn start_params(
     }
 }
 
+/// The `agent.start` call that starts a session again in `workspace` with `kind`: no first prompt, and no saved
+/// conversation carried over from the session it replaces.
+pub fn start_again_params(workspace: &str, kind: &str) -> AgentStartParams {
+    AgentStartParams {
+        prompt: None,
+        ..start_params(Some(workspace), kind, "", None)
+    }
+}
+
 /// The page for `workspace_id`, or `None` when the store does not hold that workspace.
 pub fn workspace_start(state: &StoreState, workspace_id: &str) -> Option<WorkspaceStart> {
     let workspace = state
