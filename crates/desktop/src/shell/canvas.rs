@@ -51,6 +51,8 @@ pub(super) struct PageFrames<'a> {
     pub pairing: PairingFrame,
     /// The open session's view, while the Canvas shows a session.
     pub session: Option<SessionFrame>,
+    /// The Conference room, while the Canvas shows one.
+    pub room: Option<teams::RoomFrame>,
 }
 
 pub(super) fn canvas(
@@ -180,12 +182,10 @@ fn conversation(
             Some(team) => teams::files_page(team, shell, window, cx),
             None => placeholder("Files", "This team is gone.", theme).into_any_element(),
         },
-        Canvas::Team(TeamPage::Conference(_)) => placeholder(
-            "Conference room",
-            "The Conference room needs live agents and sessions, which are not built yet.",
-            theme,
-        )
-        .into_any_element(),
+        Canvas::Team(TeamPage::Conference(_)) => match pages.room {
+            Some(frame) => teams::conference_page(frame, window, cx),
+            None => placeholder("Conference room", "This team is gone.", theme).into_any_element(),
+        },
         Canvas::Session(_) => match pages.session {
             Some(frame) => session_view::session_page(frame, cx),
             None => placeholder(
