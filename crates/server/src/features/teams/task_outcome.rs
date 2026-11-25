@@ -268,6 +268,7 @@ mod tests {
             pending_permission_mode: None,
             retained: false,
             released: false,
+            resume: None,
         }))
     }
 
