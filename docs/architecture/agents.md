@@ -216,6 +216,7 @@ directory that does not exist has no kinds.
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
 
 ## Wire
 
@@ -422,7 +423,7 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_found` when the
 session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
-workspace.
+worktree; a folder workspace takes several writers (decision 0169).
 
 ### Resume state (decision 0160)
 
@@ -586,9 +587,9 @@ folder workspace is forgotten and its files stay. A refusal or failure after the
   parent's uncommitted changes were not carried over.
 - Folder children (decision 0161): a writing child of a plain folder workspace runs in the parent's folder, with no
   copy, and its `note` and `notes` say "This workspace has no Git, so the child works in this folder." The
-  sessions under the same delegation root count as one writer there: `agent.workspace_busy` does not refuse a writing
-  start or resume of one of them because another writes in the folder, while any other writing start is refused as
-  before. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
+  folder takes several writers (decision 0169), so no writing start or resume there is refused because another session
+  writes in it. `agent.workspace_busy` remains for a worktree workspace (decision 0072), where a second writing start
+  is refused. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
 - The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
   workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
   `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
