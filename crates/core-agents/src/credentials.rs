@@ -439,8 +439,18 @@ pub(crate) fn update_account_files_locked(
         .as_ref()
         .map(|credentials| credentials.files.clone())
         .unwrap_or_default();
+    // The state file is the CLI's own and keeps its data in the existing home; it is repaired before the next check and
+    // launch (decision 0099), never replaced by the one an import built.
+    let state_file = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| credentials.state.as_ref())
+        .map(|state| state.file.as_str());
     let mut contents = Vec::new();
     for name in &names {
+        if Some(name.as_str()) == state_file {
+            continue;
+        }
         let path = source.join(name);
         if matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == io::ErrorKind::NotFound)
         {
@@ -2289,6 +2299,32 @@ mod tests {
         assert_eq!(entries(&home), ["extra.json", "projects", "token.json"]);
         assert!(!new_home.exists(), "the new account's home is deleted");
         assert_eq!(entries(home.parent().unwrap()), [ACCOUNT]);
+    }
+
+    #[test]
+    fn an_update_keeps_the_existing_state_file_and_never_replaces_it() {
+        let fixture = with_state(false);
+        let profile = fixture.profile.path();
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        // The CLI wrote its own data into the existing account's state file.
+        fs::write(
+            home.join("state.json"),
+            br#"{"onboarded":true,"projects":{"x":1}}"#,
+        )
+        .unwrap();
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        fs::write(new_home.join("token.json"), b"new").unwrap();
+        fs::write(new_home.join("state.json"), br#"{"onboarded":true}"#).unwrap();
+
+        update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+            .unwrap();
+
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"new");
+        assert_eq!(
+            fs::read(home.join("state.json")).unwrap(),
+            br#"{"onboarded":true,"projects":{"x":1}}"#
+        );
     }
 
     #[test]
