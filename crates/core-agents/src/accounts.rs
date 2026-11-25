@@ -22,7 +22,7 @@ use crate::account_check::{
     MAX_TEXT_CHARS, Verdict, account_strip_names, normalized_identity, parse_state, run_program,
     settle, state_name, unknown, verdict,
 };
-use crate::credentials;
+use crate::credentials::{self, ImportFrom};
 use crate::kind::{KindDecl, valid_id};
 use crate::paths;
 use crate::sessions::{AgentError, Agents, Change};
@@ -176,37 +176,42 @@ impl Agents {
     /// Imports the kind's declared files from `from` into a new account (decision 0059), then decides it with its check. The
     /// account stays undecided until the check keeps it, so a refused import never counts as the kind's history. The result
     /// is `imported`; `failed` when the check reports the login is not signed in (the new account is then deleted, without a
-    /// sign-out: the login is the person's); or `not_found` when none of the declared files is in `from`.
+    /// sign-out: the login is the person's); or `not_found` when a required file is missing, with a reason naming each one and
+    /// where it was looked for. Without `from`, each declared file is read from where the kind's CLI keeps it (decision
+    /// 0097).
     pub fn accounts_import(
         &self,
         kind: &str,
-        from: &str,
+        from: Option<&str>,
         label: Option<String>,
     ) -> Result<AccountsImported, AgentError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
         valid_label(&label)?;
         self.require_enabled_kind(kind)?;
-        let (account, _, mark) =
-            match self.import_new_account(kind, Path::new(from), &label, ORIGIN_IMPORT) {
-                Ok(added) => added,
-                Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
-                    return Err(error);
-                }
-                Err(error) if all_missing(&error) => {
-                    return Ok(AccountsImported {
-                        result: ImportResult::NotFound,
-                        account: None,
-                        reason: Some("none of the declared files is in the source".to_owned()),
-                    });
-                }
-                Err(error) => {
-                    return Ok(AccountsImported {
-                        result: ImportResult::Failed,
-                        account: None,
-                        reason: Some(error.message),
-                    });
-                }
-            };
+        let from = match from {
+            Some(folder) => ImportFrom::Folder(Path::new(folder)),
+            None => ImportFrom::Detected,
+        };
+        let (account, _, mark) = match self.import_new_account(kind, from, &label, ORIGIN_IMPORT) {
+            Ok(added) => added,
+            Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
+                return Err(error);
+            }
+            Err(error) if all_missing(&error) => {
+                return Ok(AccountsImported {
+                    result: ImportResult::NotFound,
+                    account: None,
+                    reason: Some(error.message),
+                });
+            }
+            Err(error) => {
+                return Ok(AccountsImported {
+                    result: ImportResult::Failed,
+                    account: None,
+                    reason: Some(error.message),
+                });
+            }
+        };
         let verdict = self.check_imported(kind, &account);
         let files = credentials::account_files_present(
             self.profile_dir(),
@@ -804,8 +809,12 @@ impl Agents {
         if active.is_some() && !replace {
             return Err(already_has_home(kind));
         }
-        let (account, imported, mark) =
-            self.import_new_account(kind, Path::new(from), DEFAULT_LABEL, ORIGIN_IMPORT)?;
+        let (account, imported, mark) = self.import_new_account(
+            kind,
+            ImportFrom::Folder(Path::new(from)),
+            DEFAULT_LABEL,
+            ORIGIN_IMPORT,
+        )?;
         if let Some(old) = active
             && let Err(error) = self.accounts_remove(kind, &old)
         {
@@ -1036,7 +1045,7 @@ impl Agents {
     pub(crate) fn import_new_account(
         &self,
         kind: &str,
-        from: &Path,
+        from: ImportFrom<'_>,
         label: &str,
         origin: &str,
     ) -> Result<(String, CredentialsImported, DecisionMark), AgentError> {
@@ -1198,7 +1207,7 @@ impl Agents {
     }
 }
 
-/// Whether an import failed only because none of the declared files is in the source: every reason is `missing`.
+/// Whether an import failed only because required files are missing: every reason is `missing`.
 fn all_missing(error: &AgentError) -> bool {
     error
         .data
@@ -1312,7 +1321,12 @@ mod tests {
         fs::write(source.path().join("token.json"), "{}").expect("write a token");
 
         let (account, _, _mark) = agents
-            .import_new_account("fake", source.path(), "work", ORIGIN_IMPORT)
+            .import_new_account(
+                "fake",
+                ImportFrom::Folder(source.path()),
+                "work",
+                ORIGIN_IMPORT,
+            )
             .expect("the import copies the declared file");
         assert!(
             !agents.store().kind_has_had_account("fake").unwrap(),
@@ -1384,7 +1398,7 @@ mod tests {
         let source = source_with_token();
 
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         let account = imported.account.expect("the import keeps its account");
         let events = account_events(&changes);
@@ -1411,7 +1425,7 @@ mod tests {
         let source = source_with_token();
 
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         assert_eq!(imported.result, ImportResult::Failed, "{imported:?}");
         assert!(
@@ -1452,7 +1466,7 @@ mod tests {
         declare_kind(profile.path(), "fake-agent", None);
         let source = source_with_token();
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         let account = imported.account.expect("the import keeps its account");
         let changes = collect_changes(&agents);

@@ -4,9 +4,10 @@
 //! is built in a temporary sibling directory and renamed into place, so a failed import leaves an existing home as it
 //! was and never leaves a half-made one. File contents are never logged or returned: names and sizes only.
 //!
-//! Every declared file is required. The declaration has no optional flag, so a declared name that is missing, a link,
-//! a directory or anything but a regular file fails the import with `agent.credentials_invalid`, naming each one and
-//! why; nothing is copied then.
+//! The files come from one folder the person names, or each from where the kind's CLI keeps it (decision 0097). A
+//! declared file listed in `credentials.optional` is skipped when it is missing; every other declared file is required.
+//! A missing required file, or any file that is a link, a directory or anything but a regular file, fails the import
+//! with `agent.credentials_invalid`, naming each one and why; nothing is copied then.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -25,6 +26,7 @@ use crate::kind::KindDecl;
 use crate::packages::KindPackages;
 use crate::paths;
 use crate::sessions::AgentError;
+use crate::sources;
 
 /// Largest credential file import copies.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -43,10 +45,27 @@ pub fn lock_homes() -> MutexGuard<'static, ()> {
 const STAGING: &str = "import";
 const REPLACED: &str = "old";
 
+/// Where an import reads the kind's declared files from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportFrom<'a> {
+    /// One absolute folder holding every declared file.
+    Folder(&'a Path),
+    /// Each file from where the kind's CLI keeps it, as this process resolves it (decision 0097).
+    Detected,
+}
+
+/// One declared file to import: where it is read from (`None` when no location is known) and whether it is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceFile {
+    name: String,
+    path: Option<PathBuf>,
+    required: bool,
+}
+
 /// Copies the kind's declared files from `from` into `<profile>/agents/homes/<kind>/`.
 ///
-/// Every declared file is read in full, at most [`MAX_FILE_BYTES`] each, before anything is written; then a new home
-/// is written and renamed into place. An existing home is replaced only with `replace`.
+/// Every declared file found is read in full, at most [`MAX_FILE_BYTES`] each, before anything is written; then a new
+/// home is written and renamed into place. An existing home is replaced only with `replace`.
 pub fn import(
     profile_dir: &Path,
     packages: &dyn KindPackages,
@@ -56,7 +75,8 @@ pub fn import(
 ) -> Result<CredentialsImported, AgentError> {
     let decl = declared(profile_dir, packages, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
-    import_at(profile_dir, &decl, &["homes"], &home, from, replace)
+    let files = source_files(&decl, ImportFrom::Folder(from))?;
+    import_at(profile_dir, &decl, &["homes"], &home, &files, replace)
 }
 
 /// Copies a new account's declared files into `<profile>/agents/accounts/<kind>/<account>` (decision 0059). An account
@@ -66,40 +86,28 @@ pub fn import_account(
     packages: &dyn KindPackages,
     kind: &str,
     account: &str,
-    from: &Path,
+    from: ImportFrom<'_>,
 ) -> Result<CredentialsImported, AgentError> {
     let decl = declared(profile_dir, packages, kind)?;
     let home = account_home_of(profile_dir, &decl.id, account)?;
+    let files = source_files(&decl, from)?;
     import_at(
         profile_dir,
         &decl,
         &["accounts", decl.id.as_str()],
         &home,
-        from,
+        &files,
         false,
     )
 }
 
-/// The shared import: the declared files of `decl`, read from `from`, written into a new `home` made in the directory
-/// `chain` names under `<profile>/agents`. Nothing but `home` is created or replaced.
-fn import_at(
-    profile_dir: &Path,
-    decl: &KindDecl,
-    chain: &[&str],
-    home: &Path,
-    from: &Path,
-    replace: bool,
-) -> Result<CredentialsImported, AgentError> {
-    let name = home
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(decl.id.as_str())
-        .to_owned();
-    let names = decl
+/// The declared files of `decl` and where each is read from. A kind that declares none refuses the import; a folder
+/// must be an absolute path to a directory.
+fn source_files(decl: &KindDecl, from: ImportFrom<'_>) -> Result<Vec<SourceFile>, AgentError> {
+    let credentials = decl
         .credentials
         .as_ref()
-        .map(|credentials| credentials.files.clone())
-        .filter(|files| !files.is_empty())
+        .filter(|credentials| !credentials.files.is_empty())
         .ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_CREDENTIALS_UNSUPPORTED,
@@ -109,31 +117,86 @@ fn import_at(
                 ),
             )
         })?;
-    if !from.is_absolute() {
-        return Err(invalid(format!(
-            "the source {} is not an absolute path",
-            from.display()
-        )));
+    match from {
+        ImportFrom::Folder(from) => {
+            if !from.is_absolute() {
+                return Err(invalid(format!(
+                    "the source {} is not an absolute path",
+                    from.display()
+                )));
+            }
+            if !from.is_dir() {
+                return Err(invalid(format!(
+                    "the source {} is not a directory",
+                    from.display()
+                )));
+            }
+            Ok(credentials
+                .files
+                .iter()
+                .map(|name| SourceFile {
+                    name: name.clone(),
+                    path: Some(from.join(name)),
+                    required: credentials.required(name),
+                })
+                .collect())
+        }
+        ImportFrom::Detected => Ok(sources::detect_here(credentials)
+            .into_iter()
+            .map(|file| SourceFile {
+                name: file.name,
+                path: file.path,
+                required: file.required,
+            })
+            .collect()),
     }
-    if !from.is_dir() {
-        return Err(invalid(format!(
-            "the source {} is not a directory",
-            from.display()
-        )));
-    }
+}
+
+/// The shared import: the declared `files`, written into a new `home` made in the directory `chain` names under
+/// `<profile>/agents`. A missing optional file is skipped. Nothing but `home` is created or replaced.
+fn import_at(
+    profile_dir: &Path,
+    decl: &KindDecl,
+    chain: &[&str],
+    home: &Path,
+    files: &[SourceFile],
+    replace: bool,
+) -> Result<CredentialsImported, AgentError> {
+    let name = home
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(decl.id.as_str())
+        .to_owned();
 
     let _gate = lock_homes();
     if home_state(home)? == HomeState::Directory && !replace {
         return Err(exists(&name));
     }
 
-    let mut contents = Vec::with_capacity(names.len());
+    let mut contents = Vec::with_capacity(files.len());
     let mut problems = Vec::new();
-    for name in &names {
-        match read_source(&from.join(name)) {
-            Ok(bytes) => contents.push((name.as_str(), bytes)),
-            Err(reason) => problems.push(json!({ "name": name, "reason": reason })),
+    for file in files {
+        let Some(path) = &file.path else {
+            if file.required {
+                problems.push(missing_entry(file));
+            }
+            continue;
+        };
+        match read_source(path) {
+            Ok(bytes) => contents.push((file.name.as_str(), bytes)),
+            // An optional file the import cannot use (missing, a link, too large...) is skipped; it is never read
+            // further. A required one refuses the import.
+            Err(reason) if !file.required => {
+                tracing::info!(kind = %decl.id, file = %file.name, reason, "skipped an optional credential file");
+            }
+            Err(reason) => problems.push(
+                json!({ "name": file.name, "reason": reason, "path": path.display().to_string() }),
+            ),
         }
+    }
+    if problems.is_empty() && contents.is_empty() {
+        // Every declared file is optional and none is there: there is nothing to import.
+        problems = files.iter().map(missing_entry).collect();
     }
     if !problems.is_empty() {
         return Err(refused_files(&decl.id, problems));
@@ -355,7 +418,7 @@ pub(crate) fn adopt_legacy_home(
     Ok(())
 }
 
-/// Whether every file the kind declares is present in the account's home as a regular file, never a link. The caller
+/// Whether every required file the kind declares is present in the account's home as a regular file, never a link. The caller
 /// holds [`lock_homes`] or accepts that a concurrent change may follow.
 pub(crate) fn account_files_present(
     profile_dir: &Path,
@@ -365,10 +428,17 @@ pub(crate) fn account_files_present(
 ) -> Result<bool, AgentError> {
     let decl = declared(profile_dir, packages, kind)?;
     let home = account_home_of(profile_dir, &decl.id, account)?;
-    let names = decl
+    let names: Vec<String> = decl
         .credentials
         .as_ref()
-        .map(|credentials| credentials.files.clone())
+        .map(|credentials| {
+            credentials
+                .files
+                .iter()
+                .filter(|name| credentials.required(name))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     if names.is_empty() || home_state(&home)? != HomeState::Directory {
         return Ok(false);
@@ -655,7 +725,7 @@ fn clear_leftovers(homes: &Path, kind: &str) {
 /// read from the open handle. The error is the reason given to the person, never anything of the content.
 fn read_source(path: &Path) -> Result<Vec<u8>, &'static str> {
     let before = match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err("missing"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING),
         Err(_) => return Err("unreadable"),
         Ok(meta) => meta,
     };
@@ -680,6 +750,35 @@ fn read_source(path: &Path) -> Result<Vec<u8>, &'static str> {
 }
 
 const TOO_LARGE: &str = "larger than 1 MiB";
+/// The reason of a file that is not there.
+pub(crate) const MISSING: &str = "missing";
+/// Where a file with no declared location was looked for.
+const NO_LOCATION: &str = "the kind declares no location for it; import from a folder";
+
+/// The refusal entry of a file that is not there: its name and where it was looked for.
+fn missing_entry(file: &SourceFile) -> Value {
+    match &file.path {
+        Some(path) => {
+            json!({ "name": file.name, "reason": MISSING, "path": path.display().to_string() })
+        }
+        None => json!({ "name": file.name, "reason": MISSING }),
+    }
+}
+
+/// Whether an import would accept the file at `path`, judged from its metadata alone, without opening it; the reason
+/// when it would not (`missing`, `a link`, `a directory`, `larger than 1 MiB`...).
+pub(crate) fn judge(path: &Path) -> Result<(), &'static str> {
+    let meta = match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING),
+        Err(_) => return Err("unreadable"),
+        Ok(meta) => meta,
+    };
+    not_regular(&meta)?;
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(TOO_LARGE);
+    }
+    Ok(())
+}
 
 /// Why an entry is not a regular file, if it is not.
 fn not_regular(meta: &fs::Metadata) -> Result<(), &'static str> {
@@ -879,22 +978,32 @@ fn invalid(message: String) -> AgentError {
     AgentError::new(codes::AGENT_CREDENTIALS_INVALID, message)
 }
 
-/// The declared files that cannot be imported, each with its reason; names only.
+/// The declared files that cannot be imported, each with its reason and where it was looked for. When every one is
+/// missing, the message names each missing file and where it was looked for, so the person knows what to sign in or copy.
 fn refused_files(kind: &str, problems: Vec<Value>) -> AgentError {
-    let listed = problems
-        .iter()
-        .map(|problem| {
-            format!(
-                "{} ({})",
-                problem["name"].as_str().unwrap_or_default(),
-                problem["reason"].as_str().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut error = invalid(format!(
-        "nothing was imported for agent kind {kind}; every declared file must be a regular file: {listed}"
-    ));
+    let text = |problem: &Value, key: &str| problem[key].as_str().unwrap_or_default().to_owned();
+    let all_missing = problems.iter().all(|problem| problem["reason"] == MISSING);
+    let message = if all_missing {
+        let listed = problems
+            .iter()
+            .map(|problem| match problem["path"].as_str() {
+                Some(path) => format!("{} (looked for at {path})", text(problem, "name")),
+                None => format!("{} ({NO_LOCATION})", text(problem, "name")),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("nothing was imported for agent kind {kind}; a required file is missing: {listed}")
+    } else {
+        let listed = problems
+            .iter()
+            .map(|problem| format!("{} ({})", text(problem, "name"), text(problem, "reason")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "nothing was imported for agent kind {kind}; every file imported must be a regular file: {listed}"
+        )
+    };
+    let mut error = invalid(message);
     error.data = Some(json!({ "files": problems }));
     error
 }
