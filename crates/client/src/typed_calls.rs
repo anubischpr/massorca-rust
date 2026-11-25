@@ -13,6 +13,7 @@ use massorca_protocol::methods::agents::{
     CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
     ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
+use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -277,6 +278,44 @@ impl Client {
             )?;
         }
         self.call(agents::START, params).await
+    }
+
+    /// `agent.chat.start`: starts an agent session whose run is a structured chat (decision 0101). Needs capability
+    /// `agent-chat/1`; a service that does not offer it is refused before anything is sent. A kind that cannot run as a
+    /// chat is refused with `agent.chat_unsupported`, and the caller may start it with [`Self::agent_start`] instead.
+    pub async fn agent_chat_start(
+        &self,
+        params: &AgentStartParams,
+    ) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_CHAT),
+            capabilities::AGENT_CHAT,
+            "a chat session",
+        )?;
+        let params = chat::AgentChatStartParams {
+            start: params.clone(),
+        };
+        self.call(chat::START, &params).await
+    }
+
+    /// `agent.chat.approval.answer`: answers a chat session's permission request; the result is the approval item after
+    /// the answer (decision 0101, D6).
+    pub async fn agent_chat_answer(
+        &self,
+        params: &chat::ChatApprovalAnswerParams,
+    ) -> Result<chat::ChatItem, ClientError> {
+        self.call(chat::APPROVAL_ANSWER, params).await
+    }
+
+    /// `agent.chat.interrupt`: ends a chat session's running turn and keeps the session (decision 0101, D8).
+    pub async fn agent_chat_interrupt(
+        &self,
+        session: &str,
+    ) -> Result<chat::ChatInterrupted, ClientError> {
+        let params = agents::AgentSessionRef {
+            session: session.to_owned(),
+        };
+        self.call(chat::INTERRUPT, &params).await
     }
 
     /// `agent.list`: sessions newest first, or only those of one workspace (a selector).
