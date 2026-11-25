@@ -69,6 +69,8 @@ pub(super) struct InstallReview {
     pub review: Option<ExtensionReview>,
     /// The person's tick for running the vendor installer the review lists.
     pub run_installer: bool,
+    /// Whether Show details is open; it starts closed.
+    pub details_open: bool,
     pub sending: bool,
     pub error: Option<String>,
 }
