@@ -476,15 +476,6 @@ fn a_linked_worktree_outside_the_workspaces_root_is_listed_with_its_lock() {
     assert!(outside.is_dir(), "listing never removes the worktree");
 }
 
-/// Git prints `prunable` in `worktree list --porcelain` from 2.31; older git leaves it off.
-fn git_reports_prunable(repo: &Path) -> bool {
-    let version = git(repo, &["--version"]);
-    let mut parts = version.trim().trim_start_matches("git version ").split('.');
-    let major: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
-    let minor: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
-    (major, minor) >= (2, 31)
-}
-
 #[test]
 fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
     let sandbox = Sandbox::new();
@@ -526,19 +517,17 @@ fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
     let shown = sandbox.json_ok("default", &["workspace", "show", "usb"]);
     assert_eq!(shown["locked"], "on a usb disk");
 
-    if git_reports_prunable(&repo) {
-        let gone_row = listed["workspaces"]
-            .as_array()
-            .expect("workspaces")
-            .iter()
-            .find(|row| row["name"] == "gone")
-            .expect("the gone row");
-        assert!(gone_row["prunable"].is_string());
-        sandbox
-            .run("default", &["workspace", "list", "--project", "repo"])
-            .success()
-            .stdout(contains("prunable: "));
-    }
+    let gone_row = listed["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .iter()
+        .find(|row| row["name"] == "gone")
+        .expect("the gone row");
+    assert!(gone_row["prunable"].is_string());
+    sandbox
+        .run("default", &["workspace", "list", "--project", "repo"])
+        .success()
+        .stdout(contains("prunable: "));
 }
 
 #[test]
