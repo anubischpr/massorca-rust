@@ -209,6 +209,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
             name: None,
             title: Some("Check".to_owned()),
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: None,
             permission_mode: None,

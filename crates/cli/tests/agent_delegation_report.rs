@@ -1,11 +1,12 @@
-//! A delegated child reports back to its parent (decision 0170). A git project with a parent workspace `lead` runs the fake agent; the tests wait on observed states
+//! A delegated child reports back to its parent, and a parent waits for a writing child that shares its workspace
+//! (decision 0170). A git project with a parent workspace `lead` runs the fake agent; the tests wait on observed states
 //! (`agent status --until`) or on the agent's screen, never on sleeps.
 
 mod harness;
 
 use std::path::PathBuf;
 
-use harness::{Sandbox, eventually, git_repo};
+use harness::{Sandbox, eventually, git_repo, single_document, with_json};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -19,6 +20,7 @@ fn declare_fake(sandbox: &Sandbox) {
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
         "prompt": { "mode": "argv" },
         "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
+        "resume": ["--resume", "{ref}"],
         "status": {
             "mechanism": "env-command",
             "events": {
@@ -96,6 +98,13 @@ fn until(sandbox: &Sandbox, session: &str, state: &str) -> Value {
             UNTIL_SECS,
         ],
     )
+}
+
+fn error_of(sandbox: &Sandbox, args: &[&str]) -> Value {
+    let outcome = sandbox.run("default", &with_json(args)).failure();
+    let document = single_document(&outcome);
+    assert_eq!(document["ok"], false, "{document}");
+    document["error"].clone()
 }
 
 /// The terminal's screen lines.
@@ -186,5 +195,176 @@ fn a_failed_and_a_stopped_child_are_told_as_such() {
     let shown = wait_for_text(&sandbox, &terminal, &notice_line(&held));
     let text = shown.join("");
     assert!(text.contains("finished: stopped."), "{shown:?}");
+    stop(&sandbox, &parent);
+}
+
+#[test]
+fn a_parent_waits_while_its_writing_child_shares_its_worktree() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, terminal) = start_parent(&sandbox);
+    let delegated = delegate(
+        &sandbox,
+        &parent,
+        "hold then write:shared.txt",
+        &["--same-workspace", "--title", "Sharer"],
+    );
+    let child = id_of(&delegated);
+    let parent_record = sandbox.json_ok("default", &["agent", "status", &parent]);
+    assert_eq!(
+        delegated["workspace_id"], parent_record["workspace_id"],
+        "{delegated}"
+    );
+    assert_eq!(
+        delegated["note"],
+        "The child works in its parent's worktree, and the parent waits until it finishes."
+    );
+    until(&sandbox, &child, "working");
+
+    let queued = sandbox.json_ok("default", &["agent", "queue", "add", &parent, "next step"]);
+    assert_eq!(queued["reason"], "child_writing", "{queued}");
+    let refused = error_of(&sandbox, &["agent", "prompt", &parent, "now"]);
+    assert_eq!(refused["code"], "agent.busy", "{refused}");
+    assert_eq!(refused["data"]["child"], child.as_str(), "{refused}");
+    assert!(
+        !screen(&sandbox, &terminal)
+            .iter()
+            .any(|line| line.contains("next step")),
+        "the parent waits"
+    );
+
+    sandbox.json_ok(
+        "default",
+        &["agent", "prompt", &child, "release", "--force"],
+    );
+    until(&sandbox, &child, "done");
+    assert!(
+        lead.join("shared.txt").is_file(),
+        "the child wrote in the parent's worktree"
+    );
+    // Both what waited and the child's notice reach the parent once the child is done, in queue order.
+    let shown = wait_for_text(&sandbox, &terminal, &notice_line(&child));
+    let first = shown
+        .iter()
+        .position(|line| line.contains("working on next step"))
+        .expect("the waiting prompt was typed");
+    let notice = shown
+        .iter()
+        .position(|line| line.contains(&notice_line(&child)))
+        .expect("the notice was typed");
+    assert!(first < notice, "{shown:?}");
+    stop(&sandbox, &parent);
+}
+
+#[test]
+fn a_second_writing_child_in_the_parents_worktree_is_refused_while_the_first_works() {
+    let (sandbox, _lead) = git_sandbox();
+    let (parent, _terminal) = start_parent(&sandbox);
+    let first = id_of(&delegate(
+        &sandbox,
+        &parent,
+        "hold on",
+        &["--same-workspace", "--title", "First"],
+    ));
+    until(&sandbox, &first, "working");
+
+    let refused = error_of(
+        &sandbox,
+        &[
+            "agent",
+            "delegate",
+            "--from",
+            &parent,
+            "--prompt",
+            "look",
+            "--same-workspace",
+        ],
+    );
+    assert_eq!(refused["code"], "agent.workspace_busy", "{refused}");
+    assert_eq!(refused["data"]["session"], first.as_str(), "{refused}");
+    stop(&sandbox, &parent);
+}
+
+#[test]
+fn a_child_is_not_resumed_beside_a_sibling_writing_in_the_parents_worktree() {
+    let (sandbox, _lead) = git_sandbox();
+    let (parent, _terminal) = start_parent(&sandbox);
+    let first = id_of(&delegate(
+        &sandbox,
+        &parent,
+        "look",
+        &["--same-workspace", "--title", "First"],
+    ));
+    until(&sandbox, &first, "done");
+    stop(&sandbox, &first);
+    let second = id_of(&delegate(
+        &sandbox,
+        &parent,
+        "hold on",
+        &["--same-workspace", "--title", "Second"],
+    ));
+    until(&sandbox, &second, "working");
+
+    let refused = error_of(&sandbox, &["agent", "resume", &first]);
+    assert_eq!(refused["code"], "agent.workspace_busy", "{refused}");
+    assert_eq!(refused["data"]["session"], second.as_str(), "{refused}");
+    stop(&sandbox, &parent);
+}
+
+#[test]
+fn a_grandchild_is_not_picked_into_a_worktree_where_its_root_runs() {
+    let (sandbox, _lead) = git_sandbox();
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "agents.delegation_depth", "2"],
+    );
+    let (parent, _terminal) = start_parent(&sandbox);
+    let child = id_of(&delegate(
+        &sandbox,
+        &parent,
+        "look",
+        &["--same-workspace", "--title", "Child"],
+    ));
+    until(&sandbox, &child, "done");
+
+    // The root's turn is over, but only the child would wait for the grandchild: the root would write beside it.
+    let refused = error_of(
+        &sandbox,
+        &[
+            "agent",
+            "delegate",
+            "--from",
+            &child,
+            "--prompt",
+            "look",
+            "--same-workspace",
+        ],
+    );
+    assert_eq!(refused["code"], "agent.workspace_busy", "{refused}");
+    assert_eq!(refused["data"]["session"], parent.as_str(), "{refused}");
+    stop(&sandbox, &parent);
+}
+
+#[test]
+fn same_workspace_takes_no_workspace_name() {
+    let (sandbox, _lead) = git_sandbox();
+    let (parent, _terminal) = start_parent(&sandbox);
+    let outcome = sandbox
+        .run(
+            "default",
+            &[
+                "agent",
+                "delegate",
+                "--from",
+                &parent,
+                "--prompt",
+                "x",
+                "--same-workspace",
+                "--name",
+                "other",
+            ],
+        )
+        .failure();
+    let text = String::from_utf8_lossy(&outcome.get_output().stderr).into_owned();
+    assert!(text.contains("--same-workspace"), "{text}");
     stop(&sandbox, &parent);
 }

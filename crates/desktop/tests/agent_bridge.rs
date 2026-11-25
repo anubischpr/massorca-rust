@@ -274,6 +274,7 @@ async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_
             name: None,
             title: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
             permission_mode: None,

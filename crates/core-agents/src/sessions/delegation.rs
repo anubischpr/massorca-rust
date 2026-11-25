@@ -64,6 +64,9 @@ const MAX_QUOTED_RESULT: usize = 4 * 1024;
 const NOT_CARRIED_OVER: &str = "the child starts from the parent branch's last commit; uncommitted changes in the parent's worktree are not carried over";
 /// What the start result and the record of a writing child of a plain folder say (decision 0161).
 pub const FOLDER_CHILD_NOTE: &str = "This workspace has no Git, so the child works in this folder.";
+/// What the start result and the record of a writing child picked into its parent's worktree say (decision 0170).
+pub const SAME_WORKSPACE_NOTE: &str =
+    "The child works in its parent's worktree, and the parent waits until it finishes.";
 /// The setting that says how many levels deep agents may delegate (decision 0070).
 pub const DELEGATION_DEPTH_SETTING: &str = "agents.delegation_depth";
 /// The owner core settings are stored under.
@@ -111,9 +114,10 @@ pub fn delegation_depth_from_stored(stored: Option<&str>) -> i64 {
 
 impl Agents {
     /// Starts a child session of `params.parent` (0055). A writing child of a worktree workspace gets a new worktree
-    /// workspace in the parent's project, based on the parent workspace's branch; a writing child of a plain folder runs
-    /// in the parent's folder, where the parent's delegation tree counts as one writer (decision 0161); a read-only child
-    /// runs in the parent's workspace. A child goes no deeper than `agents.delegation_depth` (`agent.depth_exceeded` past
+    /// workspace in the parent's project, based on the parent workspace's branch, unless `same_workspace` picks the
+    /// parent's worktree (decision 0170); a writing child of a plain folder runs in the parent's folder (decision 0161).
+    /// Wherever members of one delegation tree share a workspace, the tree counts as one writer, and the parent waits
+    /// while such a child works (decision 0170). A read-only child runs in the parent's workspace. A child goes no deeper than `agents.delegation_depth` (`agent.depth_exceeded` past
     /// it; the default of 1 means a child cannot delegate), a writing child of a worktree with no branch is refused
     /// (`agent.delegate_needs_git`), and a token that does not match the parent's live run is refused
     /// (`agent.hook_refused`). A repeated `request_id` returns the first child.
@@ -187,8 +191,34 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&parent.workspace_id)?;
+        if params.same_workspace && params.name.is_some() {
+            return Err(AgentError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                "same_workspace runs the child in the parent's workspace, so it takes no workspace name",
+            ));
+        }
         let (workspace, note, kept) = if params.read_only {
             (parent_workspace.id, None, None)
+        } else if params.same_workspace && parent_workspace.kind == WorkspaceKind::Worktree {
+            // Two sessions never write in one worktree at once: the parent waits, but a sibling or a grandchild would not.
+            let holder =
+                self.tree_writer(&lock(&self.inner.status), &parent, &parent_workspace.id)?;
+            if let Some(holder) = holder {
+                let mut error = AgentError::new(
+                    codes::AGENT_WORKSPACE_BUSY,
+                    format!(
+                        "session {holder} already writes in this worktree; a second child cannot write beside it until it finishes"
+                    ),
+                );
+                error.data = Some(json!({ "session": holder }));
+                return Err(error);
+            }
+            // The person's manual pick: the child writes in the parent's worktree, and the parent waits (decision 0170).
+            (
+                parent_workspace.id,
+                Some(SAME_WORKSPACE_NOTE.to_owned()),
+                None,
+            )
         } else if parent_workspace.kind == WorkspaceKind::Folder {
             // No Git: the child shares the parent's folder, with no copy (decision 0161).
             (
@@ -636,12 +666,22 @@ impl Agents {
                 notes: withheld.into_iter().collect(),
             };
         };
-        let notes: Vec<String> =
-            (row.parent_id.is_some() && !row.read_only && workspace.kind == StoredKind::Folder)
-                .then(|| FOLDER_CHILD_NOTE.to_owned())
-                .into_iter()
-                .chain(withheld)
-                .collect();
+        let shared = match (&row.parent_id, row.read_only, workspace.kind) {
+            (Some(_), false, StoredKind::Folder) => Some(FOLDER_CHILD_NOTE),
+            (Some(parent), false, StoredKind::Worktree) => self
+                .store()
+                .get_agent_session(parent)
+                .ok()
+                .flatten()
+                .filter(|parent| parent.workspace_id == row.workspace_id)
+                .map(|_| SAME_WORKSPACE_NOTE),
+            _ => None,
+        };
+        let notes: Vec<String> = shared
+            .map(str::to_owned)
+            .into_iter()
+            .chain(withheld)
+            .collect();
         let (Ok(limit), Ok(depth)) = (self.delegation_depth_limit(), self.delegation_depth_of(row))
         else {
             return DelegationView {
@@ -800,6 +840,67 @@ fn already_brought_back(session: &str) -> AgentError {
 }
 
 impl Agents {
+    /// A writing child of `parent` that works in the parent's own workspace (a plain folder, decision 0161, or the
+    /// person's pick, decision 0170) and has not finished: its run is live and has not reported `done` since its last
+    /// prompt, whatever it reported after (a `waiting` idle notification keeps it finished). While one
+    /// does, the parent waits: its queue holds and a prompt without force is refused (decision 0170). Read under the
+    /// status lock (`live`). A store read that fails holds nothing.
+    pub(super) fn writing_child(
+        &self,
+        live: &LiveRuns,
+        parent: &AgentSessionRow,
+    ) -> Option<String> {
+        let rows = self
+            .store()
+            .list_agent_sessions(Some(&parent.workspace_id))
+            .ok()?;
+        rows.into_iter()
+            .find(|row| {
+                row.parent_id.as_deref() == Some(parent.id.as_str())
+                    && !row.read_only
+                    && row.exit.is_none()
+                    && live.get(&row.id).is_some_and(|run| !run.finished)
+            })
+            .map(|row| row.id)
+    }
+
+    /// A writing session of `parent`'s delegation tree, other than `parent`, that a new or resumed child of `parent` in
+    /// `workspace_id` would write beside (decision 0170): a sibling or a deeper session working unfinished there, or an
+    /// ancestor of `parent` with a live run there, finished or not, because only `parent` waits for its own children.
+    /// Read under the status lock.
+    pub(super) fn tree_writer(
+        &self,
+        live: &LiveRuns,
+        parent: &AgentSessionRow,
+        workspace_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let root = self.tree_root_of(parent)?;
+        let mut ancestors = HashSet::new();
+        let mut above = parent.parent_id.clone();
+        while let Some(id) = above {
+            if ancestors.len() as i64 > MAX_CHAIN_WALK {
+                return Err(chain_too_long(&parent.id));
+            }
+            above = self
+                .store()
+                .get_agent_session(&id)?
+                .and_then(|row| row.parent_id);
+            ancestors.insert(id);
+        }
+        for row in self.store().list_agent_sessions(Some(workspace_id))? {
+            let writing = row.id != parent.id
+                && !row.read_only
+                && row.exit.is_none()
+                && live
+                    .get(&row.id)
+                    .is_some_and(|run| !run.finished || ancestors.contains(&row.id));
+            if writing && self.tree_root_of(&row)? == root {
+                return Ok(Some(row.id));
+            }
+        }
+        Ok(None)
+    }
+
     /// Queues the notice that `child`'s run finished with `outcome` on its parent's prompt queue (decision 0170), and
     /// returns the parent, whose queue the caller drains once the status lock is released. Called under the status lock
     /// (`live`) right after the end is recorded, so a reader that sees the end also sees the notice. `key` tells this end
@@ -1034,7 +1135,8 @@ then report"
     use massorca_core_store::{AgentSessionRow, RunExit, RunExitReason, new_id, now_ms};
     use massorca_protocol::codes;
     use massorca_protocol::methods::agents::{
-        AgentBringBackParams, AgentDelegateParams, AgentStartParams, QUEUE_REASON_PAUSED_STOPPED,
+        AgentBringBackParams, AgentDelegateParams, AgentStartParams, QUEUE_REASON_CHILD_WRITING,
+        QUEUE_REASON_PAUSED_STOPPED,
     };
     use massorca_protocol::methods::projects::ProjectAddParams;
     use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
@@ -1121,6 +1223,7 @@ then report"
             kind: None,
             name: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: Some(request_id.to_owned()),
             permission_mode: None,
@@ -1559,6 +1662,108 @@ then report"
             kind: "claude".to_owned(),
             ..session_row(workspace_id, parent)
         }
+    }
+
+    /// A writing child of `parent` in `workspace_id` whose run is live, with `activity` as its last report.
+    fn live_writing_child(
+        agents: &super::Agents,
+        workspace_id: &str,
+        parent: &str,
+        activity: Option<&str>,
+    ) -> AgentSessionRow {
+        let child = AgentSessionRow {
+            read_only: false,
+            exit: None,
+            activity: activity.map(|state| massorca_core_store::StoredActivity {
+                state: state.to_owned(),
+                outcome: (state == "done").then(|| "success".to_owned()),
+                source: "hook".to_owned(),
+                at: now_ms(),
+                seen_at: None,
+            }),
+            ..session_row(workspace_id, Some(parent))
+        };
+        agents.store().insert_agent_session(&child).unwrap();
+        live_run(agents, &child.id, "child-token");
+        lock(&agents.inner.status)
+            .get_mut(&child.id)
+            .unwrap()
+            .finished = activity == Some("done");
+        child
+    }
+
+    #[test]
+    fn the_parent_waits_only_for_an_unfinished_writing_child_in_its_own_workspace() {
+        let (agents, workspace_id, _profile) = service();
+        let parent = claude_row(&workspace_id, None);
+        agents.store().insert_agent_session(&parent).unwrap();
+        let waits = || {
+            agents
+                .writing_child(&lock(&agents.inner.status), &parent)
+                .is_some()
+        };
+
+        assert!(!waits(), "no child yet");
+        let reader = session_row(&workspace_id, Some(&parent.id));
+        agents.store().insert_agent_session(&reader).unwrap();
+        live_run(&agents, &reader.id, "reader-token");
+        assert!(!waits(), "a read-only child does not hold the parent");
+
+        live_writing_child(&agents, &workspace_id, &parent.id, Some("done"));
+        assert!(
+            !waits(),
+            "a child whose turn ended does not hold the parent"
+        );
+
+        // Claude's idle notification turns a finished child `waiting`; it is still finished.
+        let idle = live_writing_child(&agents, &workspace_id, &parent.id, Some("waiting"));
+        lock(&agents.inner.status)
+            .get_mut(&idle.id)
+            .unwrap()
+            .finished = true;
+        assert!(
+            !waits(),
+            "a finished child that waits does not hold the parent"
+        );
+
+        let working = live_writing_child(&agents, &workspace_id, &parent.id, Some("working"));
+        assert_eq!(
+            agents.writing_child(&lock(&agents.inner.status), &parent),
+            Some(working.id.clone())
+        );
+        lock(&agents.inner.status).remove(&working.id);
+        assert!(
+            !waits(),
+            "a child with no live run does not hold the parent"
+        );
+    }
+
+    #[test]
+    fn a_held_parent_lists_its_queue_as_child_writing_and_refuses_a_prompt_without_force() {
+        let (agents, workspace_id, _profile) = service();
+        let parent = claude_row(&workspace_id, None);
+        agents.store().insert_agent_session(&parent).unwrap();
+        let child = live_writing_child(&agents, &workspace_id, &parent.id, Some("working"));
+        agents
+            .queue_add(&parent.id, "next step", None, true)
+            .unwrap();
+
+        let list = agents.queue_list(&parent.id).unwrap();
+        assert_eq!(
+            list.items[0].reason.as_deref(),
+            Some(QUEUE_REASON_CHILD_WRITING)
+        );
+
+        live_run(&agents, &parent.id, "parent-token");
+        let refused = agents.prompt(&parent.id, "hello", false).unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_BUSY);
+        assert_eq!(
+            refused
+                .data
+                .as_ref()
+                .and_then(|data| data["child"].as_str()),
+            Some(child.id.as_str())
+        );
     }
 
     #[test]

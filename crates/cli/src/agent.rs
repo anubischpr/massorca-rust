@@ -143,8 +143,9 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
-    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only or the parent
-    /// works in a plain folder, which the child then shares.
+    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only, the parent
+    /// works in a plain folder, or --same-workspace is given; a child that shares the parent's workspace and writes makes
+    /// the parent wait. The parent is told when the child finishes.
     Delegate(AgentDelegateArgs),
     /// Shows a session's delegation tree: its root and the root's children.
     Tree {
@@ -182,6 +183,10 @@ pub struct AgentDelegateArgs {
     /// Run the child in the parent's workspace; it declares that it does not write.
     #[arg(long, conflicts_with = "name")]
     pub read_only: bool,
+    /// Run a writing child in the parent's own workspace instead of a new worktree; the parent's queued prompts then
+    /// wait until the child finishes.
+    #[arg(long, conflicts_with = "name")]
+    pub same_workspace: bool,
     /// The child session's title; the first line of the prompt by default.
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
@@ -647,6 +652,7 @@ pub async fn execute(
                     name: args.name,
                     title: args.title,
                     read_only: args.read_only,
+                    same_workspace: args.same_workspace,
                     request_id: None,
                     permission_mode: args.mode,
                 })

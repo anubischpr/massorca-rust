@@ -33,7 +33,7 @@ use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceState};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
@@ -618,12 +618,11 @@ impl Agents {
                 (workspace, Some(made))
             }
         };
-        // A delegated child in a plain folder writes beside its delegation tree, which counts as one writer (decision 0161).
+        // A delegated child that shares a workspace with its delegation tree (a plain folder, decision 0161, or the
+        // parent's worktree by the person's pick, decision 0170) writes beside it: the tree counts as one writer.
         let group = match parent {
-            Some(parent) if workspace.kind == WorkspaceKind::Folder => {
-                Some(self.tree_root_of(parent)?)
-            }
-            _ => None,
+            Some(parent) => Some(self.tree_root_of(parent)?),
+            None => None,
         };
         if !params.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
@@ -908,12 +907,23 @@ impl Agents {
                 format!("the workspace directory is missing: {}", workspace.path),
             ));
         }
-        // In a plain folder the session's delegation tree counts as one writer (decision 0161).
-        let group = if workspace.kind == WorkspaceKind::Folder {
-            Some(self.tree_root_of(&row)?)
-        } else {
-            None
-        };
+        // Wherever the session's delegation tree shares a workspace, the tree counts as one writer (decisions 0161, 0170),
+        // but a resumed child never writes beside another writer of its tree there, as a new child would not (0170).
+        if !row.read_only
+            && let Some(parent) = &row.parent_id
+            && let Some(parent) = self.store().get_agent_session(parent)?
+        {
+            let holder = self.tree_writer(&lock(&self.inner.status), &parent, &workspace.id)?;
+            if let Some(holder) = holder {
+                let mut error = AgentError::new(
+                    codes::AGENT_WORKSPACE_BUSY,
+                    format!("session {holder} already writes in this workspace"),
+                );
+                error.data = Some(json!({ "session": holder }));
+                return Err(error);
+            }
+        }
+        let group = Some(self.tree_root_of(&row)?);
         if !row.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
@@ -1227,7 +1237,7 @@ impl Agents {
         if ready {
             self.drain_queue(&params.session);
         }
-        // The child's notice may go now (decision 0170).
+        // The notice, and any prompt the child's work held (decision 0170), may go now.
         if let Some(parent) = parent {
             self.drain_queue(&parent);
         }
@@ -1266,6 +1276,10 @@ impl Agents {
             // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
             // this, because a prompt could make the agent write into the worktree while git merges into it.
             self.refuse_while_merging(&session.workspace_id)?;
+            // A parent waits while its writing child works in its workspace (decision 0170); force types anyway.
+            if !force && let Some(child) = self.writing_child(&live, &self.reload(&session.id)?) {
+                return Err(child_writing(&session.id, &child));
+            }
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
@@ -2205,6 +2219,19 @@ fn input_refusal(
         ));
     }
     None
+}
+
+/// The refusal of a prompt to a parent whose writing child works in its workspace (decision 0170), naming the child in
+/// `data.child`.
+fn child_writing(session: &str, child: &str) -> AgentError {
+    let mut error = AgentError::new(
+        codes::AGENT_BUSY,
+        format!(
+            "session {session} waits while its child session {child} writes in the same workspace; queue the prompt, or use force"
+        ),
+    );
+    error.data = Some(json!({ "child": child }));
+    error
 }
 
 /// A stored mode source in wire form; a value a newer build wrote reads as `unknown`.
