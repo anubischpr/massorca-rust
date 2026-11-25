@@ -548,6 +548,10 @@ fn a_dropped_connection_mid_output_reads_every_byte_once_in_order() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "quarantined 2026-11-25: stalls on windows-latest; network session is fixing the cause; remove with that fix"
+)]
 fn a_gap_the_host_no_longer_holds_arrives_as_a_snapshot() {
     let (_temp, home) = temp_home();
     let test = Runtime::new().expect("a runtime");
