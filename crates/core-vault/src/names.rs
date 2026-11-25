@@ -42,7 +42,7 @@ fn is_hidden(c: char) -> bool {
             .any(|&(first, last)| (first..=last).contains(&c))
 }
 
-fn is_plain(text: &str, max_chars: usize) -> bool {
+pub(crate) fn is_plain(text: &str, max_chars: usize) -> bool {
     text.chars().count() <= max_chars && !text.chars().any(is_hidden)
 }
 

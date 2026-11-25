@@ -74,6 +74,28 @@ pub fn banner_tag(mention: Option<&str>, name: &str) -> String {
     }
 }
 
+/// How many palette slots a banner without its own colour picks from.
+pub const BANNER_PALETTE_SLOTS: usize = 6;
+
+/// The palette slot of a banner whose listing gives no colour: a stable hash of the package id (or the name).
+pub fn banner_palette_slot(item: &MarketplaceItem) -> usize {
+    let seed = item
+        .extension
+        .as_deref()
+        .map_or(item.name.as_str(), |entry| entry.id.as_str());
+    palette_slot_of(seed)
+}
+
+/// FNV-1a of the seed modulo the slot count; unlike the std hasher it gives the same slot on every run.
+fn palette_slot_of(seed: &str) -> usize {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let hash = seed.bytes().fold(OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+    });
+    usize::try_from(hash % BANNER_PALETTE_SLOTS as u64).unwrap_or_default()
+}
+
 /// The state chip beside the name. An installed agent shows its active account, and "Connected"
 /// for a signed-in one; everything else shows the item's own state.
 pub fn state_chip(item: &MarketplaceItem, snapshot: &MarketplaceSnapshot) -> &'static str {
@@ -261,6 +283,21 @@ mod tests {
             .item(MarketplaceItemId(id))
             .expect("the sample has the item")
             .clone()
+    }
+
+    #[test]
+    fn marketplace_banner_palette_slot_is_pinned_for_a_package_id() {
+        assert_eq!(palette_slot_of("acme.notes"), 0);
+        assert_eq!(palette_slot_of("massorca.claude"), 4);
+    }
+
+    #[test]
+    fn marketplace_banner_palette_slot_spreads_items_over_the_palette() {
+        let slots: std::collections::BTreeSet<usize> = (0..24)
+            .map(|index| palette_slot_of(&format!("acme.item-{index}")))
+            .collect();
+        assert!(slots.iter().all(|slot| *slot < BANNER_PALETTE_SLOTS));
+        assert!(slots.len() >= 4, "items share too few colours: {slots:?}");
     }
 
     #[test]

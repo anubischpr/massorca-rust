@@ -3,6 +3,8 @@
 
 mod accounts;
 mod add_folder;
+#[cfg(test)]
+mod banner_tests;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]
@@ -16,6 +18,9 @@ mod item_images;
 mod item_images_tests;
 mod package;
 mod review;
+mod services;
+#[cfg(test)]
+mod services_tests;
 mod sign_in;
 mod skills;
 #[cfg(test)]
@@ -30,6 +35,7 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use services::ServiceDialog;
 use std::collections::BTreeSet;
 
 use gpui::{
@@ -106,6 +112,10 @@ pub(super) struct MarketplaceFrame {
     host_picker: Entity<SelectView>,
     /// The status word beside the picker, for the host it shows.
     host_status: &'static str,
+    /// The Services section's rows of the picked host.
+    services: crate::model::marketplace::HostedServicesView,
+    /// A refused disconnect, with the service it concerns.
+    service_error: Option<(String, String)>,
     /// The Skills section's host and what it shows for that host (SKL-01).
     skills: skills::SkillsSection,
     shell: WeakEntity<Shell>,
@@ -138,6 +148,8 @@ pub(super) fn frame(
         host_note: shell.picked_note(cx),
         host_picker: shell.marketplace_host_select.clone(),
         host_status: shell.picker_status(cx),
+        services: shell.marketplace_services.clone(),
+        service_error: shell.marketplace_service_error.clone(),
         skills: skills::section_of(shell, cx),
         shell: weak,
     }
@@ -148,6 +160,13 @@ pub(super) fn page(frame: MarketplaceFrame, window: &mut Window, cx: &mut App) -
     let nav = catalogue::nav_column(&frame, window, cx);
     let content = match frame.page {
         MarketplacePage::Item(id) => item::item_page(&frame, id, cx),
+        page @ MarketplacePage::Category(ItemKind::Service) => div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_6))
+            .child(catalogue::catalogue_view(&frame, page, cx))
+            .child(services::section(&frame, cx))
+            .into_any_element(),
         page => catalogue::catalogue_view(&frame, page, cx),
     };
     let content = match &frame.host_note {
@@ -192,6 +211,9 @@ impl Shell {
             self.read_skills(&target, false);
         }
         self.model.open_page(Page::Marketplace(page));
+        if page == MarketplacePage::Category(ItemKind::Service) {
+            self.read_hosted_services(cx);
+        }
         cx.notify();
     }
 

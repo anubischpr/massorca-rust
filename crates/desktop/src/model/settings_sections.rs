@@ -388,21 +388,6 @@ const SOURCES: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Action("Connect")),
     },
     RowSpec {
-        label: "GitLab",
-        helper: "Repositories, branches and merge requests.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "Linear",
-        helper: "Lets an agent read and update Linear issues.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "Jira",
-        helper: "Lets an agent read and update Jira issues.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
         label: "Default branch",
         helper: "The branch a new workspace starts from.",
         body: RowBody::Planned(Planned::Select(None)),
@@ -779,6 +764,19 @@ mod tests {
             rows(SettingsSection::Vault).is_empty(),
             "the vault page draws its own header and no Vault status card"
         );
+    }
+
+    #[test]
+    fn hosted_services_live_in_the_marketplace_only() {
+        for section in SettingsSection::ALL {
+            for row in rows(section) {
+                assert!(
+                    !["Hosted services", "GitLab", "Linear", "Jira"].contains(&row.label),
+                    "{} in {section:?}",
+                    row.label
+                );
+            }
+        }
     }
 
     #[test]

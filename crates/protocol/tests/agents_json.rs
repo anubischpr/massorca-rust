@@ -13,6 +13,7 @@ use massorca_protocol::methods::agents::{
     KindPackage, ModeApplied, ModeSource, Outcome, PackageState, PermissionMode, PromptReceipt,
     ReceiptKind, StatusMechanism,
 };
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -38,6 +39,7 @@ fn live_session() -> AgentSession {
         brought_back_at_ms: None,
         agent_ref: None,
         terminal_id: Some("t-1".to_owned()),
+        run: Default::default(),
         created_at_ms: 1_767_225_600_000,
         execution: Execution {
             state: TerminalState::Live,
@@ -110,6 +112,37 @@ fn a_live_session_omits_absent_fields() {
             "execution": { "state": "live" }
         }),
     );
+}
+
+#[test]
+fn a_chat_session_names_its_run_and_an_absent_run_reads_as_terminal() {
+    let chat = AgentSession {
+        terminal_id: None,
+        run: RunType::Chat,
+        ..live_session()
+    };
+    assert_wire(
+        &chat,
+        &json!({
+            "id": "s-1",
+            "kind": "claude",
+            "workspace_id": "w-1",
+            "read_only": false,
+            "run": "chat",
+            "created_at_ms": 1_767_225_600_000_i64,
+            "execution": { "state": "live" }
+        }),
+    );
+    let older: AgentSession = serde_json::from_value(json!({
+        "id": "s-1",
+        "kind": "claude",
+        "workspace_id": "w-1",
+        "read_only": false,
+        "created_at_ms": 1,
+        "execution": { "state": "live" }
+    }))
+    .expect("deserializes");
+    assert_eq!(older.run, RunType::Terminal);
 }
 
 #[test]

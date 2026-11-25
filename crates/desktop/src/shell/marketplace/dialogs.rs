@@ -34,6 +34,9 @@ pub(in crate::shell) fn dialog(
     if let Some(dialog) = super::add_folder::dialog(shell, weak, cx) {
         return Some(dialog);
     }
+    if let Some(dialog) = super::services::dialog(shell, weak, cx) {
+        return Some(dialog);
+    }
     let snapshot = shell.model().marketplace();
     if let Some(flow) = &snapshot.sign_in {
         return Some(sign_in(shell, weak, snapshot, flow));
