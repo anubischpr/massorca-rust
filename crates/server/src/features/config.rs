@@ -107,7 +107,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 /// `<user home>/MassOrca/Conversations`: where conversations without a project are saved unless `conversations.folder`
-/// says otherwise (decision 0092).
+/// says otherwise (decision 0094).
 pub(crate) fn default_conversations_root() -> Result<String, ServiceError> {
     home_path(&["MassOrca", "Conversations"])
 }

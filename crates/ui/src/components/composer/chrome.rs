@@ -14,7 +14,7 @@ use super::{AccessMode, Attachment, Composer, ComposerEvent, KEY_CONTEXT, OpenMo
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::IconButton;
 use crate::components::menu::{MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay};
-use crate::components::tooltip::{Tooltip, tooltip_view};
+use crate::components::tooltip::{Tooltip, TooltipTrigger, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
@@ -57,7 +57,8 @@ impl Composer {
         self
     }
 
-    /// A control shown first in the bottom row, before attach; `build` runs on each render.
+    /// A control shown in the bottom row after the access chip, before the flexible gap; `build`
+    /// runs on each render.
     pub fn leading_control(
         mut self,
         build: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
@@ -100,6 +101,7 @@ impl Composer {
         self.access_index = if selected < modes.len() { selected } else { 0 };
         if self.access != modes {
             self.access = modes;
+            self.access_details.clear();
             self.access_menu = None;
         }
         cx.notify();
@@ -108,6 +110,25 @@ impl Composer {
     /// The access modes the chip offers.
     pub fn access_modes(&self) -> &[AccessMode] {
         &self.access
+    }
+
+    /// Sets each access mode's secondary text by index (`None` for none): the second line of its menu row and,
+    /// while it is selected, the chip's tooltip. Call it after `set_access_modes`, which clears it when the modes change.
+    pub fn set_access_details(
+        &mut self,
+        details: Vec<Option<SharedString>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.access_details != details {
+            self.access_details = details;
+            self.access_menu = None;
+            cx.notify();
+        }
+    }
+
+    /// The secondary text of access mode `index`, if it has one.
+    pub fn access_detail(&self, index: usize) -> Option<&SharedString> {
+        self.access_details.get(index).and_then(Option::as_ref)
     }
 
     /// The selected access mode's index.
@@ -152,10 +173,13 @@ impl Composer {
             .iter()
             .enumerate()
             .map(|(index, mode)| {
-                MenuItem::new(mode.name.clone())
+                let item = MenuItem::new(mode.name.clone())
                     .icon(mode.icon)
-                    .checked(index == self.access_index)
-                    .into()
+                    .checked(index == self.access_index);
+                match self.access_detail(index) {
+                    Some(detail) => item.secondary(detail.clone()).into(),
+                    None => item.into(),
+                }
             })
             .collect();
         let menu = cx.new(|cx| MenuView::new(entries, window, cx));
@@ -300,6 +324,10 @@ impl Composer {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = *cx.theme();
         let p = theme.palette;
+        let unavailable = self.send_unavailable.clone().or_else(|| {
+            self.no_agents_installed(cx)
+                .then(|| SharedString::from("No agents installed"))
+        });
         let (icon, label, enabled, fill, ink) = match action {
             PrimaryAction::Send => (
                 IconName::ArrowUp,
@@ -348,9 +376,7 @@ impl Composer {
             .bg(fill)
             .text_color(ink)
             .when_some(
-                self.send_unavailable
-                    .clone()
-                    .filter(|_| action == PrimaryAction::Disabled),
+                unavailable.filter(|_| action == PrimaryAction::Disabled),
                 |button, reason| button.tooltip(tooltip_view(Tooltip::new(reason))),
             )
             .when(action == PrimaryAction::Stop, |button| {
@@ -391,12 +417,14 @@ impl Composer {
         } else {
             (IconName::Shield, p.text.secondary)
         };
+        let detail = self.access_detail(self.access_index).cloned();
         let composer = cx.entity();
         let chip = div()
             .id("composer-access")
             .debug_selector(|| "composer-access".to_owned())
             .role(Role::Button)
             .aria_label(format!("Access: {name}"))
+            .when_some(detail.clone(), |chip, detail| chip.aria_description(detail))
             .track_focus(&self.access_focus)
             .focus_ring(&theme)
             .flex()
@@ -423,6 +451,13 @@ impl Composer {
                     .size(IconSize::XSmall)
                     .color(p.text.tertiary),
             );
+        // The tooltip shows on hover and, through the focus handle, on keyboard focus.
+        let chip = match detail {
+            Some(text) => TooltipTrigger::new("composer-access-tip", text, chip)
+                .focus_handle(self.access_focus.clone())
+                .into_any_element(),
+            None => chip.into_any_element(),
+        };
         div()
             .flex_none()
             .flex()
@@ -560,7 +595,11 @@ impl Render for Composer {
                 .on_click(move |window, cx| {
                     attach_entity.update(cx, |this, cx| this.open_attach_menu(window, cx));
                 });
-            self.attach_trigger.track(div().child(button))
+            self.attach_trigger.track(
+                div()
+                    .debug_selector(|| "composer-attach".to_owned())
+                    .child(button),
+            )
         });
         let leading = self.leading.as_ref().map(|build| build(window, cx));
         // No modes means the host declares none: no chip rather than an empty menu.
@@ -570,9 +609,9 @@ impl Render for Composer {
             .items_center()
             .gap(px(SPACE_2))
             .h(px(SIZE_CONTROL_DEFAULT))
-            .when_some(leading, |row, leading| row.child(leading))
             .when_some(attach, |row, attach| row.child(attach))
             .when_some(access, |row, chip| row.child(chip))
+            .when_some(leading, |row, leading| row.child(leading))
             .child(div().flex_1())
             .when(self.model_picker_offered, |row| {
                 row.child(self.picker.clone())
@@ -586,6 +625,7 @@ impl Render for Composer {
         bottom = bottom.child(self.primary_button(action, cx));
 
         let mut column = div()
+            .debug_selector(|| "composer-column".to_owned())
             .w_full()
             .max_w(px(LAYOUT_CONVERSATION_READING))
             .flex()
@@ -644,7 +684,7 @@ impl Render for Composer {
             .w_full()
             .flex()
             .justify_center()
-            .px(px(SPACE_4))
+            .when(!self.joined_top, |root| root.px(px(SPACE_4)))
             .child(column);
         for (menu, bounds) in menus.into_iter().flatten() {
             root = root.child(menu_overlay(&menu, MenuOrigin::Below(bounds), cx));
@@ -653,6 +693,7 @@ impl Render for Composer {
     }
 }
 
+/// The composer's top corner radius: square under a placement card that joins its top edge.
 /// The microphone of the bottom row: disabled with its reason while voice input is not there yet.
 fn microphone(
     reason: Option<SharedString>,

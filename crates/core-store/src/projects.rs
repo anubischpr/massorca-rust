@@ -89,7 +89,7 @@ impl Store {
         Ok(())
     }
 
-    /// Inserts the hidden project of a conversations folder (decision 0092). It is kept out of `list_projects`. A duplicate
+    /// Inserts the hidden project of a conversations folder (decision 0094). It is kept out of `list_projects`. A duplicate
     /// id, name or path key is `StoreError::Conflict`.
     pub fn insert_conversations_project(&self, row: &ProjectRow) -> Result<(), StoreError> {
         self.lock().execute(
