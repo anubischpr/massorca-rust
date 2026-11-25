@@ -45,7 +45,7 @@ pub enum WritingChild {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionDelegation {
     pub writing_child: WritingChild,
-    /// Whether a read-only child can start under this session.
+    /// Whether a read-only child can start under this session; false means no child can start at all.
     pub read_only_child: bool,
     pub reason: Option<String>,
 }
@@ -123,17 +123,23 @@ pub fn delegation_of(_session: &AgentSession) -> Option<SessionDelegation> {
     None
 }
 
-/// What the form says about its child, and whether it keeps Delegate off. A writing child is described unless Read
-/// only is on. When the writing child is unavailable, Delegate is enabled only while Read only is on and the session
-/// allows a read-only child, and the reason shows either way.
+/// What the form says about its child, and whether it keeps Delegate off. A session with no read-only child starts no
+/// child at all, so Delegate stays off and the reason shows, whatever its writing child says. Otherwise a writing child
+/// is described unless Read only is on, and an unavailable one keeps Delegate off unless Read only is on.
 pub fn placement_notice(
     delegation: &SessionDelegation,
     read_only: bool,
 ) -> Option<PlacementNotice> {
+    if !delegation.read_only_child {
+        return Some(PlacementNotice {
+            text: reason_or(delegation, UNAVAILABLE_NOTICE),
+            blocks_send: true,
+        });
+    }
     match delegation.writing_child {
         WritingChild::Unavailable => Some(PlacementNotice {
-            text: unavailable_text(delegation),
-            blocks_send: !(read_only && delegation.read_only_child),
+            text: reason_or(delegation, WRITER_UNAVAILABLE_NOTICE),
+            blocks_send: !read_only,
         }),
         WritingChild::OwnWorktree | WritingChild::SharedFolder if read_only => None,
         WritingChild::OwnWorktree => Some(notice(OWN_WORKTREE_NOTICE)),
@@ -141,19 +147,15 @@ pub fn placement_notice(
     }
 }
 
-/// The reason the service gives, trimmed; without one, the line for what this session can still start.
-fn unavailable_text(delegation: &SessionDelegation) -> String {
-    let reason = delegation
+/// The reason the service gives, trimmed; without one, the fallback line for what the session cannot start.
+fn reason_or(delegation: &SessionDelegation, fallback: &'static str) -> String {
+    delegation
         .reason
         .as_deref()
         .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let fallback = if delegation.read_only_child {
-        WRITER_UNAVAILABLE_NOTICE
-    } else {
-        UNAVAILABLE_NOTICE
-    };
-    reason.unwrap_or(fallback).to_owned()
+        .filter(|text| !text.is_empty())
+        .unwrap_or(fallback)
+        .to_owned()
 }
 
 fn notice(text: &str) -> PlacementNotice {
@@ -345,6 +347,30 @@ mod tests {
                 (notice.text.as_str(), notice.blocks_send),
                 (UNAVAILABLE_NOTICE, true)
             );
+        }
+    }
+
+    #[test]
+    fn a_session_that_starts_no_child_blocks_delegate_for_any_writing_child() {
+        let reason = "This session has reached its delegation depth.";
+        for writing_child in [
+            WritingChild::OwnWorktree,
+            WritingChild::SharedFolder,
+            WritingChild::Unavailable,
+        ] {
+            for read_only in [false, true] {
+                let with_reason = declared(writing_child, false, Some(reason));
+                let notice =
+                    placement_notice(&with_reason, read_only).expect("the reason is shown");
+                assert_eq!((notice.text.as_str(), notice.blocks_send), (reason, true));
+                let without_reason = declared(writing_child, false, None);
+                let notice =
+                    placement_notice(&without_reason, read_only).expect("the fallback is shown");
+                assert_eq!(
+                    (notice.text.as_str(), notice.blocks_send),
+                    (UNAVAILABLE_NOTICE, true)
+                );
+            }
         }
     }
 

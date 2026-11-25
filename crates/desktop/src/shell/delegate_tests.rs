@@ -496,3 +496,45 @@ fn a_writing_unavailable_session_without_read_only_children_keeps_delegate_off(
         "with Read only on, the session still starts no child"
     );
 }
+
+#[gpui::test]
+fn an_own_worktree_session_that_starts_no_child_keeps_delegate_off(cx: &mut TestAppContext) {
+    let (mut rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(
+        &rig,
+        cx,
+        SessionDelegation {
+            writing_child: WritingChild::OwnWorktree,
+            read_only_child: false,
+            reason: Some("This session has reached its delegation depth.".to_owned()),
+        },
+    );
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason shows before typing"
+    );
+    type_prompt(&rig, cx, "Write the tests");
+    click(cx, "dialog-action");
+    rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "with Read only off, no child starts"
+    );
+
+    rig.shell
+        .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason stays with Read only on"
+    );
+    click(cx, "dialog-action");
+    rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "with Read only on, no child starts either"
+    );
+}
