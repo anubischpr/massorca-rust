@@ -262,6 +262,8 @@ pub struct Shell {
     work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
     work_panel_applied: Option<(u16, u16)>,
+    /// New terminals waiting for the Work panel's pane to paint its size (`create_terminal`).
+    pane_waits: usize,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
     /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
@@ -562,6 +564,7 @@ impl Shell {
             terminal_views: BTreeMap::new(),
             work_panel_size: Rc::default(),
             work_panel_applied: None,
+            pane_waits: 0,
             session_grid: None,
             conversation_size: Rc::default(),
             stop_prompt: None,
