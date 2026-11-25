@@ -11,6 +11,7 @@ mod debug_page;
 mod delegate;
 mod diff_page;
 mod home_start;
+mod host_remove;
 mod marketplace;
 mod pairing;
 mod palette;
@@ -103,6 +104,8 @@ mod delegate_tests;
 #[cfg(test)]
 mod home_start_tests;
 #[cfg(test)]
+mod host_remove_tests;
+#[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
@@ -173,6 +176,10 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The Remove host confirm on screen, if one is open (D-HO-03).
+    host_remove: Option<host_remove::HostRemoveFlow>,
+    /// What the last host removal left behind, until dismissed.
+    host_remove_notice: Option<String>,
     /// The `.ssh` folder whose key files the Add host dialog lists.
     ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
@@ -538,6 +545,8 @@ impl Shell {
             devices_asked: false,
             revoke: None,
             add_host: None,
+            host_remove: None,
+            host_remove_notice: None,
             ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
@@ -930,6 +939,10 @@ impl Render for Shell {
             .theme_notice
             .as_deref()
             .map(|notice| app_theme::theme_notice_banner(notice, &shell));
+        let host_remove_banner = self
+            .host_remove_notice
+            .as_deref()
+            .map(|notice| host_remove::removal_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -961,6 +974,7 @@ impl Render for Shell {
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
                     .when_some(theme_banner, |el, banner| el.child(banner))
+                    .when_some(host_remove_banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),
             )
@@ -1053,6 +1067,10 @@ impl Render for Shell {
             .add_host
             .as_ref()
             .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
+        let host_remove = self
+            .host_remove
+            .as_ref()
+            .map(|flow| host_remove::remove_host_dialog(flow, &shell, cx));
         let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
             let connected = self.store.read(cx).state().connection.is_connected();
             settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
@@ -1138,6 +1156,7 @@ impl Render for Shell {
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
+            .when_some(host_remove, |el, dialog| el.child(dialog))
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
