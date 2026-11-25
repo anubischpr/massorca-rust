@@ -3,6 +3,7 @@
 
 use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
+use super::installed::installed_rows;
 use super::item::problem_banner;
 use super::item_images;
 use crate::model::agent_sessions::agent_of_kind;
@@ -265,6 +266,7 @@ fn discover_groups(
 pub(super) fn catalogue_view(
     frame: &MarketplaceFrame,
     page: MarketplacePage,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -310,10 +312,10 @@ pub(super) fn catalogue_view(
             .explanation(explanation)
             .into_any_element()
     } else {
-        if page == MarketplacePage::Discover {
-            discover_groups(frame, &items, cx)
-        } else {
-            card_grid(frame, &items, cx)
+        match page {
+            MarketplacePage::Discover => discover_groups(frame, &items, cx),
+            MarketplacePage::Installed => installed_rows(frame, &items, window, cx),
+            _ => card_grid(frame, &items, cx),
         }
     };
     div()
@@ -340,7 +342,7 @@ fn add_extension(frame: &MarketplaceFrame) -> AnyElement {
 }
 
 /// The state of a card's footer: the one action that fits the item's state.
-fn card_state(item: &MarketplaceItem) -> ExtensionState {
+pub(super) fn card_state(item: &MarketplaceItem) -> ExtensionState {
     match &item.state {
         ItemState::NotInstalled => ExtensionState::Catalog,
         ItemState::Installed { enabled, update } => ExtensionState::Installed {
