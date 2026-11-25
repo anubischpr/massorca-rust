@@ -461,6 +461,8 @@ fn new_line(
         text,
         task_id,
         routine_id: None,
+        card: None,
+        card_answer: None,
         created_at: now_ms(),
     }
 }
@@ -507,6 +509,7 @@ fn views(
                 text: row.text.clone(),
                 task,
                 routine,
+                card: None,
                 created_at_ms: row.created_at,
             })
         })

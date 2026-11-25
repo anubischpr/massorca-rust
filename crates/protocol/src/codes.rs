@@ -252,6 +252,10 @@ pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
 pub const TEAM_ROUTINE_RUN_INTERRUPTED: &str = "team.routine_run_interrupted";
 /// Other calls kept changing the routine while this edit was made; read it again and retry.
 pub const TEAM_ROUTINE_CHANGED: &str = "team.routine_changed";
+/// `team.room_answer` names no line of the team's room, or a line that is not a choice card.
+pub const TEAM_ROOM_CARD_NOT_FOUND: &str = "team.room_card_not_found";
+/// `team.room_answer` on a choice card that was answered already; a card takes one answer.
+pub const TEAM_ROOM_CARD_ANSWERED: &str = "team.room_card_answered";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";

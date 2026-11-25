@@ -570,6 +570,14 @@ ALTER TABLE team_room_messages ADD COLUMN routine_id TEXT REFERENCES team_routin
 "#,
         foreign_keys_off: false,
     },
+    // A room line that is a choice card, with its options and the answer it got once (decision 0121).
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN card TEXT;
+ALTER TABLE team_room_messages ADD COLUMN card_answer TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

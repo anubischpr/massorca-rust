@@ -698,6 +698,7 @@ mod tests {
             text: text.into(),
             task: None,
             routine: None,
+            card: None,
             created_at_ms: 1_700_000_000_000,
         }
     }

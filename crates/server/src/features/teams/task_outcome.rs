@@ -125,6 +125,8 @@ fn tell_room(
         text: format!("{}: {}", outcome_word(outcome), task.title),
         task_id: Some(task.id.clone()),
         routine_id: None,
+        card: None,
+        card_answer: None,
         created_at: now_ms(),
     })?;
     Ok(Some(task.team_id.clone()))

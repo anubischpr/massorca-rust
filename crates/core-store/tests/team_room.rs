@@ -1,6 +1,6 @@
 //! A team's Conference room: lines oldest first, the newest kept by a limit, unknown teams and bots refused, a line
 //! about a task found once, the room removed with its team while a removed bot's lines stay, and a removed routine
-//! unlinked from its line.
+//! unlinked from its line, and a choice card answered once.
 
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRoutineRow, TeamRow, new_id};
 
@@ -47,6 +47,8 @@ fn line(team_id: &str, bot_id: Option<&str>, text: &str, created_at: i64) -> Tea
         text: text.to_owned(),
         task_id: None,
         routine_id: None,
+        card: None,
+        card_answer: None,
         created_at,
     }
 }
@@ -144,4 +146,42 @@ fn a_line_keeps_its_routine_until_the_routine_is_removed() {
     let kept = store.list_team_room(&alpha.id, None).unwrap();
     assert_eq!(texts(kept.clone()), ["Routine created"]);
     assert_eq!(kept[0].routine_id, None);
+}
+
+#[test]
+fn a_choice_card_is_answered_once_and_a_released_answer_can_be_given_again() {
+    let store = store();
+    let alpha = team(&store, "alpha");
+    let mut card = line(&alpha.id, None, "Who should take this?", 1);
+    card.author = "bot".to_owned();
+    card.card = Some("{\"options\":[]}".to_owned());
+    store.insert_team_room_message(&card).unwrap();
+    let plain = line(&alpha.id, None, "hi", 2);
+    store.insert_team_room_message(&plain).unwrap();
+
+    let found = store.get_team_room_message(&card.id).unwrap().unwrap();
+    assert_eq!(found.card, card.card);
+    assert_eq!(found.card_answer, None);
+    assert!(store.get_team_room_message("no-line").unwrap().is_none());
+
+    assert!(
+        !store.answer_team_room_card(&plain.id, "todo").unwrap(),
+        "not a card"
+    );
+    assert!(store.answer_team_room_card(&card.id, "todo").unwrap());
+    assert!(
+        !store.answer_team_room_card(&card.id, "bot:x").unwrap(),
+        "answered once"
+    );
+    let answered = store.get_team_room_message(&card.id).unwrap().unwrap();
+    assert_eq!(answered.card_answer.as_deref(), Some("todo"));
+
+    store.release_team_room_card(&card.id).unwrap();
+    assert!(store.answer_team_room_card(&card.id, "bot:x").unwrap());
+    assert_eq!(
+        store.list_team_room(&alpha.id, None).unwrap()[0]
+            .card_answer
+            .as_deref(),
+        Some("bot:x")
+    );
 }

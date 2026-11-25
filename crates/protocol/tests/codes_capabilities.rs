@@ -139,6 +139,8 @@ const ERROR_CODES: &[(&str, &str)] = &[
         "team.routine_run_interrupted",
     ),
     (codes::TEAM_ROUTINE_CHANGED, "team.routine_changed"),
+    (codes::TEAM_ROOM_CARD_NOT_FOUND, "team.room_card_not_found"),
+    (codes::TEAM_ROOM_CARD_ANSWERED, "team.room_card_answered"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
