@@ -79,6 +79,7 @@ impl DataSource for SampleDataSource {
             projects: vec![
                 ProjectGroup {
                     emoji: None,
+                    owner: None,
                     id: "massorca-rust".into(),
                     name: "massorca-rust".into(),
                     hosts: vec![
@@ -99,6 +100,7 @@ impl DataSource for SampleDataSource {
                                     AgentState::Idle,
                                 ),
                             ],
+                            placeholders: Vec::new(),
                         },
                         HostGroup {
                             name: "VPS".into(),
@@ -111,11 +113,13 @@ impl DataSource for SampleDataSource {
                                 Agent::Antigravity,
                                 AgentState::Unreachable,
                             )],
+                            placeholders: Vec::new(),
                         },
                     ],
                 },
                 ProjectGroup {
                     emoji: None,
+                    owner: None,
                     id: "datalake".into(),
                     name: "datalake".into(),
                     hosts: vec![HostGroup {
@@ -129,6 +133,7 @@ impl DataSource for SampleDataSource {
                             Agent::Antigravity,
                             AgentState::Error,
                         )],
+                        placeholders: Vec::new(),
                     }],
                 },
             ],

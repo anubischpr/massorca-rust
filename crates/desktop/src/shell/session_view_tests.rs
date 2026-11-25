@@ -29,24 +29,24 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 /// A shell on a connected scripted service, with project p1 and workspace w1, these kinds and sessions, and s1 open.
-struct Rig {
-    shell: Entity<Shell>,
-    updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-fn session_rig(
+pub(super) fn session_rig(
     cx: &mut TestAppContext,
     kinds: Vec<AgentKind>,
     sessions: Vec<AgentSession>,
@@ -206,7 +206,7 @@ fn prompt_call(script: &mut Script) -> Option<PromptCall> {
     None
 }
 
-fn stop_call(script: &mut Script) -> Option<SessionCallReply> {
+pub(super) fn stop_call(script: &mut Script) -> Option<SessionCallReply> {
     while let Some(command) = script.next() {
         if let Command::AgentStop { session, reply } = command {
             return Some((session, reply));
