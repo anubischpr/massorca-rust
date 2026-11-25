@@ -103,6 +103,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.start",
             "agent.status",
             "agent.stop",
+            "agent.title",
             "agent.tree",
             "settings.get",
             "settings.list",

@@ -20,6 +20,7 @@ use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
+use crate::agent_title::{self, AgentTitleArgs};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
@@ -163,6 +164,8 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: AccountsCommand,
     },
+    /// Names a chat from its first prompt and reply, by one run of the kind's one-shot form (decision 0167). Prints the slug.
+    Title(AgentTitleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -625,6 +628,9 @@ pub async fn execute(
         }
         AgentCommand::Accounts { command } => {
             agent_accounts::execute(target, &client, command, output, json).await?;
+        }
+        AgentCommand::Title(args) => {
+            agent_title::execute(&client, args, output).await?;
         }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();

@@ -8,6 +8,8 @@
 //! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160). It
 //! can say whether it got MassOrca's instructions and whether `massorca`'s folder is first on its `PATH` (decision 0161).
 //! Started as `chat`, it speaks the tiny structured dialect of core-agents' `TestAdapter` instead (decision 0101).
+//! Started with `-p`, it is the one-shot form that names a chat (decision 0167): it prints one reply, as its
+//! `--fake-mode` argument says, and reports its working folder and run identity variables when asked.
 
 use std::env;
 use std::ffi::OsString;
@@ -47,6 +49,9 @@ const DELEGATE_COMMAND: &str = "massorca agent delegate";
 const HELP_WITHOUT_INSTRUCTIONS_ENV: &str = "FAKE_AGENT_HELP_WITHOUT_INSTRUCTIONS";
 /// Names a file `--help` appends a line to on each run.
 const HELP_MARKER_ENV: &str = "FAKE_AGENT_HELP_MARKER";
+/// Comma-separated flags `--help` lists after its usage, as a CLI lists the flags it takes (decision 0167): a test picks the
+/// optional arguments of a one-shot run that the listing names.
+const HELP_FLAGS_ENV: &str = "FAKE_AGENT_HELP_FLAGS";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
@@ -93,6 +98,7 @@ type Input = io::Lines<io::StdinLock<'static>>;
 fn main() -> ExitCode {
     // The sign-in and check of an account (decision 0059) are subcommands: `login` and `whoami`, run in the account home.
     match env::args().nth(1).as_deref() {
+        Some("-p") => return oneshot(),
         Some("login") => return login(),
         Some("whoami") => return whoami(),
         Some("whoami-json") => return whoami_json(),
@@ -413,6 +419,81 @@ fn say(text: &str) {
     let _ = out.flush();
 }
 
+/// Names the file a one-shot run writes its working folder and the presence of each run identity variable to.
+const ONESHOT_REPORT_ENV: &str = "FAKE_AGENT_ONESHOT_REPORT";
+/// The variables a MassOrca run carries; the one-shot report states whether each is set, never its value.
+const RUN_IDENTITY_NAMES: [&str; 3] = [
+    "MASSORCA_AGENT_SESSION",
+    "MASSORCA_AGENT_TOKEN",
+    "MASSORCA_AGENT_KIND",
+];
+
+/// The one-shot form of a chat title (decision 0167): `-p <prompt> [--fake-mode <mode>]` prints one reply and exits. The
+/// mode says what it prints: `say:<text>` prints `<text>`, `exit:<code>` exits with that code and prints nothing, `empty`
+/// prints nothing and exits 0, `hang` never ends. Without a mode it prints `Fake title`. It writes the report first.
+fn oneshot() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    let mode = args
+        .windows(2)
+        .find(|pair| pair[0] == "--fake-mode")
+        .map_or("say:Fake title", |pair| pair[1].as_str());
+    if let Some(report) = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty()) {
+        write_oneshot_report(Path::new(&report), &args);
+    }
+    if let Some(text) = mode.strip_prefix("say:") {
+        reply(text);
+        return ExitCode::SUCCESS;
+    }
+    if let Some(code) = mode.strip_prefix("exit:") {
+        return ExitCode::from(code.parse::<u8>().unwrap_or(1));
+    }
+    if mode == "empty" {
+        return ExitCode::SUCCESS;
+    }
+    if mode == "hang" {
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
+    ExitCode::from(2)
+}
+
+/// Prints the reply of a one-shot run, unprefixed, and flushes it.
+fn reply(text: &str) {
+    let mut out = io::stdout().lock();
+    let _ = writeln!(out, "{text}");
+    let _ = out.flush();
+}
+
+/// Writes the run's working folder, the arguments it was started with and whether each run identity variable is set. Never a
+/// value of a run identity variable.
+fn write_oneshot_report(path: &Path, args: &[String]) {
+    let identity: Map<String, Value> = RUN_IDENTITY_NAMES
+        .iter()
+        .map(|name| {
+            let state = if env::var_os(name).is_some() {
+                "set"
+            } else {
+                "unset"
+            };
+            ((*name).to_owned(), Value::String(state.to_owned()))
+        })
+        .collect();
+    let cwd = env::current_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_default();
+    let argv: Vec<Value> = args
+        .iter()
+        .skip(1)
+        .map(|arg| Value::String(arg.clone()))
+        .collect();
+    let mut report = Map::new();
+    report.insert("cwd".to_owned(), Value::String(cwd));
+    report.insert("argv".to_owned(), Value::Array(argv));
+    report.insert("run_identity".to_owned(), Value::Object(identity));
+    let _ = fs::write(path, Value::Object(report).to_string());
+}
+
 /// Whether `<CREDENTIAL_HOME_ENV>/token.json` is a file. Only the presence is reported.
 fn credentials_found() -> bool {
     env::var_os(CREDENTIAL_HOME_ENV)
@@ -571,6 +652,17 @@ fn help() -> ExitCode {
             "  --instructions <TEXT>
 ",
         );
+    }
+    if let Some(flags) = env::var_os(HELP_FLAGS_ENV) {
+        for flag in flags
+            .to_string_lossy()
+            .split(',')
+            .filter(|flag| !flag.is_empty())
+        {
+            text.push_str("  ");
+            text.push_str(flag);
+            text.push('\n');
+        }
     }
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());
