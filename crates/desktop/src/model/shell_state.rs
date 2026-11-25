@@ -362,6 +362,11 @@ impl ShellModel {
         self.regions = RegionState::with_open(open);
     }
 
+    /// Opens the Activity rail mode a previous run left (SET-02); its home shows, as after a mode switch.
+    pub fn restore_mode(&mut self, mode: Mode) {
+        self.navigation.mode = mode;
+    }
+
     /// The terminal each workspace's Work panel has selected.
     pub fn terminal_selection(&self) -> &TerminalSelection {
         &self.terminal_selection
@@ -544,6 +549,13 @@ mod tests {
         assert!(!narrow.sidebar_inline() && !narrow.sidebar_overlay());
         narrow.toggle_sidebar();
         assert!(narrow.sidebar_overlay() && !narrow.sidebar_inline());
+    }
+
+    #[test]
+    fn a_restored_mode_opens_its_home() {
+        let mut model = shell(1440.0);
+        model.restore_mode(Mode::BotTeams);
+        assert_eq!(model.canvas(), Canvas::Home(Mode::BotTeams));
     }
 
     #[test]

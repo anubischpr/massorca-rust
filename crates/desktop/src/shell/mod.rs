@@ -133,6 +133,8 @@ mod tests;
 #[cfg(test)]
 mod title_bar_tests;
 #[cfg(test)]
+mod ui_state_tests;
+#[cfg(test)]
 mod work_panel_tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).
@@ -351,6 +353,11 @@ impl Shell {
         self.model.restore_open_regions(open);
     }
 
+    /// Opens the Activity rail mode the last run left (SET-02); called before the first frame.
+    pub fn restore_mode(&mut self, mode: crate::model::navigation::Mode) {
+        self.model.restore_mode(mode);
+    }
+
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
@@ -427,10 +434,14 @@ impl Shell {
             }
             cx.notify();
         });
-        // Every change of the shell is checked for a new set of open regions, so the next start opens the same ones.
+        // Every change is checked for the open regions and rail mode, so the next start opens the same ones.
         cx.observe_self(|shell, cx| {
             let open = shell.model.regions().open().to_vec();
-            ui_state::remember(cx, |state| state.open_regions = open);
+            let mode = shell.model.navigation().mode;
+            ui_state::remember(cx, |state| {
+                state.open_regions = open;
+                state.mode = mode;
+            });
         })
         .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
