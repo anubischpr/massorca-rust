@@ -35,11 +35,12 @@ appId: dev.massorca.app
       visible: ".*Pair with this desktop.*"
     commands:
       - tapOn: "Pair"
-# Screen 2: Home lists the paired host, named after the server in the offer, as connected.
+# Screen 2: Home lists the paired host as connected. Its name is the runner's machine name (the server's name in the
+# offer), so the card is matched by its state, not by the name.
 - extendedWaitUntil:
-    visible: "massorca, Connected"
+    visible: ".*, Connected"
     timeout: 150000
-- tapOn: "massorca, Connected"
+- tapOn: ".*, Connected"
 # Screen 4: the host's projects list the folder workspace the job created, which has no git.
 - extendedWaitUntil:
     visible: "Projects"
