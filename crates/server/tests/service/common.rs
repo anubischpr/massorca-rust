@@ -255,6 +255,16 @@ impl Raw {
         self.recv_within(REPLY_WAIT).await
     }
 
+    /// `recv`, but a stall names `step`, so a failure says which wait never ended.
+    pub async fn recv_step(&mut self, step: &str) -> Option<Message> {
+        let mut reader: &Stream = &self.stream;
+        let started = std::time::Instant::now();
+        let frame = timeout(REPLY_WAIT, read_message(&mut reader, MAX_FRAME_LEN_LOCAL))
+            .await
+            .unwrap_or_else(|_| panic!("stalled on {step} for {:?}", started.elapsed()));
+        frame.ok().flatten()
+    }
+
     pub async fn recv_within(&mut self, limit: Duration) -> Option<Message> {
         let mut reader: &Stream = &self.stream;
         let frame = timeout(limit, read_message(&mut reader, MAX_FRAME_LEN_LOCAL))
