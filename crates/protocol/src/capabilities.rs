@@ -50,6 +50,10 @@ pub const SECRETS: &str = "secrets/1";
 pub const TEAMS: &str = "teams/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
+/// Rolling a package back to the version its update replaced (`extensions.rollback`).
+pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// The run log of a package (`extensions.log`).
+pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).

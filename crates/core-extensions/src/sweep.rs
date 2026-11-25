@@ -22,10 +22,14 @@ impl Extensions {
         let _changes = self.lock_changes();
         let versions = self.layout.lock_path().exists();
         let lockfile = self.read_lockfile()?;
+        // A kept previous version is a rollback target, so it is referenced as the entry's own folder is.
         let kept: BTreeSet<&str> = lockfile
             .packages
             .iter()
-            .map(|entry| entry.path.as_str())
+            .flat_map(|entry| {
+                std::iter::once(entry.path.as_str())
+                    .chain(entry.previous.as_deref().map(|kept| kept.path.as_str()))
+            })
             .collect();
         let pkgs = self.layout.pkgs_dir();
         let packages = match fs::read_dir(&pkgs) {

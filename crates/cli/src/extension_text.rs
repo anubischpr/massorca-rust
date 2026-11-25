@@ -2,8 +2,9 @@
 
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, CliRecord, CliRemoval, CliRemovalAction, ExtensionInstalled,
-    ExtensionItem, ExtensionRemoved, ExtensionReview, ExtensionState, ItemProblem, KindView,
-    McpServerView, Permission, Risk, RiskLevel, SourceKind,
+    ExtensionItem, ExtensionLog, ExtensionRemoved, ExtensionReview, ExtensionRunAction,
+    ExtensionRunOutcome, ExtensionState, ItemProblem, KindView, McpServerView, Permission, Risk,
+    RiskLevel, SourceKind,
 };
 
 use crate::workspace_text;
@@ -164,6 +165,50 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
 }
 
 /// What an install did.
+/// A package's runs, oldest first, each followed by the output lines it kept; `none` when it has never run.
+pub fn run_lines(log: &ExtensionLog, none: &str) -> Vec<String> {
+    if log.runs.is_empty() {
+        return vec![none.to_owned()];
+    }
+    let mut lines = Vec::new();
+    for run in &log.runs {
+        let versions = match (&run.from_version, &run.to_version) {
+            (Some(from), Some(to)) => format!("{from} -> {to}"),
+            (None, Some(to)) => to.clone(),
+            (Some(from), None) => format!("{from} -> removed"),
+            (None, None) => String::new(),
+        };
+        let line = format!(
+            "{} {} {} {}",
+            run.at_ms,
+            action_text(run.action),
+            versions,
+            outcome_text(run.outcome)
+        );
+        lines.push(line.trim_end().to_owned());
+        lines.extend(run.output.iter().map(|line| format!("    {line}")));
+    }
+    lines
+}
+
+fn action_text(action: ExtensionRunAction) -> &'static str {
+    match action {
+        ExtensionRunAction::Install => "install",
+        ExtensionRunAction::Update => "update",
+        ExtensionRunAction::Rollback => "rollback",
+        ExtensionRunAction::Remove => "remove",
+        ExtensionRunAction::Unknown => "unknown",
+    }
+}
+
+fn outcome_text(outcome: ExtensionRunOutcome) -> &'static str {
+    match outcome {
+        ExtensionRunOutcome::Ok => "ok",
+        ExtensionRunOutcome::Failed => "failed",
+        ExtensionRunOutcome::Unknown => "unknown",
+    }
+}
+
 pub fn installed_lines(installed: &ExtensionInstalled) -> Vec<String> {
     let mut lines = vec![format!("installed {} {}", installed.id, installed.version)];
     lines.extend(installed.cli.iter().map(record_line));
