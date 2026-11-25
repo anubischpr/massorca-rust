@@ -9,8 +9,9 @@ use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::TYPE_BODY_SM;
 use massorca_ui::{ActiveTheme, TextStyled};
 
-use crate::model::marketplace::import_outcome;
+use crate::model::marketplace::{HostTarget, import_outcome};
 use crate::shell::Shell;
+use crate::shell::path_field::{PickKind, path_field};
 
 /// Said when Import is pressed with no folder.
 const NO_FOLDER: &str = "Enter the folder that holds the login files.";
@@ -132,7 +133,15 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
                     "Copies the agent's login files from a folder where the service runs into a new account. The folder is only read.",
                 ),
         )
-        .child(import.field.clone())
+        .child(path_field(
+            "account-import-browse",
+            "account-import-field",
+            weak.clone(),
+            &import.field,
+            PickKind::Folder,
+            matches!(shell.marketplace_pick.target(), HostTarget::Local),
+            !import.running,
+        ))
         .action(if import.running { "Importing..." } else { "Import" })
         .action_disabled(import.running)
         .cancel_label("Cancel")
