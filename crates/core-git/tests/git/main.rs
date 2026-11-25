@@ -7,6 +7,7 @@ mod commit;
 mod config;
 mod diff;
 mod discovery;
+mod file_content;
 mod fixture;
 mod index;
 mod log;
