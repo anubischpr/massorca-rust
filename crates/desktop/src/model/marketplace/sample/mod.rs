@@ -122,6 +122,8 @@ impl MarketplaceSource for SampleMarketplaceSource {
             sign_in: self.sign_in.clone(),
             // The default-agent key does not exist yet, so the control stays disabled (D-E).
             default_agent_available: false,
+            rollback_offered: false,
+            log_offered: false,
         }
     }
 

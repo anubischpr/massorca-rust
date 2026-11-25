@@ -4,6 +4,8 @@
 mod accounts;
 mod add_folder;
 #[cfg(test)]
+mod add_menu_tests;
+#[cfg(test)]
 mod banner_tests;
 mod catalogue;
 mod dialogs;
@@ -14,12 +16,16 @@ mod host_pick;
 mod import;
 #[cfg(test)]
 mod import_tests;
+mod installed;
 mod item;
 mod item_images;
 #[cfg(test)]
 mod item_images_tests;
+mod log_view;
+mod more_menu;
 mod package;
 mod review;
+mod rollback;
 mod services;
 #[cfg(test)]
 mod services_tests;
@@ -37,6 +43,8 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use log_view::RunLogView;
+pub(super) use rollback::RollbackConfirm;
 pub(super) use services::ServiceDialog;
 use std::collections::BTreeSet;
 
@@ -166,10 +174,10 @@ pub(super) fn page(frame: MarketplaceFrame, window: &mut Window, cx: &mut App) -
             .flex()
             .flex_col()
             .gap(px(SPACE_6))
-            .child(catalogue::catalogue_view(&frame, page, cx))
+            .child(catalogue::catalogue_view(&frame, page, window, cx))
             .child(services::section(&frame, cx))
             .into_any_element(),
-        page => catalogue::catalogue_view(&frame, page, cx),
+        page => catalogue::catalogue_view(&frame, page, window, cx),
     };
     let content = match &frame.host_note {
         Some(note) => div()

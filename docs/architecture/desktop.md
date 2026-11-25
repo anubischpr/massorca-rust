@@ -197,6 +197,9 @@ Linux only. No automated run opens a visible window.
   the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2). A part that does not
   apply to the item says why in its place. The Information part links the package's website, privacy policy and
   terms of service when it names them.
+- The Installed list (`shell/marketplace/installed.rs`) shows one manager row per installed extension, the
+  `ExtensionManagerRow` of the ui crate (teams-extensions-settings.md 7.4). Its status words come from
+  `status_word` in `model/marketplace/catalogue.rs`. Discover, Updates and the categories keep the card grid.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled
@@ -256,6 +259,21 @@ Linux only. No automated run opens a visible window.
   Browse picks a folder with the system dialog, as Add host does. The seam is `ServiceHandle::accounts_import_candidates`
   (`service/accounts.rs`), which answers absent until the agents service offers the method; then the field stays typed by
   hand. Import keeps sending `from` until the protocol makes it optional.
+- Rollback and the run log (`service/extensions.rs`, `model/marketplace/run_log.rs`): each list read also reads every
+  installed package's run log when the service offers `extensions-log/1`, and records which of `extensions-rollback/1`
+  and `extensions-log/1` it offers. A package's rollback target is the version its newest run that worked replaced, when
+  that run was an update or a rollback; an install or a removal since leaves nothing kept. `extensions.rollback` without
+  consent answers with the restored version and its consent (`RollbackAnswer`), and the call is sent again with that
+  consent. Paired hosts' packages get neither yet.
+- The Installed row's More menu lists "Roll back to <version>" first, above Remove, when the service offers
+  `extensions-rollback/1` and a version is kept (`shell/marketplace/installed.rs`). Its confirm
+  (`model/marketplace/rollback_review.rs`) reads "Roll back <name>?" with one sentence that names the version it puts
+  back; Show details holds the versions and the consent. The first call names no consent, so the confirm shows the
+  consent the service gives (`shell/marketplace/rollback.rs`). Nothing kept opens the item page with its sentence.
+- "View log" in the same menu, when the service offers `extensions-log/1`, opens the package's run log
+  (`shell/marketplace/log_view.rs`, `model/marketplace/run_log.rs`). Each run is one line: its time in UTC to the minute
+  (the desktop keeps no time zone), its action, its versions and its outcome, in the service's order. A run that wrote
+  output shows it under Show details; Copy details copies the whole log. No runs says "No runs recorded yet."
 - Hosted services (SKL-35, decision 0097): the Services category draws a Hosted services section
   (`shell/marketplace/services.rs`) below its packages. It reads `marketplace.service.status` of the picked host
   (`service/hosted_services.rs`, on a paired host's own connection), numbered in `HostedServicesView` so a late answer
