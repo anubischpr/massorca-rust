@@ -255,6 +255,10 @@ interface NativeModuleInterface {
     uniffiSelf: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): Uint8Array;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_terminals(
+    uniffiSelf: bigint,
+    workspace: Uint8Array,
+  ): bigint;
   ubrn_uniffi_massorca_client_ffi_fn_method_host_watch_agents(
     uniffiSelf: bigint,
     workspace: Uint8Array,
@@ -352,6 +356,7 @@ interface NativeModuleInterface {
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_git_status(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_name(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_protocol(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_terminals(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_watch_agents(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_watch_git(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_whoami(): number;
