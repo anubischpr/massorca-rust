@@ -53,6 +53,9 @@ fn live_session() -> AgentSession {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        resume: None,
+        delegation: None,
+        notes: Vec::new(),
     }
 }
 
@@ -142,6 +145,9 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        resume: None,
+        delegation: None,
+        notes: Vec::new(),
         ..live_session()
     };
     assert_wire(
@@ -196,6 +202,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };
@@ -241,6 +248,7 @@ fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: Some(KindModel {
             choices: vec![
                 KindModelChoice {
@@ -323,6 +331,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };
@@ -943,4 +952,67 @@ fn import_candidates_and_an_import_without_a_folder_omit_absent_fields() {
             ]
         }] }),
     );
+}
+
+#[test]
+fn an_import_that_updated_an_account_names_it_and_a_new_one_omits_the_field() {
+    let updated: agents::AccountsImported = serde_json::from_value(json!({
+        "result": "imported",
+        "updated": "0195c0de-0000-7000-8000-000000000002"
+    }))
+    .expect("an updated import decodes");
+    assert_eq!(
+        updated.updated.as_deref(),
+        Some("0195c0de-0000-7000-8000-000000000002")
+    );
+    let older: agents::AccountsImported =
+        serde_json::from_value(json!({ "result": "imported" })).expect("an older result decodes");
+    assert_eq!(older.updated, None);
+    assert_eq!(
+        serde_json::to_value(&older).expect("encodes"),
+        json!({ "result": "imported" }),
+        "a new account's result has no `updated`"
+    );
+}
+
+#[test]
+fn a_session_says_which_children_it_could_delegate_and_an_older_one_says_nothing() {
+    use massorca_protocol::methods::agents::{DelegationOptions, WritingChild};
+
+    let mut session = live_session();
+    session.delegation = Some(Box::new(DelegationOptions {
+        writing_child: WritingChild::Unavailable,
+        read_only_child: false,
+        reason: Some("at the depth limit".to_owned()),
+    }));
+    session.notes = vec!["works in this folder".to_owned()];
+    let value = serde_json::to_value(&session).expect("serializes");
+    assert_eq!(
+        value["delegation"],
+        json!({
+            "writing_child": "unavailable",
+            "read_only_child": false,
+            "reason": "at the depth limit"
+        })
+    );
+    assert_eq!(value["notes"], json!(["works in this folder"]));
+    let decoded: AgentSession = serde_json::from_value(value).expect("deserializes");
+    assert_eq!(decoded, session);
+
+    for (child, wire) in [
+        (WritingChild::OwnWorktree, "own_worktree"),
+        (WritingChild::SharedFolder, "shared_folder"),
+    ] {
+        assert_eq!(serde_json::to_value(child).expect("serializes"), wire);
+    }
+    let newer: WritingChild = serde_json::from_value(json!("elsewhere")).expect("decodes");
+    assert_eq!(newer, WritingChild::Unknown);
+
+    // A record from an older peer has neither field.
+    let mut older = serde_json::to_value(live_session()).expect("serializes");
+    assert!(older.get("delegation").is_none());
+    older.as_object_mut().expect("an object").remove("notes");
+    let decoded: AgentSession = serde_json::from_value(older).expect("an older record decodes");
+    assert_eq!(decoded.delegation, None);
+    assert!(decoded.notes.is_empty());
 }

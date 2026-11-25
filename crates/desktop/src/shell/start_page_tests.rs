@@ -1,25 +1,31 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
-use super::start_page::{picked_options, split_last_segment};
+use std::collections::BTreeMap;
+
+use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
-use crate::model::regions::Region;
-use crate::model::start_page::{StartMode, StartOptions};
+use crate::model::start_page::{
+    CHAT_NEEDS_NEWER_SERVICE, ChatAvailability, StartMode, StartOptions,
+};
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
-    Command, ConnectionState, Refusal, Script, StoreUpdate, TerminalCommand, TerminalStreamItem,
+    ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
+    TerminalCommand, TerminalStreamItem, TerminalWrite,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::terminals::TerminalAttachParams;
+use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams, TerminalState};
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
-use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
+use massorca_ui::tokens::{
+    DURATION_TOOLTIP_DELAY, LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4,
+};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -480,6 +486,81 @@ fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut 
     (rig, cx)
 }
 
+/// The service offers chat sessions and Claude can run one, as a newer service reports on connect (`agent-chat/1`).
+fn offer_chat(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    report_kind_chats(rig, cx, vec![("claude", supported_chat())]);
+}
+
+/// Replaces the chat support the service reports for each kind, as `agent.kinds` lists it (decision 0101, D10).
+fn report_kind_chats(rig: &Rig, cx: &mut VisualTestContext, chats: Vec<(&str, KindChat)>) {
+    let chats: BTreeMap<String, KindChat> = chats
+        .into_iter()
+        .map(|(id, chat)| (id.to_owned(), chat))
+        .collect();
+    rig._updates
+        .send(StoreUpdate::AgentKindChatResync(chats))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+fn supported_chat() -> KindChat {
+    KindChat {
+        supported: true,
+        reason: None,
+        version: Some("2.2.0".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    }
+}
+
+fn unsupported_chat(reason: Option<ChatUnsupportedReason>) -> KindChat {
+    KindChat {
+        supported: false,
+        reason,
+        version: None,
+        range: None,
+    }
+}
+
+/// The Chat availability the page holds for `w1`, as its switch draws it.
+fn chat_availability(rig: &Rig, cx: &mut VisualTestContext) -> ChatAvailability {
+    rig.shell
+        .read_with(cx, |shell, app| shell.chat_availability("w1", app))
+}
+
+fn mode_of(rig: &Rig, cx: &mut VisualTestContext) -> StartMode {
+    rig.shell
+        .read_with(cx, |shell, app| shell.start_mode("w1", app))
+}
+
+/// Moves the pointer onto `selector` and waits out the tooltip delay, so its tooltip draws.
+fn hover(cx: &mut VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element with selector {selector}"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+}
+
+/// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
+/// highlighted row with Enter.
+fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
+    click(cx, "model-picker-trigger");
+    for _ in 0..8 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input(agent);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw(cx);
+}
+
 fn composer_of(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
     rig.shell
         .update(cx, |shell, cx| shell.start_composer("w1", cx))
@@ -508,6 +589,88 @@ fn start_call(script: &mut Script) -> Option<StartCall> {
         }
     }
     None
+}
+
+/// The resize requests the shell sent to the service, as (terminal, cols, rows).
+fn resize_calls(script: &mut Script) -> Vec<(String, u16, u16)> {
+    let mut resizes = Vec::new();
+    while let Some(command) = script.next() {
+        if let Command::Terminal(TerminalCommand::Write(TerminalWrite::Resize {
+            terminal,
+            cols,
+            rows,
+            ..
+        })) = command
+        {
+            resizes.push((terminal, cols, rows));
+        }
+    }
+    resizes
+}
+
+#[gpui::test]
+fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    // Without the chat capability the start is a Terminal start, which opens the session view too.
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let (cols, rows) = (
+        params.cols.expect("the start sends its columns"),
+        params.rows.expect("the start sends its rows"),
+    );
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    // The service created the terminal at the start's grid, and the store lists it so.
+    rig._updates
+        .send(StoreUpdate::TerminalChanged(Terminal {
+            id: terminal.to_owned(),
+            workspace_id: "w1".to_owned(),
+            state: TerminalState::Live,
+            title: None,
+            cols,
+            rows,
+            pid: None,
+            shell: "/bin/zsh".to_owned(),
+            cwd: "/repos/fix-login".to_owned(),
+            created_at_ms: 1,
+            exit: None,
+            holds_secrets: false,
+        }))
+        .expect("the store listens");
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session.clone()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    let (_attach, attach_reply) =
+        attach_call(&mut rig._script).expect("the session's terminal is attached");
+    let (stream_tx, stream_rx) = unbounded_channel();
+    attach_reply
+        .send(Ok(stream_rx))
+        .expect("the shell is waiting for the attach");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    let applied = rig.shell.read_with(cx, |shell, _| shell.session_grid());
+    assert_eq!(
+        applied,
+        Some((cols, rows)),
+        "the view applies the start grid"
+    );
+    assert!(
+        resize_calls(&mut rig._script).is_empty(),
+        "the first draw sends no resize request"
+    );
+    drop(stream_tx);
 }
 
 #[gpui::test]
@@ -651,6 +814,7 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -695,6 +859,7 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -752,15 +917,15 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
-fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
-    cx: &mut TestAppContext,
-) {
+fn with_the_chat_capability_chat_is_the_default_and_both_segments_switch(cx: &mut TestAppContext) {
     let (rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     let mode = |rig: &Rig, cx: &mut VisualTestContext| {
-        rig.shell.read_with(cx, |shell, _| shell.start_mode("w1"))
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
     };
     assert_eq!(mode(&rig, cx), StartMode::Chat);
     assert!(cx.debug_bounds("start-terminal-note").is_none());
@@ -778,13 +943,250 @@ fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
 }
 
 #[gpui::test]
-fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
+fn without_the_chat_capability_the_switch_starts_on_terminal_and_chat_is_off(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    click(cx, "segment-0");
+    assert_eq!(
+        mode(&rig, cx),
+        StartMode::Terminal,
+        "a click on the off Chat segment changes nothing"
+    );
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    let chat = cx
+        .debug_bounds("segment-0")
+        .expect("the Chat segment is drawn")
+        .center();
+    cx.simulate_mouse_move(chat, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the off Chat segment shows why it is off"
+    );
+}
+
+#[gpui::test]
+fn chat_turns_on_by_itself_when_the_service_starts_offering_it(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    offer_chat(&rig, cx);
+    assert_eq!(mode(&rig, cx), StartMode::Chat, "Chat is the default again");
+    assert!(cx.debug_bounds("start-terminal-note").is_none());
+}
+
+#[gpui::test]
+fn send_without_the_chat_capability_opens_the_session_with_its_terminal_focused(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
+}
+
+/// After a Terminal start the Canvas shows the started session, its terminal is attached and holds the keyboard,
+/// and the start composer no longer does (owner ruling 2026-11-25).
+fn assert_started_session_has_the_keyboard(
+    rig: &mut Rig,
+    cx: &mut VisualTestContext,
+    terminal: &str,
+) {
+    let canvas = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert!(
+        matches!(canvas, Canvas::Session(_)),
+        "the Canvas shows the started session: {canvas:?}"
+    );
+    let (attach, attach_reply) =
+        attach_call(&mut rig._script).expect("the agent's terminal is attached");
+    assert_eq!(attach.terminal, terminal);
+    let (_stream_tx, stream_rx) = unbounded_channel();
+    attach_reply
+        .send(Ok(stream_rx))
+        .expect("the shell is waiting for the attach");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    // One element holds the keyboard, so the terminal holding it means the start composer does not.
+    let terminal_focused = cx.update(|window, cx| {
+        let shell = rig.shell.read(cx);
+        let surface = &shell.terminal_views[terminal].surface;
+        surface.read(cx).focus_handle().is_focused(window)
+    });
+    assert!(
+        terminal_focused,
+        "the started session's terminal has the keyboard"
+    );
+}
+
+#[gpui::test]
+fn a_kind_that_cannot_chat_turns_chat_off_with_its_reason_and_starts_on_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let outside_range = KindChat {
+        supported: false,
+        reason: Some(ChatUnsupportedReason::VersionOutsideRange),
+        version: Some("2.4.1".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    };
+    let cases = [
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            "Claude was not found on this computer.",
+        ),
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::VersionUnknown)),
+            "Claude's version could not be read.",
+        ),
+        (
+            outside_range,
+            "Chat needs Claude >=2.1.0, <2.3.0; this computer has 2.4.1.",
+        ),
+        (unsupported_chat(None), "Claude cannot run chat sessions."),
+    ];
+    for (chat, reason) in cases {
+        report_kind_chats(&rig, cx, vec![("claude", chat)]);
+        assert_eq!(mode_of(&rig, cx), StartMode::Terminal, "{reason}");
+        assert_eq!(chat_availability(&rig, cx).reason(), Some(reason));
+        assert!(cx.debug_bounds("start-terminal-note").is_some());
+        hover(cx, "segment-0");
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the off Chat segment shows why it is off: {reason}"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_pick_change_between_two_agents_turns_chat_on_and_off(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ],
+    );
+    report_kind_chats(
+        &rig,
+        cx,
+        vec![
+            ("claude", supported_chat()),
+            (
+                "codex",
+                unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            ),
+        ],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Claude is the picked agent and can chat"
+    );
+
+    pick_agent(cx, "Codex");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Terminal,
+        "Codex cannot chat, so Terminal is selected"
+    );
+    assert_eq!(
+        chat_availability(&rig, cx).reason(),
+        Some("Codex was not found on this computer.")
+    );
+    hover(cx, "segment-0");
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the drawn Chat segment turns off with the pick, and says why"
+    );
+
+    pick_agent(cx, "Claude");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Chat comes back with an agent that can chat"
+    );
+}
+
+#[test]
+fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
+    let off = mode_segments(&ChatAvailability::new(false, None));
+    assert!(off[0].is_disabled());
+    assert_eq!(
+        off[0].tooltip_text().map(|text| text.as_ref()),
+        Some(CHAT_NEEDS_NEWER_SERVICE)
+    );
+    assert!(!off[1].is_disabled(), "Terminal is always on");
+    let not_detected = unsupported_chat(Some(ChatUnsupportedReason::NotDetected));
+    let for_agent = mode_segments(&ChatAvailability::new(
+        true,
+        Some(("Claude", Some(&not_detected))),
+    ));
+    assert!(for_agent[0].is_disabled());
+    assert_eq!(
+        for_agent[0].tooltip_text().map(|text| text.as_ref()),
+        Some("Claude was not found on this computer.")
+    );
+    let on = mode_segments(&ChatAvailability::new(true, None));
+    assert!(!on[0].is_disabled());
+    assert_eq!(on[0].tooltip_text(), None);
+}
+
+#[gpui::test]
+fn a_terminal_start_opens_the_session_with_its_terminal_focused(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    offer_chat(&rig, cx);
     click(cx, "segment-1");
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
@@ -801,23 +1203,7 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    let (canvas, work_panel, selected) = rig.shell.read_with(cx, |shell, _| {
-        (
-            shell.model.canvas(),
-            shell.model.region_visible(Region::WorkPanel),
-            shell
-                .model
-                .terminal_selection()
-                .selected("w1")
-                .map(str::to_owned),
-        )
-    });
-    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
-    assert!(work_panel, "the Work panel shows the agent's terminal");
-    assert_eq!(selected.as_deref(), Some(terminal));
-    let (attach, _attach_reply) =
-        attach_call(&mut rig._script).expect("the agent's terminal is attached");
-    assert_eq!(attach.terminal, terminal);
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
 }
 
 fn claude_with_modes() -> AgentKind {

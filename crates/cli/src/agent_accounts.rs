@@ -367,7 +367,17 @@ fn summary_lines(summary: &AccountSummary) -> Vec<String> {
 
 fn import_lines(imported: &AccountsImported) -> Vec<String> {
     match (imported.result, &imported.account, &imported.reason) {
-        (ImportResult::Imported, Some(account), _) => summary_lines(account),
+        (ImportResult::Imported, Some(account), _) => {
+            let mut lines = Vec::new();
+            if let Some(updated) = &imported.updated {
+                // The login was already this account (decision 0098): it has the new files, and no account was added.
+                lines.push(format!(
+                    "updated account {updated} with the imported files instead of adding one"
+                ));
+            }
+            lines.extend(summary_lines(account));
+            lines
+        }
         (ImportResult::NotFound, _, reason) => vec![format!(
             "not imported: {}",
             reason

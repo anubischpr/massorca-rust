@@ -23,7 +23,7 @@ use massorca_protocol::methods::agents::{
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
-use crate::kind::KindDecl;
+use crate::kind::{KindDecl, valid_id};
 use crate::packages::KindPackages;
 use crate::paths;
 use crate::sessions::AgentError;
@@ -340,6 +340,15 @@ pub fn remove(profile_dir: &Path, kind: &str) -> Result<CredentialsRemoved, Agen
     remove_at(profile_dir, &["homes"], &home, kind)
 }
 
+/// [`remove`] for a caller that already holds [`lock_homes`].
+pub(crate) fn remove_locked(
+    profile_dir: &Path,
+    kind: &str,
+) -> Result<CredentialsRemoved, AgentError> {
+    let home = home_of(profile_dir, kind)?;
+    remove_at_locked(profile_dir, &["homes"], &home, kind)
+}
+
 /// Deletes one account's home (decision 0059). Its kind's other accounts and the 0056 home are left alone.
 pub fn remove_account(
     profile_dir: &Path,
@@ -394,6 +403,240 @@ pub(crate) fn remove_account_locked(
 ) -> Result<CredentialsRemoved, AgentError> {
     let home = account_home_of(profile_dir, kind, account)?;
     remove_at_locked(profile_dir, &["accounts", kind], &home, account)
+}
+
+/// Gives the account `into` the declared credential files the new account `from` holds, both of `kind` (decision 0098),
+/// then deletes `from`'s home. Only the declared files `from` has are written, each inside `into`'s home: read in full
+/// first (a link, anything but a regular file, or a file over [`MAX_FILE_BYTES`] refuses the update before anything is
+/// written), then written to a new owner-only sibling and renamed over the old one. Every other file of `into`'s home
+/// stays as it is, and a declared file `from` did not bring is kept: an agent home also holds transcripts, history and
+/// settings. A link at a declared file in `into`'s home is refused, never followed. The caller holds [`lock_homes`].
+pub(crate) fn update_account_files_locked(
+    profile_dir: &Path,
+    packages: &dyn KindPackages,
+    kind: &str,
+    from: &str,
+    into: &str,
+) -> Result<(), AgentError> {
+    let decl = declared(profile_dir, packages, kind)?;
+    let source = account_home_of(profile_dir, &decl.id, from)?;
+    let target = account_home_of(profile_dir, &decl.id, into)?;
+    let (_root, _pins) = root_dir(profile_dir, &["accounts", decl.id.as_str()])?;
+    if home_state(&source)? != HomeState::Directory {
+        return Err(invalid(format!(
+            "account {from} of agent kind {kind} has no credential home to update from"
+        )));
+    }
+    if home_state(&target)? != HomeState::Directory {
+        return Err(invalid(format!(
+            "account {into} of agent kind {kind} has no credential home; remove it and add the account again"
+        )));
+    }
+    #[cfg(windows)]
+    let _target_pin = pin(&target)?;
+    let names: Vec<String> = decl
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.files.clone())
+        .unwrap_or_default();
+    // The state file is the CLI's own and keeps its data in the existing home; it is repaired before the next check and
+    // launch (decision 0099), never replaced by the one an import built.
+    let state_file = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| credentials.state.as_ref())
+        .map(|state| state.file.as_str());
+    let mut contents = Vec::new();
+    for name in &names {
+        if Some(name.as_str()) == state_file {
+            continue;
+        }
+        let path = source.join(name);
+        if matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+        {
+            continue;
+        }
+        let bytes = read_source(&path).map_err(|reason| {
+            invalid(format!(
+                "the new {name} of agent kind {kind} cannot be used: {reason}"
+            ))
+        })?;
+        contents.push((name.as_str(), bytes));
+    }
+    if contents.is_empty() {
+        return Err(invalid(format!(
+            "account {from} of agent kind {kind} holds no declared file to update account {into} with"
+        )));
+    }
+    for (name, _) in &contents {
+        match fs::symlink_metadata(target.join(name)) {
+            Ok(meta) if is_link(&meta) || !meta.is_file() => {
+                return Err(invalid(format!(
+                    "{} is not a regular file; credential files are never written through a link, remove it by hand",
+                    target.join(name).display()
+                )));
+            }
+            _ => {}
+        }
+    }
+    for (name, bytes) in &contents {
+        replace_file(&target.join(name), bytes)?;
+    }
+    remove_at_locked(profile_dir, &["accounts", decl.id.as_str()], &source, from)?;
+    tracing::info!(kind, files = ?contents.iter().map(|(name, _)| *name).collect::<Vec<_>>(), "updated an account's credential files");
+    Ok(())
+}
+
+/// Writes `bytes` to a new owner-only sibling of `path` and renames it over `path`, so a reader sees the old file or the
+/// new one, never a part. The sibling is deleted when the write or the rename fails.
+fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("credential");
+    let staged = path.with_file_name(sibling_name(name, STAGING));
+    let written = write_private_file(&staged, bytes).and_then(|()| fs::rename(&staged, path));
+    if let Err(error) = written {
+        if fs::symlink_metadata(&staged).is_ok() {
+            let _ = fs::remove_file(&staged);
+        }
+        return Err(internal("put the new credential file in place", &error));
+    }
+    Ok(())
+}
+
+/// Settles the old homes a replace set aside and a crash left behind (decision 0098), at startup under [`lock_homes`]: in
+/// `<profile>/agents/homes` and each `<profile>/agents/accounts/<kind>`, an aside folder `.<name>.old-<id>` whose home
+/// `<name>` is missing is renamed back to it, and one whose home exists, so the swap finished, is deleted. Links and
+/// names that are not a kind or an account id are left alone.
+pub(crate) fn restore_replaced_leftovers_locked(profile_dir: &Path) {
+    let mut roots: Vec<(Vec<String>, bool)> = vec![(vec!["homes".to_owned()], false)];
+    if let Ok(kinds) = fs::read_dir(paths::agents_dir(profile_dir).join("accounts")) {
+        for kind in kinds
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+        {
+            if valid_id(&kind) {
+                roots.push((vec!["accounts".to_owned(), kind], true));
+            }
+        }
+    }
+    for (chain, accounts) in roots {
+        let chain: Vec<&str> = chain.iter().map(String::as_str).collect();
+        if check_chain(profile_dir, &chain).is_err() {
+            continue;
+        }
+        let root = dir_chain(profile_dir, &chain).pop().unwrap_or_default();
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some((home_name, _)) = file
+                .strip_prefix('.')
+                .and_then(|rest| rest.rsplit_once(&format!(".{REPLACED}-")))
+            else {
+                continue;
+            };
+            let named = if accounts {
+                paths::valid_account_id(home_name)
+            } else {
+                valid_id(home_name)
+            };
+            let aside = entry.path();
+            let plain_dir =
+                fs::symlink_metadata(&aside).is_ok_and(|meta| meta.is_dir() && !is_link(&meta));
+            if !named || !plain_dir {
+                continue;
+            }
+            let home = root.join(home_name);
+            match home_state(&home) {
+                Ok(HomeState::Missing) => match fs::rename(&aside, &home) {
+                    Ok(()) => tracing::warn!("a credential home a crash left aside was put back"),
+                    Err(error) => {
+                        tracing::error!(aside = %aside.display(), %error, "a credential home left aside could not be put back")
+                    }
+                },
+                Ok(HomeState::Directory) => {
+                    if fs::remove_dir_all(&aside).is_err() {
+                        tracing::warn!(aside = %aside.display(), "a replaced credential home could not be deleted");
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+}
+
+/// Deletes what is left of a kind's account folder once its accounts are gone (decision 0098): the hidden folders an
+/// interrupted import or replace left in `<profile>/agents/accounts/<kind>/` (they may hold credential copies), the
+/// folder itself when it is then empty, and the hidden siblings of the kind's 0056 home. A link is refused, never
+/// followed, and named in the returned problems; so is anything that could not be deleted. The caller holds
+/// [`lock_homes`].
+pub(crate) fn remove_kind_leftovers_locked(profile_dir: &Path, kind: &str) -> Vec<AgentError> {
+    let mut problems = Vec::new();
+    if !valid_id(kind) {
+        return problems;
+    }
+    let remove_hidden = |root: &Path, prefix: &str, problems: &mut Vec<AgentError>| {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_str().is_some_and(|name| name.starts_with(prefix)) {
+                continue;
+            }
+            let path = entry.path();
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if is_link(&meta) => problems.push(invalid(format!(
+                    "{} is a link; it is never followed, remove it by hand",
+                    path.display()
+                ))),
+                Ok(meta) if meta.is_dir() => {
+                    if let Err(error) = fs::remove_dir_all(&path) {
+                        problems.push(internal("delete a leftover credential folder", &error));
+                    }
+                }
+                Ok(_) => {
+                    if let Err(error) = fs::remove_file(&path) {
+                        problems.push(internal("delete a leftover credential file", &error));
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    };
+    match check_chain(profile_dir, &["accounts", kind]) {
+        Ok(()) => {
+            let accounts = paths::accounts_dir(profile_dir, kind);
+            if fs::symlink_metadata(&accounts).is_ok() {
+                remove_hidden(&accounts, ".", &mut problems);
+                match fs::remove_dir(&accounts) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    // A busy account kept its home; that is reported already.
+                    Err(_)
+                        if fs::read_dir(&accounts)
+                            .is_ok_and(|mut entries| entries.next().is_some()) => {}
+                    Err(error) => {
+                        problems.push(internal("delete the kind's account folder", &error))
+                    }
+                }
+            }
+        }
+        Err(error) => problems.push(error),
+    }
+    match check_homes_dir(profile_dir) {
+        Ok(()) => {
+            let homes = paths::agents_dir(profile_dir).join("homes");
+            remove_hidden(&homes, &format!(".{kind}."), &mut problems);
+        }
+        Err(error) => problems.push(error),
+    }
+    problems
 }
 
 /// The account's home when its kind's directory and it exist as plain directories, `None` when it does not exist yet
@@ -714,7 +957,7 @@ fn refuse_replaced_leftover(homes: &Path, kind: &str) -> Result<(), AgentError> 
         {
             let path = entry.path();
             let mut error = invalid(format!(
-                "{} holds an old credential home of agent kind {kind} set aside by an earlier replace; move or delete it by hand, then import again",
+                "{} holds an old credential home of {kind} set aside by an earlier replace; rename it back to {kind} if the home is missing, or move or delete it by hand, then import again",
                 path.display()
             ));
             error.data = Some(json!({ "leftover": path.display().to_string() }));
@@ -853,7 +1096,7 @@ pub(crate) fn not_regular(meta: &fs::Metadata) -> Result<(), String> {
 }
 
 /// A symbolic link, or on Windows any reparse point (junctions included).
-fn is_link(meta: &fs::Metadata) -> bool {
+pub(crate) fn is_link(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -2016,6 +2259,146 @@ mod tests {
         assert_eq!(
             usable_account_home(profile, "fake", ACCOUNT).unwrap(),
             Some(account_home(&fixture, ACCOUNT))
+        );
+    }
+
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn an_update_writes_only_the_files_the_new_account_brought_and_keeps_everything_else() {
+        let fixture = Fixture::new(&["token.json", "extra.json"]);
+        let profile = fixture.profile.path();
+        fixture.source_file("token.json", b"old");
+        fixture.source_file("extra.json", b"old extra");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        fs::create_dir_all(home.join("projects")).unwrap();
+        fs::write(home.join("projects").join("x.jsonl"), b"transcript").unwrap();
+        // The new account brought only the token.
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        fs::write(new_home.join("token.json"), b"new").unwrap();
+
+        update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+            .unwrap();
+
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"new");
+        assert_eq!(fs::read(home.join("extra.json")).unwrap(), b"old extra");
+        assert_eq!(
+            fs::read(home.join("projects").join("x.jsonl")).unwrap(),
+            b"transcript"
+        );
+        assert_eq!(entries(&home), ["extra.json", "projects", "token.json"]);
+        assert!(!new_home.exists(), "the new account's home is deleted");
+        assert_eq!(entries(home.parent().unwrap()), [ACCOUNT]);
+    }
+
+    #[test]
+    fn an_update_keeps_the_existing_state_file_and_never_replaces_it() {
+        let fixture = with_state(false);
+        let profile = fixture.profile.path();
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        // The CLI wrote its own data into the existing account's state file.
+        fs::write(
+            home.join("state.json"),
+            br#"{"onboarded":true,"projects":{"x":1}}"#,
+        )
+        .unwrap();
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        fs::write(new_home.join("token.json"), b"new").unwrap();
+        fs::write(new_home.join("state.json"), br#"{"onboarded":true}"#).unwrap();
+
+        update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+            .unwrap();
+
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"new");
+        assert_eq!(
+            fs::read(home.join("state.json")).unwrap(),
+            br#"{"onboarded":true,"projects":{"x":1}}"#
+        );
+    }
+
+    #[test]
+    fn an_update_refuses_a_linked_file_and_a_missing_home_and_changes_nothing() {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        let missing =
+            update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+                .unwrap_err();
+        assert_eq!(missing.code, codes::AGENT_CREDENTIALS_INVALID);
+        fixture.source_file("token.json", b"old");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        let empty =
+            update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+                .unwrap_err();
+        assert_eq!(empty.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(new_home.is_dir(), "a refused update deletes nothing");
+        let home = account_home(&fixture, ACCOUNT);
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn the_startup_restores_an_aside_home_whose_home_is_missing_and_deletes_one_whose_home_exists()
+    {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        fixture.source_file("token.json", b"kept");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        let finished = home.with_file_name(format!(".{ACCOUNT}.{REPLACED}-1"));
+        fs::create_dir(&finished).unwrap();
+        let lost = account_home(&fixture, OTHER_ACCOUNT);
+        let crashed = lost.with_file_name(format!(".{OTHER_ACCOUNT}.{REPLACED}-2"));
+        fs::create_dir(&crashed).unwrap();
+        fs::write(crashed.join("token.json"), b"only copy").unwrap();
+        let legacy_aside = fixture.home().with_file_name(format!(".fake.{REPLACED}-3"));
+        fs::create_dir_all(&legacy_aside).unwrap();
+
+        restore_replaced_leftovers_locked(profile);
+
+        assert!(!finished.exists(), "a finished swap's old home is deleted");
+        assert_eq!(fs::read(lost.join("token.json")).unwrap(), b"only copy");
+        assert!(!crashed.exists());
+        assert!(fixture.home().is_dir(), "the 0056 home is put back too");
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn the_kind_leftovers_and_its_empty_account_folder_are_deleted() {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        let accounts = paths::accounts_dir(profile, "fake");
+        fs::create_dir_all(accounts.join(format!(".{ACCOUNT}.{REPLACED}-1"))).unwrap();
+        fs::create_dir_all(accounts.join(format!(".{ACCOUNT}.{STAGING}-2"))).unwrap();
+        fs::write(
+            accounts
+                .join(format!(".{ACCOUNT}.{STAGING}-2"))
+                .join("token.json"),
+            b"copy",
+        )
+        .unwrap();
+        let homes = fixture.home().parent().unwrap().to_path_buf();
+        fs::create_dir_all(homes.join(format!(".fake.{REPLACED}-3"))).unwrap();
+        fs::create_dir_all(homes.join(".other.old-4")).unwrap();
+
+        let problems = remove_kind_leftovers_locked(profile, "fake");
+
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!accounts.exists(), "the kind's account folder is deleted");
+        assert_eq!(
+            entries(&homes),
+            [".other.old-4"],
+            "another kind's folder stays"
         );
     }
 

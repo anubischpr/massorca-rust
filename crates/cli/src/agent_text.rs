@@ -115,6 +115,16 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if session.released {
         lines.push("released: yes".to_owned());
     }
+    // Why an exited session cannot resume (decision 0160); a live run is not resumed anyway.
+    if session.execution.state == massorca_protocol::methods::terminals::TerminalState::Exited
+        && let Some(resume) = session.resume.as_ref().filter(|resume| !resume.available)
+    {
+        lines.push(format!(
+            "resume: unavailable: {} ({})",
+            resume.reason.as_deref().unwrap_or("no reason given"),
+            resume.code.as_deref().unwrap_or("unknown")
+        ));
+    }
     if let Some(mode) = &session.permission_mode {
         // A mode no launch argument carried is only requested until something confirms it (decision 0083).
         let state = if session.mode_confirmed {

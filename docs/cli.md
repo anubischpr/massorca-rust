@@ -108,7 +108,7 @@ machine.
 | `agent archive <SESSION>` | Prints the archived output of a released session. Withheld for a run that holds vault secrets, unless the caller is host-admin. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
-| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`, or in the parent's folder when that is a plain folder workspace. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
@@ -121,11 +121,11 @@ machine.
 | `extension install <SOURCE> [--sha256 HEX] [--yes \| --consent FINGERPRINT] [--yes-run-installer]` | Installs a package. Without `--yes` or `--consent` it prints the review and exits 1 with `extension.consent_required`. `--yes` accepts the review this run prints. `--consent` accepts exactly the review an earlier run printed, by its fingerprint, and fails with `extension.consent_mismatch` if the package or what it would run changed since. A package from a folder or archive that declares a vendor command is refused with `extension.vendor_command_refused`; only the built-in catalogue names one. A package whose agent CLI is missing also needs `--yes-run-installer`, which runs the vendor's official command shown in the review; the review says it installs the current release, unpinned. In an agent's run (`MASSORCA_AGENT_SESSION` or `MASSORCA_AGENT_TOKEN` set) `--yes-run-installer` is refused with `extension.needs_person`: a person runs the command. `file:` needs `--sha256`. Never prompts. |
 | `extension update <ID> [--sha256 HEX] [--yes \| --consent FINGERPRINT]` | Brings an installed package up to date in place, from the source it was installed from. The source is read and reviewed again. Without `--yes` or `--consent` it prints the new review and exits 1 with `extension.consent_required`; `--consent` accepts exactly that review and fails with `extension.consent_mismatch` if the package changed since. A package whose files are unchanged is reported as already up to date and nothing is written. The enabled state, CLI registrations and install time are kept; no vendor command runs. `file:` needs `--sha256`. In an agent's run it is refused with `extension.needs_person`. An older service that does not know the method is reported as too old to update. Never prompts. |
 | `extension enable <ID>` / `extension disable <ID>` | Registers or unregisters the package's contributions. Files and data stay. While an install or removal of the package runs, either is refused with `extension.busy`. |
-| `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
+| `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts: for each agent kind the package provided and no other installed package provides, every account, its files under the profile (leftovers of an interrupted import included), and the kind's old single credential home (decision 0098). Nothing is signed out at the vendor, so a login a MassOrca sign-in made stays valid there. A busy account, a built-in agent kind named by a package outside `massorca.*`, and the accounts of a package whose files cannot be read are left, and listed in the result's failures. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
 | `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
 | `agent accounts add <KIND> [--label L] [--no-attach]` | Signs a new account in: runs the kind's login in a service-owned terminal, prints the account and the terminal, then attaches to it unless `--no-attach`. Refused with `--json` unless `--no-attach`. Built-in sign-in is declared for `claude` only (`claude auth login`); a kind without a sign-in is refused with `agent.credentials_unsupported`, which says to sign in from the vendor's CLI, then import the login. |
 | `agent accounts sign-in <KIND> <ACCOUNT> [--no-attach]` | Signs an existing account in again: runs the kind's login in its own home, prints the account and the terminal, then attaches unless `--no-attach`. The account is kept whatever the login ends with (an expired one stays listed, as `expired`, and is not deleted or signed out). Refused with `--json` unless `--no-attach`. Refused with `agent.account_not_found` for an unknown account or one of another kind, and with `agent.busy` while the account is signing in or a live run uses it. |
-| `agent accounts import <KIND> [--from <DIR>] [--label L]` | Copies the kind's declared login files into a new account, then checks it. Without `--from`, each file is copied from where the kind's CLI keeps it (decision 0097): the command prints `copying <file> from <path>` for each file it will copy, and `skipping <file>` for a missing optional one, then imports; when a required file is missing it copies nothing and fails with `agent.credentials_invalid`, naming each missing file and where it was looked for. With `--from`, every file comes from `DIR`. Either way a missing optional file is skipped and a missing required one gives `not_found`, with the reason naming the file. Prints `imported`, `failed` (with the reason) or `not_found`. Names and sizes only. Without `--from` it needs a service that offers `agent-import-detect/1`. |
+| `agent accounts import <KIND> [--from <DIR>] [--label L]` | Copies the kind's declared login files into a new account, then checks it. Without `--from`, each file is copied from where the kind's CLI keeps it (decision 0097): the command prints `copying <file> from <path>` for each file it will copy, and `skipping <file>` for a missing optional one, then imports; when a required file is missing it copies nothing and fails with `agent.credentials_invalid`, naming each missing file and where it was looked for. With `--from`, every file comes from `DIR`. Either way a missing optional file is skipped and a missing required one gives `not_found`, with the reason naming the file. Prints `imported`, `failed` (with the reason) or `not_found`. When the login is already an account of the kind, that account gets the new credential files (its other files stay) and keeps its id, label, active mark and project choices, and the command prints `updated account <ID> with the imported files instead of adding one` (`--json`: `updated`) (decision 0098); while that account is busy the import fails instead. Names and sizes only. Without `--from` it needs a service that offers `agent-import-detect/1`. |
 | `agent accounts candidates [<KIND>]` | Shows where an import without `--from` would copy from: per kind `ready` or `not ready` and its folder (the folder of the first required file), then each declared file with `required` or `optional`, `found` or `missing`, its path, and the override variable when one was used (`from CLAUDE_CONFIG_DIR`). Without a kind, every kind that declares login files. Reads metadata only, never a file's contents. `--json` prints the `agent.accounts.import_candidates` result. |
 | `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
 | `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
@@ -234,9 +234,17 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   its conversation. The session keeps its id and its agent ref; its activity is absent until
   the new run reports. The arguments and environment of the first start are not kept. A live
   run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
-  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; another
+  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
+  session whose agent saved no conversation for its ref fails with `agent.resume_not_found`
+  before any run starts (decision 0160); another
   writing session in the workspace
   fails with `agent.workspace_busy`.
+- `agent status` shows, for an exited session that cannot resume, a line
+  `resume: unavailable: REASON (CODE)`, for example
+  `resume: unavailable: the agent saved no conversation for this session (agent.resume_not_found)`.
+  With `--json` every session carries `resume: { available, code?, reason? }`. A resumed run
+  that fails because its agent found no conversation (Claude: "No conversation found with
+  session ID") leaves the session exited with that state, and its exit as it was.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what
@@ -281,11 +289,25 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   child gets a new workspace in the parent's project, named `--name` or `<parent
   workspace>-<n>` with the first free `n`, on a branch of that name based on the parent
   workspace's branch; it starts from that branch's last commit, so uncommitted changes in the
-  parent are not carried over, and the result's `note` says so. A parent in a folder workspace
-  fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
+  parent are not carried over, and the result's `note` says so. A writing child of a parent in
+  a plain folder workspace runs in that folder, with no copy, and its `note` and
+  `notes` say "This workspace has no Git, so the child works in this folder."; the
+  parent's delegation tree counts as one writer there, and any other writing start in the
+  folder still fails with `agent.workspace_busy` (decision 0161). A parent in a worktree with
+  no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
   delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
+  Each session's `--json` record carries `delegation`: `writing_child` (`own_worktree`,
+  `shared_folder` or `unavailable`), `read_only_child`, and a `reason` when no writing child is
+  possible.
+- Every agent run finds `massorca` first on its `PATH` (the folder of the service's own
+  executable). A kind that declares an `instructions` channel (the built-in `claude`, through
+  `--append-system-prompt`) gets a short text, when `claude --help` lists that flag, on its command line telling it to use `agent
+  delegate`, `agent tree`, `agent status`, `agent stop` and `agent bring-back` when the person
+  asks for a child session, and that its own subagents are not shown in the Sidebar; only while
+  `agents.delegation_depth` leaves room for a child (decision 0161). A CLI that does not list the
+  flag starts without the text, and the session's `notes` say so.
 - `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.

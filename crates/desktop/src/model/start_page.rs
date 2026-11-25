@@ -9,7 +9,7 @@ use massorca_protocol::methods::workspaces::WorkspaceState;
 
 use super::service_view::LOCAL_HOST;
 use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
-use crate::service::StoreState;
+use crate::service::{ChatUnsupportedReason, KindChat, StoreState};
 
 /// Why the page's actions that need git are off.
 pub const GIT_LATER: &str = "Git operations come later.";
@@ -23,8 +23,8 @@ pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 
-/// Where a session started from the page opens: as a Conversation in the Canvas, or as the agent's
-/// own terminal in the Work panel (D-AG-01, pv96). Chat is the default.
+/// How a session started from the page runs: as a Conversation (chat), or as the agent's own terminal. Both open
+/// in the Canvas (D-AG-01, owner ruling 2026-11-25). Chat is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StartMode {
     #[default]
@@ -49,11 +49,81 @@ impl StartMode {
             Self::Terminal
         }
     }
+
+    /// The mode a start opens in: this one while Chat is available, else Terminal.
+    pub fn offered(self, chat_available: bool) -> Self {
+        if chat_available { self } else { Self::Terminal }
+    }
+}
+
+/// Why the Chat segment is off until the service offers chat sessions.
+pub const CHAT_NEEDS_NEWER_SERVICE: &str = "Chat sessions need a newer service.";
+
+/// Whether the Chat segment is on (decision 0101, D11): on while the service offers `agent-chat/1` and the picked
+/// agent can chat. With no agent picked it stays on, and Send says what is missing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatAvailability {
+    Available,
+    /// Off, with the reason its tooltip gives.
+    Unavailable(String),
+}
+
+impl ChatAvailability {
+    /// `agent` is the picked agent's name and its chat support; `None` while no agent is picked.
+    pub fn new(offered: bool, agent: Option<(&str, Option<&KindChat>)>) -> Self {
+        if !offered {
+            return Self::Unavailable(CHAT_NEEDS_NEWER_SERVICE.to_owned());
+        }
+        match agent {
+            Some((_, Some(chat))) if chat.supported => Self::Available,
+            Some((name, chat)) => Self::Unavailable(cannot_chat(name, chat)),
+            None => Self::Available,
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    /// The reason the segment is off, when it is.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Available => None,
+            Self::Unavailable(reason) => Some(reason.as_str()),
+        }
+    }
+}
+
+/// Why the picked agent `name` cannot run a chat, as the service reported it (decision 0101, D10).
+fn cannot_chat(name: &str, chat: Option<&KindChat>) -> String {
+    match chat.and_then(|chat| chat.reason) {
+        Some(ChatUnsupportedReason::NotDetected) => {
+            format!("{name} was not found on this computer.")
+        }
+        Some(ChatUnsupportedReason::VersionUnknown) => {
+            format!("{name}'s version could not be read.")
+        }
+        Some(ChatUnsupportedReason::VersionOutsideRange) => {
+            match chat.and_then(version_and_range) {
+                Some((version, range)) => {
+                    format!("Chat needs {name} {range}; this computer has {version}.")
+                }
+                None => format!("{name} cannot run chat sessions."),
+            }
+        }
+        // A reason from a newer service reads as the plain one.
+        Some(ChatUnsupportedReason::Unknown) | None => format!("{name} cannot run chat sessions."),
+    }
+}
+
+/// The version the service read and the range it supports, when it gave both.
+fn version_and_range(chat: &KindChat) -> Option<(&str, &str)> {
+    Some((chat.version.as_deref()?, chat.range.as_deref()?))
 }
 
 /// The note under the composer while Terminal is chosen (WS-40).
 pub const TERMINAL_NOTE: &str =
-    "The agent opens in a Work panel terminal. Some features are limited there.";
+    "The agent runs in its own terminal. Some features are limited there.";
 
 /// The key hints under the composer, each key with what it does (D-AG-01).
 pub const KEY_HINTS: [(&str, &str); 4] = [
@@ -162,15 +232,24 @@ pub fn start_options(
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, at the
-/// Work panel's terminal size. A `permission_mode` is sent only when the person picked one; without it the vendor CLI
-/// starts in its own default.
+/// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
+/// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
+pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
+    shown
+        .or(fitted)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
+}
+
+/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, its
+/// terminal at `grid` (see `start_grid`). A `permission_mode` is sent only when the person picked one; without it the
+/// vendor CLI starts in its own default.
 pub fn start_params(
     workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.map(str::to_owned),
@@ -180,12 +259,28 @@ pub fn start_params(
         env: BTreeMap::new(),
         read_only: false,
         title: None,
-        cols: Some(NEW_TERMINAL_COLS),
-        rows: Some(NEW_TERMINAL_ROWS),
+        cols: Some(grid.0),
+        rows: Some(grid.1),
         request_id: None,
         permission_mode,
         model: options.model,
         effort: options.effort,
+    }
+}
+
+/// The `agent.start` call that starts a session again in `workspace` with `kind`, its terminal at `grid`: no first
+/// prompt, and no saved conversation carried over from the session it replaces.
+pub fn start_again_params(workspace: &str, kind: &str, grid: (u16, u16)) -> AgentStartParams {
+    AgentStartParams {
+        prompt: None,
+        ..start_params(
+            Some(workspace),
+            kind,
+            "",
+            None,
+            StartOptions::default(),
+            grid,
+        )
     }
 }
 
@@ -349,6 +444,97 @@ mod tests {
     }
 
     #[test]
+    fn without_the_chat_capability_every_start_opens_on_terminal() {
+        assert_eq!(StartMode::Chat.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Terminal.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Chat.offered(true), StartMode::Chat);
+        assert_eq!(StartMode::Terminal.offered(true), StartMode::Terminal);
+    }
+
+    fn agent_chat(supported: bool, reason: Option<ChatUnsupportedReason>) -> KindChat {
+        KindChat {
+            supported,
+            reason,
+            version: None,
+            range: None,
+        }
+    }
+
+    #[test]
+    fn chat_is_available_while_the_service_offers_it_and_the_picked_agent_can_chat() {
+        let can = agent_chat(true, None);
+        assert!(ChatAvailability::new(true, Some(("Claude", Some(&can)))).is_available());
+        assert_eq!(
+            ChatAvailability::new(false, Some(("Claude", Some(&can)))).reason(),
+            Some(CHAT_NEEDS_NEWER_SERVICE)
+        );
+        assert!(
+            ChatAvailability::new(true, None).is_available(),
+            "with no agent picked Send says what is missing, and Chat stays on"
+        );
+    }
+
+    #[test]
+    fn each_reason_says_why_the_picked_agent_cannot_chat() {
+        let reason_for = |chat: Option<KindChat>| {
+            ChatAvailability::new(true, Some(("Claude", chat.as_ref())))
+                .reason()
+                .map(str::to_owned)
+        };
+        let not_detected = agent_chat(false, Some(ChatUnsupportedReason::NotDetected));
+        assert_eq!(
+            reason_for(Some(not_detected)).as_deref(),
+            Some("Claude was not found on this computer.")
+        );
+        let unreadable = agent_chat(false, Some(ChatUnsupportedReason::VersionUnknown));
+        assert_eq!(
+            reason_for(Some(unreadable)).as_deref(),
+            Some("Claude's version could not be read.")
+        );
+        assert_eq!(
+            reason_for(Some(agent_chat(false, None))).as_deref(),
+            Some("Claude cannot run chat sessions.")
+        );
+        assert_eq!(
+            reason_for(None).as_deref(),
+            Some("Claude cannot run chat sessions."),
+            "a kind the service lists no chat for cannot chat"
+        );
+    }
+
+    #[test]
+    fn a_reason_from_a_newer_service_reads_as_the_plain_reason() {
+        let newer = agent_chat(false, Some(ChatUnsupportedReason::Unknown));
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&newer)))).reason(),
+            Some("Claude cannot run chat sessions.")
+        );
+    }
+
+    #[test]
+    fn a_version_outside_the_range_names_the_range_and_the_version_found() {
+        let outside = KindChat {
+            supported: false,
+            reason: Some(ChatUnsupportedReason::VersionOutsideRange),
+            version: Some("2.4.1".to_owned()),
+            range: Some(">=2.1.0, <2.3.0".to_owned()),
+        };
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&outside)))).reason(),
+            Some("Chat needs Claude >=2.1.0, <2.3.0; this computer has 2.4.1.")
+        );
+        let no_range = KindChat {
+            range: None,
+            ..outside
+        };
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&no_range)))).reason(),
+            Some("Claude cannot run chat sessions."),
+            "without the range there is no sentence to say, so the plain reason stands"
+        );
+    }
+
+    #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
         let params = start_params(
             Some("w1"),
@@ -356,12 +542,27 @@ mod tests {
             "fix the login",
             None,
             StartOptions::default(),
+            (150, 70),
         );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
-        assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+        assert_eq!((params.cols, params.rows), (Some(150), Some(70)));
+    }
+
+    #[test]
+    fn a_new_session_starts_at_the_shown_grid_else_the_fitted_one_else_the_work_panel_size() {
+        assert_eq!(
+            start_grid(Some((150, 70)), Some((100, 30))),
+            (150, 70),
+            "the grid the session view last drew wins"
+        );
+        assert_eq!(start_grid(None, Some((100, 30))), (100, 30));
+        assert_eq!(
+            start_grid(None, None),
+            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
+        );
     }
 
     const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
@@ -386,7 +587,7 @@ mod tests {
     fn without_the_capability_neither_model_nor_effort_is_sent() {
         let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
         assert_eq!(options, StartOptions::default());
-        let params = start_params(Some("w1"), "claude", "hi", None, options);
+        let params = start_params(Some("w1"), "claude", "hi", None, options, (120, 40));
         assert_eq!((params.model, params.effort), (None, None));
     }
 
