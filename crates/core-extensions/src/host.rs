@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use massorca_ext_package::manifest::agent::CliOs;
+use serde::Serialize;
 
 /// How long a vendor installer, uninstaller or verify command may run before it is killed.
 pub const INSTALLER_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -15,6 +16,19 @@ pub const MAX_LOG_BYTES: u64 = 1024 * 1024;
 /// Resolves a bare program name the way `core-agents` does: PATH, plus PATHEXT on Windows.
 pub trait ProgramResolver: Send + Sync {
     fn resolve(&self, binary: &str) -> Option<PathBuf>;
+
+    /// Where bare names are searched, so a failure can say what was looked for (decision 0092).
+    fn search(&self) -> ProgramSearch {
+        ProgramSearch::default()
+    }
+}
+
+/// The search path of bare program names: `process` or `registry`, the source it came from, and its directories in
+/// order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ProgramSearch {
+    pub source: String,
+    pub dirs: Vec<String>,
 }
 
 /// How a command ended. `code` is `None` when it was killed or ended by a signal.

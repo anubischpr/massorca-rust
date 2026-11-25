@@ -19,8 +19,8 @@ use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
-    UNINSTALL_CLI_WARNING, command_text, installed_lines, item_lines, item_rows, removed_lines,
-    review_lines, state_text,
+    UNINSTALL_CLI_WARNING, command_text, doctor_lines, installed_lines, item_lines, item_rows,
+    removed_lines, review_lines, state_text,
 };
 use crate::output::Output;
 use crate::target::Target;
@@ -32,6 +32,11 @@ pub enum ExtensionCommand {
     /// Shows one extension, installed or from the catalogue.
     Show {
         /// Package id, such as massorca.claude.
+        id: String,
+    },
+    /// Shows what detection sees for a package's CLIs: the path found or not found, and the PATH it searched.
+    Doctor {
+        /// Package id, such as massorca.codex.
         id: String,
     },
     /// Lists the built-in catalogue and which entries are installed.
@@ -135,6 +140,10 @@ pub async fn execute(
         ExtensionCommand::Show { id } => {
             let item = client.extension_get(&id).await?;
             output.success(&item, &item_lines(&item));
+        }
+        ExtensionCommand::Doctor { id } => {
+            let item = client.extension_get(&id).await?;
+            output.success(&item, &doctor_lines(&item));
         }
         ExtensionCommand::Catalogue => {
             let list = client.extension_catalogue().await?;

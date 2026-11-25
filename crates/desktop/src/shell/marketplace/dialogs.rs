@@ -3,17 +3,19 @@
 
 use super::{InstallReview, UninstallConfirm};
 use crate::model::marketplace::{
-    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, SignInFlow, SignInStep, offers_cli_removal,
-    review_lines, uninstall_body_for,
+    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, SignInFlow, SignInStep, install_button_label,
+    offers_cli_removal, review_details, review_lines, uninstall_body_for,
 };
 use crate::shell::Shell;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Styled, WeakEntity, div, px,
+    AnyElement, App, ClipboardItem, InteractiveElement, IntoElement, ParentElement, Styled,
+    WeakEntity, div, px,
 };
 use massorca_ui::components::account_sign_in_dialog::{AccountSignInDialog, SignInStage};
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
-use massorca_ui::tokens::{SPACE_2, TYPE_BODY_SM};
+use massorca_ui::tokens::{SPACE_1, SPACE_2, TYPE_BODY_SM, TYPE_CAPTION};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 /// The dialog on screen, if any: the sign-in while an account is being added, the install review of a
@@ -61,7 +63,11 @@ fn install_review(
     };
     let may_install =
         review.review.is_some() && !review.sending && (!runs_installer || review.run_installer);
-    let mut body = div().flex().flex_col().gap(px(SPACE_2));
+    let action_label = review
+        .review
+        .as_ref()
+        .map_or("Add to MassOrca", install_button_label);
+    let mut body = div().flex().flex_col().gap(px(SPACE_1));
     if review.review.is_none() && review.error.is_none() {
         body = body.child(
             div()
@@ -78,10 +84,32 @@ fn install_review(
                 .child(line),
         );
     }
+    if let Some(answer) = &review.review {
+        let open = review.details_open;
+        let toggle = weak.clone();
+        let label = if open { "Hide details" } else { "Show details" };
+        body = body.child(
+            Button::new("marketplace-install-details", label)
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    let _ = toggle.update(cx, |shell, cx| shell.set_install_details(!open, cx));
+                }),
+        );
+        if open {
+            for line in review_details(answer) {
+                body = body.child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.secondary)
+                        .child(line),
+                );
+            }
+        }
+    }
     let mut dialog = Dialog::new("marketplace-install-review", title)
         .open(true)
         .child(body)
-        .action("Allow and install")
+        .action(action_label)
         .cancel_label("Cancel")
         .busy(review.sending)
         .action_disabled(!may_install)
@@ -104,6 +132,15 @@ fn install_review(
         );
     }
     if let Some(error) = &review.error {
+        // Copy details gives the whole refusal, with what was looked for and where, not only the line shown.
+        let text = error.clone();
+        dialog = dialog.child(
+            Button::new("marketplace-install-copy", "Copy details")
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                }),
+        );
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())

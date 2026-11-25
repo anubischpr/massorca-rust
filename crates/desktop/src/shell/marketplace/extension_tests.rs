@@ -5,7 +5,9 @@ use super::InstallReview;
 use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, problem_alert};
 use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
-use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate};
+use crate::service::{
+    AccountCommand, Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate,
+};
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
@@ -571,6 +573,7 @@ fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
         id: kind.to_owned(),
         detected: false,
         program_path: None,
+        path_source: None,
         cli_installed_by_package: false,
         cli: None,
     }];
@@ -1077,6 +1080,119 @@ fn a_refused_update_opens_the_item_page_with_the_refusal(cx: &mut TestAppContext
     assert!(
         shown(cx, "marketplace-connection-alert"),
         "the refusal is shown on the item page"
+    );
+}
+
+/// While the agent's package is not installed, Add account sends nothing and Import does not open.
+#[gpui::test]
+fn add_account_and_import_wait_while_the_agents_package_is_not_installed(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    click(cx, "button:marketplace-add-account");
+    assert!(rig.script.next().is_none(), "no account add is sent");
+    click(cx, "button:marketplace-import-account");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_accounts.import.is_none()),
+        "no import dialog opens"
+    );
+}
+
+/// While the agent's package is installed but off, Add account sends nothing.
+#[gpui::test]
+fn add_account_waits_while_the_agents_package_is_turned_off(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        vec![installed_agent("codex", false)],
+        vec![installed_agent("codex", false)],
+    );
+    click(cx, "button:marketplace-add-account");
+    assert!(rig.script.next().is_none(), "no account add is sent");
+}
+
+/// Once the install lands, the page re-reads the package and Add account works without a restart.
+#[gpui::test]
+fn add_account_turns_on_after_the_install_without_a_restart(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![agent_kind(
+            "codex",
+            "Codex",
+            PackageState::Enabled,
+        )]))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![installed_agent("codex", true)]),
+            catalogue: Ok(vec![installed_agent("codex", true)]),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+
+    click(cx, "button:marketplace-add-account");
+    match rig.script.next() {
+        Some(Command::Account(AccountCommand::Add { params, .. })) => {
+            assert_eq!(params.kind, "codex");
+        }
+        _ => panic!("Add account sends the agent's account add once its package is on"),
+    }
+}
+
+/// A refused install shows what was looked for and where, and Copy details puts all of it on the clipboard.
+#[gpui::test]
+fn copy_details_puts_the_refused_install_on_the_clipboard(cx: &mut TestAppContext) {
+    let refusal = "the installer for codex failed: `npm` was not found on PATH\nLooked for npm on the registry PATH.";
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    click(cx, "button:marketplace-install");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, "catalogue:massorca.codex");
+            reply
+        }
+        _ => panic!("the review asks the service what installing does"),
+    };
+    let _ = reply.send(Ok(review(false)));
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.installer_failed".to_owned(),
+                message: refusal.to_owned(),
+            }));
+        }
+        _ => panic!("the press sends the agent's install"),
+    }
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "button:marketplace-install-copy");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(
+        copied
+            .as_deref()
+            .is_some_and(|text| text.contains("Looked for npm on the registry PATH.")),
+        "{copied:?}"
     );
 }
 

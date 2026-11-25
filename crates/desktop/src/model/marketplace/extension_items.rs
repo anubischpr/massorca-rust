@@ -357,6 +357,7 @@ mod tests {
             id: "claude".to_owned(),
             detected: false,
             program_path: None,
+            path_source: None,
             cli_installed_by_package: false,
             cli: None,
         }];
@@ -557,6 +558,7 @@ mod tests {
             id: "claude".to_owned(),
             detected: false,
             program_path: None,
+            path_source: None,
             cli_installed_by_package: false,
             cli: None,
         }];
@@ -590,6 +592,7 @@ mod tests {
             id: kind.to_owned(),
             detected: false,
             program_path: None,
+            path_source: None,
             cli_installed_by_package: false,
             cli: None,
         }];

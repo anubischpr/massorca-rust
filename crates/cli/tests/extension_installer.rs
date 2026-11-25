@@ -237,3 +237,77 @@ fn an_agent_run_cannot_start_a_vendor_installer_or_uninstaller() {
     assert_eq!(removal["code"], "extension.needs_person");
     assert!(!host.has_cli("codex"), "nothing was installed");
 }
+
+/// Windows: npm installs a CLI as a `.cmd` shim, so a CLI that is only a shim is detected and the installer is skipped.
+#[cfg(windows)]
+#[test]
+fn a_cli_that_is_only_a_cmd_shim_is_detected_and_the_installer_is_skipped() {
+    let host = Host::cmd_shims_only();
+    host.put_cmd_cli("codex");
+
+    let record = host.json(&["extension", "install", CODEX, "--yes"]);
+
+    let cli = &record["cli"][0];
+    assert_eq!(cli["detected_before_install"], true, "{record}");
+    assert_eq!(cli["installed_by_package"], false, "{record}");
+    assert!(cli["installer"].is_null(), "{record}");
+    assert!(install_log(&host, "massorca.codex").is_empty());
+    assert!(host.installed_ids().contains(&"massorca.codex".to_owned()));
+}
+
+/// Windows: `npm` is `npm.cmd`, so the installer runs through that shim, and the `.cmd` shim it leaves is found.
+#[cfg(windows)]
+#[test]
+fn an_installer_run_through_npm_cmd_records_the_cli_it_leaves() {
+    let host = Host::cmd_shims_only();
+    host.put_npm_cmd("codex");
+
+    let record = host.json(&[
+        "extension",
+        "install",
+        CODEX,
+        "--yes",
+        "--yes-run-installer",
+    ]);
+
+    let cli = &record["cli"][0];
+    assert_eq!(cli["installed_by_package"], true, "{record}");
+    assert_eq!(cli["installer"]["exit_code"], 0, "{record}");
+    assert!(host.has_cmd_cli("codex"), "npm.cmd left the CLI's shim");
+    let log = install_log(&host, "massorca.codex");
+    assert!(log.contains("fake-npm install -g @openai/codex"), "{log}");
+}
+
+/// Windows: a verify command that is a `.cmd` shim runs, and its exit status decides whether the install is recorded.
+#[cfg(windows)]
+#[test]
+fn a_verify_command_that_is_a_cmd_shim_decides_the_install() {
+    let passing = Host::cmd_shims_only();
+    passing.put_npm_cmd("gentle-shell");
+    let record = passing.json(&[
+        "extension",
+        "install",
+        GENTLE_SHELL,
+        "--yes",
+        "--yes-run-installer",
+    ]);
+    assert_eq!(record["cli"][0]["installed_by_package"], true, "{record}");
+    assert_eq!(record["cli"][0]["installer"]["exit_code"], 0, "{record}");
+
+    let failing = Host::cmd_shims_only();
+    failing.put_npm_cmd("gentle-shell");
+    fs::write(failing.bin.path().join("fail-verify"), "").expect("the verify fails");
+    let error = failing.json_error(&[
+        "extension",
+        "install",
+        GENTLE_SHELL,
+        "--yes",
+        "--yes-run-installer",
+    ]);
+    assert_eq!(error["code"], "extension.verify_failed");
+    assert_eq!(error["data"]["installer_ran"], true);
+    assert_eq!(
+        failing.json(&["extension", "list"])["extensions"],
+        serde_json::json!([])
+    );
+}

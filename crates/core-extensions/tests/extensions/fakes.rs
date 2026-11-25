@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use massorca_core_extensions::host::{CommandRunner, Exit, ProgramResolver};
+use massorca_core_extensions::host::{CommandRunner, Exit, ProgramResolver, ProgramSearch};
 
 #[derive(Debug, Default)]
 pub struct FakeHost {
@@ -20,6 +20,8 @@ pub struct FakeHost {
     exits: Mutex<HashMap<String, i32>>,
     /// Whether a successful install of a built-in's CLI makes it resolve.
     installs_binary: bool,
+    /// Where the fake searches for a bare program name, as the host reports it.
+    search: ProgramSearch,
 }
 
 impl FakeHost {
@@ -32,6 +34,15 @@ impl FakeHost {
 
     pub fn with_program(self, name: &str) -> Self {
         self.add_program(name);
+        self
+    }
+
+    /// The search path the fake reports: its source (`process` or `registry`) and its directories, in order.
+    pub fn searching(mut self, source: &str, dirs: &[&str]) -> Self {
+        self.search = ProgramSearch {
+            source: source.to_owned(),
+            dirs: dirs.iter().map(|dir| (*dir).to_owned()).collect(),
+        };
         self
     }
 
@@ -68,6 +79,10 @@ impl FakeHost {
 impl ProgramResolver for FakeHost {
     fn resolve(&self, binary: &str) -> Option<PathBuf> {
         self.programs.lock().expect("programs").get(binary).cloned()
+    }
+
+    fn search(&self) -> ProgramSearch {
+        self.search.clone()
     }
 }
 
