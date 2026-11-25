@@ -602,4 +602,31 @@ mod tests {
         let focused = cx.update(|window, cx| window.focused(cx).is_some());
         assert!(focused, "Tab moves focus onto a pill");
     }
+
+    /// Presses and releases one key, as the keyboard does.
+    fn press(cx: &mut VisualTestContext, key: &str) {
+        let os = cx.update(|_, cx| cx.platform_info().os);
+        let keystroke = gpui::Keystroke::parse_with_os(key, os).expect("a valid keystroke");
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    }
+
+    #[gpui::test]
+    fn marketplace_invocation_banner_space_presses_the_focused_pill(cx: &mut TestAppContext) {
+        cx.update(|app| {
+            crate::init(crate::Appearance::Dark, app).expect("design system initialises")
+        });
+        let presses = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| Host {
+            presses: presses.clone(),
+        });
+        draw(cx);
+        cx.update(|window, cx| window.focus_next(cx));
+        press(cx, "space");
+        assert_eq!(presses.borrow().as_slice(), ["@Claude review my changes"]);
+    }
 }
