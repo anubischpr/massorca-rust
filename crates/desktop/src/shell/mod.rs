@@ -217,6 +217,8 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
+    filter_menu: Option<teams::OpenFilterMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -251,6 +253,10 @@ pub struct Shell {
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
+    /// The request number of the newest skills read; only its answer is shown.
+    marketplace_skills_request: u64,
+    /// Whether the Skills section's "Where MassOrca looked" report is open.
+    marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The grid the session view last drew its terminal at (`session_grid`).
@@ -259,6 +265,8 @@ pub struct Shell {
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
+    focus_started_terminal: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -526,6 +534,7 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            filter_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -546,10 +555,13 @@ impl Shell {
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
+            marketplace_skills_request: 0,
+            marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
             session_grid: None,
             stop_prompt: None,
             terminal_notice: None,
+            focus_started_terminal: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
@@ -716,6 +728,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -963,6 +976,10 @@ impl Render for Shell {
             .team_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let filter_menu = self
+            .filter_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
             .revoke
             .as_ref()
@@ -1047,6 +1064,7 @@ impl Render for Shell {
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
@@ -1058,5 +1076,21 @@ impl Render for Shell {
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
             .when_some(close_dialog, |el, dialog| el.child(dialog))
+    }
+}
+
+impl Shell {
+    /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
+    /// composer can never start a second session.
+    fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.focus_started_terminal.as_deref() else {
+            return;
+        };
+        let Some(view) = self.terminal_views.get(terminal) else {
+            return;
+        };
+        let focus = view.surface.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.focus_started_terminal = None;
     }
 }
