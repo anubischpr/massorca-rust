@@ -57,6 +57,9 @@ pub const TEAM_ROOM: &str = "team-room/1";
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).
 pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// Updating a host program a tool package installed (`extensions.program_update_review`, `extensions.program_update`,
+/// decision 0151).
+pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.

@@ -131,6 +131,16 @@ const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
         capabilities::EXTENSIONS_LOG,
         Permission::Read,
     ),
+    (
+        extensions::PROGRAM_UPDATE_REVIEW,
+        capabilities::EXTENSIONS_PROGRAMS,
+        Permission::Read,
+    ),
+    (
+        extensions::PROGRAM_UPDATE,
+        capabilities::EXTENSIONS_PROGRAMS,
+        Permission::HostAdmin,
+    ),
 ];
 
 /// The skill methods this build registers: discovery (`skills/1`), and placement (`skills-place/1`, where the writes need

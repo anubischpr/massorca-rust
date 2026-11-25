@@ -10,6 +10,7 @@ mod host_programs;
 mod install;
 mod item;
 mod kind_packages;
+mod program_update;
 mod remove;
 mod reserved;
 mod review;
