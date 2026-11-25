@@ -31,6 +31,14 @@ fn package_folders(s: &Setup) -> usize {
     fs::read_dir(s.service.layout().package_root("acme.kit")).map_or(0, Iterator::count)
 }
 
+/// The folder of one version of `acme.kit`, if it is on disk.
+fn version_folder(s: &Setup, version: &str) -> Option<String> {
+    fs::read_dir(s.service.layout().package_root("acme.kit"))
+        .ok()?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .find(|name| name.starts_with(&format!("{version}-")))
+}
+
 fn write_archive(path: &std::path::Path, manifest: &Value) {
     fs::write(path, zip(&package_files(manifest))).expect("the archive is written");
 }
@@ -72,8 +80,64 @@ fn a_changed_folder_updates_in_place_and_keeps_its_state() {
     assert_eq!(entry["agent_kinds"], json!(["kit"]));
     assert_eq!(entry["x-note"], "kept");
     assert!(s.exists(&format!("{path}/agents/kit.json")));
-    assert!(!s.exists(&old_path), "the old folder is removed");
+    assert!(s.exists(&old_path), "the replaced version is kept");
+    assert_eq!(entry["previous"]["version"], "1.2.0");
+    assert_eq!(entry["previous"]["path"], old_path.as_str());
+    assert_eq!(entry["previous"]["sha256"], before["sha256"]);
+    assert_eq!(entry["previous"]["consent"], before["consent"]);
     assert!(s.host.runs().is_empty(), "no vendor command runs");
+}
+
+#[test]
+fn an_update_keeps_one_previous_version_and_drops_the_one_before() {
+    let s = setup(FakeHost::new());
+    let source = s.package_dir("kit", &kit_manifest("1.2.0"));
+    s.install(&source, false).expect("installs");
+    for version in ["1.3.0", "1.4.0"] {
+        let source = s.package_dir("kit", &kit_manifest(version));
+        let consent = s.service.inspect(&source).expect("inspect").consent;
+        s.service
+            .update("acme.kit", Some(&consent), None)
+            .expect("updates");
+    }
+
+    let entry = first_entry(&s);
+    assert_eq!(entry["version"], "1.4.0");
+    assert_eq!(entry["previous"]["version"], "1.3.0");
+    assert_eq!(
+        package_folders(&s),
+        2,
+        "the current and the previous version"
+    );
+    assert!(
+        version_folder(&s, "1.2.0").is_none(),
+        "the version before the previous one is removed"
+    );
+}
+
+#[test]
+fn an_update_back_to_the_kept_version_reuses_its_folder() {
+    let s = setup(FakeHost::new());
+    let older = s.package_dir("kit", &kit_manifest("1.2.0"));
+    s.install(&older, false).expect("installs");
+    let newer = s.package_dir("kit", &kit_manifest("1.3.0"));
+    let consent = s.service.inspect(&newer).expect("inspect").consent;
+    s.service
+        .update("acme.kit", Some(&consent), None)
+        .expect("updates");
+
+    let older = s.package_dir("kit", &kit_manifest("1.2.0"));
+    let consent = s.service.inspect(&older).expect("inspect").consent;
+    let back = s
+        .service
+        .update("acme.kit", Some(&consent), None)
+        .expect("updates back");
+
+    assert_eq!(back.version, "1.2.0");
+    let entry = first_entry(&s);
+    assert_eq!(entry["previous"]["version"], "1.3.0");
+    assert_eq!(package_folders(&s), 2);
+    assert!(s.exists(entry["path"].as_str().expect("a path")));
 }
 
 #[test]
@@ -217,7 +281,7 @@ fn an_outdated_built_in_is_refreshed_in_place_and_keeps_its_state() {
         .expect("a built-in kind");
     assert_eq!(updated.version, built_in.package_version);
     assert!(!updated.enabled, "the disabled state is kept");
-    assert!(!old.exists(), "the outdated folder is removed");
+    assert!(old.exists(), "the replaced version is kept for rollback");
     assert!(s.host.runs().is_empty(), "no vendor command runs");
 }
 
