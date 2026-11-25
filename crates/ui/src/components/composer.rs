@@ -108,6 +108,8 @@ pub struct Composer {
     access_index: usize,
     /// A caption after the access chip, such as a mode waiting for the next resume.
     access_note: Option<SharedString>,
+    /// Each access mode's secondary text by index, `None` for none; see `set_access_details`.
+    access_details: Vec<Option<SharedString>>,
     agent_name: SharedString,
     voice: bool,
     /// Whether the attach button, its menu and dropped files are offered.
@@ -181,6 +183,7 @@ impl Composer {
             access,
             access_index: 0,
             access_note: None,
+            access_details: Vec::new(),
             agent_name: "Claude".into(),
             voice: true,
             attach_offered: true,
@@ -921,6 +924,97 @@ mod tests {
             composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
             PrimaryAction::Send,
             "Send returns once an agent is installed"
+        );
+    }
+
+    fn same_named_modes() -> Vec<AccessMode> {
+        let auto = || AccessMode {
+            name: "Auto".into(),
+            icon: IconName::Shield,
+            bypass: false,
+        };
+        vec![auto(), auto()]
+    }
+
+    #[gpui::test]
+    fn the_access_detail_tells_two_same_named_modes_apart_in_the_menu_and_the_tooltip(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::components::button::test_support::{focus_and_draw as focus_element, press_key};
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), same_named_modes(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_access_details(vec![Some("The CLI's default".into()), None], cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer
+                .access_detail(0)
+                .map(|text| text.to_string())),
+            Some("The CLI's default".to_owned())
+        );
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(1).cloned()),
+            None
+        );
+        // Keyboard focus on the selected chip shows its detail as the tooltip.
+        let access_focus = composer.read_with(cx, |composer, _| composer.access_focus.clone());
+        cx.update(|window, _| window.activate_window());
+        press_key(cx, "f1");
+        focus_element(cx, &access_focus);
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the chip's tooltip shows on keyboard focus"
+        );
+        // Opening the chip lists both modes; only the first row carries the detail line.
+        let chip = cx
+            .debug_bounds("composer-access")
+            .expect("the chip is drawn")
+            .center();
+        cx.simulate_click(chip, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let with_detail = cx
+            .debug_bounds("menu-item-0")
+            .expect("the default row is drawn")
+            .size
+            .height;
+        let plain = cx
+            .debug_bounds("menu-item-1")
+            .expect("the declared row is drawn")
+            .size
+            .height;
+        assert!(
+            f32::from(with_detail) > f32::from(plain),
+            "the detail adds a second line to its row"
+        );
+    }
+
+    #[gpui::test]
+    fn access_details_stay_with_their_modes_until_the_modes_change(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), access(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_access_details(vec![Some("The CLI's default".into())], cx)
+        });
+        composer.update(cx, |composer, cx| {
+            composer.set_access_modes(access(), 0, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(0).cloned()),
+            Some("The CLI's default".into()),
+            "unchanged modes keep their details"
+        );
+        composer.update(cx, |composer, cx| {
+            composer.set_access_modes(same_named_modes(), 0, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, _| composer.access_detail(0).cloned()),
+            None,
+            "changed modes drop the details that named the old list"
         );
     }
 }

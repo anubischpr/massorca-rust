@@ -51,6 +51,7 @@ pub struct MenuItem {
     icon: Option<IconName>,
     shortcut: Option<SharedString>,
     disabled_reason: Option<SharedString>,
+    secondary: Option<SharedString>,
     checked: Option<bool>,
     destructive: bool,
     submenu: Option<Vec<MenuEntry>>,
@@ -64,6 +65,7 @@ impl MenuItem {
             icon: None,
             shortcut: None,
             disabled_reason: None,
+            secondary: None,
             checked: None,
             destructive: false,
             submenu: None,
@@ -87,6 +89,12 @@ impl MenuItem {
         self
     }
 
+    /// A second line under the label, in secondary text, for example the CLI's default under "Auto".
+    pub fn secondary(mut self, text: impl Into<SharedString>) -> Self {
+        self.secondary = Some(text.into());
+        self
+    }
+
     /// Makes the row checkable, with its current state.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
@@ -107,6 +115,11 @@ impl MenuItem {
 
     pub fn label(&self) -> &SharedString {
         &self.label
+    }
+
+    /// The second line under the label, if the row has one.
+    pub fn secondary_text(&self) -> Option<&SharedString> {
+        self.secondary.as_ref()
     }
 
     pub fn is_disabled(&self) -> bool {
@@ -783,6 +796,20 @@ impl MenuView {
             .flex()
             .flex_col()
             .child(name.child(item.label.clone()));
+        if let Some(secondary) = &item.secondary {
+            let colour = if disabled {
+                p.text.disabled
+            } else {
+                p.text.secondary
+            };
+            label = label.child(
+                div()
+                    .min_w_0()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(colour)
+                    .child(secondary.clone()),
+            );
+        }
         if let Some(reason) = &item.disabled_reason {
             label = label.child(
                 div()
@@ -852,8 +879,12 @@ impl MenuView {
         if item.has_submenu() {
             row = row.aria_expanded(expanded);
         }
-        if let Some(reason) = item.disabled_reason.clone() {
-            row = row.aria_description(reason);
+        if let Some(text) = item
+            .disabled_reason
+            .clone()
+            .or_else(|| item.secondary.clone())
+        {
+            row = row.aria_description(text);
         }
         a11y::disabled(row, item.is_disabled())
     }
@@ -980,6 +1011,20 @@ mod tests {
                 .disabled("Nothing running")
                 .is_disabled()
         );
+    }
+
+    #[test]
+    fn items_keep_a_secondary_line_apart_from_their_disabled_reason() {
+        let row = MenuItem::new("Auto").secondary("The CLI's default");
+        assert_eq!(
+            row.secondary_text().map(|text| text.as_ref()),
+            Some("The CLI's default")
+        );
+        assert!(
+            !row.is_disabled(),
+            "a secondary line does not disable the row"
+        );
+        assert_eq!(MenuItem::new("Auto").secondary_text(), None);
     }
 }
 

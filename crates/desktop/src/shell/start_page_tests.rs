@@ -772,11 +772,21 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
     assert_eq!(
         modes,
         [
-            ("The CLI's default (Auto)".to_owned(), false),
+            ("Auto".to_owned(), false),
             ("Auto".to_owned(), false),
             ("Plan".to_owned(), false),
             ("Bypass permissions".to_owned(), true),
         ]
+    );
+    let details = composer.read_with(cx, |composer, _| {
+        (0..4)
+            .map(|index| composer.access_detail(index).map(|text| text.to_string()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        details,
+        [Some("The CLI's default".to_owned()), None, None, None],
+        "the default entry says it is the CLI's default; the declared Auto does not"
     );
     assert_eq!(
         composer.read_with(cx, |composer, _| composer.access_index()),

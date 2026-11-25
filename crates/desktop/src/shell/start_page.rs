@@ -269,6 +269,14 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .collect()
 }
 
+/// The secondary text of each of a kind's mode entries, in the same order as `access_modes`.
+pub(super) fn access_details(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
+    choices
+        .iter()
+        .map(|choice| choice.detail.clone().map(SharedString::from))
+        .collect()
+}
+
 /// The installed, enabled kinds as the picker's rail offers them: one agent each, with the kind as its only row,
 /// since the service declares no models yet.
 fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
@@ -599,7 +607,7 @@ impl Shell {
         let chosen_kind = kinds
             .iter()
             .find(|kind| kind.id.as_str() == chosen.as_ref());
-        let (modes, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
+        let (modes, details, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
             let choices = start_choices(kind);
             // The person's last explicit pick for this kind comes back, while the kind still declares it.
             let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
@@ -608,7 +616,7 @@ impl Shell {
                     .iter()
                     .position(|choice| choice.id.as_deref() == Some(id))
             });
-            (access_modes(&choices), remembered)
+            (access_modes(&choices), access_details(&choices), remembered)
         });
         composer.update(cx, |composer, cx| {
             let keep = if composer.access_modes() == modes.as_slice() {
@@ -617,6 +625,7 @@ impl Shell {
                 remembered.unwrap_or(0)
             };
             composer.set_access_modes(modes, keep, cx);
+            composer.set_access_details(details, cx);
         });
         let kind_chosen = choices
             .iter()
