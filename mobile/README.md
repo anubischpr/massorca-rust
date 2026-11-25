@@ -73,6 +73,9 @@ runs in CI and in the Jest test `src/terminal/terminal-asset.test.ts`.
   library), `src/NativeMassorcaMobile.ts` (the codegen spec of that install call). The typecheck and Jest need them.
 - **Written by the build and ignored:** `cpp/`, `ios/`, `MassorcaMobile.podspec`, `android/CMakeLists.txt`,
   `android/cpp-adapter.cpp`, `android/src/main/` (the Kotlin glue), `android/app/src/main/jniLibs/` (the Rust libraries).
+- **Committed native glue:** `android/app/app-modules.cmake` and `android/app/app-modules/CMakeLists.txt`. `app/build.gradle`
+  passes the first to CMake, which builds React Native's app library `libappmodules.so` next to ubrn's library. Without it
+  the app aborts at its first import (`PlatformConstants` is missing). Keep them when the native build is regenerated.
 
 Build the Rust library for both ABIs and write the output (needs the Rust toolchain of `rust-toolchain.toml`,
 `cargo-ndk` 4.1.2 and the Android NDK in `ANDROID_NDK_HOME`):
