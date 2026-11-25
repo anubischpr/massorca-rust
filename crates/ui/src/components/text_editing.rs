@@ -13,7 +13,19 @@ pub(crate) mod undo_history;
 
 pub use super::text_field::TextBuffer;
 
-actions!(text_editing, [Undo, Redo]);
+actions!(
+    text_editing,
+    [
+        Undo,
+        Redo,
+        MoveWordLeft,
+        MoveWordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        DeleteWordBackward,
+        DeleteWordForward,
+    ]
+);
 
 /// Line breaks as a multi-line surface stores them: `\n` only.
 pub fn normalize_line_breaks(text: &str) -> String {

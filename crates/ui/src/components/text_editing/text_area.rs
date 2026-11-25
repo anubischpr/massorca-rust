@@ -19,7 +19,10 @@ use gpui::{
 use super::input::{self, InputHost, impl_input_handler};
 use super::keymap::{self, EditShortcut};
 use super::layout::Shaped;
-use super::{Redo, TextBuffer, Undo, normalize_line_breaks};
+use super::{
+    DeleteWordBackward, DeleteWordForward, MoveWordLeft, MoveWordRight, Redo, SelectWordLeft,
+    SelectWordRight, TextBuffer, Undo, normalize_line_breaks,
+};
 use crate::tokens::{SIZE_COMPOSER_MAX_HEIGHT, SIZE_COMPOSER_MIN_HEIGHT};
 
 actions!(
@@ -39,6 +42,10 @@ actions!(
         MoveRowEnd,
         SelectRowStart,
         SelectRowEnd,
+        MoveDocumentStart,
+        MoveDocumentEnd,
+        SelectDocumentStart,
+        SelectDocumentEnd,
         SelectAll,
         CopySelection,
         CutSelection,
@@ -89,6 +96,22 @@ pub fn bind_keys(cx: &mut App) {
         |&(keys, shortcut)| match shortcut {
             EditShortcut::Undo => KeyBinding::new(keys, Undo, context),
             EditShortcut::Redo => KeyBinding::new(keys, Redo, context),
+            EditShortcut::WordLeft => KeyBinding::new(keys, MoveWordLeft, context),
+            EditShortcut::WordRight => KeyBinding::new(keys, MoveWordRight, context),
+            EditShortcut::SelectWordLeft => KeyBinding::new(keys, SelectWordLeft, context),
+            EditShortcut::SelectWordRight => KeyBinding::new(keys, SelectWordRight, context),
+            EditShortcut::DeleteWordBackward => KeyBinding::new(keys, DeleteWordBackward, context),
+            EditShortcut::DeleteWordForward => KeyBinding::new(keys, DeleteWordForward, context),
+            EditShortcut::LineStart => KeyBinding::new(keys, MoveRowStart, context),
+            EditShortcut::LineEnd => KeyBinding::new(keys, MoveRowEnd, context),
+            EditShortcut::SelectLineStart => KeyBinding::new(keys, SelectRowStart, context),
+            EditShortcut::SelectLineEnd => KeyBinding::new(keys, SelectRowEnd, context),
+            EditShortcut::DocumentStart => KeyBinding::new(keys, MoveDocumentStart, context),
+            EditShortcut::DocumentEnd => KeyBinding::new(keys, MoveDocumentEnd, context),
+            EditShortcut::SelectDocumentStart => {
+                KeyBinding::new(keys, SelectDocumentStart, context)
+            }
+            EditShortcut::SelectDocumentEnd => KeyBinding::new(keys, SelectDocumentEnd, context),
         },
     ));
     cx.bind_keys(bindings);
@@ -347,7 +370,7 @@ impl_input_handler!(TextArea);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::text_editing::keymap::{REDO_KEYS, UNDO_KEYS};
+    use crate::components::text_editing::keymap::{REDO_KEYS, UNDO_KEYS, platform_keys};
     use gpui::{ClipboardItem, Entity, EntityInputHandler, TestAppContext, VisualTestContext};
     use std::cell::RefCell;
 
@@ -490,6 +513,47 @@ mod tests {
         assert_eq!(text_of(&area, cx), "");
         cx.simulate_keystrokes(REDO_KEYS);
         assert_eq!(text_of(&area, cx), "ab");
+    }
+
+    #[gpui::test]
+    fn word_keys_move_select_and_delete_by_the_word(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).with_text("one two three"));
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes(platform_keys("alt-left", "ctrl-left"));
+        assert_eq!(area.read_with(cx, |area, _| area.cursor()), 8);
+        cx.simulate_keystrokes(platform_keys("alt-shift-left", "ctrl-shift-left"));
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 4..8);
+        cx.simulate_keystrokes(platform_keys("alt-backspace", "ctrl-backspace"));
+        assert_eq!(text_of(&area, cx), "one three");
+    }
+
+    #[gpui::test]
+    fn document_keys_go_to_the_start_and_end_of_all_the_text(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).with_text("ab\ncd"));
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes(platform_keys("cmd-up", "ctrl-home"));
+        assert_eq!(area.read_with(cx, |area, _| area.cursor()), 0);
+        cx.simulate_keystrokes(platform_keys("cmd-down", "ctrl-end"));
+        assert_eq!(area.read_with(cx, |area, _| area.cursor()), 5);
+        cx.simulate_keystrokes(platform_keys("cmd-shift-up", "ctrl-shift-home"));
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 0..5);
+    }
+
+    #[gpui::test]
+    fn home_end_and_select_all_keys_already_work_on_the_visual_row(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).with_text("ab\ncd"));
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes("home");
+        assert_eq!(area.read_with(cx, |area, _| area.cursor()), 3);
+        cx.simulate_keystrokes("end");
+        assert_eq!(area.read_with(cx, |area, _| area.cursor()), 5);
+        cx.simulate_keystrokes("shift-home");
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 3..5);
+        cx.simulate_keystrokes(platform_keys("cmd-a", "ctrl-a"));
+        assert_eq!(area.read_with(cx, |area, _| area.buffer.selected()), 0..5);
     }
 
     #[gpui::test]
