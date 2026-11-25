@@ -1027,7 +1027,9 @@ impl Shell {
             return;
         };
         let mode = self.pending_bypass(session, cx);
-        let grid = Some(self.start_grid(cx));
+        // A chat has no terminal, so its run starts with no grid.
+        let chat = self.is_chat_session(session, cx);
+        let grid = (!chat).then(|| self.start_grid(cx));
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -1037,8 +1039,18 @@ impl Shell {
         .detach();
     }
 
+    fn is_chat_session(&self, session: &str, cx: &App) -> bool {
+        let state = self.store.read(cx).state();
+        state
+            .agents
+            .iter()
+            .find(|record| record.id == session)
+            .is_some_and(|record| !is_terminal_arm(record))
+    }
+
     /// The service's answer to a resume. A refusal that says the saved conversation is gone replaces the reason of the
     /// ended session and offers Start a new session here; any other refusal is kept above the terminal with its reason.
+    /// A resumed chat follows its transcript again from the cursor it holds: the journal carries on (decision 0101, D9).
     fn finish_resume(
         &mut self,
         session: &str,
@@ -1047,8 +1059,14 @@ impl Shell {
     ) {
         self.session_calls.remove(session);
         match answer {
-            Ok(_) => {
+            Ok(resumed) => {
                 self.session_resume_gone.remove(session);
+                if resumed.run == RunType::Chat
+                    && self.chat_watched.as_deref() == Some(session)
+                    && let Some(service) = &self.service
+                {
+                    service.watch_chat(session);
+                }
             }
             Err(refusal) if refusal_says_conversation_gone(refusal.code()) => {
                 self.session_resume_gone.insert(session.to_owned());

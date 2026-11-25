@@ -532,3 +532,60 @@ fn the_item_the_stream_settles_replaces_the_card_with_its_one_line(cx: &mut Test
     assert!(cx.debug_bounds("button:ap-Approve").is_none());
     assert!(cx.debug_bounds("transcript-row-ap").is_some());
 }
+
+#[gpui::test]
+fn resume_in_an_ended_chat_starts_it_with_no_grid_and_follows_the_transcript_again(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(true)], vec![chat_s1(true)]);
+    chat_calls(&mut rig.script);
+
+    emit(&rig, cx, "", |_| ComposerEvent::Resume);
+
+    let mut resumed = None;
+    while let Some(command) = rig.script.next() {
+        if let Command::AgentResume { params, reply } = command {
+            resumed = Some((params, reply));
+        }
+    }
+    let (params, reply) = resumed.expect("Resume asks the service for a new run");
+    assert_eq!(params.session, "s1");
+    assert_eq!(
+        (params.cols, params.rows),
+        (None, None),
+        "a chat run has no terminal to size"
+    );
+    let live = chat_s1(false);
+    reply
+        .send(Ok(live.clone()))
+        .expect("the shell waits for the answer");
+    rig.updates
+        .send(StoreUpdate::AgentChanged(live))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+
+    let calls = chat_calls(&mut rig.script);
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, ChatCommand::Watch { session } if session == "s1")),
+        "the stream is asked for again: {calls:?}"
+    );
+}
+
+#[gpui::test]
+fn resume_in_an_ended_terminal_session_still_sizes_its_terminal(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(true, None)]);
+
+    emit(&rig, cx, "", |_| ComposerEvent::Resume);
+
+    let mut grid = None;
+    while let Some(command) = rig.script.next() {
+        if let Command::AgentResume { params, .. } = command {
+            grid = Some((params.cols, params.rows));
+        }
+    }
+    let (cols, rows) = grid.expect("Resume asks the service for a new run");
+    assert!(cols.is_some() && rows.is_some());
+}
