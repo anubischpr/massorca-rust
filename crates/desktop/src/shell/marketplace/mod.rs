@@ -15,6 +15,7 @@ mod item;
 mod item_images;
 #[cfg(test)]
 mod item_images_tests;
+mod more_menu;
 mod package;
 mod review;
 mod sign_in;
