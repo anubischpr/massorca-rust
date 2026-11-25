@@ -161,9 +161,12 @@ fn board_card(
     shell: &WeakEntity<Shell>,
     focus: FocusHandle,
 ) -> BoardCard {
-    let mut built = BoardCard::new(format!("task-{}", card.id.0), card.title.clone(), focus)
-        .lifted(card.lifted)
-        .bot(card.bot.clone().unwrap_or_else(|| "Unassigned".into()));
+    let built = BoardCard::new(format!("task-{}", card.id.0), card.title.clone(), focus)
+        .lifted(card.lifted);
+    let mut built = match card.bot.as_deref() {
+        Some(bot) => built.bot(bot),
+        None => built.unassigned(),
+    };
     if let Some((state, word)) = status_of(column) {
         built = built.status(state, word);
     }
@@ -403,5 +406,24 @@ mod tests {
             let task = shell.model().teams().team(TeamId(1)).unwrap().tasks[0].clone();
             assert_eq!(task.column, Column::Open);
         });
+    }
+
+    #[gpui::test]
+    fn an_open_task_with_no_bot_shows_the_unassigned_chip(cx: &mut TestAppContext) {
+        let (shell, cx) = shell(cx);
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Board(TeamId(1)));
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("board-card-unassigned").is_some(),
+            "the open task has no bot, so its card shows the Unassigned chip"
+        );
+        assert!(
+            cx.debug_bounds("board-card-bot").is_some(),
+            "a card with a bot still names it"
+        );
     }
 }
