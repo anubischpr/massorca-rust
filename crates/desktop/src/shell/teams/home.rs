@@ -3,17 +3,18 @@
 use super::super::Shell;
 use super::super::change;
 use super::access::access_control;
+use super::team_shape;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{Team, TeamError, TeamPage, TeamsState};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, px};
-use massorca_ui::components::avatar::{Avatar, AvatarSize};
 use massorca_ui::components::badge::Badge;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::icon_button::IconButton;
-use massorca_ui::tokens::{SPACE_1, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
+use massorca_ui::components::team_character::TeamCharacterMark;
+use massorca_ui::tokens::{SIZE_AVATAR_MD, SPACE_1, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// A team card is this wide; the cards wrap into as many columns as the width allows.
@@ -150,8 +151,8 @@ fn team_card(
             .padding(CardPadding::Comfortable)
             .title(team.name.clone())
             .header_action(
-                Avatar::team(format!("team-mark-{}", id.0), team.name.clone())
-                    .size(AvatarSize::Medium),
+                TeamCharacterMark::new(team_shape(team.character), team.name.clone())
+                    .size(SIZE_AVATAR_MD),
             )
             .child(line(lead, theme))
             .child(line(bots, theme))

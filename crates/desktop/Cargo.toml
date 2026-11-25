@@ -13,6 +13,7 @@ base64.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
+jiff.workspace = true
 massorca-client.workspace = true
 massorca-core-remote.workspace = true
 massorca-net.workspace = true

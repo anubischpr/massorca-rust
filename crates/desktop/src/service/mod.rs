@@ -18,6 +18,7 @@ mod quit;
 mod refusal;
 mod secrets;
 mod skills;
+mod team_room;
 mod teams;
 mod terminals;
 mod update;
@@ -54,6 +55,9 @@ pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
 pub use skills::{SkillsListing, SkillsRead};
+#[cfg(test)]
+pub(crate) use team_room::RoomCommand;
+pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};

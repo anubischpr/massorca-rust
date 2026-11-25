@@ -55,18 +55,30 @@ async fn output_after_a_taller_resize_lands_right_below_the_output_before_it() {
     manager.input(&info.id, &command).expect("input");
     live.wait_for_text(&after).await;
 
-    let mut client = Client::new(SIZE.cols, SIZE.rows);
-    client.advance(&live.snapshot);
-    client.advance(&live.output[..at_resize]);
-    client.resize(taller.cols, taller.rows);
-    client.advance(&live.output[at_resize..]);
-
-    let rows = client.rows();
+    // The screen as the desktop emulator draws the stream: the old size up to the resize, the new one after it.
+    let snapshot = live.snapshot.clone();
+    let screen = |output: &[u8]| {
+        let mut client = Client::new(SIZE.cols, SIZE.rows);
+        client.advance(&snapshot);
+        client.advance(&output[..at_resize]);
+        client.resize(taller.cols, taller.rows);
+        client.advance(&output[at_resize..]);
+        client.rows()
+    };
     // A shell may print its prompt on the same row as the output, but never the command's echo.
-    let row_of = |marker: &str| {
+    let row_in = |rows: &[String], marker: &str| {
         rows.iter()
             .position(|row| row.ends_with(marker) && !row.contains("echo"))
     };
+    // The marker can arrive before the prompt the shell prints under it: read until that prompt is drawn too.
+    let mut rows = screen(&live.output);
+    while !row_in(&rows, &after)
+        .is_some_and(|row| rows[row + 1..].iter().any(|below| !below.is_empty()))
+    {
+        live.step().await;
+        rows = screen(&live.output);
+    }
+    let row_of = |marker: &str| row_in(&rows, marker);
     let (Some(above), Some(below)) = (row_of(&before), row_of(&after)) else {
         panic!("both markers are on the screen: {rows:?}");
     };
