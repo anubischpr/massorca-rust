@@ -698,6 +698,18 @@ impl Agents {
         permission_mode: Option<&str>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        self.resume_at(selector, permission_mode, grant, None, None)
+    }
+
+    /// `resume` with the terminal at `cols` x `rows`, each the default when absent: the size of the view that shows it.
+    pub fn resume_at(
+        &self,
+        selector: &str,
+        permission_mode: Option<&str>,
+        grant: SecretGrant,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
@@ -807,8 +819,8 @@ impl Agents {
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
+            cols: cols.unwrap_or(DEFAULT_COLS),
+            rows: rows.unwrap_or(DEFAULT_ROWS),
         };
         let terminal_id = self
             .spawn_run(plan, &workspace.id, &workspace.path, title, size)
