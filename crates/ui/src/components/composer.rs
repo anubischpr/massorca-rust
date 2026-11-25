@@ -131,7 +131,7 @@ pub struct Composer {
     enter_inserts_newline: bool,
     /// Send works with a blank draft (the start page creates a workspace with no prompt).
     sends_empty: bool,
-    /// A placement card joins the top edge: square top corners, and the composer spans the card's column.
+    /// A placement card sits on the top edge: the composer spans the card's column, keeping its rounded corners.
     joined_top: bool,
     /// A control shown after the access chip (the start page's Chat / Terminal switch).
     leading: Option<LeadingControl>,
@@ -325,8 +325,8 @@ impl Composer {
         cx.notify();
     }
 
-    /// A placement card joins the top edge: the top corners are square, and the composer spans the card's column so
-    /// the card's inset lines up with its sides.
+    /// A placement card sits on the top edge: the composer spans the card's column so the card's inset lines up with
+    /// its sides, and keeps its rounded corners, as the start artboard draws it.
     pub fn joined_top(mut self, joined: bool) -> Self {
         self.joined_top = joined;
         self
