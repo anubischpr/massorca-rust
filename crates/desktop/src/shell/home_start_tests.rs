@@ -11,7 +11,7 @@ use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
 use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
-use crate::service::{Command, KindChat, Refusal, Script, StoreUpdate};
+use crate::service::{ChatCommand, Command, KindChat, Refusal, Script, StoreUpdate};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
@@ -103,6 +103,9 @@ fn next_call(script: &mut Script) -> Option<Call> {
                 reply,
             } => return Some(Call::Create((params, unique_name, reply))),
             Command::AgentStart { params, reply } => return Some(Call::Start((params, reply))),
+            Command::Chat(ChatCommand::Start { params, reply }) => {
+                return Some(Call::Start((params, reply)));
+            }
             _ => {}
         }
     }

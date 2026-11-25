@@ -298,6 +298,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
     focus_started_terminal: Option<String>,
+    /// The started chat session whose composer takes the keyboard once its view exists.
+    focus_started_chat: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -606,6 +608,7 @@ impl Shell {
             stop_prompt: None,
             terminal_notice: None,
             focus_started_terminal: None,
+            focus_started_chat: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
@@ -773,6 +776,7 @@ impl Render for Shell {
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
         self.focus_started_terminal(window, cx);
+        self.focus_started_chat(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -1149,6 +1153,19 @@ impl Render for Shell {
 }
 
 impl Shell {
+    /// Moves the keyboard into a just-started chat session's composer once its view is the one on the Canvas.
+    fn focus_started_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.focus_started_chat.clone() else {
+            return;
+        };
+        if self.model.snapshot().active_session.as_deref() != Some(session.as_str()) {
+            return;
+        }
+        let composer = self.session_composer(&session, cx);
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
+        self.focus_started_chat = None;
+    }
+
     /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
     /// composer can never start a second session.
     fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -8,7 +8,7 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
 };
-use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use massorca_protocol::methods::agents::AgentKind;
 use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -49,9 +49,10 @@ use crate::model::start_page::{
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
-use crate::service::Refusal;
+use crate::service::{Refusal, StartedSession};
 use crate::ui_state;
 use massorca_protocol::codes;
+use massorca_protocol::methods::chat::RunType;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
@@ -872,7 +873,7 @@ impl Shell {
             options,
             grid,
         );
-        let mode = self.start_mode(workspace, cx);
+        let chat = self.start_mode(workspace, cx) == StartMode::Chat;
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,
@@ -880,9 +881,9 @@ impl Shell {
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = service.agent_start(params).await;
+            let answer = service.start_session(params, chat).await;
             let _ = shell.update(cx, |shell, cx| {
-                shell.finish_start(&prompt, composer, mode, answer, cx);
+                shell.finish_start(&prompt, composer, answer, cx);
             });
         })
         .detach();
@@ -1009,26 +1010,34 @@ impl Shell {
         }
     }
 
-    /// The service's answer to a start. The session opens in the Canvas once the Sidebar lists it, and in
-    /// Terminal its terminal then takes the keyboard. A refusal gives the prompt back to the composer with its
-    /// sentence.
+    /// The service's answer to a start. The session opens in the Canvas once the Sidebar lists it; a terminal session's
+    /// terminal then takes the keyboard, and a chat session's composer does. A chat the service could not run started
+    /// as a terminal session, which says why above it. A refusal gives the prompt back to the composer with its sentence.
     pub(super) fn finish_start(
         &mut self,
         prompt: &str,
         composer: Entity<Composer>,
-        mode: StartMode,
-        answer: Result<AgentSession, Refusal>,
+        answer: Result<StartedSession, Refusal>,
         cx: &mut Context<Self>,
     ) {
         self.start_pending = None;
         self.note_refusal(answer.as_ref().err());
         match answer {
-            Ok(session) => {
+            Ok(started) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
                 // Both arms open the started session in the Canvas (owner ruling 2026-11-25): the session the person
-                // started is what they see. A terminal session's terminal takes the keyboard once drawn.
-                if mode == StartMode::Terminal {
+                // started is what they see.
+                let session = started.session;
+                if session.run == RunType::Chat {
+                    self.focus_started_chat = Some(session.id.clone());
+                } else {
                     self.focus_started_terminal = session.terminal_id.clone();
+                }
+                if let Some(why) = started.fell_back {
+                    self.session_notices.insert(
+                        session.id.clone(),
+                        format!("Started a terminal session instead of a chat: {why}"),
+                    );
                 }
                 self.model.open_started_session(session.id);
             }

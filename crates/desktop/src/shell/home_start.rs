@@ -550,7 +550,7 @@ impl Shell {
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
         let details = self.home_details.values();
-        let mode = self.start_mode(HOME_START, cx);
+        let chat = self.start_mode(HOME_START, cx) == StartMode::Chat;
         self.start_pending = Some(StartingSession {
             workspace: HOME_START.to_owned(),
             kind_name: kind.name,
@@ -567,7 +567,7 @@ impl Shell {
                 ProjectChoice::NoProject => {
                     let params =
                         no_project_start_params(&kind.id, &prompt, permission_mode, options, grid);
-                    service.agent_start(params).await
+                    service.start_session(params, chat).await
                 }
                 ProjectChoice::Project(project) => {
                     match create_for_start(
@@ -590,14 +590,14 @@ impl Shell {
                                 options,
                                 grid,
                             );
-                            service.agent_start(params).await
+                            service.start_session(params, chat).await
                         }
                         Err(refusal) => Err(refusal),
                     }
                 }
             };
             let _ = shell.update(cx, |shell, cx| {
-                shell.finish_start(&prompt, composer, mode, answer, cx);
+                shell.finish_start(&prompt, composer, answer, cx);
             });
         })
         .detach();
