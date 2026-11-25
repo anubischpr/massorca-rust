@@ -233,6 +233,14 @@ Linux only. No automated run opens a visible window.
   Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
   sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
   not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
+- Hosted services (SKL-35, decision 0097): the Services category draws a Hosted services section
+  (`shell/marketplace/services.rs`) below its packages. It reads `marketplace.service.status` of the picked host
+  (`service/hosted_services.rs`, on a paired host's own connection), numbered in `HostedServicesView` so a late answer
+  is dropped. Each row shows Connected, Not connected or Unknown, the account or base URL when the host shows them, and
+  Connect, Replace token or Disconnect. Linear and Jira are status-only, GitLab without `glab` cannot connect, and a
+  refused GitLab disconnect shows the service's sentence under its row. The connect dialog takes the token in a masked
+  field, a base URL for GitLab, Azure DevOps and Gitea, and an email for Bitbucket; the token field is cleared the
+  moment the token is sent. Settings > Sources and integrations points to this section instead of disabled Connect rows.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

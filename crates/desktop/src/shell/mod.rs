@@ -227,6 +227,10 @@ pub struct Shell {
     marketplace_review: Option<marketplace::InstallReview>,
     /// The Services section's reads of the picked host (SKL-35).
     marketplace_services: crate::model::marketplace::HostedServicesView,
+    /// The connect dialog of a hosted service, if open.
+    marketplace_service_dialog: Option<marketplace::ServiceDialog>,
+    /// A refused disconnect, with the service it concerns.
+    marketplace_service_error: Option<(String, String)>,
     /// The Add extension dialog on screen, if any.
     marketplace_add: Option<marketplace::AddFolderDialog>,
     /// The last refused change to an installed package, with the item it concerns.
@@ -523,6 +527,8 @@ impl Shell {
             marketplace_uninstall: None,
             marketplace_review: None,
             marketplace_services: crate::model::marketplace::HostedServicesView::default(),
+            marketplace_service_dialog: None,
+            marketplace_service_error: None,
             marketplace_add: None,
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),

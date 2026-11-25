@@ -281,6 +281,7 @@ impl Shell {
         self.marketplace_item_error = None;
         self.marketplace_review = None;
         self.marketplace_uninstall = None;
+        self.marketplace_service_dialog = None;
         if self.model.navigation().page
             == Page::Marketplace(MarketplacePage::Category(ItemKind::Service))
         {

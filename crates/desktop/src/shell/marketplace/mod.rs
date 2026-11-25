@@ -32,6 +32,7 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use services::ServiceDialog;
 use std::collections::BTreeSet;
 
 use gpui::{
@@ -108,6 +109,8 @@ pub(super) struct MarketplaceFrame {
     host_status: &'static str,
     /// The Services section's rows of the picked host.
     services: crate::model::marketplace::HostedServicesView,
+    /// A refused disconnect, with the service it concerns.
+    service_error: Option<(String, String)>,
     shell: WeakEntity<Shell>,
 }
 
@@ -139,6 +142,7 @@ pub(super) fn frame(
         host_picker: shell.marketplace_host_select.clone(),
         host_status: shell.picker_status(cx),
         services: shell.marketplace_services.clone(),
+        service_error: shell.marketplace_service_error.clone(),
         shell: weak,
     }
 }
