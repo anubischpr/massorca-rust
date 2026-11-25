@@ -23,8 +23,8 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use crate::model::agent_delegate::{
-    DelegateDraft, NO_KIND, PlacementNotice, WritingChild, delegate_params, new_request_id,
-    placement_notice, starting_kind, writing_child_of,
+    DelegateDraft, NO_KIND, PlacementNotice, SessionDelegation, delegate_params, delegation_of,
+    new_request_id, placement_notice, starting_kind,
 };
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::service::Refusal;
@@ -42,8 +42,8 @@ pub(super) struct DelegateForm {
     kind_select: Entity<SelectView>,
     /// The index into `kinds` of the agent the child starts on: the parent's, or the one the person picked.
     pub(super) kind: Option<usize>,
-    /// Where a writing child of the parent runs, as the parent declares it; `None` while none is declared.
-    pub(super) placement: Option<WritingChild>,
+    /// The delegation the session declares, or `None` while no session declares one.
+    pub(super) delegation: Option<SessionDelegation>,
     pub(super) read_only: bool,
     /// The id of the last submit sent. It stays while the answer or its refusal shows, so the next submit sends it.
     pub(super) request: Option<String>,
@@ -63,14 +63,14 @@ pub(super) struct StartedChild {
 }
 
 impl DelegateForm {
-    /// The line the form states before the person types; a read-only child needs none.
+    /// The line the form states before the person types, from the session's delegation and the read-only choice.
     fn notice(&self) -> Option<PlacementNotice> {
-        self.placement
+        self.delegation
             .as_ref()
-            .and_then(|writing| placement_notice(writing, self.read_only))
+            .and_then(|delegation| placement_notice(delegation, self.read_only))
     }
 
-    /// Whether the parent's placement keeps Delegate off, as an unavailable session does.
+    /// Whether the session's delegation keeps Delegate off for the choice the form holds.
     fn blocked(&self) -> bool {
         self.notice().is_some_and(|notice| notice.blocks_send)
     }
@@ -123,14 +123,14 @@ impl Shell {
         if self.service.is_none() {
             return;
         }
-        let (parent_kind, placement, kinds) = {
+        let (parent_kind, delegation, kinds) = {
             let state = self.store.read(cx).state();
             let Some(parent) = state.agents.iter().find(|parent| parent.id == session) else {
                 return;
             };
             (
                 parent.kind.clone(),
-                writing_child_of(parent),
+                delegation_of(parent),
                 session_kind_choices(&state.agent_kinds),
             )
         };
@@ -184,7 +184,7 @@ impl Shell {
             kinds,
             kind_select,
             kind: starting,
-            placement,
+            delegation,
             read_only: false,
             request: None,
             sending: false,

@@ -10,7 +10,7 @@ use massorca_ui::components::text_field::TextField;
 
 use super::delegate::DelegateForm;
 use super::service_tests::{Rig, click, draw, rig};
-use crate::model::agent_delegate::{PROMPT_REQUIRED, WritingChild};
+use crate::model::agent_delegate::{PROMPT_REQUIRED, SessionDelegation, WritingChild};
 use crate::service::fixtures::{agent, agent_kind};
 use crate::service::{Command, Refusal, StoreUpdate};
 
@@ -40,15 +40,24 @@ fn open_form(rig: &Rig, cx: &mut VisualTestContext) {
     draw(cx);
 }
 
-/// Declares where the open form's writing child runs, as a parent session that carries the field would.
-fn declare(rig: &Rig, cx: &mut VisualTestContext, writing: WritingChild) {
+/// Declares the open form's session delegation, as a parent session that carries the field would.
+fn declare(rig: &Rig, cx: &mut VisualTestContext, delegation: SessionDelegation) {
     rig.shell.update(cx, |shell, cx| {
         if let Some(form) = shell.delegate.as_mut() {
-            form.placement = Some(writing);
+            form.delegation = Some(delegation);
         }
         cx.notify();
     });
     draw(cx);
+}
+
+/// A delegation whose writing child is `writing_child`, with a read-only child allowed and no reason.
+fn writing(writing_child: WritingChild) -> SessionDelegation {
+    SessionDelegation {
+        writing_child,
+        read_only_child: true,
+        reason: None,
+    }
 }
 
 /// Types `text` into one of the form's fields through the field's own entity, as the person's typing does.
@@ -331,7 +340,7 @@ for the feed"
 fn an_own_worktree_child_is_described_before_the_person_types(cx: &mut TestAppContext) {
     let (rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    declare(&rig, cx, WritingChild::OwnWorktree);
+    declare(&rig, cx, writing(WritingChild::OwnWorktree));
     assert!(
         cx.debug_bounds("delegate-placement-notice").is_some(),
         "the placement shows as the form opens"
@@ -349,7 +358,7 @@ fn an_own_worktree_child_is_described_before_the_person_types(cx: &mut TestAppCo
 fn a_shared_folder_child_is_described_before_the_person_types(cx: &mut TestAppContext) {
     let (rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    declare(&rig, cx, WritingChild::SharedFolder);
+    declare(&rig, cx, writing(WritingChild::SharedFolder));
     assert!(
         cx.debug_bounds("delegate-placement-notice").is_some(),
         "the placement shows as the form opens"
@@ -369,7 +378,7 @@ fn a_read_only_child_gets_no_isolation_line_and_a_writing_one_gets_it_back(
 ) {
     let (rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    declare(&rig, cx, WritingChild::SharedFolder);
+    declare(&rig, cx, writing(WritingChild::SharedFolder));
     rig.shell
         .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
     draw(cx);
@@ -403,13 +412,59 @@ fn a_session_that_declares_no_placement_shows_no_line_and_sends_as_before(cx: &m
 }
 
 #[gpui::test]
-fn an_unavailable_session_states_why_and_sends_nothing(cx: &mut TestAppContext) {
+fn a_writing_unavailable_session_sends_a_read_only_child_only_with_read_only_on(
+    cx: &mut TestAppContext,
+) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
     declare(
         &rig,
         cx,
-        WritingChild::Unavailable {
+        SessionDelegation {
+            writing_child: WritingChild::Unavailable,
+            read_only_child: true,
+            reason: Some("Writing is paused in this session.".to_owned()),
+        },
+    );
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason shows before typing"
+    );
+    type_prompt(&rig, cx, "Review the diff");
+    click(cx, "dialog-action");
+    rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "with Read only off, a writing child cannot start"
+    );
+
+    rig.shell
+        .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason stays with Read only on"
+    );
+    click(cx, "dialog-action");
+    let Some(Command::Delegate { params, .. }) = rig.script.next() else {
+        panic!("with Read only on, the session's read-only child is sent");
+    };
+    assert_eq!((params.read_only, params.name), (true, None));
+}
+
+#[gpui::test]
+fn a_writing_unavailable_session_without_read_only_children_keeps_delegate_off(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(
+        &rig,
+        cx,
+        SessionDelegation {
+            writing_child: WritingChild::Unavailable,
+            read_only_child: false,
             reason: Some("This session has reached its delegation depth.".to_owned()),
         },
     );
@@ -417,12 +472,27 @@ fn an_unavailable_session_states_why_and_sends_nothing(cx: &mut TestAppContext) 
         cx.debug_bounds("delegate-placement-notice").is_some(),
         "the reason shows before typing"
     );
-    type_prompt(&rig, cx, "Write the tests");
+    type_prompt(&rig, cx, "Review the diff");
     click(cx, "dialog-action");
     rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
     cx.run_until_parked();
     assert!(
         rig.script.next().is_none(),
-        "Delegate is off, so no call reaches the service"
+        "with Read only off, nothing can start"
+    );
+
+    rig.shell
+        .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason stays with Read only on"
+    );
+    click(cx, "dialog-action");
+    rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "with Read only on, the session still starts no child"
     );
 }
