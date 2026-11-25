@@ -18,19 +18,52 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The file in a session's run directory that holds why its current run got no instructions.
 const WITHHELD_FILE: &str = "instructions-withheld";
 
-/// A probe's identity: the program, its modified time, and what is run and looked for.
-type ProbeKey = (PathBuf, Option<SystemTime>, Vec<String>, String);
+/// A probe's identity: the program, its modified time, and what is run.
+type ProbeKey = (PathBuf, Option<SystemTime>, Vec<String>);
 
-/// The probe results of this service, so a probe runs once per installed program, not per launch.
-fn probe_cache() -> &'static Mutex<HashMap<ProbeKey, bool>> {
-    static CACHE: OnceLock<Mutex<HashMap<ProbeKey, bool>>> = OnceLock::new();
+/// What a probe run printed and how it ended: the exit code (`None` when it did not finish) and its output.
+#[derive(Debug, Clone)]
+pub(crate) struct ProbeRun {
+    pub(crate) exit: Option<i32>,
+    pub(crate) output: String,
+}
+
+/// The probe runs of this service, so a probe runs once per installed program, not per launch. Shared by the instruction
+/// channel and the one-shot title run's `--help` listing (decision 0167).
+fn probe_cache() -> &'static Mutex<HashMap<ProbeKey, ProbeRun>> {
+    static CACHE: OnceLock<Mutex<HashMap<ProbeKey, ProbeRun>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// What `program` prints for `args` (its `--help`, usually): run once per program path and modified time, with the names an
+/// account command strips removed and no account home, and kept for the service's life.
+pub(crate) fn probe_run(decl: &KindDecl, program: &Path, args: &[String]) -> ProbeRun {
+    let modified = fs::metadata(program)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let key = (program.to_path_buf(), modified, args.to_vec());
+    if let Some(known) = probe_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+    {
+        return known.clone();
+    }
+    let output = run_probe(program, args, &account_strip_names(decl), PROBE_TIMEOUT);
+    let run = ProbeRun {
+        exit: output.exit,
+        output: output.output,
+    };
+    probe_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key, run.clone());
+    run
+}
+
 /// Whether `program`, the kind's resolved program, takes the kind's instruction channel: always without a declared
-/// probe; else when the probe exits 0 within [`PROBE_TIMEOUT`] and its output contains the declared text. The probe runs
-/// with the names an account command strips removed and no account home, and its result is kept per program path and
-/// modified time. A kind without a channel takes none.
+/// probe; else when the probe exits 0 within [`PROBE_TIMEOUT`] and its output contains the declared text (see
+/// [`probe_run`] for how a probe runs and is kept). A kind without a channel takes none.
 pub(crate) fn channel_supported(decl: &KindDecl, program: &Path) -> bool {
     let Some(channel) = &decl.instructions else {
         return false;
@@ -38,34 +71,8 @@ pub(crate) fn channel_supported(decl: &KindDecl, program: &Path) -> bool {
     let Some(probe) = &channel.supported_when else {
         return true;
     };
-    let modified = fs::metadata(program)
-        .and_then(|metadata| metadata.modified())
-        .ok();
-    let key = (
-        program.to_path_buf(),
-        modified,
-        probe.args.clone(),
-        probe.contains.clone(),
-    );
-    if let Some(known) = probe_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&key)
-    {
-        return *known;
-    }
-    let output = run_probe(
-        program,
-        &probe.args,
-        &account_strip_names(decl),
-        PROBE_TIMEOUT,
-    );
-    let supported = output.exit == Some(0) && output.output.contains(&probe.contains);
-    probe_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(key, supported);
-    supported
+    let run = probe_run(decl, program, &probe.args);
+    run.exit == Some(0) && run.output.contains(&probe.contains)
 }
 
 /// What a session records when its run got no instructions because its CLI failed the channel's probe.

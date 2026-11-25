@@ -13,6 +13,7 @@ pub mod instructions;
 pub mod kind;
 pub mod launch;
 mod modes;
+pub mod oneshot;
 pub mod packages;
 pub mod paths;
 mod process_tree;
@@ -25,6 +26,7 @@ pub mod sign_in;
 pub mod sources;
 mod state_file;
 pub mod status;
+pub mod title;
 
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
 pub use event::{DoneOutcome, EventTarget};
