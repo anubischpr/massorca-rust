@@ -11,6 +11,7 @@ mod reasoning_slider;
 pub use state::{
     AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState, PickerView, RowRef,
 };
+pub use reasoning_slider::AgentBrand;
 
 use std::fmt;
 use std::time::Instant;

@@ -499,8 +499,8 @@ impl ModelPicker {
             .effort
             .unwrap_or(model.default_effort)
             .min(count - 1);
-        // The agent's listing colours feed the fill once the picker is given them; until then the accent fills.
-        let brand = brand_colours(None, (p.accent.default, p.accent.fg));
+        // The agent's listing colours fill the bar; an agent that lists none fills with the accent.
+        let brand = brand_colours(self.state.current_brand(), (p.accent.default, p.accent.fg));
         let name = name_colour(brand, p.surface.overlay);
         let agent = self.state.current_kind().label();
         let reduced = cx.reduce_motion();

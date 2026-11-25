@@ -17,7 +17,7 @@ use gpui::{
     px, relative,
 };
 
-pub use brand::{BrandColours, brand_colours, name_colour};
+pub use brand::{AgentBrand, BrandColours, brand_colours, name_colour};
 pub use stops::{has_slider, is_top_level};
 use stops::{STOP_INSET, Slide, nearest_stop, stop_fraction, value_text};
 
