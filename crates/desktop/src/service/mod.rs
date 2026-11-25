@@ -8,6 +8,7 @@ mod agent_forget;
 mod agent_queue;
 mod agents;
 mod bridge;
+mod chat;
 mod connection;
 mod extensions;
 mod git;
@@ -25,6 +26,8 @@ mod update;
 mod workspace_create;
 
 #[cfg(test)]
+mod chat_calls_tests;
+#[cfg(test)]
 mod chat_tests;
 #[cfg(test)]
 mod git_tests;
@@ -35,6 +38,9 @@ mod secrets_tests;
 pub(crate) use accounts::AccountCommand;
 pub use agent_chat::{ChatUnsupportedReason, KindChat};
 pub use agent_forget::ForgetSessionParams;
+#[cfg(test)]
+pub(crate) use chat::ChatCommand;
+pub use chat::StartedSession;
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
