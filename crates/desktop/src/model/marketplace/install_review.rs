@@ -1,11 +1,80 @@
-//! The install review of a catalogue package: the lines that say exactly what the service reported (decision 0062).
-//! Permissions, the agent programs, the vendor commands and the fingerprint are shown as the service sent them.
+//! The install review dialog's words (decision 0062, owner ruling 2026-11-24): only what the button will do. The
+//! technical review (hashes, permissions, programs, verify and uninstall commands) stays in the CLI's review output.
 
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, ExtensionReview, KindView, RiskLevel,
 };
 
 use super::extension_items::{permission_word, risk_word, source_word};
+
+/// What the dialog says, in one of two cases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewOutcome {
+    /// Nothing is installed on this computer: the package is added to MassOrca.
+    Add { title: String, body: String },
+    /// The vendor installer runs: the sentence and the command on its own line are the warning.
+    Install {
+        title: String,
+        sentence: String,
+        command: String,
+    },
+}
+
+impl ReviewOutcome {
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Add { title, .. } | Self::Install { title, .. } => title,
+        }
+    }
+
+    /// The primary button.
+    pub fn button(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "Add to MassOrca",
+            Self::Install { .. } => "Install",
+        }
+    }
+}
+
+/// Whether this computer runs a vendor installer: a CLI plan that will run its command.
+pub fn installer_runs(review: &ExtensionReview) -> bool {
+    review
+        .cli
+        .iter()
+        .any(|plan| matches!(plan.state, CliPlanState::WillRun { .. }))
+}
+
+/// The dialog's words for `review`, naming the item `name` (the catalogue item's display name).
+pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
+    let commands: Vec<String> = review
+        .cli
+        .iter()
+        .filter_map(|plan| match &plan.state {
+            CliPlanState::WillRun { command, .. } => Some(command.join(" ")),
+            _ => None,
+        })
+        .collect();
+    if !commands.is_empty() {
+        return ReviewOutcome::Install {
+            title: format!("Install {name}"),
+            sentence: format!("MassOrca will install {name} on this computer."),
+            command: commands.join("; "),
+        };
+    }
+    let detected = review
+        .cli
+        .iter()
+        .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }));
+    let body = if detected {
+        format!("MassOrca will add the {name} agent you already have installed on this computer.")
+    } else {
+        format!("MassOrca will add {name} to this computer.")
+    };
+    ReviewOutcome::Add {
+        title: format!("Add {name} to MassOrca"),
+        body,
+    }
+}
 
 /// The review, one line per fact, in the order the person reads it: what the package is, its risk and permissions,
 /// what each agent runs, each vendor command, and the consent the person accepts.
@@ -66,14 +135,6 @@ pub fn review_details(review: &ExtensionReview) -> Vec<String> {
             review.consent
         ),
     ]
-}
-
-/// Whether this computer runs a vendor installer: a CLI plan that will run its command.
-pub fn installer_runs(review: &ExtensionReview) -> bool {
-    review
-        .cli
-        .iter()
-        .any(|plan| matches!(plan.state, CliPlanState::WillRun { .. }))
 }
 
 /// The button that finishes the review: Allow and install when an installer runs, else Add to MassOrca.
@@ -461,5 +522,92 @@ mod tests {
         plain.kinds.clear();
         let lines = review_lines(&plain);
         assert!(lines.contains(&"Permissions: none".to_owned()), "{lines:?}");
+    }
+
+    /// Text the dialog no longer shows in any case.
+    const REMOVED: [&str; 10] = [
+        "SHA-256",
+        "Consent",
+        "Permissions",
+        "Runs a program",
+        "Gives agents access",
+        "starts:",
+        "keeps its sign-in in",
+        "Verify after the install",
+        "Uninstall command",
+        "Risk",
+    ];
+
+    fn words(outcome: &ReviewOutcome) -> String {
+        match outcome {
+            ReviewOutcome::Add { title, body } => format!(
+                "{title}
+{body}"
+            ),
+            ReviewOutcome::Install {
+                title,
+                sentence,
+                command,
+            } => format!(
+                "{title}
+{sentence}
+{command}"
+            ),
+        }
+    }
+
+    fn assert_nothing_removed_shows(outcome: &ReviewOutcome) {
+        let text = words(outcome);
+        for removed in REMOVED {
+            assert!(!text.contains(removed), "{removed:?} shows in {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_cli_already_here_is_added_to_massorca_and_nothing_is_installed() {
+        let outcome = review_outcome(&detected_review(), "Claude");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Add {
+                title: "Add Claude to MassOrca".to_owned(),
+                body: "MassOrca will add the Claude agent you already have installed on this computer."
+                    .to_owned(),
+            }
+        );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert_nothing_removed_shows(&outcome);
+    }
+
+    #[test]
+    fn a_missing_cli_names_the_one_installer_command() {
+        let outcome = review_outcome(&review(), "Claude");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Install {
+                title: "Install Claude".to_owned(),
+                sentence: "MassOrca will install Claude on this computer.".to_owned(),
+                command: "winget install Anthropic.ClaudeCode".to_owned(),
+            }
+        );
+        assert_eq!(outcome.button(), "Install");
+        assert_nothing_removed_shows(&outcome);
+    }
+
+    #[test]
+    fn a_package_without_an_installer_is_added_by_name() {
+        let mut plain = review();
+        plain.cli.clear();
+        plain.kinds.clear();
+        plain.runs_installer = false;
+        let outcome = review_outcome(&plain, "Kit");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Add {
+                title: "Add Kit to MassOrca".to_owned(),
+                body: "MassOrca will add Kit to this computer.".to_owned(),
+            }
+        );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert_nothing_removed_shows(&outcome);
     }
 }

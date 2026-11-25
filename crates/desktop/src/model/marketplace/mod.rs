@@ -27,7 +27,8 @@ pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;
 pub use install_review::{
-    install_button_label, installer_runs, review_details, review_lines, shown_risk,
+    ReviewOutcome, install_button_label, installer_runs, review_details, review_lines,
+    review_outcome, shown_risk,
 };
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
