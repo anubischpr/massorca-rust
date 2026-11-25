@@ -103,6 +103,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(projects::SET_BASE, "project.set_base");
     assert_eq!(projects::INIT_GIT, "project.init_git");
     assert_eq!(capabilities::PROJECT_INIT_GIT, "project-init-git/1");
+    assert_eq!(capabilities::PROJECT_ICON_COLOR, "project-icon-color/1");
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");

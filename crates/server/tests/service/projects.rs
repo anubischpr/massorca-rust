@@ -11,9 +11,9 @@ use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectIcon, ProjectInspectParams, ProjectInspection,
-    ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
-    ProjectUpdateParams,
+    self, IconColor, Project, ProjectAddParams, ProjectIcon, ProjectInspectParams,
+    ProjectInspection, ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams, ProjectUpdateParams,
 };
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
@@ -658,6 +658,63 @@ async fn project_update_sets_keeps_and_clears_the_icon_and_publishes_project_cha
         .await
         .expect("project.show");
     assert_eq!(shown.icon, None);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn project_update_keeps_a_lucide_colour_and_project_show_returns_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("project.add");
+    let icon = ProjectIcon::Lucide {
+        name: "Folder".to_owned(),
+        color: Some(IconColor::Usage3),
+    };
+
+    let set: Project = client
+        .call(
+            projects::UPDATE,
+            &ProjectUpdateParams {
+                project: project.id.clone(),
+                icon: Some(Some(icon.clone())),
+            },
+        )
+        .await
+        .expect("project.update sets a coloured icon");
+    assert_eq!(set.icon, Some(icon.clone()));
+    let shown: Project = client
+        .call(
+            projects::SHOW,
+            &ProjectRef {
+                project: project.id.clone(),
+            },
+        )
+        .await
+        .expect("project.show");
+    assert_eq!(shown.icon, Some(icon));
+
+    let refused = client
+        .call::<_, Project>(
+            projects::UPDATE,
+            &ProjectUpdateParams {
+                project: project.id.clone(),
+                icon: Some(Some(ProjectIcon::Lucide {
+                    name: "Folder".to_owned(),
+                    color: Some(IconColor::Unknown),
+                })),
+            },
+        )
+        .await;
+    assert_eq!(
+        remote_code(&refused.expect_err("an unknown colour is refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
     stop(running).await;
 }
 

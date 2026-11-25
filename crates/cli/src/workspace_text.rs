@@ -257,11 +257,14 @@ pub fn unregistered_line(worktree: &UnregisteredWorktree) -> String {
     )
 }
 
-/// A project's icon as `emoji:<emoji>`, `lucide:<name>` or `image:<label> (upload|file)`, read as the forms `--icon` takes.
+/// A project's icon as `emoji:<emoji>`, `lucide:<name>[:<colour>]` or `image:<label> (upload|file)`, read as the forms `--icon` takes.
 pub fn icon_text(icon: &ProjectIcon) -> String {
     match icon {
         ProjectIcon::Emoji { emoji } => format!("emoji:{emoji}"),
-        ProjectIcon::Lucide { name } => format!("lucide:{name}"),
+        ProjectIcon::Lucide { name, color } => match color {
+            Some(color) => format!("lucide:{name}:{}", color.token()),
+            None => format!("lucide:{name}"),
+        },
         ProjectIcon::Image { source, label, .. } => {
             let origin = match source {
                 ProjectIconSource::Upload => "upload",

@@ -293,7 +293,7 @@ pub enum ProjectCommand {
     Update {
         /// Project id, name or path.
         project: String,
-        /// The icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`.
+        /// The icon: `emoji:<emoji>`, `lucide:<name>[:<colour>]` or `image:<PNG file>`.
         #[arg(
             long,
             value_name = "ICON",

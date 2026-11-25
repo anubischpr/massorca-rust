@@ -6,6 +6,8 @@ pub const PROJECTS: &str = "projects/1";
 pub const PROJECT_INIT_GIT: &str = "project-init-git/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
+/// The colour of a Lucide project icon (`ProjectIcon::Lucide` `color`): an older service would drop it silently.
+pub const PROJECT_ICON_COLOR: &str = "project-icon-color/1";
 pub const WORKSPACES: &str = "workspaces/1";
 /// Renaming a workspace and setting its comment (`workspace.update`).
 pub const WORKSPACE_UPDATE: &str = "workspace-update/1";

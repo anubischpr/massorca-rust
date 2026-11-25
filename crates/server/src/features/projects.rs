@@ -1,4 +1,4 @@
-//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`), `project.update` (capability `project-update/1`) and `project.init_git` (capability `project-init-git/1`), over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.inspect`, `project.remove` and `project.set_base` (capability `projects/1`), `project.update` (capability `project-update/1`, with `project-icon-color/1` for a Lucide icon's colour) and `project.init_git` (capability `project-init-git/1`), over the workspace domain.
 
 use std::sync::Arc;
 
@@ -73,6 +73,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::PROJECT_UPDATE, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::PROJECT_ICON_COLOR, Owner::Core)?,
         registries.methods.register(
             Owner::Core,
             projects::UPDATE,

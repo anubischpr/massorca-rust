@@ -4,7 +4,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectIcon, ProjectIconSource, ProjectKind,
+    self, IconColor, Project, ProjectAddParams, ProjectIcon, ProjectIconSource, ProjectKind,
     ProjectUpdateParams,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -61,6 +61,7 @@ fn each_icon_kind_has_the_documented_wire_shape() {
     assert_wire(
         &ProjectIcon::Lucide {
             name: "Rocket".to_owned(),
+            color: None,
         },
         &json!({ "type": "lucide", "name": "Rocket" }),
     );
@@ -151,17 +152,20 @@ fn an_icon_is_normalized_to_its_trimmed_text() {
     );
     assert_eq!(
         ProjectIcon::Lucide {
-            name: " Rocket ".to_owned()
+            name: " Rocket ".to_owned(),
+            color: None,
         }
         .normalized(),
         Ok(ProjectIcon::Lucide {
-            name: "Rocket".to_owned()
+            name: "Rocket".to_owned(),
+            color: None,
         })
     );
     let long = "a".repeat(41);
     for name in ["", "1Rocket", "rocket-ship", long.as_str()] {
         let icon = ProjectIcon::Lucide {
             name: name.to_owned(),
+            color: None,
         };
         assert!(icon.normalized().is_err(), "{name:?} is not a Lucide name");
     }
@@ -223,6 +227,7 @@ fn an_image_is_built_from_the_bytes_of_a_png_or_webp_file() {
 fn a_stored_icon_round_trips_through_its_json() {
     let icon = ProjectIcon::Lucide {
         name: "Rocket".to_owned(),
+        color: Some(IconColor::Usage3),
     };
     let stored = icon.to_stored().expect("stores");
     assert_eq!(ProjectIcon::from_stored(&stored), Some(icon));
@@ -273,4 +278,69 @@ fn project_update_params_tell_an_absent_icon_from_a_null_one() {
 fn the_update_method_and_its_capability_are_named_as_documented() {
     assert_eq!(projects::UPDATE, "project.update");
     assert_eq!(capabilities::PROJECT_UPDATE, "project-update/1");
+}
+
+#[test]
+fn a_lucide_icon_without_a_colour_keeps_the_json_it_had() {
+    assert_wire(
+        &ProjectIcon::Lucide {
+            name: "Rocket".to_owned(),
+            color: None,
+        },
+        &json!({ "type": "lucide", "name": "Rocket" }),
+    );
+    assert_wire(
+        &ProjectIcon::Lucide {
+            name: "Rocket".to_owned(),
+            color: Some(IconColor::Neutral),
+        },
+        &json!({ "type": "lucide", "name": "Rocket", "color": "neutral" }),
+    );
+}
+
+#[test]
+fn each_lucide_colour_is_its_token_on_the_wire() {
+    let tokens = [
+        (IconColor::Usage1, "usage-1"),
+        (IconColor::Usage2, "usage-2"),
+        (IconColor::Usage3, "usage-3"),
+        (IconColor::Usage4, "usage-4"),
+        (IconColor::Usage5, "usage-5"),
+        (IconColor::Usage6, "usage-6"),
+        (IconColor::Neutral, "neutral"),
+    ];
+    for (color, token) in tokens {
+        let icon = ProjectIcon::Lucide {
+            name: "Folder".to_owned(),
+            color: Some(color),
+        };
+        assert_wire(
+            &icon,
+            &json!({ "type": "lucide", "name": "Folder", "color": token }),
+        );
+        assert_eq!(color.token(), token);
+        assert_eq!(IconColor::from_token(token), Some(color));
+        assert!(icon.normalized().is_ok(), "{token} is a colour");
+    }
+    assert_eq!(IconColor::from_token("usage-7"), None);
+    assert_eq!(IconColor::from_token("#ff0000"), None);
+}
+
+#[test]
+fn an_unknown_lucide_colour_token_is_refused_by_validation() {
+    // A token from a newer peer still decodes, so validation can refuse it with the usual message.
+    let icon: ProjectIcon = serde_json::from_value(json!({
+        "type": "lucide",
+        "name": "Folder",
+        "color": "usage-9"
+    }))
+    .expect("a newer colour token decodes");
+    assert_eq!(
+        icon,
+        ProjectIcon::Lucide {
+            name: "Folder".to_owned(),
+            color: Some(IconColor::Unknown),
+        }
+    );
+    assert!(icon.normalized().is_err(), "an unknown colour is refused");
 }
