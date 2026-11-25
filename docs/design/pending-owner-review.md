@@ -60,7 +60,7 @@ The pv96 comparison changed some journeys the owner validated on 2026-11-12 (J3,
 
 ## Marketplace item page order (2026-11-22)
 
-Owner direction, binding. Where an artboard or section 7.2 differs from the owner's order, the owner's order wins. The item page has nine parts, top to bottom: logo, name with state chip and Copy link, host, invocation banner, Connection (agents), Information, Settings, Advanced Options (installed items), Danger Zone. The artboards show no banner, Connection or Settings part, and keep About and Permissions apart; section 7.2 now follows the owner's order.
+Owner direction, binding. Where an artboard or section 7.2 differs from the owner's order, the owner's order wins. The item page has nine parts, top to bottom: logo, name with state chip and Copy link, host, invocation banner, Connection (agents), Information, Settings, Advanced Options (installed items), Danger Zone. The artboards show no Connection or Settings part, and keep About and Permissions apart; section 7.2 now follows the owner's order. The invocation banner is no longer open: the owner approved it on 2026-11-25 (A99, components/InvocationBanner.md, artboard bt-invocation-banner).
 
 | # | Question | Source | Artboard |
 |---|---|---|---|
