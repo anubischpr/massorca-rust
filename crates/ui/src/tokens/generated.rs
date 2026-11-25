@@ -1162,6 +1162,8 @@ pub const SIZE_AVATAR_LG: f32 = 40.0;
 pub const SIZE_INDICATOR_DOT: f32 = 6.0;
 /// `size.badge.height`
 pub const SIZE_BADGE_HEIGHT: f32 = 16.0;
+/// `size.tag.height`
+pub const SIZE_TAG_HEIGHT: f32 = 20.0;
 /// `size.kbd.height`
 pub const SIZE_KBD_HEIGHT: f32 = 16.0;
 /// `size.progress.height`
