@@ -2252,6 +2252,120 @@ mod tests {
         );
     }
 
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn an_update_writes_only_the_files_the_new_account_brought_and_keeps_everything_else() {
+        let fixture = Fixture::new(&["token.json", "extra.json"]);
+        let profile = fixture.profile.path();
+        fixture.source_file("token.json", b"old");
+        fixture.source_file("extra.json", b"old extra");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        fs::create_dir_all(home.join("projects")).unwrap();
+        fs::write(home.join("projects").join("x.jsonl"), b"transcript").unwrap();
+        // The new account brought only the token.
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        fs::write(new_home.join("token.json"), b"new").unwrap();
+
+        update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+            .unwrap();
+
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"new");
+        assert_eq!(fs::read(home.join("extra.json")).unwrap(), b"old extra");
+        assert_eq!(
+            fs::read(home.join("projects").join("x.jsonl")).unwrap(),
+            b"transcript"
+        );
+        assert_eq!(entries(&home), ["extra.json", "projects", "token.json"]);
+        assert!(!new_home.exists(), "the new account's home is deleted");
+        assert_eq!(entries(home.parent().unwrap()), [ACCOUNT]);
+    }
+
+    #[test]
+    fn an_update_refuses_a_linked_file_and_a_missing_home_and_changes_nothing() {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        let missing =
+            update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+                .unwrap_err();
+        assert_eq!(missing.code, codes::AGENT_CREDENTIALS_INVALID);
+        fixture.source_file("token.json", b"old");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let new_home = create_account_home(profile, "fake", OTHER_ACCOUNT).unwrap();
+        let empty =
+            update_account_files_locked(profile, &BuiltInPackages, "fake", OTHER_ACCOUNT, ACCOUNT)
+                .unwrap_err();
+        assert_eq!(empty.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(new_home.is_dir(), "a refused update deletes nothing");
+        let home = account_home(&fixture, ACCOUNT);
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn the_startup_restores_an_aside_home_whose_home_is_missing_and_deletes_one_whose_home_exists()
+    {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        fixture.source_file("token.json", b"kept");
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        let home = account_home(&fixture, ACCOUNT);
+        let finished = home.with_file_name(format!(".{ACCOUNT}.{REPLACED}-1"));
+        fs::create_dir(&finished).unwrap();
+        let lost = account_home(&fixture, OTHER_ACCOUNT);
+        let crashed = lost.with_file_name(format!(".{OTHER_ACCOUNT}.{REPLACED}-2"));
+        fs::create_dir(&crashed).unwrap();
+        fs::write(crashed.join("token.json"), b"only copy").unwrap();
+        let legacy_aside = fixture.home().with_file_name(format!(".fake.{REPLACED}-3"));
+        fs::create_dir_all(&legacy_aside).unwrap();
+
+        restore_replaced_leftovers_locked(profile);
+
+        assert!(!finished.exists(), "a finished swap's old home is deleted");
+        assert_eq!(fs::read(lost.join("token.json")).unwrap(), b"only copy");
+        assert!(!crashed.exists());
+        assert!(fixture.home().is_dir(), "the 0056 home is put back too");
+        assert_eq!(fs::read(home.join("token.json")).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn the_kind_leftovers_and_its_empty_account_folder_are_deleted() {
+        let fixture = Fixture::new(&["token.json"]);
+        let profile = fixture.profile.path();
+        let accounts = paths::accounts_dir(profile, "fake");
+        fs::create_dir_all(accounts.join(format!(".{ACCOUNT}.{REPLACED}-1"))).unwrap();
+        fs::create_dir_all(accounts.join(format!(".{ACCOUNT}.{STAGING}-2"))).unwrap();
+        fs::write(
+            accounts
+                .join(format!(".{ACCOUNT}.{STAGING}-2"))
+                .join("token.json"),
+            b"copy",
+        )
+        .unwrap();
+        let homes = fixture.home().parent().unwrap().to_path_buf();
+        fs::create_dir_all(homes.join(format!(".fake.{REPLACED}-3"))).unwrap();
+        fs::create_dir_all(homes.join(".other.old-4")).unwrap();
+
+        let problems = remove_kind_leftovers_locked(profile, "fake");
+
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!accounts.exists(), "the kind's account folder is deleted");
+        assert_eq!(
+            entries(&homes),
+            [".other.old-4"],
+            "another kind's folder stays"
+        );
+    }
+
     #[test]
     fn remove_account_deletes_only_that_account() {
         let fixture = Fixture::new(&["token.json"]);

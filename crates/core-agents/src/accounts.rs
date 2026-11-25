@@ -1517,6 +1517,30 @@ mod tests {
     }
 
     #[test]
+    fn a_third_party_package_never_cleans_a_built_in_kind() {
+        let (agents, _, profile) = service();
+        let mut account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
+        account.kind = "claude".to_owned();
+        agents.store().insert_agent_account(&account).unwrap();
+        let home = {
+            let _gate = credentials::lock_homes();
+            credentials::create_account_home(profile.path(), "claude", &account.id).unwrap()
+        };
+
+        let refused = agents
+            .remove_package_accounts("acme.kit", &["claude".to_owned()])
+            .expect_err("the built-in kind is skipped and reported");
+
+        assert_eq!(refused.code, codes::AGENT_HOOK_REFUSED);
+        assert!(refused.message.contains("claude"), "{}", refused.message);
+        assert!(home.is_dir(), "the account's home stays");
+        assert_eq!(
+            agents.store().list_agent_accounts("claude").unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
     fn an_account_that_is_not_pending_is_activated() {
         let (agents, _, _profile) = service();
         let account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
