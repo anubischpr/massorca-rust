@@ -969,32 +969,150 @@ fn a_remembered_pick_comes_back_on_the_start_chip_and_is_sent(cx: &mut TestAppCo
     assert_eq!(params.permission_mode.as_deref(), Some("plan"));
 }
 
-#[gpui::test]
-fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
-    let (mut rig, cx) = start_page_rig(
-        cx,
-        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+#[test]
+fn a_start_sends_only_the_mode_the_chip_shows_from_the_same_list() {
+    use super::start_page::{access_modes, sent_mode};
+    use crate::model::permission_modes::start_choices;
+    let choices = start_choices(&claude_with_modes());
+    let shown = access_modes(&choices);
+    assert_eq!(
+        sent_mode(&choices, &shown, 0),
+        None,
+        "the CLI's default sends no mode"
     );
-    type_and_send(&rig, cx, "fix the login");
-    cx.run_until_parked();
-    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!((params.model, params.effort), (None, None));
+    assert_eq!(sent_mode(&choices, &shown, 1).as_deref(), Some("auto"));
+    assert_eq!(sent_mode(&choices, &shown, 2).as_deref(), Some("plan"));
+    assert_eq!(
+        sent_mode(&choices, &shown, 9),
+        None,
+        "past the end sends no mode"
+    );
+    // A chip built from another list never lends its index to this one.
+    let other = access_modes(&choices[..1]);
+    assert_eq!(sent_mode(&choices, &other, 2), None);
 }
 
 #[gpui::test]
-fn with_the_capability_a_kind_with_no_models_still_sends_neither(cx: &mut TestAppContext) {
-    let (mut rig, cx) = start_page_rig(
-        cx,
-        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
-    );
-    rig._updates
-        .send(StoreUpdate::AgentOptionsOffered(true))
-        .expect("the store listens");
-    cx.run_until_parked();
+fn a_chip_index_nobody_picked_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    // The index moves without the person choosing the entry: nothing is sent.
+    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    draw(cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!((params.model, params.effort), (None, None));
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn the_shown_mode_and_the_sent_mode_agree_for_every_entry(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    let expected = [None, Some("auto"), Some("plan"), Some("bypassPermissions")];
+    for (index, want) in expected.into_iter().enumerate() {
+        composer.update(cx, |composer, cx| {
+            composer.set_access(index, cx);
+            cx.emit(ComposerEvent::AccessChanged(index));
+        });
+        draw(cx);
+        type_and_send(&rig, cx, "fix the login");
+        cx.run_until_parked();
+        let (params, _reply) =
+            start_call(&mut rig._script).expect("the start is sent to the service");
+        assert_eq!(params.permission_mode.as_deref(), want, "entry {index}");
+        rig.shell.update(cx, |shell, _| shell.start_pending = None);
+    }
+}
+
+/// A profile whose ui state remembers `mode` as the start pick of Claude.
+fn profile_remembering(temp: &tempfile::TempDir, mode: &str) -> (Profile, ui_state::UiState) {
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
+    let mut saved = ui_state::UiState::default();
+    saved
+        .start_permission_modes
+        .insert("claude".to_owned(), mode.to_owned());
+    (profile, saved)
+}
+
+/// Drops the start page's composer so the next draw builds a fresh one.
+fn fresh_composer(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
+    rig.shell.update(cx, |shell, _| {
+        shell.start_composers.remove("w1");
+    });
+    draw(cx);
+    composer_of(rig, cx)
+}
+
+#[gpui::test]
+fn a_remembered_mode_on_a_fresh_composer_is_shown_and_sent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let (profile, saved) = profile_remembering(&temp, "plan");
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile, saved));
+    let composer = fresh_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        2,
+        "the chip shows the remembered Plan"
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+}
+
+#[gpui::test]
+fn a_remembered_bypass_mode_is_not_restored_and_sends_no_mode(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let (profile, saved) = profile_remembering(&temp, "bypassPermissions");
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile, saved));
+    let composer = fresh_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0,
+        "a bypass is never restored from memory"
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn a_mode_list_change_without_a_remembered_pick_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    composer.update(cx, |composer, cx| {
+        composer.set_access(1, cx);
+        cx.emit(ComposerEvent::AccessChanged(1));
+    });
+    draw(cx);
+    // The kind drops Plan; the chip resets and the earlier pick of Auto no longer counts.
+    let mut changed = claude_with_modes();
+    changed.permission_modes.remove(1);
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![changed]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0
+    );
+    // The chip lands on Auto again without the person picking it: nothing is sent.
+    composer.update(cx, |composer, cx| composer.set_access(1, cx));
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
 }
 
 /// Claude's picker rows with real models, Opus with five levels and Haiku with none, the row `model` chosen at `effort`.
@@ -1033,6 +1151,34 @@ fn picker_of_claude(
             fast: false,
         },
     )
+}
+
+#[gpui::test]
+fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
+}
+
+#[gpui::test]
+fn with_the_capability_a_kind_with_no_models_still_sends_neither(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentOptionsOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
 }
 
 #[test]

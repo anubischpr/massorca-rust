@@ -225,8 +225,13 @@ Linux only. No automated run opens a visible window.
   the Bot icon.
 - Add extension (`shell/marketplace/add_folder.rs`) sits in the catalogue header and takes a full folder path on This
   computer. Its review is the catalogue install's review (`InstallReview`, with no catalogue item): `extensions.inspect`
-  answers for `dir:<path>`, and nothing installs until Allow and install is pressed. The CLI reaches the same review with
-  `massorca extension install dir:<path>`; it prints the review and needs `--consent` or `--yes`. A git URL is listed as
+  answers for `dir:<path>`, and nothing installs until its button is pressed. The CLI reaches the same review with
+  `massorca extension install dir:<path>`; it prints the review and needs `--consent` or `--yes`.
+- The install review dialog (`model/marketplace/install_review.rs`) says only what its button does, in one of two
+  cases: "Add <name> to MassOrca" when nothing is installed (an agent whose CLI is already here, or a package with no
+  installer), or "Install <name>" with the one vendor command on a code line. Hashes, permissions, programs, risk and
+  the verify and uninstall commands are not shown; the CLI review and `massorca extension doctor <id>` keep them. The
+  consent fingerprint, sha256 and request sent are unchanged. A git URL is listed as
   not available yet, because the service's sources are `catalogue:`, `dir:` and `file:` only.
 - Update checks (`shell/marketplace/extension_updates.rs`): each installed folder or archive package is inspected once
   per read of the lists, never per draw. A review whose sha256 differs from the installed one lists the package on

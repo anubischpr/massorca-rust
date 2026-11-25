@@ -2,7 +2,7 @@
 //! 0059). Parts 1 to 3 are the header; the rest follow it in the order the model gives.
 
 use super::MarketplaceFrame;
-use super::catalogue::kind_icon;
+use super::catalogue::{item_mark, kind_icon};
 use super::host_pick::host_picker_row;
 use super::item_images;
 use crate::model::marketplace::{
@@ -138,9 +138,13 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Any
     ))
     .copy_link(copy)
     .host(host_picker_row(frame, cx));
-    if let Some(logo) = item_images::logo(frame, item, cx) {
-        header = header.logo(logo);
-    }
+    header = match item_mark(item) {
+        Some(mark) => header.agent(mark),
+        None => match item_images::logo(frame, item, cx) {
+            Some(logo) => header.logo(logo),
+            None => header,
+        },
+    };
     if !item.state.is_installed() {
         header = header.action(install_action(frame, item));
     }

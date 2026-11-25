@@ -89,6 +89,8 @@ pub(super) fn profile_banner() -> impl IntoElement {
 pub(super) struct StartComposer {
     pub entity: Entity<Composer>,
     pub mode: StartMode,
+    /// The (kind, mode) the person last picked on the chip; the only mode a start can send.
+    pub picked: Option<(String, String)>,
     _events: Subscription,
 }
 
@@ -260,6 +262,19 @@ pub(super) fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
 }
 
 /// A kind's mode entries as the composer's chip shows them; a bypass mode carries the warning glyph.
+/// The mode a start sends: the entry the chip shows, and only when the chip was built from exactly these choices.
+/// A chip showing another list, or an index past its end, sends no mode, so the vendor CLI starts in its default.
+pub(super) fn sent_mode(
+    choices: &[ModeChoice],
+    shown: &[AccessMode],
+    index: usize,
+) -> Option<String> {
+    if access_modes(choices).as_slice() != shown {
+        return None;
+    }
+    choices.get(index)?.id.clone()
+}
+
 pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
     choices
         .iter()
@@ -558,6 +573,7 @@ impl Shell {
                             ComposerEvent::OpenMarketplace => shell
                                 .open_marketplace(MarketplacePage::Category(ItemKind::Agent), cx),
                             ComposerEvent::AccessChanged(index) => {
+                                shell.record_start_pick(&workspace, *index, composer.clone(), cx);
                                 shell.remember_start_mode(&composer, *index, cx);
                             }
                             _ => {}
@@ -566,6 +582,7 @@ impl Shell {
                     StartComposer {
                         entity,
                         mode: StartMode::default(),
+                        picked: None,
                         _events: events,
                     }
                 })
@@ -599,7 +616,7 @@ impl Shell {
 
     /// Keeps a start composer in step with the store: the kinds it offers, and why Send is off.
     fn refresh_start_composer(
-        &self,
+        &mut self,
         composer: &Entity<Composer>,
         workspace_id: &str,
         cx: &mut Context<Self>,
@@ -633,22 +650,30 @@ impl Shell {
             let choices = start_choices(kind);
             // The person's last explicit pick for this kind comes back, while the kind still declares it.
             let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+            // A bypass mode is never restored from memory: it is sent only when picked on this composer.
             let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
-                choices
+                let index = choices
                     .iter()
-                    .position(|choice| choice.id.as_deref() == Some(id))
+                    .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
+                Some((index, (kind.id.clone(), id.to_owned())))
             });
             (access_modes(&choices), access_details(&choices), remembered)
         });
-        composer.update(cx, |composer, cx| {
-            let keep = if composer.access_modes() == modes.as_slice() {
-                composer.access_index()
+        let changed = composer.update(cx, |composer, cx| {
+            let changed = composer.access_modes() != modes.as_slice();
+            let keep = if changed {
+                remembered.as_ref().map_or(0, |(index, _)| *index)
             } else {
-                remembered.unwrap_or(0)
+                composer.access_index()
             };
             composer.set_access_modes(modes, keep, cx);
             composer.set_access_details(details, cx);
+            changed
         });
+        // A restored chip is the person's pick, so the chip and the start agree; a reset chip sends no mode.
+        if changed && let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.picked = remembered.map(|(_, picked)| picked);
+        }
         let kind_chosen = choices
             .iter()
             .any(|choice| choice.id.as_str() == chosen.as_ref());
@@ -770,14 +795,60 @@ impl Shell {
             .into_iter()
             .find(|kind| kind.id == chosen)
             .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
-        let permission_mode = kinds
+        // `session_kind_choices` lists only kinds that can start, so an unavailable kind is refused above.
+        let shown = kinds
             .iter()
             .find(|declared| declared.id == kind.id)
             .and_then(|declared| {
-                let index = composer.read(cx).access_index();
-                start_choices(declared).get(index)?.id.clone()
+                let composer = composer.read(cx);
+                sent_mode(
+                    &start_choices(declared),
+                    composer.access_modes(),
+                    composer.access_index(),
+                )
             });
+        // A mode goes out only when the person picked it for this kind and the chip still shows it.
+        let picked = self
+            .start_composers
+            .values()
+            .find(|start| start.entity == *composer)
+            .and_then(|start| start.picked.as_ref())
+            .filter(|(picked_kind, _)| *picked_kind == kind.id)
+            .map(|(_, mode)| mode.clone());
+        let permission_mode = shown.filter(|mode| picked.as_ref() == Some(mode));
         Ok((kind, permission_mode))
+    }
+
+    /// Records the chip entry the person chose on a start composer, by mode id; the CLI's default clears it.
+    fn record_start_pick(
+        &mut self,
+        workspace: &str,
+        index: usize,
+        composer: Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let picked = self
+            .store
+            .read(cx)
+            .state()
+            .agent_kinds
+            .iter()
+            .find(|kind| kind.id == chosen)
+            .and_then(|kind| {
+                let mode = start_choices(kind).get(index)?.id.clone()?;
+                Some((kind.id.clone(), mode))
+            });
+        if let Some(start) = self.start_composers.get_mut(workspace) {
+            start.picked = picked;
+        }
     }
 
     /// Keeps the data-folder banner in step with the last answer: on after `profile.unsafe_location`,

@@ -1195,3 +1195,16 @@ fn copy_details_puts_the_refused_install_on_the_clipboard(cx: &mut TestAppContex
         "{copied:?}"
     );
 }
+
+#[gpui::test]
+fn an_agent_page_header_draws_the_agents_own_mark(cx: &mut TestAppContext) {
+    let (_rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    assert!(cx.debug_bounds("marketplace-header-agent").is_some());
+    assert!(cx.debug_bounds("marketplace-header-icon").is_none());
+}
