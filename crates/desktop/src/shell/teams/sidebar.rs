@@ -5,7 +5,7 @@ use super::super::Shell;
 use super::super::change;
 use super::super::sidebar::row_focus;
 use super::new_project::new_project_button;
-use super::waiting_icon;
+use super::{team_shape, waiting_icon};
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
 use crate::model::teams::{
@@ -14,6 +14,7 @@ use crate::model::teams::{
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
 use massorca_ui::components::button::ButtonSize;
 use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
+use massorca_ui::components::team_character::TeamCharacterMark;
 use massorca_ui::tokens::{
     SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
 };
@@ -109,9 +110,9 @@ fn team_rows(
     let theme = *cx.theme();
     let focus = row_focus(window, cx, format!("team-{index}"));
     let mut row = match team.reach {
-        HostReach::Connected => SidebarRow::nav(
+        HostReach::Connected => SidebarRow::team(
             format!("team-row-{index}"),
-            IconName::Users,
+            TeamCharacterMark::new(team_shape(team.character), team.name.clone()),
             team.name.clone(),
         ),
         // An unreachable team reads like its host row: the status glyph, dimmed (A10).

@@ -5,8 +5,10 @@ use super::super::Shell;
 use super::dialogs::TeamConfirm;
 use super::team_pill;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{MemoryEntry, MemoryTab, Team, TeamId};
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, prelude::*, px};
+use crate::model::teams::{MemoryEntry, MemoryTab, Team, TeamId, TeamPage};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
+};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::ListRow;
@@ -19,6 +21,7 @@ pub(in crate::shell) fn memory_page(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     team: TeamId,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = *cx.theme();
@@ -36,7 +39,14 @@ pub(in crate::shell) fn memory_page(
                 .text_color(theme.palette.text.primary)
                 .child("Memory"),
         )
-        .child(team_pill(&team_data.name, team_data.character, &theme));
+        .child(team_pill(
+            TeamPage::Memory(team),
+            &team_data.name,
+            team_data.character,
+            shell,
+            window,
+            cx,
+        ));
     let entries: Vec<&MemoryEntry> = team_data
         .memory
         .iter()

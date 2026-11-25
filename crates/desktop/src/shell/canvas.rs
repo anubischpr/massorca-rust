@@ -172,10 +172,12 @@ fn conversation(
         Canvas::Team(TeamPage::Project(team, project)) => {
             teams::project_page(model, shell, team, project, window, cx)
         }
-        Canvas::Team(TeamPage::Routines(team)) => teams::routines_page(model, shell, team, cx),
-        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Routines(team)) => {
+            teams::routines_page(model, shell, team, window, cx)
+        }
+        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, window, cx),
         Canvas::Team(TeamPage::Files(team)) => match model.teams().team(team) {
-            Some(team) => teams::files_page(team, cx),
+            Some(team) => teams::files_page(team, shell, window, cx),
             None => placeholder("Files", "This team is gone.", theme).into_any_element(),
         },
         Canvas::Team(TeamPage::Conference(_)) => placeholder(

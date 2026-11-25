@@ -6,7 +6,7 @@ use super::dialogs::TeamConfirm;
 use super::{board_columns, team_pill};
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId};
+use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId, TeamPage};
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
 };
@@ -82,7 +82,14 @@ pub(in crate::shell) fn project_page(
                 .text_color(theme.palette.text.primary)
                 .child(project_data.name.clone()),
         )
-        .child(team_pill(&team_data.name, team_data.character, &theme));
+        .child(team_pill(
+            TeamPage::Project(team, project),
+            &team_data.name,
+            team_data.character,
+            shell,
+            window,
+            cx,
+        ));
     let brief_section = section("Brief", &theme)
         .child(body(brief, &theme))
         .child(edit_brief);
