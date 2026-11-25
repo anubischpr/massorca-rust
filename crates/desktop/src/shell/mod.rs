@@ -52,6 +52,8 @@ use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use std::collections::BTreeSet;
+
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -261,6 +263,8 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
+    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    collapsed_projects: BTreeSet<String>,
 }
 
 impl Shell {
@@ -542,6 +546,7 @@ impl Shell {
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -870,6 +875,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
+                        &self.collapsed_projects,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -895,6 +901,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
+                        &self.collapsed_projects,
                         &self.search,
                         true,
                         self.rail.morph_generation(),

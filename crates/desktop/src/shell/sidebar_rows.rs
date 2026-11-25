@@ -6,6 +6,7 @@ use super::change;
 use super::rail::agent_kind;
 use crate::model::shell::{Agent, AgentState, HostReach};
 use crate::model::sidebar::{HOST_INDENT, NavKind, NavRow, TreeRow, project_label, session_indent};
+use crate::model::workspace_flow::NO_PROJECT_LABEL;
 use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*, px};
 use massorca_ui::IconName;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
@@ -48,8 +49,31 @@ pub(super) fn tree_row(
 ) -> SidebarRow {
     let id = SharedString::from(format!("tree-row-{index}"));
     let item = match row {
-        TreeRow::Project { name, emoji } => {
-            SidebarRow::project(id, IconName::Folder, project_label(name, emoji.as_deref()))
+        TreeRow::Project {
+            id: project_id,
+            name,
+            emoji,
+            expanded,
+        } => {
+            // The "No project" group wears the struck folder, as its project menu row does (A95).
+            let icon = if name == NO_PROJECT_LABEL {
+                IconName::FolderX
+            } else {
+                IconName::Folder
+            };
+            let (click_shell, click_id) = (shell.clone(), project_id.clone());
+            let (key_shell, key_id) = (shell.clone(), project_id.clone());
+            // A click on the row, or Left and Right on the keyboard, folds the project's rows (A10).
+            SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
+                .expanded(*expanded)
+                .on_click(move |_, _, cx| {
+                    let id = click_id.clone();
+                    change(&click_shell, cx, move |shell| shell.toggle_project(&id));
+                })
+                .on_toggle(move |_, _, cx| {
+                    let id = key_id.clone();
+                    change(&key_shell, cx, move |shell| shell.toggle_project(&id));
+                })
         }
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
         TreeRow::RemoteHost { name, state } => remote_host_row(id, name, state),
@@ -63,8 +87,8 @@ pub(super) fn tree_row(
             unread,
             can_bring_back,
             tooltip,
+            workspace_id,
             dimmed,
-            ..
         } => {
             let mut row = session_row(id, title, *agent, *state, *depth, *selected);
             if let Some(tooltip) = tooltip {
@@ -87,6 +111,14 @@ pub(super) fn tree_row(
                 let _ = open_shell.update(cx, |shell, cx| {
                     shell.open_session(&id, cx);
                     cx.notify();
+                });
+            });
+            // Right click or Shift+F10 offers the session's path and folder rows (A97).
+            let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            let row = row.on_context_menu(move |window, cx| {
+                let id = menu_workspace.clone();
+                let _ = menu_shell.update(cx, |shell, cx| {
+                    shell.open_session_menu(id, window, cx);
                 });
             });
             if *can_bring_back {
@@ -132,6 +164,7 @@ fn indent_padding(row: &TreeRow) -> f32 {
 /// The debug selector of a row a test clicks: a session by its id.
 fn row_selector(row: &TreeRow) -> Option<String> {
     match row {
+        TreeRow::Project { id, .. } => Some(format!("sidebar-project-{id}")),
         TreeRow::Session { id, .. } => Some(format!("sidebar-session-{id}")),
         _ => None,
     }

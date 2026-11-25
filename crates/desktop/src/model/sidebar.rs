@@ -2,6 +2,8 @@
 //! the host's sessions; it has no workspace row (A97). The Bot Teams rows come from the teams sidebar (D-WS-29);
 //! here Bot Teams is only the marker (A9, A10, A83).
 
+use std::collections::BTreeSet;
+
 use super::navigation::{Mode, Page};
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
 use super::workspace_flow::NO_PROJECT_LABEL;
@@ -31,9 +33,13 @@ pub struct NavRow {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TreeRow {
     Project {
+        /// The project's id, for collapsing it.
+        id: String,
         name: String,
         /// The project's emoji icon, drawn before its name.
         emoji: Option<String>,
+        /// Whether its rows are listed below it (A10).
+        expanded: bool,
     },
     Host {
         name: String,
@@ -160,8 +166,10 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             continue;
         }
         rows.push(TreeRow::Project {
+            id: project.id.clone(),
             name: project.name.clone(),
             emoji: project.emoji.clone(),
+            expanded: true,
         });
         for host in &project.hosts {
             rows.push(TreeRow::Host {
@@ -175,6 +183,32 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
         }
     }
     rows
+}
+
+/// The tree with its collapsed projects folded: a collapsed project keeps its row and hides the rows
+/// below it, up to the next project (A10, SidebarTree.md).
+pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Vec<TreeRow> {
+    let mut out = Vec::with_capacity(tree.len());
+    let mut hidden = false;
+    for row in tree {
+        match row {
+            TreeRow::Project {
+                id, name, emoji, ..
+            } => {
+                let expanded = !collapsed.contains(&id);
+                hidden = !expanded;
+                out.push(TreeRow::Project {
+                    id,
+                    name,
+                    emoji,
+                    expanded,
+                });
+            }
+            row if !hidden => out.push(row),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn push_session(
@@ -304,8 +338,10 @@ mod tests {
         assert_eq!(
             tree[0],
             TreeRow::Project {
+                id: "massorca-rust".into(),
                 name: "massorca-rust".into(),
                 emoji: None,
+                expanded: true,
             }
         );
         assert!(matches!(
@@ -432,6 +468,7 @@ mod tests {
     #[test]
     fn a_project_row_takes_its_emoji_into_its_label() {
         let groups = vec![ProjectGroup {
+            id: "massorca".into(),
             name: "massorca".into(),
             emoji: Some("🚀".into()),
             hosts: Vec::new(),
@@ -439,8 +476,10 @@ mod tests {
         assert_eq!(
             flatten(&groups, None)[0],
             TreeRow::Project {
+                id: "massorca".into(),
                 name: "massorca".into(),
                 emoji: Some("🚀".into()),
+                expanded: true,
             }
         );
         assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
@@ -450,6 +489,7 @@ mod tests {
     #[test]
     fn the_no_project_group_is_hidden_while_it_has_no_sessions() {
         let empty = ProjectGroup {
+            id: NO_PROJECT_LABEL.into(),
             name: NO_PROJECT_LABEL.into(),
             emoji: None,
             hosts: vec![host_with(Vec::new(), HostReach::Connected)],
@@ -469,6 +509,7 @@ mod tests {
     fn a_stopped_session_stays_listed_however_many_sessions_there_are() {
         let sessions: Vec<SessionRow> = (1..=9).map(|n| sample_session(&format!("s{n}"))).collect();
         let snapshot = snapshot_of(vec![ProjectGroup {
+            id: "p".into(),
             name: "p".into(),
             emoji: None,
             hosts: vec![host_with(sessions, HostReach::Connected)],
@@ -478,5 +519,24 @@ mod tests {
             .filter(|row| matches!(row, TreeRow::Session { .. }))
             .count();
         assert_eq!(listed, 9);
+    }
+
+    #[test]
+    fn a_collapsed_project_keeps_its_row_and_hides_the_rows_below_it() {
+        let collapsed = BTreeSet::from(["massorca-rust".to_owned()]);
+        let rows = collapse_projects(tree_of(&sample()), &collapsed);
+        assert_eq!(
+            rows.len(),
+            4,
+            "the collapsed project's row, then the other project's three rows"
+        );
+        assert!(matches!(
+            &rows[0],
+            TreeRow::Project { id, expanded: false, .. } if id == "massorca-rust"
+        ));
+        assert!(matches!(
+            &rows[1],
+            TreeRow::Project { id, expanded: true, .. } if id == "datalake"
+        ));
     }
 }

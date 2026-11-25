@@ -84,6 +84,7 @@ pub struct HostGroup {
 /// A project is the top level of the Sidebar, with one host row per host (A10).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectGroup {
+    pub id: String,
     pub name: String,
     /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
     pub emoji: Option<String>,

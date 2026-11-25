@@ -35,6 +35,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         .projects
         .iter()
         .map(|project| ProjectGroup {
+            id: project.id.clone(),
             name: project.name.clone(),
             emoji: project.icon.as_ref().and_then(emoji_of),
             hosts: vec![HostGroup {
@@ -63,6 +64,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     });
     if !conversations.is_empty() || state.workspaces.iter().any(|w| !listed(w)) {
         projects.push(ProjectGroup {
+            id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
             hosts: vec![HostGroup {

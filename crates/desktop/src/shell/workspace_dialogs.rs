@@ -7,7 +7,7 @@ use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_L
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     CreateForm, ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry,
-    WorkspaceMenuId, chosen_workspace_item, project_menu_rows, workspace_menu,
+    WorkspaceMenuId, chosen_workspace_item, project_menu_rows, session_menu, workspace_menu,
 };
 use crate::service::Refusal;
 use gpui::{
@@ -154,6 +154,7 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
         WorkspaceMenuId::OpenFileManager => IconName::Folder,
         WorkspaceMenuId::OpenTerminal => IconName::SquareTerminal,
         WorkspaceMenuId::OpenEditor | WorkspaceMenuId::Developer => IconName::Code,
+        WorkspaceMenuId::OpenFolder => IconName::Folder,
         WorkspaceMenuId::Rename | WorkspaceMenuId::EditWorkspace => IconName::Pencil,
         WorkspaceMenuId::SourceControl | WorkspaceMenuId::CopyBranch => IconName::GitBranch,
         WorkspaceMenuId::CopyPath => IconName::Copy,
@@ -335,6 +336,30 @@ impl Shell {
         );
     }
 
+    /// The context menu of a session row (A97): its workspace's path, folder and Work panel rows.
+    pub(super) fn open_session_menu(
+        &mut self,
+        workspace_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.service.is_none() {
+            return;
+        }
+        let rows = session_menu();
+        self.open_menu(
+            menu_entries(&rows),
+            MenuTarget::Workspace {
+                id: workspace_id,
+                rows,
+            },
+            OverlayLayer::Page,
+            window.mouse_position(),
+            window,
+            cx,
+        );
+    }
+
     /// Runs a chosen workspace row. Rows that are off never reach here.
     fn run_workspace_action(&mut self, id: &str, action: WorkspaceMenuId, cx: &mut Context<Self>) {
         match action {
@@ -365,6 +390,7 @@ impl Shell {
             | WorkspaceMenuId::EditWorkspace
             | WorkspaceMenuId::SourceControl
             | WorkspaceMenuId::Developer
+            | WorkspaceMenuId::OpenFolder
             | WorkspaceMenuId::RevealInWorkPanel => {}
         }
     }

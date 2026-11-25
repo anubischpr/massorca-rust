@@ -79,6 +79,7 @@ impl DataSource for SampleDataSource {
             projects: vec![
                 ProjectGroup {
                     emoji: None,
+                    id: "massorca-rust".into(),
                     name: "massorca-rust".into(),
                     hosts: vec![
                         HostGroup {
@@ -115,6 +116,7 @@ impl DataSource for SampleDataSource {
                 },
                 ProjectGroup {
                     emoji: None,
+                    id: "datalake".into(),
                     name: "datalake".into(),
                     hosts: vec![HostGroup {
                         name: "This PC".into(),

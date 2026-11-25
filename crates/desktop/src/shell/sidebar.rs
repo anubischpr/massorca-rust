@@ -1,13 +1,15 @@
 //! The Sidebar: Create, Search, the navigation rows, the project tree and its footer (D-SH-01).
 //! In Bot Teams it lists the teams instead (D-WS-29).
 
+use std::collections::BTreeSet;
+
 use super::Shell;
 use super::sidebar_rows::{nav_row, tree_item};
 use super::teams;
 use super::tooltip::with_tooltip;
 use crate::model::morph::ease;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::{NavRow, SidebarContent, TreeRow};
+use crate::model::sidebar::{NavRow, SidebarContent, TreeRow, collapse_projects};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Div, Entity, FocusHandle, IntoElement,
     MouseButton, SharedString, Stateful, Window, div, prelude::*, px,
@@ -27,6 +29,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 /// if any: its content fades in over it.
 pub(super) fn sidebar(
     model: &ShellModel,
+    collapsed: &BTreeSet<String>,
     search: &Entity<SearchField>,
     overlay: bool,
     switch: Option<u64>,
@@ -73,7 +76,13 @@ pub(super) fn sidebar(
             let content = nav_rows(content, &nav, "nav", &shell, window, cx);
             content
                 .child(projects_header(&theme))
-                .child(tree_list(&tree, &shell, window, cx, &theme))
+                .child(tree_list(
+                    &collapse_projects(tree, collapsed),
+                    &shell,
+                    window,
+                    cx,
+                    &theme,
+                ))
                 .child(footer())
         }
         SidebarContent::BotTeams => {
@@ -242,4 +251,13 @@ fn footer_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
         IconButton::new(id, icon, label).size(ButtonSize::Default),
         label,
     )
+}
+
+impl Shell {
+    /// Collapses a project's rows, or expands them again (A10). Kept for the app run only.
+    pub(super) fn toggle_project(&mut self, id: &str) {
+        if !self.collapsed_projects.remove(id) {
+            self.collapsed_projects.insert(id.to_owned());
+        }
+    }
 }
