@@ -258,6 +258,10 @@ pub struct Shell {
     _marketplace_host_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
+    work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
+    /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
+    work_panel_applied: Option<(u16, u16)>,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
     /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
@@ -556,6 +560,8 @@ impl Shell {
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
+            work_panel_size: Rc::default(),
+            work_panel_applied: None,
             session_grid: None,
             conversation_size: Rc::default(),
             stop_prompt: None,

@@ -11,15 +11,17 @@ use super::Shell;
 use super::session_view::SESSION_HEADER_HEIGHT;
 use crate::model::canvas::Canvas;
 
-/// The grid of a session's terminal pane when the Conversation is `width` x `height` pixels: the header sits above the
-/// pane, and the terminal surface pads its grid by SPACE_2 on each side (`TerminalSurface::render`).
-pub(crate) fn session_pane_grid(width: f32, height: f32, cell: CellSize) -> (u16, u16) {
+/// The grid a terminal pane fits when it is `width` x `height` pixels: the terminal surface pads its grid by SPACE_2 on
+/// each side (`TerminalSurface::render`), so the pane's own size is not the grid's.
+pub(crate) fn pane_grid(width: f32, height: f32, cell: CellSize) -> (u16, u16) {
     let padding = 2.0 * SPACE_2;
-    geometry::grid_fit(
-        width - padding,
-        height - SESSION_HEADER_HEIGHT - padding,
-        cell,
-    )
+    geometry::grid_fit(width - padding, height - padding, cell)
+}
+
+/// The grid of a session's terminal pane when the Conversation is `width` x `height` pixels: the header sits above the
+/// pane, so it is taken off the height first.
+pub(crate) fn session_pane_grid(width: f32, height: f32, cell: CellSize) -> (u16, u16) {
+    pane_grid(width, height - SESSION_HEADER_HEIGHT, cell)
 }
 
 impl Shell {

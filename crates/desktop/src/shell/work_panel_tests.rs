@@ -10,6 +10,7 @@ use massorca_protocol::methods::terminals::{
     AttachMode, ExitReason, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
     TerminalState,
 };
+use massorca_ui::components::work_panel_tabs::WorkTabsAction;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -164,6 +165,91 @@ fn open_and_show(rig: &mut Rig, cx: &mut VisualTestContext) -> UnboundedSender<T
     cx.run_until_parked();
     draw(cx);
     items
+}
+
+/// A live terminal the service created at `cols` x `rows`, as the store then lists it.
+fn live_at(id: &str, cols: u16, rows: u16) -> Terminal {
+    Terminal {
+        cols,
+        rows,
+        ..live(id)
+    }
+}
+
+fn resize_call(script: &mut Script) -> Option<String> {
+    find_call(script, |command| match command {
+        Command::Terminal(TerminalCommand::Write(TerminalWrite::Resize { terminal, .. })) => {
+            Some(terminal)
+        }
+        _ => None,
+    })
+}
+
+#[gpui::test]
+fn a_new_work_panel_terminal_opens_at_the_grid_its_pane_applies_without_a_resize(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page(cx);
+    // t1 is attached but no output is fed, so its emulator keeps the grid its pane applied on the first draw.
+    open_terminal(&mut rig, cx);
+    let (_, _items) = attach_with_stream(&mut rig.script);
+    cx.run_until_parked();
+    draw(cx);
+    // t1's pane has painted, so the Work panel knows its size; the grid its surface applied is the one it fits.
+    let applied = rig.shell.read_with(cx, |shell, cx| {
+        let feed = shell
+            .terminal_views
+            .get("t1")
+            .expect("t1 has a view")
+            .surface
+            .read(cx)
+            .feed();
+        (feed.columns() as u16, feed.lines() as u16)
+    });
+    while rig.script.next().is_some() {}
+
+    cx.update(|window, cx| {
+        rig.shell.update(cx, |shell, cx| {
+            shell.work_action(WorkTabsAction::Add, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let (params, reply) = create_call(&mut rig.script).expect("a terminal.create call");
+    assert_eq!(
+        (params.cols, params.rows),
+        (Some(applied.0), Some(applied.1)),
+        "the second terminal opens at the grid t1's pane applied"
+    );
+
+    let terminal = live_at("t2", applied.0, applied.1);
+    rig.updates
+        .send(StoreUpdate::TerminalChanged(terminal.clone()))
+        .expect("the store listens");
+    reply
+        .send(Ok(terminal))
+        .expect("the shell waits for its answer");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+
+    assert!(
+        resize_call(&mut rig.script).is_none(),
+        "the first draw fits the grid the service already holds"
+    );
+    rig.shell.read_with(cx, |shell, cx| {
+        let feed = shell
+            .terminal_views
+            .get("t2")
+            .expect("t2 has a view")
+            .surface
+            .read(cx)
+            .feed();
+        assert_eq!(
+            (feed.columns() as u16, feed.lines() as u16),
+            applied,
+            "the surface applies the grid terminal.create sent"
+        );
+    });
 }
 
 #[gpui::test]

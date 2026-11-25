@@ -4,6 +4,9 @@
 //! tab asks first; "Keep running" drops the view and the process goes on in the service (decision
 //! 0033), so its tab stays and "Show terminal" attaches it again.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::prelude::*;
 use gpui::{AnyElement, App, AsyncApp, Context, Entity, Task, WeakEntity, Window, div, px};
 use massorca_client::AttachUpdate;
@@ -13,6 +16,7 @@ use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
 use massorca_ui::components::terminal_surface::TerminalSurface;
 use massorca_ui::components::terminal_surface::feed::FeedOutcome;
+use massorca_ui::components::terminal_surface::grid_paint;
 use massorca_ui::components::work_panel_tabs::{
     WorkPanelTabs, WorkTab, WorkTabKind, WorkTabsAction,
 };
@@ -21,12 +25,14 @@ use massorca_ui::{ActiveTheme, TextStyled, Theme};
 use tokio::sync::watch;
 
 use super::Shell;
+use super::session_grid::pane_grid;
 use crate::model::regions::Region;
 use crate::model::session_ended::is_agent_run_terminal;
 use crate::model::terminals::new_terminal_params;
 use crate::model::work_panel::{
     BROWSER_LATER, CloseStep, MARKDOWN_LATER, MOBILE_LATER, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS,
-    TerminalStrip, close_step, detached_text, status_banner, terminal_strip, terminal_unavailable,
+    TerminalStrip, close_step, detached_text, new_terminal_grid, status_banner, terminal_strip,
+    terminal_unavailable,
 };
 use crate::service::{
     AttachRole, ConnectionState, Refusal, ServiceHandle, StoreState, StreamEnd, TerminalStream,
@@ -72,6 +78,8 @@ enum WorkBody {
         surface: Entity<TerminalSurface>,
         banner: Option<&'static str>,
         failure: Option<String>,
+        /// Where the pane records its size as it paints (`Shell::work_panel_size`).
+        size: Rc<Cell<Option<(f32, f32)>>>,
     },
 }
 
@@ -121,6 +129,7 @@ impl Shell {
                     surface: view.surface.clone(),
                     banner: status_banner(tab.status),
                     failure: view.failure.clone(),
+                    size: self.work_panel_size.clone(),
                 },
                 None => WorkBody::Detached {
                     workspace,
@@ -163,7 +172,8 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let params = new_terminal_params(&workspace, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS);
+        let (cols, rows) = self.work_panel_grid(cx);
+        let params = new_terminal_params(&workspace, cols, rows);
         let window_handle = window.window_handle();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -175,6 +185,21 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// The grid a new Work panel terminal opens at (`new_terminal_grid`): the grid its pane fits now, else the grid a
+    /// Work panel pane last applied, else the fixed size.
+    pub(super) fn work_panel_grid(&self, cx: &App) -> (u16, u16) {
+        let measured = self.work_panel_size.get().and_then(|(width, height)| {
+            let cell = grid_paint::cell_metrics(cx)?;
+            Some(pane_grid(width, height, cell))
+        });
+        new_terminal_grid(measured, self.work_panel_applied)
+    }
+
+    /// Remembers the grid a Work panel pane applied, the fallback for a new terminal's grid.
+    fn note_work_panel_grid(&mut self, cols: u16, rows: u16) {
+        self.work_panel_applied = Some((cols, rows));
     }
 
     fn show_created_terminal(
@@ -435,6 +460,7 @@ fn new_surface(
                 let known = noting
                     .update(cx, |shell, cx| {
                         shell.note_terminal_grid(&sized, cols, rows, cx);
+                        shell.note_work_panel_grid(cols, rows);
                         // A pane that fits to the grid the service already reports needs no resize request.
                         shell.terminal_has_grid(&sized, cols, rows, cx)
                     })
@@ -681,6 +707,7 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
             surface,
             banner,
             failure,
+            size,
         } => {
             let retry = shell.clone();
             let pane = pane.when_some(banner, |pane, message| {
@@ -698,12 +725,35 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
                         },
                     ))
                     .into_any_element(),
-                None => pane
-                    .child(div().flex_1().min_h_0().child(surface))
-                    .into_any_element(),
+                None => pane.child(measured_pane(surface, size)).into_any_element(),
             }
         }
     }
+}
+
+/// A terminal's pane: its surface, over a probe that records the pane's size as it paints (the probe takes no room).
+fn measured_pane(
+    surface: Entity<TerminalSurface>,
+    size: Rc<Cell<Option<(f32, f32)>>>,
+) -> impl IntoElement {
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), _, _| {
+                    size.set(Some((
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height),
+                    )));
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
+        .child(surface)
 }
 
 /// The banner of a terminal whose host cannot be reached: it may still run, and it never says it
