@@ -60,6 +60,28 @@ fn making_an_offer_asks_the_service_and_shows_what_it_answers(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn a_custom_address_is_sent_with_the_offer_and_empty_means_the_bound_ones(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_pairing(&rig, cx);
+    let field = rig
+        .shell
+        .read_with(cx, |shell, _| shell.pairing_address.clone());
+    field.update_in(cx, |field, window, cx| {
+        field.set_text(" 10.0.2.2, vps.example.ts.net:443 ", window, cx)
+    });
+    click(cx, "pairing-make-offer");
+    let addresses = loop {
+        match rig.script.next() {
+            Some(Command::CreateOffer { params, .. }) => break params.addresses,
+            Some(_) => continue,
+            None => panic!("the offer was not asked for"),
+        }
+    };
+    assert_eq!(addresses, ["10.0.2.2", "vps.example.ts.net:443"]);
+    assert!(super::pairing::custom_addresses("  ").is_empty());
+}
+
+#[gpui::test]
 fn a_refused_offer_shows_the_services_own_sentence(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
     open_pairing(&rig, cx);

@@ -138,6 +138,8 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 /// The service has no network listener, so an offer would name no address.
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+/// An address given for a pairing offer is not one a device could dial (a wildcard, port 0, a path, credentials).
+pub const PAIRING_INVALID_ADDRESS: &str = "pairing.invalid_address";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";

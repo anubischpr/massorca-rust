@@ -101,6 +101,11 @@ pub struct PairingCreateParams {
     /// Advanced: a reduced offer, `read` and `workspace` only. Without it the new device gets every scope.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub standard: bool,
+    /// Addresses the offer lists instead of the bound listeners, for a phone or client behind NAT, in a container or an
+    /// emulator: `host`, `host:port`, an IP literal (IPv6 in brackets with a port), or a `wss://` or `https://` URL. A
+    /// value without a port takes the listener's port. Only services offering `pairing-address/1` read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

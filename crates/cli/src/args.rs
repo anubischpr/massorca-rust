@@ -462,6 +462,11 @@ pub struct PairOfferArgs {
     /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
     #[arg(long, value_name = "SECS")]
     pub ttl: Option<u32>,
+    /// Address the new device dials, in place of the addresses the service is bound to; repeatable or
+    /// comma-separated, at most 8. HOST takes the listener's port. Use it behind NAT, in a container or for an
+    /// emulator (10.0.2.2 reaches the computer running an Android emulator).
+    #[arg(long = "address", value_name = "HOST[:PORT]", value_delimiter = ',')]
+    pub addresses: Vec<String>,
 }
 
 #[derive(Debug, Args)]

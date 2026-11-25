@@ -169,6 +169,8 @@ pub struct Shell {
     /// The offer another host shows, typed or pasted, and the optional name for that host.
     pairing_offer: Entity<TextField>,
     pairing_name: Entity<TextField>,
+    /// "Custom address" of the offer this computer makes; empty lists the bound addresses (SRV-07).
+    pairing_address: Entity<TextField>,
     _pairing_changes: Subscription,
     /// Whether the paired devices were asked for since the Pairing page was last shown.
     devices_asked: bool,
@@ -486,6 +488,11 @@ impl Shell {
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
         let pairing_name = cx.new(|cx| TextField::new(cx).placeholder("Name"));
+        let pairing_address = cx.new(|cx| {
+            TextField::new(cx)
+                .placeholder("Automatic, for example 192.168.1.20:7347")
+                .mono()
+        });
         // Typing in the offer field redraws the page, which enables Pair once there is an offer.
         let pairing_changes =
             cx.subscribe(&pairing_offer, |_, _, _: &TextFieldEvent, cx| cx.notify());
@@ -541,6 +548,7 @@ impl Shell {
             pairing: PairingState::default(),
             pairing_offer,
             pairing_name,
+            pairing_address,
             _pairing_changes: pairing_changes,
             devices_asked: false,
             revoke: None,
@@ -871,6 +879,7 @@ impl Render for Shell {
             state: self.pairing.clone(),
             offer_field: self.pairing_offer.clone(),
             name_field: self.pairing_name.clone(),
+            address_field: self.pairing_address.clone(),
             devices: crate::model::devices::devices_view(
                 self.store.read(cx).state().devices.as_ref(),
                 crate::model::pairing::now_ms(),

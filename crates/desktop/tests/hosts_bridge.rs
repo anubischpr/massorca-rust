@@ -143,6 +143,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -186,6 +187,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -244,6 +246,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -314,6 +317,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -402,6 +406,7 @@ async fn paired_with(
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");

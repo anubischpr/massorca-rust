@@ -28,6 +28,7 @@ pub async fn offer(
         // `admin` asks older services for full access too; they do not read `standard`.
         admin: !args.standard,
         standard: args.standard,
+        addresses: args.addresses.clone(),
     };
     let created: PairingCreated = client.call(devices::PAIRING_CREATE, &params).await?;
     let lines = offer_lines(&created);

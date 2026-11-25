@@ -17,6 +17,8 @@ pub const CONFIG: &str = "config/1";
 pub const DEVICES: &str = "devices/1";
 /// The network listener's state (decision 0040).
 pub const NETWORK: &str = "network/1";
+/// `addresses` on `pairing.create`: the offer lists the addresses the caller gives instead of the bound listeners.
+pub const PAIRING_ADDRESS: &str = "pairing-address/1";
 /// Terminal methods (`terminal.*`) and the attach stream.
 pub const TERMINALS: &str = "terminals/1";
 /// `terminal.wait`: a bounded wait for a terminal's exit (decision 0087).

@@ -38,6 +38,8 @@ pub(super) struct PairingFrame {
     pub state: PairingState,
     pub offer_field: Entity<TextField>,
     pub name_field: Entity<TextField>,
+    /// "Custom address": what the offer lists instead of the bound addresses, when not empty.
+    pub address_field: Entity<TextField>,
     /// The devices the store holds: being read, listed, or refused.
     pub devices: DevicesView,
     pub shell: WeakEntity<Shell>,
@@ -54,6 +56,7 @@ impl Shell {
             cx.notify();
             return;
         };
+        let addresses = custom_addresses(self.pairing_address.read(cx).text());
         self.pairing.offer = OfferState::Making;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -62,6 +65,7 @@ impl Shell {
                 // A paired device is the owner with full access; older servers default to read and workspace.
                 admin: true,
                 standard: false,
+                addresses,
             };
             let result = service.create_offer(params).await;
             let _ = this.update(cx, |shell, cx| {
@@ -187,6 +191,15 @@ impl Shell {
     }
 }
 
+/// The custom addresses typed for an offer, split at commas and spaces. The service checks each one.
+pub(super) fn custom_addresses(typed: &str) -> Vec<String> {
+    typed
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The Pairing page: this computer's offer, then the pairing it accepts, each a settings group.
 pub(super) fn pairing_page(frame: &PairingFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
@@ -246,6 +259,13 @@ fn offer_group(frame: &PairingFrame, theme: &Theme) -> AnyElement {
     let mut group = SettingsGroup::new("pairing-offer", "Pair a device")
         .description(
             "Make an offer and enter it on the other device. An offer works once and expires.",
+        )
+        .row(
+            SettingsRow::new("pairing-offer-address", "Custom address")
+                .helper(
+                    "The address the other device dials, when it is not one this PC is bound to. Leave empty to use the bound addresses.",
+                )
+                .control(frame.address_field.clone()),
         )
         .row(make.control(button));
     if let OfferState::Made(view) = &frame.state.offer {
