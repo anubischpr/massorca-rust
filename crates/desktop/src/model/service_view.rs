@@ -2,19 +2,20 @@
 //! item and the notice above the Canvas. Plain functions over `StoreState`, so tests call them
 //! without GPUI (decision 0028).
 
-use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::agent_sessions::{session_state, sessions_by_workspace};
+use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
 use super::hosts::{HostTone, host_state};
 use super::shell::{
-    AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
-    SessionRow, ShellSnapshot, StatusBarModel, WorkspaceRow,
+    Agent, AgentState, HostGroup, HostReach, PlaceholderRow, ProjectGroup, ServiceNotice,
+    ServiceStatus, ServiceTone, ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
 use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
+use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::ProjectIcon;
+use massorca_protocol::methods::projects::{Project, ProjectIcon};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -26,45 +27,68 @@ const USAGE_SLOTS: usize = 6;
 /// agent sessions it runs, and the service's own status. Usage and prototypes do not exist in the service yet.
 pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     let reach = reach_of(state, now);
-    let sessions = sessions_by_workspace(state);
-    let mut projects: Vec<ProjectGroup> = state
-        .projects
-        .iter()
-        .map(|project| ProjectGroup {
-            name: project.name.clone(),
-            emoji: project.icon.as_ref().and_then(emoji_of),
-            hosts: vec![HostGroup {
-                name: LOCAL_HOST.to_owned(),
-                reach,
-                workspaces: workspace_rows(
-                    state
+    let listed = |workspace: &Workspace| {
+        state
+            .projects
+            .iter()
+            .any(|project| project.id == workspace.project_id)
+    };
+    let shown = |workspace: &Workspace| !hidden_team_folder(state, workspace);
+    let shown_id = |id: &str| state.workspace(id).is_none_or(&shown);
+    let mut projects: Vec<ProjectGroup> =
+        state
+            .projects
+            .iter()
+            // The Bot teams folder project shows only while one of its team folders does.
+            .filter(|project| {
+                !is_teams_folder(&project.path)
+                    || state
                         .workspaces
                         .iter()
-                        .filter(|workspace| workspace.project_id == project.id),
-                    &sessions,
-                ),
-            }],
-        })
-        .collect();
+                        .any(|workspace| workspace.project_id == project.id && shown(workspace))
+            })
+            .map(|project| ProjectGroup {
+                id: project.id.clone(),
+                name: project.name.clone(),
+                emoji: project.icon.as_ref().and_then(emoji_of),
+                owner: remote_owner_of(project),
+                hosts: vec![HostGroup {
+                    name: LOCAL_HOST.to_owned(),
+                    reach,
+                    workspaces: workspace_rows(state.workspaces.iter().filter(|workspace| {
+                        workspace.project_id == project.id && shown(workspace)
+                    })),
+                    sessions: top_session_rows(state, |id| {
+                        shown_id(id)
+                            && state
+                                .workspace(id)
+                                .is_some_and(|workspace| workspace.project_id == project.id)
+                    }),
+                    placeholders: placeholder_rows(state, |workspace| {
+                        workspace.project_id == project.id && shown(workspace)
+                    }),
+                }],
+            })
+            .collect();
     // A conversation's folder belongs to the hidden project of the conversations folder, which the service never
     // lists (decision 0092). Any workspace whose project is not listed is one of those: it goes under No project, last.
-    let conversations = workspace_rows(
-        state.workspaces.iter().filter(|workspace| {
-            !state
-                .projects
-                .iter()
-                .any(|project| project.id == workspace.project_id)
-        }),
-        &sessions,
-    );
-    if !conversations.is_empty() {
+    let conversations = top_session_rows(state, |id| {
+        state
+            .workspace(id)
+            .is_some_and(|workspace| !listed(workspace))
+    });
+    if !conversations.is_empty() || state.workspaces.iter().any(|w| !listed(w)) {
         projects.push(ProjectGroup {
+            id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
+            owner: None,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
-                workspaces: conversations,
+                workspaces: workspace_rows(state.workspaces.iter().filter(|w| !listed(w))),
+                sessions: conversations,
+                placeholders: placeholder_rows(state, |workspace| !listed(workspace)),
             }],
         });
     }
@@ -89,11 +113,35 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     }
 }
 
-/// The rows of `workspaces`, each with the agent sessions it runs; usage colours cycle over them in order.
-fn workspace_rows<'a>(
-    workspaces: impl Iterator<Item = &'a Workspace>,
-    sessions: &BTreeMap<String, Vec<SessionRow>>,
-) -> Vec<WorkspaceRow> {
+/// The folder under the workspaces root that holds every team's folder (`bot-teams`, as the service names it).
+const TEAMS_FOLDER: &str = "bot-teams";
+
+/// Whether `path` is the Bot teams folder project, which holds the teams' folders.
+fn is_teams_folder(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .is_some_and(|name| name == TEAMS_FOLDER)
+}
+
+/// A team's own folder shows in Workspaces only while that team's Workspaces option is on (AUTO-12, pv96). The
+/// folder is the workspace the service makes for the team in the Bot teams folder, named with the team's id. While the
+/// teams are not read, the option reads as off, its default. A bot task's worktree in a linked project stays shown.
+fn hidden_team_folder(state: &StoreState, workspace: &Workspace) -> bool {
+    let in_teams_folder = Path::new(&workspace.path)
+        .parent()
+        .is_some_and(|parent| is_teams_folder(&parent.to_string_lossy()));
+    if !in_teams_folder {
+        return false;
+    }
+    !state
+        .teams
+        .iter()
+        .flatten()
+        .any(|record| record.team.id == workspace.name && record.team.workspaces)
+}
+
+/// The rows of `workspaces` for the palette; usage colours cycle over them in order.
+fn workspace_rows<'a>(workspaces: impl Iterator<Item = &'a Workspace>) -> Vec<WorkspaceRow> {
     workspaces
         .enumerate()
         .map(|(index, workspace)| WorkspaceRow {
@@ -101,7 +149,34 @@ fn workspace_rows<'a>(
             name: workspace.name.clone(),
             branch: workspace.branch.clone(),
             usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
-            sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// The workspaces `keep` accepts that have no session yet, as placeholder rows (A97). Only a workspace this app saw
+/// created is listed. Its row shows the chosen agent, else the configured default, else a neutral glyph.
+fn placeholder_rows(state: &StoreState, keep: impl Fn(&Workspace) -> bool) -> Vec<PlaceholderRow> {
+    let default_agent = state
+        .config_value(DEFAULT_AGENT_KEY)
+        .and_then(|value| value.value.as_str())
+        .map(agent_of_kind);
+    state
+        .workspaces
+        .iter()
+        .filter(|workspace| keep(workspace) && !state.workspace_has_session(&workspace.id))
+        .filter_map(|workspace| {
+            let chosen = state.awaiting_session.get(&workspace.id)?;
+            Some(PlaceholderRow {
+                workspace_id: workspace.id.clone(),
+                title: workspace_title(workspace),
+                agent: chosen
+                    .as_deref()
+                    .map(agent_of_kind)
+                    .or(default_agent)
+                    .unwrap_or(Agent::Unknown),
+                branch: workspace.branch.clone(),
+                path: Some(workspace.path.clone()),
+            })
         })
         .collect()
 }
@@ -219,6 +294,12 @@ pub fn teams_view(state: &StoreState) -> TeamsState {
     }
 }
 
+/// The owner or org a project's remote shows after its name (A10). Nothing supplies one yet.
+fn remote_owner_of(_project: &Project) -> Option<String> {
+    // Project.remote_owner (core PR #332) is not in the protocol yet; None until it lands.
+    None
+}
+
 /// The emoji an icon is; the other icon kinds are not drawn yet.
 fn emoji_of(icon: &ProjectIcon) -> Option<String> {
     match icon {
@@ -239,6 +320,7 @@ mod tests {
     };
     use massorca_client::HostRecord;
     use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+    use massorca_protocol::methods::config::ConfigValue;
 
     fn connected() -> ConnectionState {
         ConnectionState::Connected {
@@ -262,6 +344,195 @@ mod tests {
             now,
         );
         state
+    }
+
+    #[test]
+    fn no_project_shows_an_owner_line_until_the_protocol_carries_one() {
+        let now = Instant::now();
+        let snapshot = service_snapshot(&loaded(now), now);
+        assert!(
+            snapshot
+                .projects
+                .iter()
+                .all(|project| project.owner.is_none())
+        );
+    }
+
+    fn setting(key: &str, value: &str) -> ConfigValue {
+        ConfigValue {
+            owner: "core".into(),
+            key: key.into(),
+            value: value.into(),
+            ..Default::default()
+        }
+    }
+
+    fn placeholders_of(state: &StoreState, now: Instant) -> Vec<PlaceholderRow> {
+        service_snapshot(state, now).projects[0].hosts[0]
+            .placeholders
+            .clone()
+    }
+
+    fn tree_rows(state: &StoreState, now: Instant) -> Vec<TreeRow> {
+        let snapshot = service_snapshot(state, now);
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        tree
+    }
+
+    /// Loaded p1 with w1 and w2; then w4 is created in p1 and its agent kind is chosen as `kind`.
+    fn created_with_kind(now: Instant, kind: &str) -> StoreState {
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: kind.into(),
+            },
+            now,
+        );
+        state
+    }
+
+    #[test]
+    fn a_workspace_created_with_no_session_is_a_placeholder_of_its_chosen_agent() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        assert!(
+            placeholders_of(&state, now).is_empty(),
+            "the workspaces listed at startup have no row"
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: "codex".into(),
+            },
+            now,
+        );
+        assert_eq!(
+            placeholders_of(&state, now),
+            vec![PlaceholderRow {
+                workspace_id: "w4".into(),
+                title: "feat/four".into(),
+                agent: Agent::Codex,
+                branch: Some("feat/four".into()),
+                path: Some("/repos/four".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_first_session_takes_the_placeholders_place_in_the_tree() {
+        let now = Instant::now();
+        let mut state = created_with_kind(now, "codex");
+        state.apply(StoreUpdate::AgentChanged(agent("s0", "w1", 1)), now);
+        let placeholder = tree_rows(&state, now)
+            .iter()
+            .position(|row| matches!(row, TreeRow::Placeholder { .. }))
+            .expect("the placeholder is listed");
+
+        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        let rows = tree_rows(&state, now);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, TreeRow::Placeholder { .. }))
+        );
+        assert!(matches!(
+            &rows[placeholder],
+            TreeRow::Session { id, depth: 0, .. } if id == "s4"
+        ));
+    }
+
+    #[test]
+    fn a_workspace_with_no_session_left_has_no_row_and_no_placeholder_comes_back() {
+        let now = Instant::now();
+        let mut state = created_with_kind(now, "codex");
+        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(StoreUpdate::AgentGone("s4".into()), now);
+        assert!(placeholders_of(&state, now).is_empty());
+        assert!(!state.awaiting_session.contains_key("w4"));
+        assert!(
+            tree_rows(&state, now)
+                .iter()
+                .all(|row| !matches!(row, TreeRow::Session { .. } | TreeRow::Placeholder { .. }))
+        );
+    }
+
+    #[test]
+    fn a_workspace_the_service_made_takes_the_configured_default_kind() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting(DEFAULT_AGENT_KEY, "gemini")]),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Gemini);
+    }
+
+    #[test]
+    fn a_workspace_with_no_known_kind_at_all_is_a_neutral_glyph() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Unknown);
+    }
+
+    #[test]
+    fn the_chosen_kind_wins_over_the_default_whichever_arrives_first() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::ConfigResync(vec![setting(DEFAULT_AGENT_KEY, "gemini")]),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w4", "p1", "four", 4)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::WorkspaceKindChosen {
+                workspace: "w4".into(),
+                kind: "codex".into(),
+            },
+            now,
+        );
+        assert_eq!(placeholders_of(&state, now)[0].agent, Agent::Codex);
+    }
+
+    #[test]
+    fn a_workspace_announced_before_the_first_list_is_not_waiting_for_a_session() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::Connection(connected()), now);
+        state.apply(
+            StoreUpdate::WorkspaceChanged(workspace("w1", "p1", "one", 1)),
+            now,
+        );
+        state.apply(
+            StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha")],
+                workspaces: vec![workspace("w1", "p1", "one", 1)],
+            },
+            now,
+        );
+        assert!(placeholders_of(&state, now).is_empty());
     }
 
     #[test]
@@ -295,6 +566,92 @@ mod tests {
         assert!(!teams_view(&state).is_connected());
     }
 
+    /// A service with project alpha and the Bot teams folder project holding team t1's folder, and team t1 read with
+    /// its Workspaces option set to `workspaces`.
+    fn with_team_folder(workspaces: Option<bool>) -> StoreState {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::Connection(connected()), now);
+        let mut teams = project("pt", "Bot teams");
+        teams.path = "/ws/bot-teams".into();
+        let mut folder = workspace("wt", "pt", "t1", 2);
+        folder.path = "/ws/bot-teams/t1".into();
+        state.apply(
+            StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha"), teams],
+                workspaces: vec![workspace("w1", "p1", "one", 1), folder],
+            },
+            now,
+        );
+        if let Some(on) = workspaces {
+            let mut record = crate::service::fixtures::team("t1", "Desarrollo");
+            record.team.workspaces = on;
+            state.apply(
+                StoreUpdate::Teams(crate::service::TeamsRead {
+                    number: 1,
+                    teams: Ok(vec![record]),
+                }),
+                now,
+            );
+        }
+        state
+    }
+
+    fn project_names(state: &StoreState) -> Vec<String> {
+        service_snapshot(state, Instant::now())
+            .projects
+            .into_iter()
+            .map(|project| project.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_teams_folder_shows_in_workspaces_only_while_its_workspaces_option_is_on() {
+        assert_eq!(
+            project_names(&with_team_folder(Some(false))),
+            ["alpha"],
+            "off: the team folder and its empty Bot teams project are hidden"
+        );
+        let on = with_team_folder(Some(true));
+        assert_eq!(project_names(&on), ["Bot teams", "alpha"]);
+        let snapshot = service_snapshot(&on, Instant::now());
+        let folders: Vec<&str> = snapshot.projects[0].hosts[0]
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(folders, ["t1"]);
+        assert_eq!(
+            project_names(&with_team_folder(None)),
+            ["alpha"],
+            "unread teams: the option reads as off, its default"
+        );
+    }
+
+    #[test]
+    fn a_workspace_named_like_a_team_outside_the_teams_folder_stays_shown() {
+        let mut state = with_team_folder(Some(false));
+        let mut task = workspace("wx", "p1", "t1", 3);
+        task.path = "/repos/alpha-worktrees/t1".into();
+        state.apply(StoreUpdate::WorkspaceChanged(task), Instant::now());
+        let snapshot = service_snapshot(&state, Instant::now());
+        let alpha = snapshot
+            .projects
+            .iter()
+            .find(|project| project.name == "alpha")
+            .expect("alpha is listed");
+        let names: Vec<&str> = alpha.hosts[0]
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["one", "t1"],
+            "a bot task's worktree stays with its project"
+        );
+    }
+
     #[test]
     fn projects_group_their_workspaces_under_one_host() {
         let snapshot = service_snapshot(&loaded(Instant::now()), Instant::now());
@@ -313,22 +670,35 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_tree_keeps_its_shape_and_carries_workspace_ids() {
+    fn the_sidebar_tree_has_project_and_host_rows_and_no_workspace_rows() {
         let snapshot = service_snapshot(&loaded(Instant::now()), Instant::now());
         let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
         else {
             panic!("workspaces content expected");
         };
-        // 2 projects, 2 hosts, 3 workspaces.
-        assert_eq!(tree.len(), 7);
-        let ids: Vec<&str> = tree
+        // 2 projects and their 2 hosts; the workspaces are not rows of the tree (A97).
+        assert_eq!(tree.len(), 4);
+        assert!(
+            tree.iter()
+                .all(|row| matches!(row, TreeRow::Project { .. } | TreeRow::Host { .. }))
+        );
+    }
+
+    #[test]
+    fn a_hosts_sessions_list_oldest_first_across_its_workspaces() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::AgentsResync(vec![agent("late", "w2", 30), agent("early", "w1", 10)]),
+            now,
+        );
+        let snapshot = service_snapshot(&state, now);
+        let ids: Vec<&str> = snapshot.projects[0].hosts[0]
+            .sessions
             .iter()
-            .filter_map(|row| match row {
-                TreeRow::Workspace { id, .. } => Some(id.as_str()),
-                _ => None,
-            })
+            .map(|row| row.id.as_str())
             .collect();
-        assert_eq!(ids, vec!["w1", "w2", "w3"]);
+        assert_eq!(ids, vec!["early", "late"]);
     }
 
     #[test]
@@ -535,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn live_sessions_sit_under_their_workspace_and_count_in_the_status_bar() {
+    fn live_sessions_sit_under_their_host_and_count_in_the_status_bar() {
         let now = Instant::now();
         let mut state = loaded(now);
         let report = |state, outcome| Activity {
@@ -554,25 +924,24 @@ mod tests {
         state.apply(StoreUpdate::AgentsResync(vec![working, waiting, done]), now);
 
         let snapshot = service_snapshot(&state, now);
-        let listed = |project: usize, workspace: usize| {
-            snapshot.projects[project].hosts[0].workspaces[workspace]
+        let listed = |project: usize| {
+            snapshot.projects[project].hosts[0]
                 .sessions
                 .iter()
                 .map(|row| (row.id.as_str(), row.state))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            listed(0, 0),
+            listed(0),
             vec![("s1", AgentState::Running), ("s2", AgentState::Waiting)]
         );
-        assert!(listed(0, 1).is_empty(), "a workspace with no session");
-        assert_eq!(listed(1, 0), vec![("s3", AgentState::Done)]);
+        assert_eq!(listed(1), vec![("s3", AgentState::Done)]);
         assert_eq!(snapshot.status.running, 1);
         assert_eq!(snapshot.status.waiting, 1);
     }
 
     #[test]
-    fn the_sidebar_indents_children_under_their_parent_and_names_where_they_run() {
+    fn the_sidebar_indents_children_and_titles_untitled_ones_by_their_branch() {
         let now = Instant::now();
         let mut state = loaded(now);
         let mut plan = agent("p", "w1", 10);
@@ -589,38 +958,19 @@ mod tests {
         else {
             panic!("workspaces content expected");
         };
-        let sessions: Vec<(&str, usize, Option<&str>, bool)> = tree
+        let sessions: Vec<(&str, usize)> = tree
             .iter()
             .filter_map(|row| match row {
-                TreeRow::Session {
-                    title,
-                    depth,
-                    place,
-                    own_worktree,
-                    ..
-                } => Some((title.as_str(), *depth, place.as_deref(), *own_worktree)),
+                TreeRow::Session { title, depth, .. } => Some((title.as_str(), *depth)),
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            sessions,
-            vec![
-                ("Plan", 0, None, false),
-                ("Child session", 1, Some("feat/two"), true),
-                ("Check", 2, Some("Current worktree"), false),
-            ]
-        );
-        let workspaces: Vec<&str> = tree
-            .iter()
-            .filter_map(|row| match row {
-                TreeRow::Workspace { id, .. } => Some(id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            workspaces.contains(&"w2"),
-            "the child's own worktree row stays listed"
-        );
+        assert_eq!(sessions, vec![("Plan", 0), ("feat/two", 1), ("Check", 2)]);
+        let child_tooltip = tree.iter().find_map(|row| match row {
+            TreeRow::Session { id, tooltip, .. } if id == "c" => tooltip.clone(),
+            _ => None,
+        });
+        assert_eq!(child_tooltip.as_deref(), Some("feat/two · /repos/two"));
     }
 
     #[test]

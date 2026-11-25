@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use massorca_protocol::methods::config::ConfigList;
 use massorca_protocol::methods::{
-    config, events, extensions, projects, service, skills, workspaces,
+    config, events, extensions, hosted_services, projects, service, skills, workspaces,
 };
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
@@ -118,11 +118,35 @@ const EXTENSION_METHODS: &[(&str, Permission)] = &[
     (extensions::UPDATE, Permission::HostAdmin),
 ];
 
+/// The extension methods behind their own capability, with that capability and permission.
+const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
+    (
+        extensions::ROLLBACK,
+        capabilities::EXTENSIONS_ROLLBACK,
+        Permission::HostAdmin,
+    ),
+    (
+        extensions::LOG,
+        capabilities::EXTENSIONS_LOG,
+        Permission::Read,
+    ),
+];
+
 /// The skill methods this build registers (capability `skills/1`).
 const SKILL_METHODS: [(&str, Permission); 1] = [(skills::DISCOVER, Permission::Read)];
 
+/// The hosted-service methods (capability `services/1`); writes take the class `secret.set` takes.
+const SERVICE_METHODS: [(&str, Permission); 3] = [
+    (hosted_services::STATUS, Permission::Read),
+    (hosted_services::CONNECT, Permission::HostAdmin),
+    (hosted_services::DISCONNECT, Permission::HostAdmin),
+];
+
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: &[&str] = &[
+    "marketplace.services.list",
+    "marketplace.services.connect",
+    "marketplace.services.disconnect",
     "service.info",
     "service.status",
     "service.stop",
@@ -299,6 +323,16 @@ async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
         assert_eq!(info.capability, capabilities::EXTENSIONS, "{method}");
         assert_eq!(info.permission, permission, "{method}");
     }
+    for &(method, capability, permission) in OWN_CAPABILITY_METHODS {
+        let info = methods
+            .methods()
+            .into_iter()
+            .find(|info| info.method == method)
+            .unwrap_or_else(|| panic!("{method} is registered"));
+        assert_eq!(info.owner, Owner::Core, "{method}");
+        assert_eq!(info.capability, capability, "{method}");
+        assert_eq!(info.permission, permission, "{method}");
+    }
     for (method, permission) in SKILL_METHODS {
         let info = methods
             .methods()
@@ -307,6 +341,16 @@ async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
             .unwrap_or_else(|| panic!("{method} is registered"));
         assert_eq!(info.owner, Owner::Core, "{method}");
         assert_eq!(info.capability, capabilities::SKILLS, "{method}");
+        assert_eq!(info.permission, permission, "{method}");
+    }
+    for (method, permission) in SERVICE_METHODS {
+        let info = methods
+            .methods()
+            .into_iter()
+            .find(|info| info.method == method)
+            .unwrap_or_else(|| panic!("{method} is registered"));
+        assert_eq!(info.owner, Owner::Core, "{method}");
+        assert_eq!(info.capability, capabilities::SERVICES, "{method}");
         assert_eq!(info.permission, permission, "{method}");
     }
     stop(running).await;
@@ -360,6 +404,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(TEAM_METHODS)
         .chain(EXTENSION_METHODS.iter().map(|(method, _)| method))
         .chain(SKILL_METHODS.iter().map(|(method, _)| method))
+        .chain(SERVICE_METHODS.iter().map(|(method, _)| method))
     {
         assert!(
             commands.iter().any(|command| command.method == *method),

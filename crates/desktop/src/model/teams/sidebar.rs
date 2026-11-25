@@ -1,11 +1,13 @@
 //! The Sidebar in Bot Teams mode (D-WS-29, screens 4.1): every team with its Conference room and
 //! Board, and the Projects of the team in view (Files, Memory, Routines, then its projects).
 
+use super::filters::is_finished_project;
 use super::page::TeamPage;
 use super::state::TeamsState;
 use super::types::{Column, ProjectId, Team, TeamId};
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
+use massorca_protocol::methods::teams::TeamCharacter;
 
 /// The Bot Teams Sidebar, ready to draw.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +26,8 @@ pub struct TeamsSidebar {
 pub struct TeamRow {
     pub id: TeamId,
     pub name: String,
+    /// The team's character, drawn before its name (A57).
+    pub character: TeamCharacter,
     pub reach: HostReach,
     /// A page of this team is on screen.
     pub selected: bool,
@@ -83,7 +87,7 @@ pub fn teams_sidebar(state: &TeamsState, page: Page) -> TeamsSidebar {
             .collect(),
         projects: context
             .and_then(|id| state.team(id))
-            .map(|team| projects_section(team, current)),
+            .map(|team| projects_section(team, current, state.hides_finished_projects())),
     }
 }
 
@@ -93,6 +97,7 @@ fn team_row(team: &Team, current: Option<TeamPage>) -> TeamRow {
     TeamRow {
         id: team.id,
         name: team.name.clone(),
+        character: team.character,
         reach: team.reach,
         selected: current.is_some_and(|page| page.team() == team.id),
         conference: ChildRow {
@@ -124,7 +129,13 @@ fn board_hint(team: &Team) -> String {
     }
 }
 
-fn projects_section(team: &Team, current: Option<TeamPage>) -> ProjectsSection {
+/// The Projects section of a team. Finished projects are left out while `hide_finished` is set, except the one
+/// whose page is on screen.
+fn projects_section(
+    team: &Team,
+    current: Option<TeamPage>,
+    hide_finished: bool,
+) -> ProjectsSection {
     let fixed = [
         (ProjectRowKind::Files, "Files", TeamPage::Files(team.id)),
         (ProjectRowKind::Memory, "Memory", TeamPage::Memory(team.id)),
@@ -143,15 +154,24 @@ fn projects_section(team: &Team, current: Option<TeamPage>) -> ProjectsSection {
             selected: current == Some(page),
         })
         .collect();
-    rows.extend(team.projects.iter().map(|project| {
-        let page = TeamPage::Project(team.id, project.id);
-        ProjectRow {
-            kind: ProjectRowKind::Project(project.id),
-            label: project.name.clone(),
-            page,
-            selected: current == Some(page),
-        }
-    }));
+    rows.extend(
+        team.projects
+            .iter()
+            .filter(|project| {
+                !hide_finished
+                    || !is_finished_project(project)
+                    || current == Some(TeamPage::Project(team.id, project.id))
+            })
+            .map(|project| {
+                let page = TeamPage::Project(team.id, project.id);
+                ProjectRow {
+                    kind: ProjectRowKind::Project(project.id),
+                    label: project.name.clone(),
+                    page,
+                    selected: current == Some(page),
+                }
+            }),
+    );
     ProjectsSection {
         team: team.id,
         rows,
@@ -205,5 +225,28 @@ mod tests {
         let sidebar = teams_sidebar(&UnavailableTeams.teams(), Page::Home);
         assert!(!sidebar.connected);
         assert!(sidebar.teams.is_empty() && sidebar.projects.is_none());
+    }
+
+    #[test]
+    fn a_finished_project_is_left_out_while_hidden_unless_its_page_is_on_screen() {
+        use super::super::filters::desarrollo_with_project_card;
+        let mut team = desarrollo_with_project_card();
+        team.projects[0].tasks[0].column = Column::Done;
+        let mut state = TeamsState::connected(Vec::new(), vec![team]);
+        let open_project = Page::Team(TeamPage::Project(TeamId(1), ProjectId(1)));
+        let project_rows = |sidebar: &TeamsSidebar| {
+            sidebar.projects.as_ref().map_or(0, |section| {
+                section
+                    .rows
+                    .iter()
+                    .filter(|row| matches!(row.kind, ProjectRowKind::Project(_)))
+                    .count()
+            })
+        };
+        let memory = Page::Team(TeamPage::Memory(TeamId(1)));
+        assert_eq!(project_rows(&teams_sidebar(&state, memory)), 1);
+        state.set_hide_finished_projects(true);
+        assert_eq!(project_rows(&teams_sidebar(&state, memory)), 0);
+        assert_eq!(project_rows(&teams_sidebar(&state, open_project)), 1);
     }
 }

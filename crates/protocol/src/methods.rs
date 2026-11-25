@@ -4,6 +4,7 @@
 //! (`project`, `workspace`) resolve by id, then exact name, then path.
 
 pub mod agents;
+pub mod chat;
 pub mod commands;
 pub mod config;
 pub mod devices;
@@ -11,11 +12,13 @@ pub mod events;
 pub mod extensions;
 pub mod git;
 pub mod host;
+pub mod hosted_services;
 pub mod projects;
 pub mod secrets;
 pub mod service;
 pub mod skills;
 pub mod tasks;
+pub mod team_room;
 pub mod teams;
 pub mod terminals;
 pub mod workspaces;

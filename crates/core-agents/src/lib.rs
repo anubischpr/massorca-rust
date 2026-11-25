@@ -6,8 +6,10 @@
 pub mod account_check;
 pub mod accounts;
 pub mod catalog;
+pub mod chat;
 pub mod credentials;
 pub mod event;
+pub mod instructions;
 pub mod kind;
 pub mod launch;
 mod modes;
@@ -17,6 +19,7 @@ mod process_tree;
 pub mod prompt;
 pub mod provided_env;
 pub mod resolve;
+pub mod resume_state;
 pub mod sessions;
 pub mod sign_in;
 pub mod sources;
@@ -29,8 +32,9 @@ pub use kind::KindDecl;
 pub use packages::{BuiltInPackages, KindPackages, PackageKind, PackageState, used_kinds};
 pub use provided_env::{EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, ProviderError, SecretGrant};
 pub use resolve::SearchEnv;
+pub use resume_state::VendorEnv;
 pub use sessions::{
-    AgentError, Agents, AgentsConfig, ArchivedOutput, Change, DELEGATION_DEPTH_DEFAULT,
+    AgentError, Agents, AgentsConfig, ArchivedOutput, Change, ChatOpened, DELEGATION_DEPTH_DEFAULT,
     DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult,
     RepoOps,
 };

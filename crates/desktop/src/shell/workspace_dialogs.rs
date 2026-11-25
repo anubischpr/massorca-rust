@@ -2,8 +2,15 @@
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
+use std::path::Path;
+
 use super::Shell;
 use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_LABEL};
+use crate::model::regions::Region;
+use crate::model::session_delete::{SessionDeleteFlow, SessionDeleteStage};
+use crate::model::session_menu::{
+    SessionFacts, SessionMenuFacts, SessionMenuId, SessionMenuRow, session_menu,
+};
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry, WorkspaceMenuId,
@@ -11,9 +18,11 @@ use crate::model::workspace_flow::{
 };
 use crate::service::Refusal;
 use gpui::{
-    AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
+    App, AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::terminals::TerminalState;
+use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
 use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
@@ -75,6 +84,13 @@ pub(super) enum MenuTarget {
         id: String,
         rows: Vec<WorkspaceMenuEntry>,
     },
+    /// A session row's menu: the session it acts on (None while its workspace has none), the workspace whose
+    /// folder it names, and its rows.
+    Session {
+        session: Option<String>,
+        workspace: String,
+        rows: Vec<SessionMenuRow>,
+    },
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
     /// The start page's project menu: the rows of the project menu, chosen to open a start page.
@@ -98,6 +114,7 @@ pub(super) struct WorkspaceDialogs {
     pub add_project: Option<AddProjectDialog>,
     pub remove: Option<RemoveFlow>,
     pub menu: Option<OpenMenu>,
+    pub delete_session: Option<SessionDeleteFlow>,
 }
 
 pub(super) fn icon_of(icon: ProjectIcon) -> IconName {
@@ -133,6 +150,33 @@ fn item_entry(id: WorkspaceMenuId, label: &'static str, off: Option<&'static str
     item.into()
 }
 
+/// The session menu's rows as the ui menu draws them: each action with its icon and words, and the divider
+/// before Delete session (A97).
+fn session_menu_entries(rows: &[SessionMenuRow]) -> Vec<MenuEntry> {
+    rows.iter()
+        .map(|row| match row {
+            SessionMenuRow::Item(id) => MenuEntry::from(session_item(*id)),
+            SessionMenuRow::Divider => MenuEntry::Separator,
+        })
+        .collect()
+}
+
+fn session_item(id: SessionMenuId) -> MenuItem {
+    let (label, icon) = match id {
+        SessionMenuId::Stop => ("Stop", IconName::Square),
+        SessionMenuId::CopyPath => ("Copy path", IconName::Copy),
+        SessionMenuId::OpenFolder => ("Open folder", IconName::Folder),
+        SessionMenuId::RevealInWorkPanel => ("Reveal in Work panel", IconName::PanelRight),
+        SessionMenuId::Delete => ("Delete session…", IconName::Trash2),
+    };
+    let item = MenuItem::new(label).icon(icon);
+    if id == SessionMenuId::Delete {
+        item.destructive()
+    } else {
+        item
+    }
+}
+
 fn menu_icon(id: WorkspaceMenuId) -> IconName {
     match id {
         WorkspaceMenuId::NewSession => IconName::MessageSquare,
@@ -149,7 +193,11 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
 }
 
 impl Shell {
-    /// The context menu of a workspace row (D-WS-02), built from the workspace's record.
+    /// The context menu of a workspace (D-WS-02). No tree row opens it now (A97); the project row menu will.
+    #[expect(
+        dead_code,
+        reason = "workspace menu waits for the project row menu (A97)"
+    )]
     pub(super) fn open_workspace_menu(
         &mut self,
         id: String,
@@ -171,6 +219,55 @@ impl Shell {
         self.open_menu(
             menu_entries(&rows),
             MenuTarget::Workspace { id, rows },
+            OverlayLayer::Page,
+            window.mouse_position(),
+            window,
+            cx,
+        );
+    }
+
+    /// The context menu of a session row (A97), or of a workspace's row while it has no session.
+    pub(super) fn open_session_menu(
+        &mut self,
+        session: Option<String>,
+        workspace: String,
+        local: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.service.is_none() {
+            return;
+        }
+        let rows = {
+            let state = self.store.read(cx).state();
+            if state.workspace(&workspace).is_none() {
+                return;
+            }
+            let facts = match session.as_deref() {
+                Some(id) => {
+                    let Some(agent) = state.agents.iter().find(|agent| agent.id == id) else {
+                        return;
+                    };
+                    Some(SessionFacts {
+                        running: agent.execution.state != TerminalState::Exited,
+                        has_terminal: agent.terminal_id.is_some(),
+                    })
+                }
+                None => None,
+            };
+            session_menu(SessionMenuFacts {
+                session: facts,
+                local,
+                delete_offered: state.agent_archive,
+            })
+        };
+        self.open_menu(
+            session_menu_entries(&rows),
+            MenuTarget::Session {
+                session,
+                workspace,
+                rows,
+            },
             OverlayLayer::Page,
             window.mouse_position(),
             window,
@@ -210,6 +307,67 @@ impl Shell {
             | WorkspaceMenuId::Developer
             | WorkspaceMenuId::RevealInWorkPanel => {}
         }
+    }
+
+    /// Runs a chosen session row. Stop reaches the service; the other rows act on this PC.
+    pub(super) fn run_session_action(
+        &mut self,
+        session: Option<&str>,
+        workspace: &str,
+        action: SessionMenuId,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SessionMenuId::Stop => {
+                let (Some(session), Some(service)) = (session, self.service.clone()) else {
+                    return;
+                };
+                let session = session.to_owned();
+                cx.spawn(async move |_, _| {
+                    // The store follows the service's own event; a refusal leaves the session as it was.
+                    let _ = service.agent_stop(&session).await;
+                })
+                .detach();
+            }
+            SessionMenuId::CopyPath => {
+                if let Some(path) = self.workspace_path(workspace, cx) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(path));
+                }
+            }
+            SessionMenuId::OpenFolder => {
+                if let Some(path) = self.workspace_path(workspace, cx) {
+                    cx.open_with_system(Path::new(&path));
+                }
+            }
+            SessionMenuId::RevealInWorkPanel => {
+                let terminal = session.and_then(|id| {
+                    self.store
+                        .read(cx)
+                        .state()
+                        .agents
+                        .iter()
+                        .find(|agent| agent.id == id)
+                        .and_then(|agent| agent.terminal_id.clone())
+                });
+                if let Some(terminal) = terminal {
+                    self.model.show_region(Region::WorkPanel);
+                    self.reveal_terminal(workspace, &terminal, cx);
+                }
+            }
+            SessionMenuId::Delete => {
+                if let Some(session) = session {
+                    self.open_delete_session(session, cx);
+                }
+            }
+        }
+    }
+
+    fn workspace_path(&self, workspace: &str, cx: &App) -> Option<String> {
+        self.store
+            .read(cx)
+            .state()
+            .workspace(workspace)
+            .map(|workspace| workspace.path.clone())
     }
 
     /// "Add a project…": a dialog for the path of a folder or repository (A38). Needs a service.
@@ -382,6 +540,15 @@ impl Shell {
                     self.run_workspace_action(&id, action, cx);
                 }
             }
+            MenuTarget::Session {
+                session,
+                workspace,
+                rows,
+            } => {
+                if let Some(SessionMenuRow::Item(action)) = rows.get(row).copied() {
+                    self.run_session_action(session.as_deref(), &workspace, action, cx);
+                }
+            }
             MenuTarget::StartProject(choices) => match choices.get(row).cloned().flatten() {
                 Some(ProjectMenuChoice::Project(choice)) => self.open_start_project(choice, cx),
                 Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
@@ -397,6 +564,83 @@ impl Shell {
     }
 
     /// Opens the remove flow for a workspace the store knows.
+    /// Opens the confirm that deletes a session the store knows (Delete session…, A97).
+    fn open_delete_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let flow = {
+            let state = self.store.read(cx).state();
+            let Some(agent) = state.agents.iter().find(|agent| agent.id == session) else {
+                return;
+            };
+            let Some(workspace) = state.workspace(&agent.workspace_id) else {
+                return;
+            };
+            let title = agent
+                .title
+                .clone()
+                .or_else(|| workspace.branch.clone())
+                .unwrap_or_else(|| workspace.name.clone());
+            SessionDeleteFlow::new(session, title, workspace.kind != WorkspaceKind::Folder)
+        };
+        if self.dialogs.delete_session.is_none() {
+            self.dialogs.delete_session = Some(flow);
+            cx.notify();
+        }
+    }
+
+    /// Closes the delete confirm unless a call is out.
+    pub(super) fn close_session_delete(&mut self, cx: &mut Context<Self>) {
+        if self
+            .dialogs
+            .delete_session
+            .as_ref()
+            .is_some_and(|flow| !flow.busy())
+        {
+            self.dialogs.delete_session = None;
+            cx.notify();
+        }
+    }
+
+    /// The worktree option of the delete confirm. The flow ignores it once the call is out.
+    pub(super) fn set_session_delete_remove_workspace(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Some(flow) = self.dialogs.delete_session.as_mut() {
+            flow.set_remove_workspace(on);
+            cx.notify();
+        }
+    }
+
+    /// The delete confirm's action: sends the forget its stage asks for. A plain refusal closes the confirm.
+    pub(super) fn confirm_session_delete(&mut self, cx: &mut Context<Self>) {
+        let (Some(handle), Some(flow)) =
+            (self.service.clone(), self.dialogs.delete_session.as_mut())
+        else {
+            return;
+        };
+        if !flow.confirm() {
+            if matches!(flow.stage(), SessionDeleteStage::Refused { .. }) {
+                self.close_session_delete(cx);
+            }
+            return;
+        }
+        let params = flow.params();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = handle.agent_forget(params).await.map(|_| ());
+            this.update(cx, |shell, cx| shell.finish_session_delete(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn finish_session_delete(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+        if let Some(flow) = self.dialogs.delete_session.as_mut()
+            && flow.answered(result)
+        {
+            // The row leaves the Sidebar once the service's forget reaches the store.
+            self.dialogs.delete_session = None;
+        }
+        cx.notify();
+    }
+
     pub(super) fn open_remove(&mut self, id: &str, cx: &mut Context<Self>) {
         let name = self
             .store

@@ -8,12 +8,13 @@ use crate::components::account_connection_list::{
     AccountConnectionList, AccountRow, AccountStatus,
 };
 use crate::components::account_sign_in_dialog::{AccountSignInDialog, SignInStage};
+use crate::components::agent_icon::AgentKind;
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::danger_zone::DangerZone;
-use crate::components::invocation_banner::InvocationBanner;
+use crate::components::invocation_banner::{BannerFill, InvocationBanner};
 use crate::components::marketplace_item_header::MarketplaceItemHeader;
 use crate::icon::IconName;
-use crate::tokens::{SPACE_4, SPACE_6};
+use crate::tokens::{Color, SPACE_4, SPACE_6};
 
 pub fn stories() -> Vec<Story> {
     vec![
@@ -67,7 +68,12 @@ fn item_header(_: &mut Window, cx: &mut App) -> AnyElement {
 }
 
 fn invocation_banner(_: &mut Window, cx: &mut App) -> AnyElement {
-    let banner = InvocationBanner::new("story-banner", "@Claude")
+    let banner = InvocationBanner::new("story-banner", "Claude", "@Claude", IconName::Bot)
+        .agent(AgentKind::Claude)
+        .fill(BannerFill::Listed(
+            Color::rgba8(0xD9, 0x77, 0x57, 1.0),
+            None,
+        ))
         .example("@Claude review the open changes on this branch")
         .example("@Claude explain the failing test in this project")
         .example("@Claude summarise today's sessions");

@@ -1300,6 +1300,20 @@ fn edit_brief_view(form: &EditBriefDialog, shell: &WeakEntity<Shell>, cx: &App) 
     dialog
 }
 
+/// What a confirm says the item takes with it, under its title (X-DLG-01).
+fn team_confirm_body(confirm: &TeamConfirm) -> &'static str {
+    match confirm {
+        TeamConfirm::RemoveTeam { .. } => {
+            "Its bots, projects and tasks are removed. This cannot be undone."
+        }
+        TeamConfirm::DeleteProject { .. } => {
+            "Its routines stop and its tasks are removed from the Board. This cannot be undone."
+        }
+        TeamConfirm::RemoveBot { .. } => "The bot leaves the team. This cannot be undone.",
+        TeamConfirm::DeleteMemory { .. } => "The team's bots stop using this note.",
+    }
+}
+
 /// The confirm on screen: a team or a project goes with what it holds; a memory entry is forgotten.
 pub(in crate::shell) fn team_confirm_view(
     confirm: &TeamConfirm,
@@ -1314,31 +1328,28 @@ pub(in crate::shell) fn team_confirm_view(
         }
         TeamConfirm::RemoveTeam { .. } | TeamConfirm::DeleteMemory { .. } => None,
     };
-    let (dialog, body, action) = match confirm {
+    let (dialog, action) = match confirm {
         TeamConfirm::RemoveTeam { name, .. } => (
             Dialog::new("delete-team", format!("Delete team {name}?"))
                 .variant(DialogVariant::Destructive),
-            "Its bots, projects and tasks are removed. This cannot be undone.",
             "Delete team",
         ),
         TeamConfirm::DeleteProject { name, .. } => (
             Dialog::new("delete-project", format!("Delete project {name}?"))
                 .variant(DialogVariant::Destructive),
-            "Its tasks are removed from the Board. This cannot be undone.",
             "Delete project",
         ),
         TeamConfirm::RemoveBot { name, .. } => (
             Dialog::new("remove-bot", format!("Remove bot {name}?"))
                 .variant(DialogVariant::Destructive),
-            "The bot leaves the team. This cannot be undone.",
             "Remove bot",
         ),
         TeamConfirm::DeleteMemory { .. } => (
             Dialog::new("delete-memory", "Delete this memory?"),
-            "The team's bots stop using this note.",
             "Delete memory",
         ),
     };
+    let body = team_confirm_body(confirm);
     let dialog = dialog
         .open(true)
         .child(
@@ -1947,5 +1958,19 @@ mod tests {
                 ),
                 other => panic!("the confirm should stay open with the refusal, found {other:?}"),
             });
+    }
+
+    #[test]
+    fn deleting_a_project_says_its_routines_stop_and_its_tasks_leave_the_board() {
+        let confirm = TeamConfirm::DeleteProject {
+            team: TeamId(1),
+            project: ProjectId(1),
+            name: "Desarrollo onboarding".into(),
+            error: None,
+        };
+        assert_eq!(
+            team_confirm_body(&confirm),
+            "Its routines stop and its tasks are removed from the Board. This cannot be undone."
+        );
     }
 }

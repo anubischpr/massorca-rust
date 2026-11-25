@@ -12,7 +12,8 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::MarketplaceFrame;
 use crate::model::marketplace::{
-    HostTarget, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, ServiceMarketplace,
+    HostTarget, ItemKind, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource,
+    ServiceMarketplace,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::{HostListing, HostLists, HostMarketplaceRead, StoreState};
@@ -240,9 +241,12 @@ impl Shell {
     }
 
     /// Aims the Marketplace at `target`. A paired host is read under a new request number, so an answer to an earlier one
-    /// is no longer awaited.
+    /// is no longer awaited; the Skills section reads the new host too while it is on screen.
     fn read_picked_host(&mut self, target: HostTarget) {
         let request = self.marketplace_pick.aim(target.clone());
+        if self.on_skills_page() {
+            self.read_skills(&target, false);
+        }
         if let (HostTarget::Paired(name), Some(service)) = (target, self.service.clone()) {
             service.read_host_marketplace(name, request);
         }
@@ -280,6 +284,12 @@ impl Shell {
         self.marketplace_item_error = None;
         self.marketplace_review = None;
         self.marketplace_uninstall = None;
+        self.marketplace_service_dialog = None;
+        if self.model.navigation().page
+            == Page::Marketplace(MarketplacePage::Category(ItemKind::Service))
+        {
+            self.read_hosted_services(cx);
+        }
         self.show_marketplace(cx);
         self.sync_picker(cx);
         cx.notify();
