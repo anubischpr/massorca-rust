@@ -233,7 +233,7 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
     assert_eq!(shown["execution"]["state"], "exited");
     assert_eq!(shown["execution"]["exit"]["reason"], "service_stopped");
     // Either service may record the end: the stopping one with the program's exit code when it saw the program end
-    // (on Windows the stop's console interrupt, 0xC000013A), the next one with no code. Both read "service stopped".
+    // with one, the next one with no code. Both read "service stopped".
     let listed = sandbox.run("default", &["agent", "list"]).success();
     let line = stdout_text(&listed)
         .lines()
@@ -246,6 +246,32 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
         None => "exited (service stopped)".to_owned(),
     };
     assert!(line.contains(&expected), "{line}");
+}
+
+#[test]
+fn a_plain_stop_reads_as_a_signal_with_no_exit_code_on_every_platform() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let started = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
+    );
+    let session = text(&started, "id").to_owned();
+    wait_for_line(&sandbox, text(&started, "terminal_id"), "fake-agent: ready");
+
+    sandbox.json_ok("default", &["agent", "stop", &session]);
+    let exit = eventually("the stopped run to exit", || {
+        let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+        (shown["execution"]["state"] == "exited").then(|| shown["execution"]["exit"].clone())
+    });
+    assert_eq!(exit["reason"], "killed", "{exit}");
+    // Unix records the hangup's signal; Windows the console event's, rather than the code 3221225786.
+    assert!(exit["code"].is_null(), "a stop has no exit code: {exit}");
+    assert!(
+        exit["signal"].is_string(),
+        "a stop names its signal: {exit}"
+    );
 }
 
 /// Starts a fake agent in `main`, waits for its answer, and stops its run; returns the session id and its terminal.

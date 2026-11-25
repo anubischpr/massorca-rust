@@ -58,7 +58,9 @@ that runs:
 A local terminal is `live` from spawn until its process is reaped, then
 `exited` with `exit: { code?, signal?, at_ms, reason }`. `reason` is `exited`
 (it ended on its own), `killed` (a `terminal.kill` or `terminal.close`) or
-`service_stopped`. An exited terminal stays listed, with its screen
+`service_stopped`. A signal death has a `signal` and no `code`. On Windows the
+console event that ends a program on a stop (`STATUS_CONTROL_C_EXIT`) reads as
+the signal `Interrupt`, so a stop reads the same on every platform. An exited terminal stays listed, with its screen
 attachable for reading, until `terminal.close`; at most 64 exited terminals
 are kept, the oldest dropped first.
 
