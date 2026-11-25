@@ -187,31 +187,69 @@ struct Seen {
     output: Vec<u8>,
     /// Cursor answers the link refused while it was down; written once it is back.
     unanswered: usize,
+    /// The view reported the link lost and not yet back; a write now could wait on the reconnect.
+    link_down: bool,
 }
 
 impl Seen {
     /// Reads one event. A cursor query in the output gets its answer, as an emulator gives it; the shell waits for it.
     fn read_one(&mut self, test: &Runtime, view: &TerminalView) -> TerminalEvent {
-        let event = within(test, view.next())
+        let event = test
+            .block_on(async { timeout(WAIT, view.next()).await })
+            .unwrap_or_else(|_| panic!("no event in time; {}", self.recent()))
             .expect("the view reports no error")
             .expect("the view is open");
         if let TerminalEvent::Output { bytes, .. } = &event {
             self.unanswered += count(bytes, CURSOR_QUERY);
             self.output.extend_from_slice(bytes);
         }
+        if is_lost(&event) {
+            self.link_down = true;
+        } else if is_back(&event) {
+            self.link_down = false;
+        }
         self.answer_cursor_queries(test, view);
         self.events.push(event.clone());
         event
     }
 
+    /// The last events and output read, for a stuck test's message.
+    fn recent(&self) -> String {
+        let events: Vec<String> = self
+            .events
+            .iter()
+            .rev()
+            .take(4)
+            .map(|event| match event {
+                TerminalEvent::Output { offset, bytes } => {
+                    format!("Output@{offset}+{}", bytes.len())
+                }
+                TerminalEvent::Snapshot { offset, bytes, .. } => {
+                    format!("Snapshot@{offset}+{}", bytes.len())
+                }
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let tail = &self.output[self.output.len().saturating_sub(200)..];
+        format!(
+            "last events (newest first) {events:?}, link down {}, unanswered {}, output tail {:?}",
+            self.link_down,
+            self.unanswered,
+            String::from_utf8_lossy(tail)
+        )
+    }
+
     /// Answers the cursor queries read so far; a refused answer waits for the link to return.
     fn answer_cursor_queries(&mut self, test: &Runtime, view: &TerminalView) {
-        while self.unanswered > 0 {
+        while self.unanswered > 0 && !self.link_down {
             match within(test, view.input(CURSOR_ANSWER.to_vec())) {
                 Ok(()) => {}
                 // A query that comes after the process ended has no one left to answer it.
                 Err(FfiError::Remote { code, .. }) if code == "terminal.exited" => {}
-                Err(FfiError::Unreachable { .. }) => return,
+                Err(FfiError::Unreachable { .. }) => {
+                    self.link_down = true;
+                    return;
+                }
                 Err(error) => panic!("the answer is written: {error:?}"),
             }
             self.unanswered -= 1;
