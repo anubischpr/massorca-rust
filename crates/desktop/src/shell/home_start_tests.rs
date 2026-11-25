@@ -123,6 +123,23 @@ fn the_title_names_the_chosen_project_and_the_name_opens_its_menu(cx: &mut TestA
 }
 
 #[gpui::test]
+fn the_home_key_hints_start_at_the_composer_left_edge_not_centred(cx: &mut TestAppContext) {
+    let (_rig, cx) = home_rig(cx);
+    draw(cx);
+    let column = cx
+        .debug_bounds("home-start-column")
+        .expect("the page column is drawn");
+    let enter = cx
+        .debug_bounds("start-key-hint-Enter")
+        .expect("the Enter hint is drawn");
+    let offset = f32::from(enter.origin.x) - f32::from(column.origin.x);
+    assert!(
+        offset <= 1.0,
+        "the Enter hint starts {offset} px inside the column, not at its left edge"
+    );
+}
+
+#[gpui::test]
 fn the_title_is_the_plain_question_while_no_project_exists(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[]);
     rig.updates

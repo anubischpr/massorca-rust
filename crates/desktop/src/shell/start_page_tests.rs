@@ -152,6 +152,24 @@ fn the_start_page_microphone_is_disabled_and_says_why(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_key_hints_start_at_the_composer_left_edge_not_centred(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    let column = cx
+        .debug_bounds("start-column")
+        .expect("the page column is drawn");
+    let enter = cx
+        .debug_bounds("start-key-hint-Enter")
+        .expect("the Enter hint is drawn");
+    let column_left = f32::from(column.origin.x);
+    let enter_left = f32::from(enter.origin.x);
+    assert!(
+        enter_left - column_left <= EDGE_TOLERANCE,
+        "the Enter hint starts at {enter_left} px, away from the column's left edge at {column_left} px"
+    );
+}
+
+#[gpui::test]
 fn the_start_page_places_its_host_project_and_branch_in_one_card(cx: &mut TestAppContext) {
     let (_rig, cx) = start_page_rig(cx, Vec::new());
     draw(cx);

@@ -22,7 +22,7 @@ use massorca_ui::components::segmented_control::{Segment, SegmentedControl, Segm
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_4, SPACE_6, SPACE_8, TYPE_CAPTION,
+    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_CAPTION,
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
@@ -286,16 +286,18 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
         .collect()
 }
 
-/// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
+/// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
 pub(super) fn key_hints(theme: &Theme) -> impl IntoElement {
     div()
+        .debug_selector(|| "start-key-hints".to_owned())
         .flex()
         .flex_row()
         .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_4))
+        .gap(px(SPACE_3))
         .children(KEY_HINTS.iter().map(|(key, what)| {
+            let selector = format!("start-key-hint-{key}");
             div()
+                .debug_selector(move || selector.clone())
                 .flex()
                 .flex_row()
                 .items_center()
