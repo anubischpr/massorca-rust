@@ -245,6 +245,11 @@ Linux only. No automated run opens a visible window.
   Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
   sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
   not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
+- Account import (`shell/marketplace/import.rs`) starts from the folder the service detects for the kind when it offers
+  `agent-import-detect/1`: the field is prefilled with a "Found" or "Missing" line (`model/marketplace/import_folder.rs`).
+  Browse picks a folder with the system dialog, as Add host does. The seam is `ServiceHandle::accounts_import_candidates`
+  (`service/accounts.rs`), which answers absent until the agents service offers the method; then the field stays typed by
+  hand. Import keeps sending `from` until the protocol makes it optional.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 
