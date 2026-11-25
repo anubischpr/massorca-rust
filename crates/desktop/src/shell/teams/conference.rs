@@ -384,7 +384,8 @@ fn bots_row(team: &Team, theme: &Theme) -> impl IntoElement {
         )
 }
 
-/// One line: a person's bubble on the right, or a bot's row with its character, name, Lead tag, time and task card.
+/// One line: a person's bubble on the right, or a bot's row with its character, name, Lead tag, time, and its task or
+/// routine card.
 fn line_view(line: &RoomLine, team: &Team, shell: &WeakEntity<Shell>, theme: &Theme) -> AnyElement {
     let palette = theme.palette;
     match &line.speaker {
@@ -444,7 +445,17 @@ fn line_view(line: &RoomLine, team: &Team, shell: &WeakEntity<Shell>, theme: &Th
                     line.task
                         .as_ref()
                         .map(|task| task_card(task, team.id, &line.id, shell)),
-                );
+                )
+                .children(line.routine.as_ref().map(|routine| {
+                    routine_card(
+                        &routine.name,
+                        &routine.when,
+                        team.id,
+                        &line.id,
+                        shell,
+                        theme,
+                    )
+                }));
             div()
                 .flex()
                 .gap(px(SPACE_3))
@@ -478,6 +489,48 @@ fn task_card(
                     .on_click(move |_, cx| {
                         let _ = shell.update(cx, |shell, cx| {
                             shell.model.open_team_page(TeamPage::Board(team));
+                            cx.notify();
+                        });
+                    }),
+            ),
+    )
+}
+
+/// The "Routine created" card of a routine a line scheduled (audit C5), with the way to the team's Routines.
+fn routine_card(
+    name: &str,
+    when: &str,
+    team: TeamId,
+    line: &str,
+    shell: &WeakEntity<Shell>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let shell = shell.clone();
+    div().max_w(px(420.)).child(
+        Card::new(format!("room-routine-{line}"))
+            .padding(CardPadding::Compact)
+            .icon(IconName::Repeat)
+            .title("Routine created")
+            .child(
+                div()
+                    .text_style(TYPE_BODY_STRONG)
+                    .text_color(theme.palette.text.primary)
+                    .child(name.to_owned()),
+            )
+            .child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.secondary)
+                    .debug_selector(|| "room-routine-when".to_owned())
+                    .child(when.to_owned()),
+            )
+            .footer_action(
+                Button::new(format!("room-view-routine-{line}"), "View routine")
+                    .variant(ButtonVariant::Ghost)
+                    .size(ButtonSize::Compact)
+                    .on_click(move |_, cx| {
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.model.open_team_page(TeamPage::Routines(team));
                             cx.notify();
                         });
                     }),
@@ -622,6 +675,46 @@ mod tests {
             routine: None,
             created_at_ms: 1_700_000_000_000,
         }
+    }
+
+    #[gpui::test]
+    fn a_routine_the_room_scheduled_shows_its_card_and_opens_the_routines(cx: &mut TestAppContext) {
+        use crate::model::navigation::Page;
+        use massorca_protocol::methods::teams::{Routine, RoutineCadence};
+
+        let (rig, cx) = open_room(cx);
+        let mut answer = line(RoomAuthor::Bot, Some(("b1", "Mara")), "scheduled");
+        answer.routine = Some(Routine {
+            id: "r1".into(),
+            team_id: "t1".into(),
+            bot_id: Some("b1".into()),
+            name: "Back up the docs".into(),
+            prompt: "Back up the docs tomorrow at 09:00".into(),
+            cadence: RoutineCadence::Once,
+            time: "09:00".into(),
+            weekday: None,
+            month_day: None,
+            run_date: Some("2099-01-02".into()),
+            zone: None,
+            zone_used: None,
+            paused: false,
+            starts_as_admin: false,
+            next_run_at_ms: Some(1),
+            created_at_ms: 1,
+        });
+        rig.updates
+            .send(room_read(vec![answer]))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-routine-when").is_some());
+        click(cx, "button:room-view-routine-scheduled");
+        rig.shell.read_with(cx, |shell, _| {
+            assert_eq!(
+                shell.model().navigation().page,
+                Page::Team(TeamPage::Routines(TeamId(1)))
+            );
+        });
     }
 
     fn room_read(lines: Vec<TeamRoomMessage>) -> StoreUpdate {

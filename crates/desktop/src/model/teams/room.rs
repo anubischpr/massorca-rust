@@ -1,10 +1,11 @@
 //! The Conference room as the page draws it (bt-conference-room, screens 4.2, decision 0102): the lines of the team's
-//! room with who wrote them and the task each is about, and the bot that receives a line naming no bot.
+//! room with who wrote them and the task or routine each is about, and the bot that receives a line naming no bot.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_protocol::methods::tasks::Column as WireColumn;
 use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+use massorca_protocol::methods::teams::{Routine, RoutineCadence};
 
 use super::types::{BotId, Team};
 use crate::service::{TeamIds, TeamRoomRead};
@@ -34,6 +35,16 @@ pub struct RoomLine {
     /// The local clock time it was posted, "10:42".
     pub time: String,
     pub task: Option<RoomTask>,
+    /// The one-time routine the line scheduled (decision 0121).
+    pub routine: Option<RoomRoutine>,
+}
+
+/// The routine a line scheduled, as its "Routine created" card shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomRoutine {
+    pub name: String,
+    /// "Once on 2026-11-30 at 09:00".
+    pub when: String,
 }
 
 /// Who wrote a line.
@@ -96,6 +107,18 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
             title: task.title.clone(),
             column: column_word(task.column),
         }),
+        routine: message.routine.as_ref().map(|routine| RoomRoutine {
+            name: routine.name.clone(),
+            when: routine_when(routine),
+        }),
+    }
+}
+
+/// When a routine runs, in words; the room schedules only one-time routines.
+fn routine_when(routine: &Routine) -> String {
+    match (routine.cadence, routine.run_date.as_deref()) {
+        (RoutineCadence::Once, Some(date)) => format!("Once on {date} at {}", routine.time),
+        _ => format!("At {}", routine.time),
     }
 }
 
@@ -153,6 +176,48 @@ mod tests {
             routine: None,
             created_at_ms: 1_700_000_000_000,
         }
+    }
+
+    #[test]
+    fn a_line_that_scheduled_a_routine_carries_its_card() {
+        let routine = Routine {
+            id: "r1".to_owned(),
+            team_id: "t".to_owned(),
+            bot_id: None,
+            name: "Back up the docs".to_owned(),
+            prompt: "Back up the docs tomorrow at 09:00".to_owned(),
+            cadence: RoutineCadence::Once,
+            time: "09:00".to_owned(),
+            weekday: None,
+            month_day: None,
+            run_date: Some("2099-01-02".to_owned()),
+            zone: None,
+            zone_used: None,
+            paused: false,
+            starts_as_admin: false,
+            next_run_at_ms: Some(1),
+            created_at_ms: 1,
+        };
+        let mut line = message(RoomAuthor::Bot, Some(("b", "Mara")), "Routine created");
+        line.routine = Some(routine);
+        let room = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            room: Ok(vec![line]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&room), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(
+            lines[0].routine,
+            Some(RoomRoutine {
+                name: "Back up the docs".to_owned(),
+                when: "Once on 2099-01-02 at 09:00".to_owned(),
+            })
+        );
+        assert_eq!(lines[0].task, None);
     }
 
     #[test]
