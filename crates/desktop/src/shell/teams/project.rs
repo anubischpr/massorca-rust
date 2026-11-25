@@ -6,14 +6,14 @@ use super::dialogs::TeamConfirm;
 use super::{board_columns, team_pill};
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId};
+use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId, TeamPage};
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
 };
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_CAPTION, TYPE_HEADING};
-use massorca_ui::{ActiveTheme, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// The Board area of the page is at least this tall, so an empty column keeps its height.
 const BOARD_MIN_HEIGHT: f32 = 260.0;
@@ -61,7 +61,8 @@ pub(in crate::shell) fn project_page(
         let shell = shell.clone();
         let name = project_data.name.clone();
         Button::new("project-delete", "Delete project")
-            .variant(ButtonVariant::Danger)
+            .variant(ButtonVariant::DangerGhost)
+            .leading_icon(IconName::Trash2)
             .on_click(move |_, cx| {
                 let confirm = TeamConfirm::DeleteProject {
                     team,
@@ -82,7 +83,14 @@ pub(in crate::shell) fn project_page(
                 .text_color(theme.palette.text.primary)
                 .child(project_data.name.clone()),
         )
-        .child(team_pill(&team_data.name, team_data.character, &theme));
+        .child(team_pill(
+            TeamPage::Project(team, project),
+            &team_data.name,
+            team_data.character,
+            shell,
+            window,
+            cx,
+        ));
     let brief_section = section("Brief", &theme)
         .child(body(brief, &theme))
         .child(edit_brief);

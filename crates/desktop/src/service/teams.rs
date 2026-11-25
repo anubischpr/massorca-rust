@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef, TaskStopParams};
+use massorca_protocol::methods::team_room::{TeamRoomPostParams, TeamRoomPosted};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
     TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
@@ -19,6 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
+use super::team_room::RoomCommand;
 use super::update::StoreUpdate;
 
 /// A team as the service reports it: its Board, every task of the team in four columns, its bots in creation
@@ -49,7 +51,7 @@ pub struct TeamsRead {
 /// Numbers the reads of one bridge. The bridge keeps one for its whole life, so the numbers stay ordered
 /// across reconnects.
 #[derive(Debug, Default)]
-pub(super) struct Sequence {
+pub(crate) struct Sequence {
     last: AtomicU64,
 }
 
@@ -402,6 +404,20 @@ impl ServiceHandle {
             })
         })
         .await
+    }
+
+    /// Reads a team's Conference room; the answer reaches the store.
+    pub fn read_team_room(&self, team: String) {
+        self.send(Command::Room(RoomCommand::Read { team }));
+    }
+
+    /// `team.room_post`: a person's line to a team's room. The room is read again once the service answers.
+    pub async fn post_to_team_room(
+        &self,
+        params: TeamRoomPostParams,
+    ) -> Result<TeamRoomPosted, Refusal> {
+        self.ask(|reply| Command::Room(RoomCommand::Post { params, reply }))
+            .await
     }
 
     /// `team.update`. The team shows the change when the read that follows the answer lands.

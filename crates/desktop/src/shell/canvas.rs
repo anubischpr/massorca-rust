@@ -54,6 +54,8 @@ pub(super) struct PageFrames<'a> {
     pub pairing: PairingFrame,
     /// The open session's view, while the Canvas shows a session.
     pub session: Option<SessionFrame>,
+    /// The Conference room, while the Canvas shows one.
+    pub room: Option<teams::RoomFrame>,
 }
 
 pub(super) fn canvas(
@@ -185,18 +187,18 @@ fn conversation(
         Canvas::Team(TeamPage::Project(team, project)) => {
             teams::project_page(model, shell, team, project, window, cx)
         }
-        Canvas::Team(TeamPage::Routines(team)) => teams::routines_page(model, shell, team, cx),
-        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Routines(team)) => {
+            teams::routines_page(model, shell, team, window, cx)
+        }
+        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, window, cx),
         Canvas::Team(TeamPage::Files(team)) => match model.teams().team(team) {
-            Some(team) => teams::files_page(team, cx),
+            Some(team) => teams::files_page(team, shell, window, cx),
             None => placeholder("Files", "This team is gone.", theme).into_any_element(),
         },
-        Canvas::Team(TeamPage::Conference(_)) => placeholder(
-            "Conference room",
-            "The Conference room needs live agents and sessions, which are not built yet.",
-            theme,
-        )
-        .into_any_element(),
+        Canvas::Team(TeamPage::Conference(_)) => match pages.room {
+            Some(frame) => teams::conference_page(frame, window, cx),
+            None => placeholder("Conference room", "This team is gone.", theme).into_any_element(),
+        },
         Canvas::Session(_) => match pages.session {
             Some(frame) => session_view::session_page(frame, cx),
             None => placeholder(

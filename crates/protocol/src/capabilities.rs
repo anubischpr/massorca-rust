@@ -37,6 +37,9 @@ pub const AGENT_SEEN: &str = "agent-seen/1";
 /// Release and retain of an agent session, and its archived output (`agent.release`, `agent.retain`, `agent.archive`,
 /// decision 0090).
 pub const AGENT_RELEASE: &str = "agent-release/1";
+/// Archive and delete of an agent session (decision 0163): `agent.archive_session`, the session's `archived`,
+/// `include_archived` on `agent.list`, `remove_workspace` and `force` on `agent.forget`, and `agent.forget_preview`.
+pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 /// `agent.start` without a `workspace`: the session runs in the conversations folder, in a folder of its own (decision
 /// 0094).
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
