@@ -44,6 +44,7 @@ use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -61,8 +62,6 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
-/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
-const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -151,6 +150,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -770,7 +774,10 @@ impl Link {
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
         self.emit(StoreUpdate::AgentChatOffered(
-            client.has_capability(AGENT_CHAT_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
+        ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
@@ -1147,6 +1154,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1227,7 +1237,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

@@ -7,7 +7,6 @@ use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
-use crate::model::regions::Region;
 use crate::model::start_page::{
     CHAT_NEEDS_NEWER_SERVICE, ChatAvailability, StartMode, StartOptions,
 };
@@ -15,13 +14,13 @@ use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
     ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
-    TerminalCommand, TerminalStreamItem,
+    TerminalCommand, TerminalStreamItem, TerminalWrite,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::terminals::TerminalAttachParams;
+use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams, TerminalState};
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::tokens::{
@@ -592,6 +591,88 @@ fn start_call(script: &mut Script) -> Option<StartCall> {
     None
 }
 
+/// The resize requests the shell sent to the service, as (terminal, cols, rows).
+fn resize_calls(script: &mut Script) -> Vec<(String, u16, u16)> {
+    let mut resizes = Vec::new();
+    while let Some(command) = script.next() {
+        if let Command::Terminal(TerminalCommand::Write(TerminalWrite::Resize {
+            terminal,
+            cols,
+            rows,
+            ..
+        })) = command
+        {
+            resizes.push((terminal, cols, rows));
+        }
+    }
+    resizes
+}
+
+#[gpui::test]
+fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    // Without the chat capability the start is a Terminal start, which opens the session view too.
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let (cols, rows) = (
+        params.cols.expect("the start sends its columns"),
+        params.rows.expect("the start sends its rows"),
+    );
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    // The service created the terminal at the start's grid, and the store lists it so.
+    rig._updates
+        .send(StoreUpdate::TerminalChanged(Terminal {
+            id: terminal.to_owned(),
+            workspace_id: "w1".to_owned(),
+            state: TerminalState::Live,
+            title: None,
+            cols,
+            rows,
+            pid: None,
+            shell: "/bin/zsh".to_owned(),
+            cwd: "/repos/fix-login".to_owned(),
+            created_at_ms: 1,
+            exit: None,
+            holds_secrets: false,
+        }))
+        .expect("the store listens");
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session.clone()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    let (_attach, attach_reply) =
+        attach_call(&mut rig._script).expect("the session's terminal is attached");
+    let (stream_tx, stream_rx) = unbounded_channel();
+    attach_reply
+        .send(Ok(stream_rx))
+        .expect("the shell is waiting for the attach");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    let applied = rig.shell.read_with(cx, |shell, _| shell.session_grid());
+    assert_eq!(
+        applied,
+        Some((cols, rows)),
+        "the view applies the start grid"
+    );
+    assert!(
+        resize_calls(&mut rig._script).is_empty(),
+        "the first draw sends no resize request"
+    );
+    drop(stream_tx);
+}
+
 #[gpui::test]
 fn the_start_page_offers_only_the_installed_and_enabled_kinds_and_starts_on_the_first(
     cx: &mut TestAppContext,
@@ -915,7 +996,7 @@ fn chat_turns_on_by_itself_when_the_service_starts_offering_it(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
+fn send_without_the_chat_capability_opens_the_session_with_its_terminal_focused(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = start_page_rig(
@@ -936,17 +1017,41 @@ fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    let (canvas, work_panel) = rig.shell.read_with(cx, |shell, _| {
-        (
-            shell.model.canvas(),
-            shell.model.region_visible(Region::WorkPanel),
-        )
-    });
-    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
-    assert!(work_panel, "the Work panel shows the agent's terminal");
-    let (attach, _attach_reply) =
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
+}
+
+/// After a Terminal start the Canvas shows the started session, its terminal is attached and holds the keyboard,
+/// and the start composer no longer does (owner ruling 2026-11-25).
+fn assert_started_session_has_the_keyboard(
+    rig: &mut Rig,
+    cx: &mut VisualTestContext,
+    terminal: &str,
+) {
+    let canvas = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert!(
+        matches!(canvas, Canvas::Session(_)),
+        "the Canvas shows the started session: {canvas:?}"
+    );
+    let (attach, attach_reply) =
         attach_call(&mut rig._script).expect("the agent's terminal is attached");
     assert_eq!(attach.terminal, terminal);
+    let (_stream_tx, stream_rx) = unbounded_channel();
+    attach_reply
+        .send(Ok(stream_rx))
+        .expect("the shell is waiting for the attach");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    // One element holds the keyboard, so the terminal holding it means the start composer does not.
+    let terminal_focused = cx.update(|window, cx| {
+        let shell = rig.shell.read(cx);
+        let surface = &shell.terminal_views[terminal].surface;
+        surface.read(cx).focus_handle().is_focused(window)
+    });
+    assert!(
+        terminal_focused,
+        "the started session's terminal has the keyboard"
+    );
 }
 
 #[gpui::test]
@@ -1076,9 +1181,7 @@ fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
 }
 
 #[gpui::test]
-fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
-    cx: &mut TestAppContext,
-) {
+fn a_terminal_start_opens_the_session_with_its_terminal_focused(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
@@ -1100,23 +1203,7 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    let (canvas, work_panel, selected) = rig.shell.read_with(cx, |shell, _| {
-        (
-            shell.model.canvas(),
-            shell.model.region_visible(Region::WorkPanel),
-            shell
-                .model
-                .terminal_selection()
-                .selected("w1")
-                .map(str::to_owned),
-        )
-    });
-    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
-    assert!(work_panel, "the Work panel shows the agent's terminal");
-    assert_eq!(selected.as_deref(), Some(terminal));
-    let (attach, _attach_reply) =
-        attach_call(&mut rig._script).expect("the agent's terminal is attached");
-    assert_eq!(attach.terminal, terminal);
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
 }
 
 fn claude_with_modes() -> AgentKind {

@@ -31,6 +31,7 @@ use crate::model::home_start::{
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
+use crate::service::StoreUpdate;
 
 /// What the page draws, gathered by the shell for one frame.
 pub(super) struct HomeFrame {
@@ -385,13 +386,14 @@ impl Shell {
             kind_name: kind.name,
         });
         let options = self.chosen_options(&composer, &kind.id, cx);
+        let grid = self.start_grid(cx);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let answer = match choice {
                 ProjectChoice::NoProject => {
                     let params =
-                        no_project_start_params(&kind.id, &prompt, permission_mode, options);
+                        no_project_start_params(&kind.id, &prompt, permission_mode, options, grid);
                     service.agent_start(params).await
                 }
                 ProjectChoice::Project(project) => {
@@ -400,12 +402,16 @@ impl Shell {
                         .await
                     {
                         Ok(workspace) => {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.remember_chosen_kind(&workspace.id, &kind.id, cx);
+                            });
                             let params = home_start_params(
                                 &workspace.id,
                                 &kind.id,
                                 &prompt,
                                 permission_mode,
                                 options,
+                                grid,
                             );
                             service.agent_start(params).await
                         }
@@ -419,5 +425,20 @@ impl Shell {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Keeps the agent kind chosen for a workspace this app created, until its first session replaces its row (A97).
+    pub(super) fn remember_chosen_kind(
+        &mut self,
+        workspace: &str,
+        kind: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let update = StoreUpdate::WorkspaceKindChosen {
+            workspace: workspace.to_owned(),
+            kind: kind.to_owned(),
+        };
+        self.store
+            .update(cx, |store, cx| store.apply(vec![update], cx));
     }
 }

@@ -98,6 +98,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::AGENT_BUSY, "agent.busy"),
     (codes::AGENT_PROMPT_INVALID, "agent.prompt_invalid"),
     (codes::AGENT_RESUME_UNAVAILABLE, "agent.resume_unavailable"),
+    (codes::AGENT_RESUME_NOT_FOUND, "agent.resume_not_found"),
     (codes::AGENT_HOOK_REFUSED, "agent.hook_refused"),
     (codes::AGENT_DELEGATE_NEEDS_GIT, "agent.delegate_needs_git"),
     (codes::AGENT_DEPTH_EXCEEDED, "agent.depth_exceeded"),

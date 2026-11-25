@@ -62,6 +62,20 @@ pub struct SessionRow {
     pub children: Vec<SessionRow>,
 }
 
+/// A workspace with no session yet, drawn as one session row with the idle glyph until its first session replaces
+/// it (A97).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaceholderRow {
+    pub workspace_id: String,
+    /// The branch of the workspace's worktree, or the folder's name for a plain folder.
+    pub title: String,
+    /// The chosen agent's mark, else the configured default's, else `Agent::Unknown` (a neutral glyph).
+    pub agent: Agent,
+    pub branch: Option<String>,
+    /// The worktree's path, or the folder's path.
+    pub path: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkspaceRow {
     pub id: String,
@@ -79,6 +93,8 @@ pub struct HostGroup {
     pub workspaces: Vec<WorkspaceRow>,
     /// The top sessions the host runs, oldest first, each with its children below it (A97).
     pub sessions: Vec<SessionRow>,
+    /// The workspaces with no session yet, listed after the sessions where the first one will appear (A97).
+    pub placeholders: Vec<PlaceholderRow>,
 }
 
 /// A project is the top level of the Sidebar, with one host row per host (A10).
@@ -88,6 +104,8 @@ pub struct ProjectGroup {
     pub name: String,
     /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
     pub emoji: Option<String>,
+    /// The owner or org of the project's remote, drawn after its name (A10); None until the protocol carries one.
+    pub owner: Option<String>,
     pub hosts: Vec<HostGroup>,
 }
 
