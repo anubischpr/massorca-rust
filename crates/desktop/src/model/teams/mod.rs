@@ -10,6 +10,7 @@ mod filters;
 mod live;
 mod new_project;
 mod page;
+mod room;
 mod sample;
 mod sidebar;
 mod state;
@@ -26,6 +27,9 @@ pub use filters::{BoardFilterRow, ProjectFilter, board_filter_rows};
 pub use live::{agent_of_kind, live_teams};
 pub use new_project::{NewProject, ProjectDraft};
 pub use page::TeamPage;
+pub use room::{
+    EMPTY_ROOM, NO_BOTS, RoomLine, RoomTask, RoomView, Speaker, clock_text, receiver, room_view,
+};
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamRow, TeamsSidebar, teams_sidebar,

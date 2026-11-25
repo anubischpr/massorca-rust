@@ -3,6 +3,7 @@
 mod access;
 mod board;
 mod card_menu;
+mod conference;
 mod dialogs;
 mod files;
 mod filters;
@@ -33,6 +34,7 @@ use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
 
 pub(super) use board::{board_columns, board_page};
 pub(super) use card_menu::OpenTeamMenu;
+pub(super) use conference::{RoomFrame, RoomPage, conference_page};
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
 pub(super) use files::files_page;
 pub(super) use filters::OpenFilterMenu;
