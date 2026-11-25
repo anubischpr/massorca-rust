@@ -450,7 +450,7 @@ async fn an_agent_session_that_exits_is_ended_and_starts_again_in_its_workspace(
 
     // The fake kind declares no resume form, so the refusal carries a code the desktop reads as a missing conversation.
     let refusal = handle
-        .agent_resume(&session.id, None)
+        .agent_resume(&session.id, None, None)
         .await
         .expect_err("a kind without a resume form does not resume");
     assert_eq!(refusal.code(), Some(codes::AGENT_RESUME_UNAVAILABLE));

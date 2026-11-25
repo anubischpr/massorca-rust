@@ -428,9 +428,13 @@ fn new_surface(
     cx.new(|cx| {
         let (typing, typed_into) = (service.clone(), terminal.clone());
         let (sizing, sized) = (service, terminal);
+        let noting = shell.clone();
         let surface = TerminalSurface::new(NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS, cx)
             .on_input(move |bytes, _, _| typing.send_terminal_input(&typed_into, bytes.to_vec()))
             .on_resize(move |cols, rows, _, cx| {
+                let _ = noting.update(cx, |shell, cx| {
+                    shell.note_terminal_grid(&sized, cols, rows, cx);
+                });
                 let (service, terminal) = (sizing.clone(), sized.clone());
                 cx.spawn(async move |_| {
                     let _ = service.resize_terminal(&terminal, cols, rows).await;

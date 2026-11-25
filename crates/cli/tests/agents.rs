@@ -492,10 +492,20 @@ fn a_session_without_a_project_runs_in_its_own_folder_of_the_conversations_folde
     let listed = sandbox.json_ok("default", &["agent", "list"]);
     assert_eq!(listed["sessions"][0]["id"], session.as_str());
     sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
-    let resumed = sandbox.json_ok("default", &["agent", "resume", &session]);
+    // Resumed at the size of the view that will show it.
+    let resumed = sandbox.json_ok(
+        "default",
+        &["agent", "resume", &session, "--cols", "150", "--rows", "60"],
+    );
     assert_eq!(resumed["id"], session.as_str());
     assert_eq!(resumed["workspace_id"], workspace_id.as_str());
     assert_eq!(resumed["execution"]["state"], "live");
+    let shown = sandbox.json_ok(
+        "default",
+        &["terminal", "show", text(&resumed, "terminal_id")],
+    );
+    assert_eq!(shown["cols"], 150, "{shown}");
+    assert_eq!(shown["rows"], 60, "{shown}");
     assert_eq!(canonical_folder_of(&sandbox, &workspace_id), folder);
 }
 
