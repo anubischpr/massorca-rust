@@ -133,6 +133,7 @@ machine.
 | `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
 | `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
 | `agent accounts check <KIND> [<ACCOUNT>]` | Runs the kind's check on an account, or on the active one, and prints its state. |
+| `agent title --kind <KIND> --prompt TEXT [--reply TEXT] [--model MODEL] [--account ACCOUNT]` | Names a chat from its first prompt and reply by one run of the kind's one-shot form, with the account's home: `--account`, else the kind's active account. Prints the slug alone (`--json`: `{ slug }`): at most four lowercase words joined by `-`, at most 48 characters of `a-z`, `0-9` and `-`, accents folded (`canción` is `cancion`). Refused with `agent.oneshot_unsupported` for a kind with no one-shot form, `agent.credentials_invalid` with no usable account, `agent.oneshot_timeout` after 30 seconds and `agent.oneshot_failed` when the run fails or names no usable title. Below host-admin only the kind's active account may be named (`permission.denied` otherwise). The title is English ASCII, whatever the chat's language. Needs a service that offers `agent-title/1` (decision 0167). |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
 which must be an absolute path.

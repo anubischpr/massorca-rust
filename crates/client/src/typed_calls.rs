@@ -12,7 +12,8 @@ use massorca_protocol::methods::agents::{
     AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
     AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
     CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    CredentialsShown, GenerateTitleParams, GenerateTitleResult, ImportCandidates,
+    ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
@@ -651,6 +652,15 @@ impl Client {
         params: &AccountsCheckParams,
     ) -> Result<AccountSummary, ClientError> {
         self.call(agents::ACCOUNTS_CHECK, params).await
+    }
+
+    /// `agent.generate_title`: names a chat from its first prompt and reply, by one run of the kind's one-shot form
+    /// (capability `agent-title/1`, decision 0167).
+    pub async fn agent_generate_title(
+        &self,
+        params: &GenerateTitleParams,
+    ) -> Result<GenerateTitleResult, ClientError> {
+        self.call(agents::GENERATE_TITLE, params).await
     }
 }
 

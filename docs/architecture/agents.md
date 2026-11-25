@@ -255,6 +255,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
+| `agent.generate_title` | workspace | `kind`, `prompt`, `reply?`, `model?`, `account?` | `{ slug }`, capability `agent-title/1` (decision 0167) |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -1026,6 +1027,47 @@ first 100000 characters, and the rest was searched for the variables above, not 
 Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
 may still see a set but empty variable; and the list covers the variables named in the documents read,
 not every variable a future Claude release may read.
+
+## Chat titles by a one-shot run (decision 0167)
+
+A kind may declare a non-interactive form that names a chat from its first prompt and reply:
+
+```json
+"oneshot": {
+  "args": ["-p", "{prompt}", "--output-format", "text"],
+  "model_flag_reuse": true,
+  "optional_args": [{ "flag": "--max-turns", "values": ["1"] }, { "flag": "--strict-mcp-config" }]
+}
+```
+
+- `args` holds `{prompt}` exactly once; the prompt is one argument of the run, never a shell line. `model_flag_reuse`
+  passes the kind's `model` arguments to the run when a model is named; without it the model is ignored. Only Claude
+  declares it: the other built-in kinds have no non-interactive form that was confirmed.
+- `optional_args` are passed after `args` only when the program's `--help` lists their flag as a whole word. The listing
+  is the instruction channel's cached probe output (`instructions::probe_run`), so `--help` runs once per program; without
+  a listing none is passed. Claude lists the restrictions that stop tool use in its print mode: one turn, the permission
+  mode `default`, no MCP servers beyond an empty `--mcp-config`, the built-in tools denied through one comma-separated
+  `--disallowedTools` argument, `--tools ""` and `--no-session-persistence`. Hooks in the account's settings still load.
+- The request asks for an English ASCII title of two to four words, whatever the language of the chat, and is one line:
+  every line break and run of whitespace becomes one space (a Windows `.cmd` launcher refuses an argument with a line
+  break). A leading label such as `Title:` or `Título:` is removed before the slug is made (`title.rs`).
+- Below host-admin a caller may name only the kind's active account; another account is refused with
+  `permission.denied`. The method takes no project, so a project's own choice is not reachable through it.
+- `agent.generate_title` (capability `agent-title/1`, `massorca agent title`) runs the kind's startable program once.
+  The account is the one named, else the kind's active one; no usable account is `agent.credentials_invalid`. Its home
+  is read under the same gate as an account check, with the state file repaired first (decision 0099).
+- The run's environment removes the kind's `strip_inherited_env`, its credential and account `strip_env` lists, and the
+  three run identity variables (`MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`). It installs no
+  status hooks and writes no session row, terminal or transcript of MassOrca's. Its working folder is a fresh folder
+  under the profile's `tmp` folder, outside every workspace, removed when the run ends.
+- The run has 30 seconds (`MASSORCA_TITLE_TIMEOUT_MS` shortens it for tests, down to 100 ms). Past that its process tree
+  is stopped and the call fails with `agent.oneshot_timeout`.
+- The reply's first line that holds a usable word becomes the slug: accents folded (`canción` is `cancion`), every other
+  character a separator, at most four words joined by `-`, at most 48 characters. A reply with no usable word, a
+  non-zero exit or a missing program fails with `agent.oneshot_failed`; a kind with no one-shot form fails with
+  `agent.oneshot_unsupported`. A reply is never logged; the error names the kind and the cause only.
+- Open: Claude's print mode may keep its own transcript under the account home. `--no-session-persistence` would stop
+  that, but it is not declared because it cannot be checked here without running the real CLI.
 
 ## Follow-ups
 
