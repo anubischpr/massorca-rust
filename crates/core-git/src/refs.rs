@@ -35,6 +35,34 @@ impl Git {
         Ok(false)
     }
 
+    /// The branch part of every `refs/remotes/<remote>/<branch>` of a remote configured in `repo`, the
+    /// `<remote>/HEAD` pointers left out. Each remote name is matched whole, as in `remote_branch_exists`.
+    pub fn remote_branch_names(&self, repo: &Path) -> Result<Vec<String>, GitError> {
+        let remotes = self.run(Some(repo), ["remote"])?;
+        remotes.require_success()?;
+        let prefixes: Vec<String> = remotes
+            .text()?
+            .lines()
+            .map(|remote| format!("refs/remotes/{remote}/"))
+            .collect();
+        let captured = self.run(
+            Some(repo),
+            ["for-each-ref", "--format=%(refname)", "refs/remotes"],
+        )?;
+        captured.require_success()?;
+        Ok(captured
+            .text()?
+            .lines()
+            .flat_map(|reference| {
+                prefixes
+                    .iter()
+                    .filter_map(move |prefix| reference.strip_prefix(prefix.as_str()))
+            })
+            .filter(|branch| *branch != "HEAD")
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// Whether `rev` resolves to a commit in `repo`.
     pub fn ref_exists(&self, repo: &Path, rev: &str) -> Result<bool, GitError> {
         // No ref starts with a dash, and a leading one would be read as an option.

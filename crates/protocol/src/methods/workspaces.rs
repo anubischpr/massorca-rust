@@ -59,6 +59,10 @@ pub struct WorkspaceCreateParams {
     /// Does not run the project's setup script in the new worktree (decision 0086).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_setup: bool,
+    /// A taken typed name, branch or folder moves on to `name-2` .. `name-100` instead of being refused; the result
+    /// carries the name used. Only for a service-derived branch and folder (`workspace-unique-name/1`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unique_name: bool,
 }
 
 /// Params of `workspace.list`.

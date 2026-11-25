@@ -133,6 +133,7 @@ async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
             },
         )
         .await

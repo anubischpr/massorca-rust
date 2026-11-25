@@ -553,6 +553,7 @@ impl Agents {
                 path: None,
                 request_id: request_key.clone(),
                 no_setup: false,
+                unique_name: false,
             })
         };
         if let Some(name) = name {
@@ -1236,6 +1237,7 @@ then report"
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
             })
             .unwrap();
         let parent = session_row(&lead.id, None);

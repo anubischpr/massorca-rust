@@ -208,6 +208,7 @@ pub fn create_params(
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
     }
 }
 

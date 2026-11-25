@@ -22,3 +22,4 @@ mod removal_edges;
 mod remove;
 mod rollback;
 mod selectors;
+mod unique_names;

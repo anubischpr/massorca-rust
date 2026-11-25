@@ -240,6 +240,32 @@ fn refresh_base_starts_the_workspace_from_the_remote_branch() {
 }
 
 #[test]
+fn unique_moves_a_taken_name_on_and_prints_the_name_it_used() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    sandbox.json_ok("default", &["workspace", "create", "repo", "explore"]);
+    sandbox
+        .run("default", &["workspace", "create", "repo", "explore"])
+        .failure()
+        .stderr(contains("workspace.name_taken"));
+
+    let unique = sandbox.json_ok(
+        "default",
+        &["workspace", "create", "repo", "explore", "--unique"],
+    );
+    assert_eq!(unique["name"], "explore-2");
+    assert_eq!(unique["branch"], "explore-2");
+
+    sandbox
+        .run(
+            "default",
+            &["workspace", "create", "repo", "explore", "--unique"],
+        )
+        .success()
+        .stdout(contains("explore-3"));
+}
+
+#[test]
 fn a_repeated_request_id_returns_the_first_workspace() {
     let sandbox = Sandbox::new();
     add_repo_project(&sandbox);
