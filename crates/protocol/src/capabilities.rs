@@ -47,6 +47,8 @@ pub const AGENT_CHAT: &str = "agent-chat/1";
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
 pub const GIT: &str = "git/1";
+/// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
+pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
