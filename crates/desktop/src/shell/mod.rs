@@ -229,6 +229,12 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The menu of a memory entry's More button, if one is open (screen 4.8).
+    memory_menu: Option<teams::OpenMemoryMenu>,
+    /// The team pill's switch menu, while it is open.
+    team_switch: Option<teams::OpenTeamSwitch>,
+    /// The Conference room's composer, receivers and refusals (decision 0102).
+    room_page: teams::RoomPage,
     /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
     filter_menu: Option<teams::OpenFilterMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
@@ -571,6 +577,9 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            memory_menu: None,
+            team_switch: None,
+            room_page: teams::RoomPage::default(),
             filter_menu: None,
             vault_dialog: None,
             vault_remove: None,
@@ -823,6 +832,7 @@ impl Render for Shell {
         .flatten();
         let session = self.session_frame(cx);
         let remote_session = self.remote_session_frame(cx);
+        let room = self.room_frame(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
             .store
@@ -906,6 +916,7 @@ impl Render for Shell {
                 pairing,
                 session,
                 remote_session,
+                room,
             },
             self.conversation_size.clone(),
             window,
@@ -1028,6 +1039,19 @@ impl Render for Shell {
             .team_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let team_switch = self
+            .team_switch
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let memory_menu = self
+            .memory_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let receiver_menu = self
+            .room_page
+            .receiver_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let filter_menu = self
             .filter_menu
             .as_ref()
@@ -1117,6 +1141,9 @@ impl Render for Shell {
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(team_switch, |el, menu| el.child(menu))
+            .when_some(memory_menu, |el, menu| el.child(menu))
+            .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
