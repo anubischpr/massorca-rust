@@ -55,6 +55,15 @@ impl Workspaces {
                 format!("{} is already a project", root.display()),
             ));
         }
+        if self.store.find_conversations_project(&path_key)?.is_some() {
+            return Err(DomainError::new(
+                codes::PROJECT_EXISTS,
+                format!(
+                    "{} is the folder conversations without a project are saved in",
+                    root.display()
+                ),
+            ));
+        }
         if self.store.find_project_by_name(&name)?.is_some() {
             return Err(DomainError::new(
                 codes::PROJECT_EXISTS,

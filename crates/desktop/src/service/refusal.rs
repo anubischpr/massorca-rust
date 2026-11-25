@@ -108,6 +108,11 @@ impl From<&ClientError> for Refusal {
             ClientError::InvalidHostName(_) => host_failure(HOST_INVALID_NAME, error),
             ClientError::HostUnreadable { .. } => host_failure(HOST_UNREADABLE, error),
             ClientError::HostsBusy(_) => host_failure(HOST_BUSY, error),
+            // The service predates what the request needs (decision 0092): nothing was sent, and the CLI's code says so.
+            ClientError::CapabilityMissing { .. } => Self::Failed {
+                code: "service.capability_missing".to_owned(),
+                message: sentence(&error.to_string()),
+            },
             ClientError::Protocol(_) | ClientError::Io(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
