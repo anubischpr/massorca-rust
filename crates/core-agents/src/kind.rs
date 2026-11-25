@@ -73,6 +73,46 @@ pub struct KindDecl {
     /// 0160); such a run that exits with a failure leaves the session unable to resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_not_found_pattern: Option<String>,
+    /// How a run of the kind receives MassOrca's per-launch instructions (decision 0161). Absent means the kind gets no
+    /// text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<InstructionsDecl>,
+}
+
+/// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
+pub const TEXT_PLACEHOLDER: &str = "{text}";
+
+/// A kind's channel for MassOrca's per-launch instructions (decision 0161): launch arguments with [`TEXT_PLACEHOLDER`]
+/// exactly once, as `["--append-system-prompt", "{text}"]`. The text is passed on a run's own command line only, never
+/// written into the vendor's configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionsDecl {
+    pub args: Vec<String>,
+    /// How to tell whether the kind's CLI takes the channel. Absent means it always does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_when: Option<SupportProbe>,
+}
+
+/// A support check of an instruction channel (decision 0161): the kind's program run with `args`, which supports the
+/// channel when it exits 0 and its output contains `contains`. It runs without an account home and with the run's
+/// stripped names removed, once per installed program.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupportProbe {
+    pub args: Vec<String>,
+    pub contains: String,
+}
+
+impl InstructionsDecl {
+    /// The launch arguments that carry `text`.
+    #[must_use]
+    pub fn args_with(&self, text: &str) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|arg| arg.replace(TEXT_PLACEHOLDER, text))
+            .collect()
+    }
 }
 
 /// Where a kind's CLI keeps one conversation per agent ref (decision 0160). The folder is the run's account home when it
@@ -616,7 +656,44 @@ impl KindDecl {
         self.effort_problems(&mut problems);
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
+        self.instructions_problems(&mut problems);
         problems
+    }
+
+    /// `instructions.args` holds [`TEXT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
+    /// placeholder (decision 0161).
+    fn instructions_problems(&self, problems: &mut Vec<String>) {
+        let Some(instructions) = &self.instructions else {
+            return;
+        };
+        let placeholders: usize = instructions
+            .args
+            .iter()
+            .map(|arg| arg.matches(TEXT_PLACEHOLDER).count())
+            .sum();
+        if placeholders != 1 {
+            problems.push(format!(
+                "instructions.args must hold {TEXT_PLACEHOLDER} exactly once, not {placeholders} times"
+            ));
+        }
+        if instructions
+            .args
+            .iter()
+            .any(|arg| arg.replace(TEXT_PLACEHOLDER, "").contains(['{', '}']))
+        {
+            problems.push(format!(
+                "instructions.args may use {TEXT_PLACEHOLDER} as its only placeholder"
+            ));
+        }
+        if let Some(probe) = &instructions.supported_when {
+            if probe.args.is_empty() {
+                problems.push("instructions.supported_when.args must not be empty".to_owned());
+            }
+            no_placeholder("instructions.supported_when.args", &probe.args, problems);
+            if probe.contains.trim().is_empty() {
+                problems.push("instructions.supported_when.contains must not be empty".to_owned());
+            }
+        }
     }
 
     /// `strip_inherited_env` lists variable names, each once (without case, as Windows compares them).
@@ -1504,6 +1581,60 @@ mod tests {
             value["resume_not_found_pattern"] = serde_json::json!("No conversation found");
         });
         assert!(clean.is_empty(), "{clean:?}");
+    }
+
+    #[test]
+    fn the_instructions_channel_holds_the_text_placeholder_once_and_no_other() {
+        for (args, expected) in [
+            (serde_json::json!(["--append"]), "exactly once, not 0 times"),
+            (
+                serde_json::json!(["--a", "{text}", "--b", "{text}"]),
+                "exactly once, not 2 times",
+            ),
+            (
+                serde_json::json!(["--a", "{text}", "{ref}"]),
+                "as its only placeholder",
+            ),
+        ] {
+            let problems = problems_of(|value| {
+                value["instructions"] = serde_json::json!({ "args": args.clone() });
+            });
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let probe = problems_of(|value| {
+            value["instructions"] = serde_json::json!({
+                "args": ["--a", "{text}"],
+                "supported_when": { "args": [], "contains": " " }
+            });
+        });
+        for expected in [
+            "supported_when.args must not be empty",
+            "supported_when.contains must not be empty",
+        ] {
+            assert!(
+                probe.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {probe:?}"
+            );
+        }
+        let clean = problems_of(|value| {
+            value["instructions"] = serde_json::json!({
+                "args": ["--append-system-prompt", "{text}"],
+                "supported_when": { "args": ["--help"], "contains": "--append-system-prompt" }
+            });
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+        let decl = parse({
+            let mut value = minimal();
+            value["instructions"] = serde_json::json!({ "args": ["--note={text}"] });
+            value
+        });
+        assert_eq!(
+            decl.instructions.expect("declared").args_with("hello"),
+            ["--note=hello"]
+        );
     }
 
     #[test]

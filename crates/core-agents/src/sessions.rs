@@ -29,14 +29,16 @@ use massorca_protocol::methods::agents::{
     AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
     PromptReceipt, ReceiptKind, ResumeState,
 };
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceState};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
+use crate::instructions::{self, DELEGATION_INSTRUCTIONS};
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::modes;
@@ -50,8 +52,13 @@ use crate::resolve::{SearchEnv, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
+mod chat;
 mod delegation;
 mod queue;
+
+pub use chat::ChatOpened;
+use chat::{ChatRun, RunStart, Started};
+use delegation::DelegationView;
 
 pub use delegation::{
     DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING,
@@ -104,6 +111,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
+    /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
+    /// of the session do.
+    Chat(Box<crate::chat::ChatChanged>),
 }
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
@@ -285,6 +295,13 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
+    /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
+    /// are held.
+    chat_runs: Mutex<HashMap<String, Arc<ChatRun>>>,
+    /// The journal writers of chat sessions, by session. Every journal change and every read that must line up with the
+    /// stream (a snapshot or a replay) holds it, so a stream knows which batches its first event already covers. Taken
+    /// after the status lock when both are held.
+    journals: Mutex<HashMap<String, crate::chat::journal::JournalState>>,
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
@@ -367,6 +384,8 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
+                chat_runs: Mutex::new(HashMap::new()),
+                journals: Mutex::new(HashMap::new()),
                 sign_in_timeout: crate::sign_in::sign_in_timeout_from(
                     std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
                         .ok()
@@ -463,6 +482,11 @@ impl Agents {
         params: AgentStartParams,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        // A test service may start a fake kind as a chat run (decision 0101); a release build never does.
+        #[cfg(feature = "test-hooks")]
+        if crate::chat::is_test_chat_kind(&params.kind) {
+            return self.start_chat(params, grant, Box::new(crate::chat::TestAdapter::default()));
+        }
         self.start_session(params, None, grant)
     }
 
@@ -528,6 +552,19 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        self.start_session_as(params, parent, grant, RunStart::Terminal)
+    }
+
+    /// [`Self::start_session`], with the run in a terminal or as a chat (decision 0101). A chat's first prompt goes to
+    /// its standard input once the session exists, never to its arguments.
+    fn start_session_as(
+        &self,
+        params: AgentStartParams,
+        parent: Option<&AgentSessionRow>,
+        grant: SecretGrant,
+        run: RunStart,
+    ) -> Result<AgentSession, AgentError> {
+        let chat = matches!(run, RunStart::Chat(_));
         let parent_holds = parent.is_some_and(|parent| parent.holds_secrets);
         let parent_id = parent.map(|parent| parent.id.clone());
         let _gate = lock(&self.inner.start_gate);
@@ -552,7 +589,7 @@ impl Agents {
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
-            if decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
+            if !chat && decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
                 return Err(AgentError::new(
                     codes::AGENT_PROMPT_INVALID,
                     format!(
@@ -576,9 +613,16 @@ impl Agents {
                 (workspace, Some(made))
             }
         };
+        // A delegated child in a plain folder writes beside its delegation tree, which counts as one writer (decision 0161).
+        let group = match parent {
+            Some(parent) if workspace.kind == WorkspaceKind::Folder => {
+                Some(self.tree_root_of(parent)?)
+            }
+            _ => None,
+        };
         if !params.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -587,6 +631,14 @@ impl Agents {
             error.data = Some(json!({ "session": holder }));
             return Err(error);
         }
+        // The run is told how to delegate only when it may (decision 0161).
+        let depth = match parent {
+            Some(parent) => self.delegation_depth_of(parent)? + 1,
+            None => 0,
+        };
+        let (instructions, instructions_withheld) =
+            self.instructions_for(&decl, &program, depth)?;
+        let inherited_path = std::env::var("PATH").ok();
 
         // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
         let provided = self.provided_env(&workspace.project_id, grant)?;
@@ -602,7 +654,7 @@ impl Agents {
             session_id: &session_id,
             token: &token,
             run: Run::First {
-                prompt: params.prompt.as_deref(),
+                prompt: params.prompt.as_deref().filter(|_| !chat),
                 new_ref: &new_ref,
             },
             profile_dir: self.profile_dir(),
@@ -613,12 +665,15 @@ impl Agents {
             provided_env: &provided,
             holds_secrets,
             caller_env: &params.env,
+            instructions,
+            inherited_path: inherited_path.as_deref(),
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
         // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
             .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
@@ -627,32 +682,41 @@ impl Agents {
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
-        live.insert(
-            session_id.clone(),
-            LiveRun {
-                token,
-                rules: HookRules::of(&decl),
-                prompt: PromptRules::of(&decl),
-                pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
-                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
-                typed_since_report: false,
-                switching: false,
-                delivering: false,
-                account: access.account.clone(),
-            },
-        );
+        // A chat run reports through its journal, not hooks, and takes prompts on standard input (decision 0101).
+        if !chat {
+            live.insert(
+                session_id.clone(),
+                LiveRun {
+                    token,
+                    rules: HookRules::of(&decl),
+                    prompt: PromptRules::of(&decl),
+                    pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
+                    pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
+                    typed_since_report: false,
+                    switching: false,
+                    delivering: false,
+                    account: access.account.clone(),
+                },
+            );
+        }
         let agent_ref = plan.agent_ref.clone();
         let size = PtySize {
             cols: params.cols.unwrap_or(DEFAULT_COLS),
             rows: params.rows.unwrap_or(DEFAULT_ROWS),
         };
         let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
-        let terminal_id = self
-            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
-            .inspect_err(|_| {
-                live.remove(&session_id);
-                remove_dir(&run_dir);
-            })?;
+        let started = match run {
+            RunStart::Terminal => self
+                .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+                .map(Started::Terminal),
+            RunStart::Chat(adapter) => self
+                .spawn_chat_run(&session_id, plan, &workspace.id, &workspace.path, adapter)
+                .map(Started::Chat),
+        }
+        .inspect_err(|_| {
+            live.remove(&session_id);
+            remove_dir(&run_dir);
+        })?;
         crash_point("agent-start-spawned");
 
         let row = AgentSessionRow {
@@ -663,7 +727,10 @@ impl Agents {
             title: params.title,
             read_only: params.read_only,
             agent_ref,
-            terminal_id: Some(terminal_id.clone()),
+            terminal_id: match &started {
+                Started::Terminal(terminal_id) => Some(terminal_id.clone()),
+                Started::Chat(_) => None,
+            },
             request_id: params.request_id,
             created_at: now_ms(),
             exit: None,
@@ -676,11 +743,22 @@ impl Agents {
             retained: false,
             released_at: None,
         };
-        if let Err(error) = self.store().insert_agent_session(&row) {
+        let inserted = match &started {
+            Started::Terminal(_) => self.store().insert_agent_session(&row),
+            Started::Chat(chat_run) => self
+                .store()
+                .insert_chat_agent_session(&row, &chat_run.run_id),
+        };
+        if let Err(error) = inserted {
             live.remove(&session_id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
             drop(live);
-            let _ = self.inner.config.terminals.close(&terminal_id);
+            match &started {
+                Started::Terminal(terminal_id) => {
+                    let _ = self.inner.config.terminals.close(terminal_id);
+                }
+                Started::Chat(chat_run) => self.abandon_chat_run(&session_id, chat_run),
+            }
             remove_dir(&run_dir);
             return Err(error.into());
         }
@@ -689,8 +767,34 @@ impl Agents {
         if let Some(made) = made.as_mut() {
             made.keep();
         }
-        let mut session = self.view_with(&mut live, row)?;
-        self.notify(Change::Updated(Box::new(session.clone())));
+        let viewed = self.view_with(&mut live, row);
+        if let Ok(session) = &viewed {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        drop(live);
+        // Later starts need neither gate: a chat's first message is handed on outside them.
+        drop((_gate, gate));
+        let begun = match (&started, &viewed) {
+            // Its journal opens, its output is read and its first prompt is sent only now that its row exists.
+            (Started::Chat(chat_run), Ok(_)) => {
+                self.begin_chat(&session_id, chat_run, params.prompt.as_deref())
+            }
+            _ => Ok(()),
+        };
+        let mut session = match viewed.and_then(|session| begun.map(|()| session)) {
+            Ok(session) => session,
+            Err(mut error) => {
+                // A chat run whose start failed after its row exists is ended, so no program outlives the call; the
+                // error names the session it leaves, ended.
+                if let Started::Chat(chat_run) = &started {
+                    self.abandon_chat_run(&session_id, chat_run);
+                    error
+                        .data
+                        .get_or_insert_with(|| json!({ "session": session_id }));
+                }
+                return Err(error);
+            }
+        };
         session.secrets_withheld = withheld(grant);
         Ok(session)
     }
@@ -724,6 +828,16 @@ impl Agents {
     ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
+        // A chat session resumes as a chat (decision 0101, D9), which lands with chat starts; never as a terminal run.
+        if self.run_type_of(&row.id)? == RunType::Chat {
+            return Err(AgentError::new(
+                codes::AGENT_CHAT_UNSUPPORTED,
+                format!(
+                    "session {} is a chat, and chat sessions cannot be resumed yet",
+                    row.id
+                ),
+            ));
+        }
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
             return Err(AgentError::new(
                 codes::AGENT_BUSY,
@@ -788,9 +902,15 @@ impl Agents {
                 format!("the workspace directory is missing: {}", workspace.path),
             ));
         }
+        // In a plain folder the session's delegation tree counts as one writer (decision 0161).
+        let group = if workspace.kind == WorkspaceKind::Folder {
+            Some(self.tree_root_of(&row)?)
+        } else {
+            None
+        };
         if !row.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -800,6 +920,10 @@ impl Agents {
             return Err(error);
         }
 
+        let depth = self.delegation_depth_of(&row)?;
+        let (instructions, instructions_withheld) =
+            self.instructions_for(&decl, &program, depth)?;
+        let inherited_path = std::env::var("PATH").ok();
         // Before the homes gate and the status lock, as in `start`.
         let provided = self.provided_env(&workspace.project_id, grant)?;
         let parent_holds = match &row.parent_id {
@@ -834,10 +958,13 @@ impl Agents {
             provided_env: &provided,
             holds_secrets,
             caller_env: &no_env,
+            instructions,
+            inherited_path: inherited_path.as_deref(),
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
+        instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1400,6 +1527,9 @@ impl Agents {
         let row = self.reload(id)?;
         // The person's stop pauses the queue before the run is killed, so a grace-period idle cannot deliver (decision 0084, D5).
         self.pause_queue_stopped(&row.id);
+        if row.exit.is_none() && row.terminal_id.is_none() {
+            self.stop_chat_run(&row.id, force);
+        }
         if row.exit.is_none()
             && let Some(terminal) = &row.terminal_id
         {
@@ -1434,6 +1564,7 @@ impl Agents {
         }
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
+        self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
         drop(live);
@@ -1684,9 +1815,38 @@ impl Agents {
     }
 
     /// The live writing session of a workspace, if any.
-    fn live_writer(&self, workspace_id: &str) -> Result<Option<String>, AgentError> {
+    /// The instructions a run of `decl` at `depth` gets, and the note its session records when its CLI fails the
+    /// channel's support probe (decision 0161). None while the session may not delegate, or the kind has no channel.
+    fn instructions_for(
+        &self,
+        decl: &KindDecl,
+        program: &Path,
+        depth: i64,
+    ) -> Result<(Option<&'static str>, Option<String>), AgentError> {
+        if decl.instructions.is_none() || !self.may_delegate_at(depth)? {
+            return Ok((None, None));
+        }
+        Ok(if instructions::channel_supported(decl, program) {
+            (Some(DELEGATION_INSTRUCTIONS), None)
+        } else {
+            (None, Some(instructions::withheld_note(decl)))
+        })
+    }
+
+    /// A session whose run writes in the workspace now, outside the delegation tree rooted at `group` when one is given
+    /// (decision 0161).
+    fn live_writer(
+        &self,
+        workspace_id: &str,
+        group: Option<&str>,
+    ) -> Result<Option<String>, AgentError> {
         for row in self.store().list_agent_sessions(Some(workspace_id))? {
             if row.read_only {
+                continue;
+            }
+            if let Some(root) = group
+                && self.tree_root_of(&row)? == root
+            {
                 continue;
             }
             let session = self.view(row)?;
@@ -1751,11 +1911,17 @@ impl Agents {
         mut row: AgentSessionRow,
         catalog: Option<&Catalog>,
     ) -> Result<AgentSession, AgentError> {
+        // Only a session without a terminal can be a chat; the store says which (decision 0101).
+        let run = match &row.terminal_id {
+            Some(_) => RunType::Terminal,
+            None => self.run_type_of(&row.id)?,
+        };
         let execution = match (&row.exit, &row.terminal_id) {
             (Some(exit), _) => {
                 live.remove(&row.id);
                 exited(exit)
             }
+            (None, None) if run == RunType::Chat => self.chat_execution(live, &mut row)?,
             (None, None) => Execution {
                 state: TerminalState::Exited,
                 exit: None,
@@ -1779,7 +1945,8 @@ impl Agents {
             }
         };
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
-        Ok(record(row, execution, resume))
+        let placement = self.delegation_view(&row);
+        Ok(record(row, execution, resume, placement, run))
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -1826,9 +1993,26 @@ impl Agents {
         terminal: &str,
         exit: RunExit,
     ) -> Result<Execution, AgentError> {
-        let changed = self
-            .store()
-            .set_agent_session_exit(&row.id, terminal, &exit)?;
+        self.record_run_exit(live, row, RunRef::Terminal(terminal), exit)
+    }
+
+    /// [`Self::record_exit`] for a run in a terminal or a chat run (decision 0101): the same rules, with the end recorded
+    /// only while the row still names that run.
+    fn record_run_exit(
+        &self,
+        live: &mut LiveRuns,
+        row: &mut AgentSessionRow,
+        run: RunRef<'_>,
+        exit: RunExit,
+    ) -> Result<Execution, AgentError> {
+        let changed = match run {
+            RunRef::Terminal(terminal) => self
+                .store()
+                .set_agent_session_exit(&row.id, terminal, &exit)?,
+            RunRef::Chat(run_id) => self
+                .store()
+                .set_agent_session_chat_exit(&row.id, run_id, &exit)?,
+        };
         let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
         if let Some(catalog) = &catalog {
             live.remove(&row.id);
@@ -1847,7 +2031,10 @@ impl Agents {
                 &paths::run_dir(self.profile_dir(), &row.id),
                 catalog.find(&row.kind).and_then(|entry| entry.valid()),
                 facts,
-                || self.inner.config.terminals.text(terminal).ok(),
+                || match run {
+                    RunRef::Terminal(terminal) => self.inner.config.terminals.text(terminal).ok(),
+                    RunRef::Chat(_) => self.chat_output(&row.id),
+                },
             );
             if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
                 self.store().set_agent_session_status(
@@ -1863,18 +2050,38 @@ impl Agents {
         row.exit = Some(exit);
         if let Some(catalog) = &catalog {
             let resume = self.resume_of(row, true, Some(catalog));
+            let placement = self.delegation_view(row);
+            let run_type = match run {
+                RunRef::Terminal(_) => RunType::Terminal,
+                RunRef::Chat(_) => RunType::Chat,
+            };
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
                 resume,
+                placement,
+                run_type,
             ))));
         }
         Ok(execution)
     }
 }
 
-/// The wire record of a row with its execution.
-fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> AgentSession {
+/// The run an end belongs to: the terminal of a terminal run, or the id of a chat run (decision 0101).
+#[derive(Debug, Clone, Copy)]
+enum RunRef<'a> {
+    Terminal(&'a str),
+    Chat(&'a str),
+}
+
+/// The wire record of a row with its execution, its resume state and what it may delegate.
+fn record(
+    row: AgentSessionRow,
+    execution: Execution,
+    resume: ResumeState,
+    placement: DelegationView,
+    run: RunType,
+) -> AgentSession {
     AgentSession {
         id: row.id,
         kind: row.kind,
@@ -1885,6 +2092,7 @@ fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> Ag
         brought_back_at_ms: row.brought_back_at,
         agent_ref: row.agent_ref,
         terminal_id: row.terminal_id,
+        run,
         created_at_ms: row.created_at,
         execution,
         activity: row.activity.as_ref().and_then(activity_of),
@@ -1898,6 +2106,8 @@ fn record(row: AgentSessionRow, execution: Execution, resume: ResumeState) -> Ag
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
         resume: Some(resume),
+        delegation: placement.options,
+        notes: placement.notes,
     }
 }
 

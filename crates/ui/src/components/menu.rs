@@ -5,6 +5,7 @@
 //! focus to the opener. Items do not take focus one by one; the panel does.
 
 use crate::a11y::{self, framed};
+use crate::components::badge::Badge;
 use crate::components::kbd::Kbd;
 use crate::components::popover::{OverlayLayer, fade_in, overlay_surface};
 use crate::icon::{Icon, IconName, IconSize};
@@ -52,6 +53,8 @@ pub struct MenuItem {
     shortcut: Option<SharedString>,
     disabled_reason: Option<SharedString>,
     secondary: Option<SharedString>,
+    tag: Option<SharedString>,
+    warning: bool,
     checked: Option<bool>,
     destructive: bool,
     submenu: Option<Vec<MenuEntry>>,
@@ -66,10 +69,34 @@ impl MenuItem {
             shortcut: None,
             disabled_reason: None,
             secondary: None,
+            tag: None,
+            warning: false,
             checked: None,
             destructive: false,
             submenu: None,
         }
+    }
+
+    /// A small tag after the label, such as "Default".
+    pub fn tag(mut self, tag: impl Into<SharedString>) -> Self {
+        self.tag = Some(tag.into());
+        self
+    }
+
+    /// Draws the icon in the warning colour: a mode that lifts the vendor's permission prompts.
+    pub fn warning(mut self) -> Self {
+        self.warning = true;
+        self
+    }
+
+    /// The tag after the label, if the row has one.
+    pub fn tag_text(&self) -> Option<&SharedString> {
+        self.tag.as_ref()
+    }
+
+    /// Whether the icon takes the warning colour.
+    pub fn is_warning(&self) -> bool {
+        self.warning
     }
 
     pub fn icon(mut self, icon: IconName) -> Self {
@@ -746,6 +773,8 @@ impl MenuView {
             p.text.disabled
         } else if item.destructive {
             p.status.danger_fg
+        } else if item.warning {
+            p.status.warning_fg
         } else if highlighted {
             p.text.primary
         } else {
@@ -790,12 +819,17 @@ impl MenuView {
         if !item.destructive {
             name = name.truncate();
         }
-        let mut label = div()
-            .flex_1()
+        let mut heading = div()
             .min_w_0()
             .flex()
-            .flex_col()
+            .flex_row()
+            .items_center()
+            .gap(px(SPACE_1))
             .child(name.child(item.label.clone()));
+        if let Some(tag) = &item.tag {
+            heading = heading.child(Badge::text(tag.clone()).category(true));
+        }
+        let mut label = div().flex_1().min_w_0().flex().flex_col().child(heading);
         if let Some(secondary) = &item.secondary {
             let colour = if disabled {
                 p.text.disabled
@@ -1011,6 +1045,16 @@ mod tests {
                 .disabled("Nothing running")
                 .is_disabled()
         );
+    }
+
+    #[test]
+    fn a_row_carries_its_tag_and_its_warning_icon_only_when_given() {
+        let plain = MenuItem::new("Plan");
+        assert_eq!(plain.tag_text(), None);
+        assert!(!plain.is_warning());
+        let auto = MenuItem::new("Auto").tag("Default");
+        assert_eq!(auto.tag_text().map(|tag| tag.as_ref()), Some("Default"));
+        assert!(MenuItem::new("Bypass permissions").warning().is_warning());
     }
 
     #[test]

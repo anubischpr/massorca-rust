@@ -57,6 +57,7 @@ mod tests {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: 1,
             execution: Execution {
                 state: TerminalState::Exited,
@@ -73,6 +74,8 @@ mod tests {
             retained: false,
             released: false,
             resume: None,
+            delegation: None,
+            notes: Vec::new(),
         }
     }
 
