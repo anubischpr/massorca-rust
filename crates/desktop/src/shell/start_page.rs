@@ -57,6 +57,8 @@ use massorca_protocol::methods::chat::RunType;
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
 pub(super) struct StartFrame {
+    /// Whether the heading's project icon popover is open (decision 0091).
+    pub icon_open: bool,
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
@@ -127,6 +129,40 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
         .child("What should we work on in ")
         .child(project_link)
         .child("?");
+    let heading = {
+        let (open_shell, choose_shell) = (frame.shell.clone(), frame.shell.clone());
+        let (open_project, choose_project) = (page.project_id.clone(), page.project_id.clone());
+        let icon = massorca_ui::components::project_icon_popover::project_icon_control(
+            "start-project-icon",
+            super::project_mark::project_mark(&page.icon),
+            frame.icon_open,
+            match &page.icon {
+                crate::model::project_icon::ProjectGlyph::Lucide(name) => Some(name.as_str()),
+                _ => None,
+            },
+            move |open, _, cx| {
+                let _ = open_shell.update(cx, |shell, cx| {
+                    shell.project_icon_open = open.then(|| open_project.clone());
+                    cx.notify();
+                });
+            },
+            move |choice, _, cx| {
+                let _ = choose_shell.update(cx, |shell, cx| {
+                    shell.project_icon_open = None;
+                    shell.choose_project_icon(choose_project.clone(), choice, cx);
+                    cx.notify();
+                });
+            },
+            cx,
+        );
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(massorca_ui::tokens::SPACE_3))
+            .child(icon)
+            .child(heading)
+    };
 
     let host = host_pill(
         "start-host",
