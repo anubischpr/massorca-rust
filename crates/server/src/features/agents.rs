@@ -397,7 +397,13 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
     let session = on_agents(&ctx, move |agents| {
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
-        agents.resume(&params.session, params.permission_mode.as_deref(), grant)
+        agents.resume_at(
+            &params.session,
+            params.permission_mode.as_deref(),
+            grant,
+            params.cols,
+            params.rows,
+        )
     })
     .await?;
     Ok(for_caller(&ctx, session))

@@ -55,6 +55,12 @@ pub enum AgentCommand {
         /// mode, else the kind's default.
         #[arg(long, value_name = "MODE")]
         mode: Option<String>,
+        /// The terminal's columns; the service default without it.
+        #[arg(long, value_name = "COLS")]
+        cols: Option<u16>,
+        /// The terminal's rows; the service default without it.
+        #[arg(long, value_name = "ROWS")]
+        rows: Option<u16>,
     },
     /// Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
     Mode {
@@ -413,11 +419,18 @@ pub async fn execute(
             let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
             output.success(&receipt, &lines);
         }
-        AgentCommand::Resume { session, mode } => {
+        AgentCommand::Resume {
+            session,
+            mode,
+            cols,
+            rows,
+        } => {
             let resumed = client
                 .agent_resume_with(&AgentResumeParams {
                     session,
                     permission_mode: mode,
+                    cols,
+                    rows,
                 })
                 .await?;
             output.success(&resumed, &agent_text::session_details(&resumed));
