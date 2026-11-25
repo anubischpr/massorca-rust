@@ -6,12 +6,19 @@ mod discover;
 mod frontmatter;
 mod placement_agents;
 mod placement_error;
+mod placement_link;
+mod placement_model;
+mod placement_record;
 mod placement_tree;
 mod roots;
 mod walk;
 
 pub use placement_agents::PlacementAgent;
 pub use placement_error::PlacementError;
+pub use placement_model::{
+    AgentOutcome, LinkMode, ManagedAgent, ManagedSkill, Outcome, PlacementPreview, PlacementReport,
+    PlacementStore, Plan, PlannedAgent, SkipCause, Topology,
+};
 
 pub use discover::{
     DiscoveredSkill, DiscoveryRequest, MAX_SCAN_ENTRIES, SkillDiscovery, SkillSource, SkipReason,
