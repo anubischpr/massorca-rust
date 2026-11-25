@@ -86,6 +86,7 @@ fn a_detected_folder_prefills_the_import_field_and_import_sends_it_as_before(
                 name: ".credentials.json".to_owned(),
                 required: true,
                 found: true,
+                reason: None,
                 path: None,
                 env: None,
             }],
