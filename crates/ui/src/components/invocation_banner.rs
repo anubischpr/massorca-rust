@@ -6,25 +6,31 @@ use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
-    Color, Palette, RADIUS_2XL, RADIUS_FULL, SPACE_1, SPACE_2, SPACE_3, SPACE_5, SPACE_6,
-    TYPE_BODY_SM,
+    Color, Palette, RADIUS_2XL, RADIUS_FULL, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4,
+    SPACE_6, TYPE_BODY_SM,
 };
 use gpui::{
-    AnyElement, App, Div, ElementId, Empty, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
-    linear_color_stop, linear_gradient, px,
+    AnyElement, App, Div, ElementId, Empty, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, linear_color_stop, linear_gradient, px, svg,
 };
 use std::fmt;
 use std::rc::Rc;
 
-/// The contrast the footer sentence keeps on each gradient stop (WCAG AA for body text).
+/// The contrast the footer keeps on each listed gradient stop (WCAG AA for body text).
 const READABLE_CONTRAST: f32 = 4.5;
-/// How many tints a stop tries, from its full colour down to the Canvas.
+/// How many tints a stop tries, from its full colour down to the Canvas in steps of 5 percent.
 const TINT_STEPS: u32 = 20;
 /// The gradient runs from the top left corner to the bottom right, as CSS writes 135 degrees.
 const GRADIENT_ANGLE: f32 = 135.0;
 /// The widest a pill grows; the pills share one column, narrower in a narrow window.
 const PILL_MAX_WIDTH: f32 = 560.0;
+/// A pill is 44 px high. The measure comes from the approved screenshot, not a token.
+const PILL_HEIGHT: f32 = 44.0;
+/// The tag chip is 24 px high.
+const TAG_HEIGHT: f32 = 24.0;
+/// The tag's mark is 14 px, as the artboard draws it. No icon token is 14 px, so the mark is drawn at this size.
+const TAG_MARK_PX: f32 = 14.0;
 
 /// Runs when a pill is pressed, with the prompt's full text.
 type OnSelect = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
@@ -39,7 +45,7 @@ pub fn hex_colour(text: &str) -> Option<Color> {
     Some(Color::rgba8(channel(0)?, channel(2)?, channel(4)?, 1.0))
 }
 
-/// The strongest tint of `colour` over the Canvas that keeps `text` readable, or the Canvas when none does.
+/// The strongest tint of `colour` over the Canvas that keeps `text` at 4.5:1, or the Canvas when none does.
 pub fn readable_stop(colour: Color, canvas: Color, text: Color) -> Color {
     (0..=TINT_STEPS)
         .rev()
@@ -99,34 +105,49 @@ struct TagChip {
 }
 
 impl TagChip {
-    fn element(&self, p: &Palette) -> AnyElement {
-        let mark = match self.agent {
-            Some(kind) => AgentIcon::new(kind)
-                .size(AgentIconSize::Small)
-                .into_any_element(),
-            None => Icon::new(self.icon)
-                .size(IconSize::Small)
-                .color(p.badge.neutral_fg)
-                .into_any_element(),
-        };
+    /// The chip's box and text style, without its contents.
+    fn shape(&self, p: &Palette) -> Div {
         div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(SPACE_1))
+            .h(px(TAG_HEIGHT))
             .px(px(SPACE_2))
-            .py(px(SPACE_1))
             .rounded(px(RADIUS_FULL))
             .bg(p.badge.neutral_bg)
             .text_style(TYPE_BODY_SM)
+            .font_weight(FontWeight::MEDIUM)
             .text_color(p.badge.neutral_fg)
-            .child(mark)
+    }
+
+    /// The chip with its mark and name, in the pill at `index`.
+    fn element(&self, p: &Palette, index: usize) -> AnyElement {
+        let mark = match self.agent {
+            Some(kind) => AgentIcon::new(kind)
+                .size(AgentIconSize::Name)
+                .into_any_element(),
+            None => svg()
+                .path(self.icon.path())
+                .size(px(TAG_MARK_PX))
+                .flex_none()
+                .text_color(p.badge.neutral_fg)
+                .into_any_element(),
+        };
+        self.shape(p)
+            .debug_selector(move || format!("invocation-chip-{index}"))
+            .child(
+                div()
+                    .debug_selector(move || format!("invocation-mark-{index}"))
+                    .flex_none()
+                    .child(mark),
+            )
             .child(self.name.clone())
             .into_any_element()
     }
 }
 
-/// One example prompt as a pill: a focusable button with the tag chip, the prompt's text and an arrow.
+/// One example prompt as a pill: a focusable button with the tag chip, the prompt on one line and an arrow.
 #[derive(IntoElement)]
 struct Pill {
     index: usize,
@@ -136,50 +157,68 @@ struct Pill {
     on_select: Option<OnSelect>,
 }
 
-impl RenderOnce for Pill {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = *cx.theme();
-        let p = &theme.palette;
-        let id = ElementId::NamedInteger("invocation-pill".into(), self.index as u64);
-        let focus = window
-            .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone()
-            .tab_stop(true);
-        let hover = p.fill.hover_raised;
-        let mut pill = div()
-            .id(id)
+impl Pill {
+    fn id(&self) -> ElementId {
+        ElementId::NamedInteger("invocation-pill".into(), self.index as u64)
+    }
+
+    /// The pill's box, colours, chip, text and arrow. Focus and presses are added when it is drawn.
+    fn shape(&self, p: &Palette) -> Stateful<Div> {
+        let (index, hover, pressed) = (self.index, p.fill.hover_raised, p.fill.pressed_overlay);
+        div()
+            .id(self.id())
             .role(Role::Button)
             .aria_label(self.prompt.clone())
-            .debug_selector(move || format!("invocation-pill-{}", self.index))
-            .track_focus(&focus)
-            .focus_ring(&theme)
+            .debug_selector(move || format!("invocation-pill-{index}"))
             .w_full()
             .max_w(px(PILL_MAX_WIDTH))
+            .h(px(PILL_HEIGHT))
             .flex()
             .items_center()
             .gap(px(SPACE_3))
-            .py(px(SPACE_1))
-            .pl(px(SPACE_1))
-            .pr(px(SPACE_3))
-            .rounded(px(RADIUS_FULL))
+            .pl(px(SPACE_2))
+            .pr(px(SPACE_4))
+            .rounded(px(RADIUS_LG))
             .bg(p.surface.raised)
             .cursor_pointer()
             .hover(move |style| style.bg(hover))
-            .child(self.chip.element(p))
+            .active(move |style| style.bg(pressed))
+            .child(self.chip.element(p, index))
             .child(
                 div()
+                    .debug_selector(move || format!("invocation-text-{index}"))
                     .flex_1()
                     .min_w_0()
+                    .truncate()
                     .text_body()
                     .text_color(p.text.primary)
                     .child(self.text.clone()),
             )
             .child(
-                Icon::new(IconName::ArrowRight)
-                    .size(IconSize::Small)
-                    .color(p.text.secondary),
-            );
+                div()
+                    .debug_selector(move || format!("invocation-arrow-{index}"))
+                    .flex_none()
+                    .child(
+                        Icon::new(IconName::ArrowRight)
+                            .size(IconSize::Small)
+                            .color(p.text.secondary),
+                    ),
+            )
+    }
+}
+
+impl RenderOnce for Pill {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let focus = window
+            .use_keyed_state(self.id(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone()
+            .tab_stop(true);
+        let mut pill = self
+            .shape(&theme.palette)
+            .track_focus(&focus)
+            .focus_ring(&theme);
         if let Some(on_select) = self.on_select {
             let prompt = self.prompt;
             pill = pill.on_click(move |_, window, cx| on_select(prompt.clone(), window, cx));
@@ -254,12 +293,6 @@ impl InvocationBanner {
             return None;
         }
         let mention = SharedString::from(mention_line(&self.tag));
-        let described = self
-            .examples
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
         let fill = self.fill.unwrap_or(BannerFill::Palette(p.banner.palette_1));
         let (start, end) = gradient_stops(fill, p);
         let mut pills = div()
@@ -280,16 +313,14 @@ impl InvocationBanner {
         Some(
             div()
                 .id(self.id.clone())
-                .role(Role::Status)
+                .role(Role::Group)
                 .aria_label(mention.clone())
-                .aria_description(SharedString::from(described))
                 .debug_selector(|| "invocation-banner".to_owned())
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(SPACE_3))
-                .px(px(SPACE_6))
-                .py(px(SPACE_5))
+                .p(px(SPACE_6))
                 .rounded(px(RADIUS_2XL))
                 .bg(linear_gradient(
                     GRADIENT_ANGLE,
@@ -335,13 +366,21 @@ mod tests {
     use super::*;
     use crate::a11y::probe::{reported, root};
     use gpui::{
-        Bounds, Context, Modifiers, Pixels, TestAppContext, VisualTestContext, accesskit::Role,
+        AbsoluteLength, Bounds, Context, Modifiers, Pixels, TestAppContext, VisualTestContext,
+        accesskit::Role,
     };
     use std::cell::RefCell;
 
     const CLAUDE: Color = Color::rgba8(0xD9, 0x77, 0x57, 1.0);
     const GREEN: Color = Color::rgba8(0x3F, 0x9B, 0x6E, 1.0);
     const GREY: Color = Color::rgba8(0x8E, 0x8E, 0x93, 1.0);
+    const FOOTER: &str = "Type @Claude in any chat or room to ask it directly.";
+    /// The pills' debug selectors, in order; the test API takes selectors that live for the whole program.
+    const PILLS: [&str; 3] = [
+        "invocation-pill-0",
+        "invocation-pill-1",
+        "invocation-pill-2",
+    ];
 
     /// The palette's eight banner colours and its end stop.
     fn palette_tokens(palette: &Palette) -> [Color; 9] {
@@ -366,6 +405,14 @@ mod tests {
             colours.extend(palette_tokens(&palette));
         }
         colours
+    }
+
+    fn claude_chip() -> TagChip {
+        TagChip {
+            name: SharedString::from("Claude"),
+            icon: IconName::Bot,
+            agent: Some(AgentKind::Claude),
+        }
     }
 
     fn claude_banner() -> InvocationBanner {
@@ -476,25 +523,15 @@ mod tests {
     }
 
     #[gpui::test]
-    fn marketplace_invocation_banner_is_a_status_named_by_the_mention_line(
-        cx: &mut TestAppContext,
-    ) {
+    fn marketplace_invocation_banner_is_a_group_named_by_its_footer_line(cx: &mut TestAppContext) {
         let node = root(cx, |_, cx| {
             let p = cx.theme().palette;
             claude_banner().element(&p).and_then(reported)
         })
         .expect("the banner is reported");
-        assert_eq!(node.role(), Role::Status);
-        assert_eq!(
-            node.label(),
-            Some("Type @Claude in any chat or room to ask it directly.")
-        );
-        assert_eq!(
-            node.description(),
-            Some(
-                "@Claude review my changes; @Claude explain the failing test in this project; @Claude summarise today's sessions"
-            )
-        );
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.label(), Some(FOOTER));
+        assert_eq!(node.description(), None, "the pills name themselves");
     }
 
     #[gpui::test]
@@ -512,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn marketplace_invocation_banner_has_no_border_and_a_gradient_background() {
+    fn marketplace_invocation_banner_panel_has_no_border_a_gradient_and_16_px_corners() {
         let p = Palette::DARK;
         let mut banner = claude_banner()
             .element(&p)
@@ -527,6 +564,32 @@ mod tests {
             "the panel draws no border"
         );
         assert!(style.background.is_some(), "the panel has a background");
+        assert_eq!(
+            style.corner_radii.top_left,
+            Some(AbsoluteLength::Pixels(px(RADIUS_2XL)))
+        );
+    }
+
+    #[test]
+    fn marketplace_invocation_banner_pill_has_8_px_corners_and_its_chip_stays_full() {
+        let p = Palette::DARK;
+        let pill = Pill {
+            index: 0,
+            chip: claude_chip(),
+            prompt: SharedString::from("@Claude review my changes"),
+            text: SharedString::from("review my changes"),
+            on_select: None,
+        };
+        let mut shape = pill.shape(&p);
+        assert_eq!(
+            shape.style().corner_radii.top_left,
+            Some(AbsoluteLength::Pixels(px(RADIUS_LG)))
+        );
+        let mut chip = claude_chip().shape(&p);
+        assert_eq!(
+            chip.style().corner_radii.top_left,
+            Some(AbsoluteLength::Pixels(px(RADIUS_FULL)))
+        );
     }
 
     /// Hosts one banner in a window and records the prompts its pills report.
@@ -537,22 +600,19 @@ mod tests {
     impl gpui::Render for Host {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let presses = self.presses.clone();
-            claude_banner().on_select(move |prompt, _, _| {
-                presses.borrow_mut().push(prompt.to_string());
-            })
+            // A column keeps the banner at its content height; as the window root it would fill the window.
+            div()
+                .flex()
+                .flex_col()
+                .child(claude_banner().on_select(move |prompt, _, _| {
+                    presses.borrow_mut().push(prompt.to_string());
+                }))
         }
     }
 
     fn draw(cx: &mut VisualTestContext) {
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
-
-    /// The pills' debug selectors, in order; the test API takes selectors that live for the whole program.
-    const PILLS: [&str; 3] = [
-        "invocation-pill-0",
-        "invocation-pill-1",
-        "invocation-pill-2",
-    ];
 
     /// The drawn bounds of the element with this debug selector, after a fresh draw.
     fn bounds_of(selector: &'static str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
@@ -561,42 +621,132 @@ mod tests {
             .unwrap_or_else(|| panic!("no element with selector {selector}"))
     }
 
-    fn check_centred_pills_of_one_width(cx: &mut VisualTestContext) {
+    fn px_of(value: Pixels) -> f32 {
+        f32::from(value)
+    }
+
+    /// Asserts the sizes, gaps and insets the approved spec gives, on the drawn banner.
+    fn check_the_spec_layout(cx: &mut VisualTestContext) {
         let panel = bounds_of("invocation-banner", cx);
         let footer = bounds_of("invocation-footer", cx);
-        let pills: Vec<Bounds<Pixels>> = PILLS
-            .into_iter()
-            .map(|selector| bounds_of(selector, cx))
-            .collect();
-        let widths: Vec<f32> = pills
-            .iter()
-            .map(|pill| f32::from(pill.size.width))
-            .collect();
-        assert!(
-            widths
-                .windows(2)
-                .all(|pair| (pair[0] - pair[1]).abs() < 0.5),
-            "the pills share one width: {widths:?}"
-        );
-        let panel_centre = f32::from(panel.center().x);
-        for (index, pill) in pills.iter().enumerate() {
+        let pills = PILLS.map(|selector| bounds_of(selector, cx));
+        let chip = bounds_of("invocation-chip-0", cx);
+        let mark = bounds_of("invocation-mark-0", cx);
+        let text = bounds_of("invocation-text-0", cx);
+        let arrow = bounds_of("invocation-arrow-0", cx);
+        let first = pills[0];
+        let close = |actual: f32, expected: f32, what: &str| {
             assert!(
-                (f32::from(pill.center().x) - panel_centre).abs() < 0.5,
-                "pill {index} is centred in the panel"
+                (actual - expected).abs() < 0.5,
+                "{what}: {actual} is not {expected}"
+            );
+        };
+
+        for (index, pill) in pills.iter().enumerate() {
+            close(
+                px_of(pill.size.height),
+                PILL_HEIGHT,
+                &format!("pill {index} height"),
+            );
+            close(
+                px_of(pill.size.width),
+                px_of(first.size.width),
+                "equal pill widths",
+            );
+            close(
+                px_of(pill.center().x),
+                px_of(panel.center().x),
+                &format!("pill {index} centred"),
             );
         }
-        assert!(
-            (f32::from(footer.center().x) - panel_centre).abs() < 0.5,
-            "the footer is centred under the pills"
+        for pair in pills.windows(2) {
+            let bottom = px_of(pair[0].origin.y) + px_of(pair[0].size.height);
+            close(
+                px_of(pair[1].origin.y) - bottom,
+                SPACE_2_PX,
+                "8 px between pills",
+            );
+        }
+        let last = pills[2];
+        close(
+            px_of(footer.origin.y) - (px_of(last.origin.y) + px_of(last.size.height)),
+            SPACE_3_PX,
+            "12 px from the last pill to the footer",
         );
-        assert!(
-            pills[0].origin.y < pills[1].origin.y && pills[1].origin.y < pills[2].origin.y,
-            "the pills are stacked"
+        close(
+            px_of(footer.center().x),
+            px_of(panel.center().x),
+            "the footer is centred",
+        );
+
+        close(
+            px_of(first.origin.y) - px_of(panel.origin.y),
+            SPACE_6_PX,
+            "24 px panel top",
+        );
+        close(
+            px_of(panel.origin.y) + px_of(panel.size.height)
+                - (px_of(footer.origin.y) + px_of(footer.size.height)),
+            SPACE_6_PX,
+            "24 px panel bottom",
+        );
+        close(
+            px_of(footer.origin.x) - px_of(panel.origin.x),
+            SPACE_6_PX,
+            "24 px panel left",
+        );
+        close(
+            px_of(panel.origin.x) + px_of(panel.size.width)
+                - (px_of(footer.origin.x) + px_of(footer.size.width)),
+            SPACE_6_PX,
+            "24 px panel right",
+        );
+
+        close(
+            px_of(chip.origin.x) - px_of(first.origin.x),
+            8.0,
+            "8 px left of the chip",
+        );
+        close(
+            px_of(first.origin.x) + px_of(first.size.width)
+                - (px_of(arrow.origin.x) + px_of(arrow.size.width)),
+            16.0,
+            "16 px right of the arrow",
+        );
+        close(
+            px_of(chip.size.height),
+            TAG_HEIGHT,
+            "the chip is 24 px high",
+        );
+        close(
+            px_of(mark.size.width),
+            TAG_MARK_PX,
+            "the mark is 14 px wide",
+        );
+        close(
+            px_of(mark.size.height),
+            TAG_MARK_PX,
+            "the mark is 14 px high",
+        );
+        close(px_of(arrow.size.width), 16.0, "the arrow is 16 px");
+        close(
+            px_of(text.origin.x) - (px_of(chip.origin.x) + px_of(chip.size.width)),
+            12.0,
+            "12 px from the chip to the prompt",
+        );
+        close(
+            px_of(arrow.origin.x) - (px_of(text.origin.x) + px_of(text.size.width)),
+            12.0,
+            "12 px from the prompt to the arrow",
         );
     }
 
+    const SPACE_2_PX: f32 = 8.0;
+    const SPACE_3_PX: f32 = 12.0;
+    const SPACE_6_PX: f32 = 24.0;
+
     #[gpui::test]
-    fn marketplace_invocation_banner_stacks_centred_pills_of_one_width_in_the_dark_theme(
+    fn marketplace_invocation_banner_lays_out_the_spec_sizes_in_the_dark_theme(
         cx: &mut TestAppContext,
     ) {
         cx.update(|app| {
@@ -605,11 +755,11 @@ mod tests {
         let (_, cx) = cx.add_window_view(|_, _| Host {
             presses: Rc::default(),
         });
-        check_centred_pills_of_one_width(cx);
+        check_the_spec_layout(cx);
     }
 
     #[gpui::test]
-    fn marketplace_invocation_banner_stacks_centred_pills_of_one_width_in_the_light_theme(
+    fn marketplace_invocation_banner_lays_out_the_spec_sizes_in_the_light_theme(
         cx: &mut TestAppContext,
     ) {
         cx.update(|app| {
@@ -618,7 +768,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|_, _| Host {
             presses: Rc::default(),
         });
-        check_centred_pills_of_one_width(cx);
+        check_the_spec_layout(cx);
     }
 
     #[gpui::test]
