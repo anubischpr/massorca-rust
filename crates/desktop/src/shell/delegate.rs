@@ -1,6 +1,7 @@
 //! The delegate form under a running session (X-CH-06): a prompt, the agent the child starts on, an optional
-//! workspace name and title, and read only. Sending calls `agent.delegate` with this submit's id, so a retry sends
-//! the same id and the service answers with the child it already made. A refusal keeps the form and its input.
+//! workspace name and title, read only, and the line that says where a writing child runs, stated before the person
+//! types. Sending calls `agent.delegate` with this submit's id, so a retry sends the same id and the service answers
+//! with the child it already made. A refusal keeps the form and its input.
 
 use gpui::{
     AnyElement, App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*,
@@ -22,7 +23,8 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use crate::model::agent_delegate::{
-    DelegateDraft, NO_KIND, delegate_params, new_request_id, starting_kind,
+    DelegateDraft, NO_KIND, PlacementNotice, WritingChild, delegate_params, new_request_id,
+    placement_notice, starting_kind, writing_child_of,
 };
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::service::Refusal;
@@ -40,6 +42,8 @@ pub(super) struct DelegateForm {
     kind_select: Entity<SelectView>,
     /// The index into `kinds` of the agent the child starts on: the parent's, or the one the person picked.
     pub(super) kind: Option<usize>,
+    /// Where a writing child of the parent runs, as the parent declares it; `None` while none is declared.
+    pub(super) placement: Option<WritingChild>,
     pub(super) read_only: bool,
     /// The id of the submit the form last sent. It stays while the answer or its refusal shows, so a retry sends it.
     pub(super) request: Option<String>,
@@ -56,6 +60,20 @@ pub(super) struct StartedChild {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) note: Option<String>,
+}
+
+impl DelegateForm {
+    /// The line the form states before the person types; a read-only child needs none.
+    fn notice(&self) -> Option<PlacementNotice> {
+        self.placement
+            .as_ref()
+            .and_then(|writing| placement_notice(writing, self.read_only))
+    }
+
+    /// Whether the parent's placement keeps Delegate off, as an unavailable session does.
+    fn blocked(&self) -> bool {
+        self.notice().is_some_and(|notice| notice.blocks_send)
+    }
 }
 
 /// The dialog on screen, if any: the form until its call is answered, then the child it started.
@@ -105,13 +123,14 @@ impl Shell {
         if self.service.is_none() {
             return;
         }
-        let (parent_kind, kinds) = {
+        let (parent_kind, placement, kinds) = {
             let state = self.store.read(cx).state();
             let Some(parent) = state.agents.iter().find(|parent| parent.id == session) else {
                 return;
             };
             (
                 parent.kind.clone(),
+                writing_child_of(parent),
                 session_kind_choices(&state.agent_kinds),
             )
         };
@@ -165,6 +184,7 @@ impl Shell {
             kinds,
             kind_select,
             kind: starting,
+            placement,
             read_only: false,
             request: None,
             sending: false,
@@ -189,7 +209,7 @@ impl Shell {
         let Some(form) = self.delegate.as_mut() else {
             return;
         };
-        if form.sending || form.started.is_some() {
+        if form.sending || form.started.is_some() || form.blocked() {
             return;
         }
         let draft = DelegateDraft {
@@ -290,8 +310,10 @@ impl Shell {
 
 /// The form's dialog: its fields, the read-only choice, and its submit, which reads Retry after a refusal.
 fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
-    let can_send =
-        !form.prompt.read(cx).text().trim().is_empty() && form.kind.is_some() && !form.sending;
+    let can_send = !form.prompt.read(cx).text().trim().is_empty()
+        && form.kind.is_some()
+        && !form.sending
+        && !form.blocked();
     let read_only_weak = weak.clone();
     let read_only = Switch::new("delegate-read-only", form.read_only)
         .label("Read only")
@@ -303,6 +325,7 @@ fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElem
         .flex()
         .flex_col()
         .gap(px(SPACE_3))
+        .children(form.notice().map(|notice| notice_view(&notice, cx)))
         .child(prompt_view(form, cx))
         .child(form.kind_select.clone())
         .child(form.name.clone())
@@ -368,6 +391,17 @@ fn started_view(started: &StartedChild, weak: &WeakEntity<Shell>, cx: &App) -> A
         .on_dismiss(move |_, cx| {
             let _ = done.update(cx, |shell, cx| shell.close_delegate(cx));
         })
+        .into_any_element()
+}
+
+/// The line about where the child runs. It sits above the prompt, so the person reads it before typing.
+fn notice_view(notice: &PlacementNotice, cx: &App) -> AnyElement {
+    let p = cx.theme().palette;
+    div()
+        .debug_selector(|| "delegate-placement-notice".to_owned())
+        .text_style(TYPE_BODY_SM)
+        .text_color(p.text.secondary)
+        .child(notice.text.clone())
         .into_any_element()
 }
 

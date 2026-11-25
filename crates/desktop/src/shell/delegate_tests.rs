@@ -9,7 +9,7 @@ use massorca_ui::components::text_field::TextField;
 
 use super::delegate::DelegateForm;
 use super::service_tests::{Rig, click, draw, rig};
-use crate::model::agent_delegate::PROMPT_REQUIRED;
+use crate::model::agent_delegate::{PROMPT_REQUIRED, WritingChild};
 use crate::service::fixtures::{agent, agent_kind};
 use crate::service::{Command, Refusal, StoreUpdate};
 
@@ -36,6 +36,17 @@ fn with_running_session(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext
 fn open_form(rig: &Rig, cx: &mut VisualTestContext) {
     rig.shell
         .update_in(cx, |shell, window, cx| shell.open_delegate("s", window, cx));
+    draw(cx);
+}
+
+/// Declares where the open form's writing child runs, as a parent session that carries the field would.
+fn declare(rig: &Rig, cx: &mut VisualTestContext, writing: WritingChild) {
+    rig.shell.update(cx, |shell, cx| {
+        if let Some(form) = shell.delegate.as_mut() {
+            form.placement = Some(writing);
+        }
+        cx.notify();
+    });
     draw(cx);
 }
 
@@ -310,5 +321,107 @@ for the feed"
         params.prompt,
         "Write the tests
 for the feed"
+    );
+}
+
+#[gpui::test]
+fn an_own_worktree_child_is_described_before_the_person_types(cx: &mut TestAppContext) {
+    let (rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(&rig, cx, WritingChild::OwnWorktree);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the placement shows as the form opens"
+    );
+    rig.shell.read_with(cx, |shell, app| {
+        let form = shell.delegate.as_ref().expect("the form is open");
+        assert!(
+            form.prompt.read(app).text().is_empty(),
+            "nothing is typed yet"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_shared_folder_child_is_described_as_not_isolated_before_the_person_types(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(&rig, cx, WritingChild::SharedFolder);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the placement shows as the form opens"
+    );
+    rig.shell.read_with(cx, |shell, app| {
+        let form = shell.delegate.as_ref().expect("the form is open");
+        assert!(
+            form.prompt.read(app).text().is_empty(),
+            "nothing is typed yet"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_read_only_child_gets_no_isolation_line_and_a_writing_one_gets_it_back(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(&rig, cx, WritingChild::SharedFolder);
+    rig.shell
+        .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_none(),
+        "a read-only child needs no isolation line"
+    );
+    rig.shell
+        .update(cx, |shell, cx| shell.set_delegate_read_only(false, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the line returns for a child that may write"
+    );
+}
+
+#[gpui::test]
+fn a_session_that_declares_no_placement_shows_no_line_and_sends_as_before(cx: &mut TestAppContext) {
+    let (mut rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_none(),
+        "no session declares a placement yet"
+    );
+    type_prompt(&rig, cx, "Write the tests");
+    click(cx, "dialog-action");
+    let Some(Command::Delegate { params, .. }) = rig.script.next() else {
+        panic!("an agent.delegate call was expected");
+    };
+    assert_eq!(params.prompt, "Write the tests");
+}
+
+#[gpui::test]
+fn an_unavailable_session_states_why_and_sends_nothing(cx: &mut TestAppContext) {
+    let (mut rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    declare(
+        &rig,
+        cx,
+        WritingChild::Unavailable {
+            reason: Some("This session has reached its delegation depth.".to_owned()),
+        },
+    );
+    assert!(
+        cx.debug_bounds("delegate-placement-notice").is_some(),
+        "the reason shows before typing"
+    );
+    type_prompt(&rig, cx, "Write the tests");
+    click(cx, "dialog-action");
+    rig.shell.update(cx, |shell, cx| shell.submit_delegate(cx));
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "Delegate is off, so no call reaches the service"
     );
 }
