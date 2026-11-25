@@ -177,7 +177,7 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "team.room.post",
-            "Post a line to a team's Conference room; a person's line becomes a started task",
+            "Post a line to a team's Conference room; a person's line becomes a task, a routine or a choice card",
             "team.room_post",
             json!({
                 "type": "object",
