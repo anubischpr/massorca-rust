@@ -438,3 +438,326 @@ fn head_from_row(row: &Row<'_>) -> rusqlite::Result<ChatJournalHead> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_sessions::{RunExitReason, RunMode};
+    use crate::projects::{ProjectKind, ProjectRow};
+    use crate::workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
+    use crate::{new_id, now_ms};
+
+    fn store_with_session(chat: bool) -> (Store, String) {
+        let store = Store::open_in_memory().unwrap();
+        let project = ProjectRow {
+            id: new_id(),
+            kind: ProjectKind::Folder,
+            path: "/notes".to_owned(),
+            path_key: "/notes".to_owned(),
+            name: "notes".to_owned(),
+            workspaces_root: "/notes-workspaces".to_owned(),
+            added_at: now_ms(),
+            base_ref: None,
+            icon: None,
+        };
+        store.insert_project(&project).unwrap();
+        let workspace = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id.clone(),
+            kind: WorkspaceKind::Folder,
+            name: "main".to_owned(),
+            path: "/notes".to_owned(),
+            path_key: "/notes".to_owned(),
+            branch: None,
+            base_ref: None,
+            created_branch: false,
+            state: WorkspaceState::Ready,
+            request_id: None,
+            created_at: now_ms(),
+            comment: None,
+        };
+        store.insert_workspace(&workspace).unwrap();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace.id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+            retained: false,
+            released_at: None,
+        };
+        if chat {
+            store.insert_chat_agent_session(&row, "run-1").unwrap();
+        } else {
+            store.insert_agent_session(&row).unwrap();
+        }
+        (store, row.id)
+    }
+
+    fn message<'a>(id: &'a str, text: Option<&'a str>) -> NewChatItem<'a> {
+        NewChatItem {
+            id,
+            turn: Some("turn-1"),
+            parent: None,
+            at_ms: 5,
+            item_type: "assistant_message",
+            body: r#"{"type":"assistant_message","state":"running"}"#,
+            text,
+        }
+    }
+
+    #[test]
+    fn a_session_records_its_run_type_and_a_chat_exit_lands_only_on_its_run() {
+        let (store, terminal) = store_with_session(false);
+        assert_eq!(
+            store.agent_session_run(&terminal).unwrap(),
+            Some(SessionRun::default())
+        );
+        let (store, chat) = store_with_session(true);
+        assert_eq!(
+            store.agent_session_run(&chat).unwrap(),
+            Some(SessionRun {
+                run_type: SessionRunType::Chat,
+                run_id: Some("run-1".to_owned()),
+            })
+        );
+        let exit = RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: 9,
+        };
+        assert!(
+            !store
+                .set_agent_session_chat_exit(&chat, "run-0", &exit)
+                .unwrap(),
+            "an earlier run's end does not land"
+        );
+        assert!(
+            store
+                .set_agent_session_chat_exit(&chat, "run-1", &exit)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .set_agent_session_chat_exit(&chat, "run-1", &exit)
+                .unwrap(),
+            "an end is recorded once"
+        );
+        assert_eq!(
+            store.get_agent_session(&chat).unwrap().unwrap().exit,
+            Some(exit)
+        );
+    }
+
+    #[test]
+    fn items_keep_their_position_and_take_the_seq_of_each_change() {
+        let (store, session) = store_with_session(true);
+        assert_eq!(store.chat_journal_head(&session).unwrap(), None);
+        assert_eq!(
+            store
+                .add_chat_item(&session, &message("a", Some("")), 10)
+                .unwrap(),
+            None,
+            "no journal, no item"
+        );
+        let head = store.open_chat_journal(&session, "epoch-1").unwrap();
+        assert_eq!(
+            head,
+            ChatJournalHead {
+                epoch: "epoch-1".to_owned(),
+                seq: 0,
+                pruned_seq: 0
+            }
+        );
+        assert_eq!(
+            store.open_chat_journal(&session, "epoch-2").unwrap().epoch,
+            "epoch-1",
+            "an open journal keeps its epoch"
+        );
+
+        let first = store
+            .add_chat_item(&session, &message("a", Some("Hel")), 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!((first.position, first.seq), (1, 1));
+        let second = store
+            .add_chat_item(&session, &message("b", None), 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!((second.position, second.seq), (2, 2));
+
+        let appended = store
+            .append_chat_item_text(&session, "a", "lo é")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            appended,
+            ChatAppend { seq: 3, offset: 3 },
+            "the offset is the text's byte length before the append"
+        );
+        let again = store
+            .append_chat_item_text(&session, "a", "!")
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, ChatAppend { seq: 4, offset: 8 });
+        assert_eq!(
+            store.append_chat_item_text(&session, "b", "x").unwrap(),
+            None,
+            "an item without text takes no append"
+        );
+        assert_eq!(
+            store.append_chat_item_text(&session, "nope", "x").unwrap(),
+            None
+        );
+
+        let replaced = store
+            .replace_chat_item(&session, "a", r#"{"state":"completed"}"#, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!((replaced.position, replaced.seq), (1, 5));
+        assert_eq!(replaced.text.as_deref(), Some("Hello é!"), "the text stays");
+        assert_eq!(replaced.body, r#"{"state":"completed"}"#);
+        assert_eq!(store.chat_journal_head(&session).unwrap().unwrap().seq, 5);
+
+        let changed = store.chat_items_changed_after(&session, 2, 10).unwrap();
+        assert_eq!(
+            changed
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a"],
+            "only `a` changed after seq 2"
+        );
+    }
+
+    #[test]
+    fn appends_are_chunks_a_new_text_folds_them_and_offsets_stay_byte_exact() {
+        let (store, session) = store_with_session(true);
+        store.open_chat_journal(&session, "e").unwrap();
+        store
+            .add_chat_item(&session, &message("a", Some("ab")), 10)
+            .unwrap();
+        for piece in ["c", "dé", "f"] {
+            store.append_chat_item_text(&session, "a", piece).unwrap();
+        }
+        let chunks = |store: &Store| -> i64 {
+            store
+                .lock()
+                .query_row(
+                    "SELECT count(*) FROM agent_chat_text_chunks WHERE session_id = ?1",
+                    [&session],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(chunks(&store), 3, "each append is its own chunk");
+        assert_eq!(
+            store
+                .chat_item(&session, "a")
+                .unwrap()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("abcdéf")
+        );
+        store
+            .replace_chat_item(&session, "a", r#"{"state":"completed"}"#, Some("abcdéf"))
+            .unwrap();
+        assert_eq!(
+            chunks(&store),
+            0,
+            "a new text folds the chunks into the base"
+        );
+        let appended = store
+            .append_chat_item_text(&session, "a", "g")
+            .unwrap()
+            .unwrap();
+        assert_eq!(appended.offset, 7);
+        assert_eq!(
+            store
+                .chat_item(&session, "a")
+                .unwrap()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("abcdéfg")
+        );
+    }
+
+    #[test]
+    fn pages_go_back_by_position_oldest_first() {
+        let (store, session) = store_with_session(true);
+        store.open_chat_journal(&session, "e").unwrap();
+        for id in ["1", "2", "3", "4", "5"] {
+            store
+                .add_chat_item(&session, &message(id, None), 100)
+                .unwrap();
+        }
+        let ids =
+            |items: &[ChatItemRow]| items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        let (newest, older) = store.chat_items_before(&session, None, 2).unwrap();
+        assert_eq!(ids(&newest), ["4", "5"]);
+        assert!(older);
+        let (page, older) = store.chat_items_before(&session, Some(4), 2).unwrap();
+        assert_eq!(ids(&page), ["2", "3"]);
+        assert!(older);
+        let (page, older) = store.chat_items_before(&session, Some(2), 2).unwrap();
+        assert_eq!(ids(&page), ["1"]);
+        assert!(!older);
+    }
+
+    #[test]
+    fn past_the_cap_the_oldest_items_go_and_pruned_seq_names_their_newest_change() {
+        let (store, session) = store_with_session(true);
+        store.open_chat_journal(&session, "e").unwrap();
+        store
+            .add_chat_item(&session, &message("1", Some("")), 3)
+            .unwrap();
+        store
+            .add_chat_item(&session, &message("2", None), 3)
+            .unwrap();
+        store
+            .add_chat_item(&session, &message("3", None), 3)
+            .unwrap();
+        // Item 1 changes after item 3 was added, so dropping it drops a change at seq 4.
+        store.append_chat_item_text(&session, "1", "x").unwrap();
+        store
+            .add_chat_item(&session, &message("4", None), 3)
+            .unwrap();
+        let (items, older) = store.chat_items_before(&session, None, 10).unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["2", "3", "4"]
+        );
+        assert!(!older);
+        let head = store.chat_journal_head(&session).unwrap().unwrap();
+        assert_eq!((head.seq, head.pruned_seq), (5, 4));
+    }
+
+    #[test]
+    fn forgetting_a_session_removes_its_journal() {
+        let (store, session) = store_with_session(true);
+        store.open_chat_journal(&session, "e").unwrap();
+        store
+            .add_chat_item(&session, &message("1", None), 10)
+            .unwrap();
+        assert!(store.delete_agent_session(&session).unwrap());
+        assert_eq!(store.chat_journal_head(&session).unwrap(), None);
+        assert_eq!(store.chat_item(&session, "1").unwrap(), None);
+    }
+}
