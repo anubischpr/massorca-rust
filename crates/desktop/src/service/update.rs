@@ -48,6 +48,11 @@ pub enum StoreUpdate {
     AgentChanged(AgentSession),
     /// An agent session the service forgot.
     AgentGone(String),
+    /// The agent kind chosen when this app created a workspace; kept until the workspace has a session (A97).
+    WorkspaceKindChosen {
+        workspace: String,
+        kind: String,
+    },
     /// Every agent kind the service declares, after a connect. Replaces what was held.
     AgentKindsResync(Vec<AgentKind>),
     /// Every session's prompt queue after a connect, or `None` when the service offers no queue. Replaces what was held.
@@ -245,6 +250,9 @@ pub struct StoreState {
     pub agent_options: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
+    /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
+    /// it). In memory only; a session ends the entry, so no placeholder comes back once its session is archived (A97).
+    pub awaiting_session: BTreeMap<String, Option<String>>,
 }
 
 impl Default for StoreState {
@@ -276,6 +284,7 @@ impl Default for StoreState {
             agent_no_project: false,
             agent_options: false,
             config: Vec::new(),
+            awaiting_session: BTreeMap::new(),
         }
     }
 }
@@ -306,6 +315,8 @@ impl StoreState {
                 self.workspaces.sort_by(workspace_order);
                 self.git
                     .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
+                self.awaiting_session
+                    .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
                 self.loaded = true;
             }
             StoreUpdate::ProjectChanged(project) => {
@@ -314,12 +325,22 @@ impl StoreState {
             }
             StoreUpdate::ProjectGone(id) => self.projects.retain(|p| p.id != id),
             StoreUpdate::WorkspaceChanged(workspace) => {
+                // Only a workspace that appears after the first list was created while this app runs (A97).
+                if self.loaded
+                    && self.workspace(&workspace.id).is_none()
+                    && !self.workspace_has_session(&workspace.id)
+                {
+                    self.awaiting_session
+                        .entry(workspace.id.clone())
+                        .or_insert(None);
+                }
                 replace_by(&mut self.workspaces, workspace, |w| w.id.clone());
                 self.workspaces.sort_by(workspace_order);
             }
             StoreUpdate::WorkspaceGone(id) => {
                 self.workspaces.retain(|w| w.id != id);
                 self.git.remove(&id);
+                self.awaiting_session.remove(&id);
             }
             StoreUpdate::TerminalsResync(mut terminals) => {
                 terminals.sort_by(terminal_order);
@@ -334,10 +355,18 @@ impl StoreState {
                 sessions.sort_by(agent_order);
                 self.agents = sessions;
                 self.agents_answered = true;
+                self.awaiting_session
+                    .retain(|id, _| !self.agents.iter().any(|s| &s.workspace_id == id));
             }
             StoreUpdate::AgentChanged(session) => {
+                self.awaiting_session.remove(&session.workspace_id);
                 replace_by(&mut self.agents, session, |s| s.id.clone());
                 self.agents.sort_by(agent_order);
+            }
+            StoreUpdate::WorkspaceKindChosen { workspace, kind } => {
+                if !self.workspace_has_session(&workspace) {
+                    self.awaiting_session.insert(workspace, Some(kind));
+                }
             }
             StoreUpdate::AgentGone(id) => {
                 self.agents.retain(|s| s.id != id);
@@ -412,6 +441,13 @@ impl StoreState {
         self.config
             .iter()
             .find(|value| value.owner == DEFAULT_OWNER && value.key == key)
+    }
+
+    /// Whether the held agent sessions include one in this workspace.
+    pub fn workspace_has_session(&self, workspace_id: &str) -> bool {
+        self.agents
+            .iter()
+            .any(|session| session.workspace_id == workspace_id)
     }
 
     /// Keeps the newest read: an older answer that arrives late changes nothing.

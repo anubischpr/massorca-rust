@@ -71,6 +71,18 @@ pub enum TreeRow {
         /// Its host is unreachable, so the row dims (A10).
         dimmed: bool,
     },
+    /// A workspace with no session yet: one idle row where its first session will appear (A97).
+    Placeholder {
+        /// The workspace it stands for, for the row menu.
+        workspace_id: String,
+        /// The branch, or the folder's name for a plain folder.
+        title: String,
+        agent: Agent,
+        /// The row tooltip: "branch · worktree path", or the folder path.
+        tooltip: Option<String>,
+        /// Its host is unreachable, so the row dims (A10).
+        dimmed: bool,
+    },
 }
 
 /// The indent of a project, a host and a top session, in px from the Sidebar's edge (A97).
@@ -149,10 +161,15 @@ pub fn project_label(name: &str, emoji: Option<&str>) -> String {
 
 /// The row tooltip of a session: "branch · worktree path", the path alone for a folder (A97).
 pub fn tooltip_of(session: &SessionRow) -> Option<String> {
-    match (&session.branch, &session.path) {
+    tooltip_for(session.branch.as_deref(), session.path.as_deref())
+}
+
+/// The row tooltip of a worktree or a folder: "branch · path", the path alone for a folder (A97).
+pub fn tooltip_for(branch: Option<&str>, path: Option<&str>) -> Option<String> {
+    match (branch, path) {
         (Some(branch), Some(path)) => Some(format!("{branch} · {path}")),
-        (Some(branch), None) => Some(branch.clone()),
-        (None, Some(path)) => Some(path.clone()),
+        (Some(branch), None) => Some(branch.to_owned()),
+        (None, Some(path)) => Some(path.to_owned()),
         (None, None) => None,
     }
 }
@@ -160,8 +177,11 @@ pub fn tooltip_of(session: &SessionRow) -> Option<String> {
 fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     for project in projects {
-        // The "No project" group is listed only while it has sessions (A95, A97).
-        let empty = project.hosts.iter().all(|host| host.sessions.is_empty());
+        // The "No project" group is listed only while it has sessions or a workspace awaiting one (A95, A97).
+        let empty = project
+            .hosts
+            .iter()
+            .all(|host| host.sessions.is_empty() && host.placeholders.is_empty());
         if project.name == NO_PROJECT_LABEL && empty {
             continue;
         }
@@ -179,6 +199,18 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             let dimmed = matches!(host.reach, HostReach::Unreachable { .. });
             for session in &host.sessions {
                 push_session(&mut rows, session, 0, active, dimmed);
+            }
+            for placeholder in &host.placeholders {
+                rows.push(TreeRow::Placeholder {
+                    workspace_id: placeholder.workspace_id.clone(),
+                    title: placeholder.title.clone(),
+                    agent: placeholder.agent,
+                    tooltip: tooltip_for(
+                        placeholder.branch.as_deref(),
+                        placeholder.path.as_deref(),
+                    ),
+                    dimmed,
+                });
             }
         }
     }
@@ -240,7 +272,7 @@ fn push_session(
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
-    use crate::model::shell::{HostGroup, StatusBarModel};
+    use crate::model::shell::{HostGroup, PlaceholderRow, StatusBarModel};
 
     fn sample() -> ShellSnapshot {
         SampleDataSource.snapshot()
@@ -281,6 +313,17 @@ mod tests {
             reach,
             workspaces: Vec::new(),
             sessions,
+            placeholders: Vec::new(),
+        }
+    }
+
+    fn placeholder(workspace_id: &str) -> PlaceholderRow {
+        PlaceholderRow {
+            workspace_id: workspace_id.into(),
+            title: "feat/new".into(),
+            agent: Agent::Codex,
+            branch: Some("feat/new".into()),
+            path: Some("D:/new".into()),
         }
     }
 
@@ -503,6 +546,59 @@ mod tests {
         let rows = tree_of(&snapshot_of(vec![listed]));
         assert_eq!(rows.len(), 3, "project, host and the session");
         assert!(matches!(&rows[0], TreeRow::Project { name, .. } if name == NO_PROJECT_LABEL));
+    }
+
+    #[test]
+    fn a_placeholder_row_follows_its_hosts_sessions_and_carries_the_branch_tooltip() {
+        let mut host = host_with(vec![sample_session("s1")], HostReach::Connected);
+        host.placeholders = vec![placeholder("w9")];
+        let rows = tree_of(&snapshot_of(vec![ProjectGroup {
+            id: "p".into(),
+            name: "p".into(),
+            emoji: None,
+            hosts: vec![host],
+        }]));
+        assert_eq!(rows.len(), 4, "project, host, the session, the placeholder");
+        assert_eq!(
+            rows[3],
+            TreeRow::Placeholder {
+                workspace_id: "w9".into(),
+                title: "feat/new".into(),
+                agent: Agent::Codex,
+                tooltip: Some("feat/new · D:/new".into()),
+                dimmed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_placeholder_on_an_unreachable_host_dims_like_its_sessions() {
+        let mut host = host_with(Vec::new(), HostReach::Unreachable { minutes: 2 });
+        host.placeholders = vec![placeholder("w9")];
+        let rows = tree_of(&snapshot_of(vec![ProjectGroup {
+            id: "p".into(),
+            name: "p".into(),
+            emoji: None,
+            hosts: vec![host],
+        }]));
+        assert!(matches!(
+            rows.last(),
+            Some(TreeRow::Placeholder { dimmed: true, .. })
+        ));
+    }
+
+    #[test]
+    fn the_no_project_group_stays_listed_while_a_workspace_waits_for_its_first_session() {
+        let mut host = host_with(Vec::new(), HostReach::Connected);
+        host.placeholders = vec![placeholder("w9")];
+        let group = ProjectGroup {
+            id: NO_PROJECT_LABEL.into(),
+            name: NO_PROJECT_LABEL.into(),
+            emoji: None,
+            hosts: vec![host],
+        };
+        let rows = tree_of(&snapshot_of(vec![group]));
+        assert_eq!(rows.len(), 3, "project, host and the placeholder");
     }
 
     #[test]

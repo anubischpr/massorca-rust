@@ -99,6 +99,7 @@ impl DataSource for SampleDataSource {
                                     AgentState::Idle,
                                 ),
                             ],
+                            placeholders: Vec::new(),
                         },
                         HostGroup {
                             name: "VPS".into(),
@@ -111,6 +112,7 @@ impl DataSource for SampleDataSource {
                                 Agent::Antigravity,
                                 AgentState::Unreachable,
                             )],
+                            placeholders: Vec::new(),
                         },
                     ],
                 },
@@ -129,6 +131,7 @@ impl DataSource for SampleDataSource {
                             Agent::Antigravity,
                             AgentState::Error,
                         )],
+                        placeholders: Vec::new(),
                     }],
                 },
             ],

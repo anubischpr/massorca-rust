@@ -127,6 +127,29 @@ pub(super) fn tree_row(
                 row
             }
         }
+        TreeRow::Placeholder {
+            workspace_id,
+            title,
+            agent,
+            tooltip,
+            dimmed,
+        } => {
+            let mut row =
+                SidebarRow::session(id, title.clone(), GlyphState::Idle, agent_kind(*agent))
+                    .level(SESSION_LEVEL);
+            if let Some(tooltip) = tooltip {
+                row = row.tooltip(tooltip.clone());
+            }
+            if *dimmed {
+                row = row.dimmed(true);
+            }
+            // Right click offers the workspace's path and folder rows, as a session row does (A97).
+            let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());
+            row.on_context_menu(move |window, cx| {
+                let id = menu_workspace.clone();
+                let _ = menu_shell.update(cx, |shell, cx| shell.open_session_menu(id, window, cx));
+            })
+        }
     };
     item.focus_handle(focus.clone()).tab_stop(true)
 }
@@ -157,6 +180,7 @@ fn indent_padding(row: &TreeRow) -> f32 {
         TreeRow::Project { .. } => return 0.0,
         TreeRow::Host { .. } | TreeRow::RemoteHost { .. } => (HOST_INDENT, HOST_LEVEL),
         TreeRow::Session { depth, .. } => (session_indent(*depth), SESSION_LEVEL + depth),
+        TreeRow::Placeholder { .. } => (session_indent(0), SESSION_LEVEL),
     };
     indent - SPACE_2 - level as f32 * TREE_INDENT
 }
@@ -166,6 +190,9 @@ fn row_selector(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::Project { id, .. } => Some(format!("sidebar-project-{id}")),
         TreeRow::Session { id, .. } => Some(format!("sidebar-session-{id}")),
+        TreeRow::Placeholder { workspace_id, .. } => {
+            Some(format!("sidebar-placeholder-{workspace_id}"))
+        }
         _ => None,
     }
 }

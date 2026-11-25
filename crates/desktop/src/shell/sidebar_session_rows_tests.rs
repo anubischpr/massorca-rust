@@ -2,11 +2,76 @@
 //! workspace row between them, and a child session sits under its parent. A scripted handle answers
 //! nothing, so no window opens.
 
-use super::service_tests::{click, draw, rig};
+use super::service_tests::{Rig, click, draw, rig};
 use crate::service::StoreUpdate;
-use crate::service::fixtures::agent;
-use gpui::{Modifiers, MouseButton, TestAppContext};
+use crate::service::fixtures::{agent, workspace};
+use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::AgentSession;
+
+/// Creates workspace w2 on the rig's project p1 with the Claude kind chosen and no session yet.
+fn created_without_a_session(rig: &Rig, cx: &mut VisualTestContext) {
+    let created = workspace("w2", "p1", "feat-b", 2);
+    rig.updates
+        .send(StoreUpdate::WorkspaceKindChosen {
+            workspace: "w2".into(),
+            kind: "claude".into(),
+        })
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui::test]
+fn a_workspace_created_without_a_session_is_drawn_as_a_placeholder_row(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    assert!(
+        cx.debug_bounds("sidebar-placeholder-w1").is_none(),
+        "a workspace listed at startup with no session has no row"
+    );
+    created_without_a_session(&rig, cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w2").is_some());
+    rig.shell.read_with(cx, |shell, _| {
+        let snapshot = shell.model.snapshot();
+        let placeholders = &snapshot.projects[0].hosts[0].placeholders;
+        assert_eq!(placeholders.len(), 1);
+        assert_eq!(placeholders[0].title, "feat/feat-b");
+    });
+}
+
+#[gpui::test]
+fn the_first_session_replaces_the_placeholder_row(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    created_without_a_session(&rig, cx);
+    rig.updates
+        .send(StoreUpdate::AgentChanged(agent("a1", "w2", 3)))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w2").is_none());
+    assert!(cx.debug_bounds("sidebar-session-a1").is_some());
+}
+
+#[gpui::test]
+fn a_workspace_whose_sessions_are_all_gone_has_no_row(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    created_without_a_session(&rig, cx);
+    rig.updates
+        .send(StoreUpdate::AgentChanged(agent("a1", "w2", 3)))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::AgentGone("a1".into()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-session-a1").is_none());
+    assert!(
+        cx.debug_bounds("sidebar-placeholder-w2").is_none(),
+        "an archived or deleted session leaves no placeholder behind"
+    );
+}
 
 #[gpui::test]
 fn sessions_are_drawn_as_rows_and_clicking_one_selects_it(cx: &mut TestAppContext) {
