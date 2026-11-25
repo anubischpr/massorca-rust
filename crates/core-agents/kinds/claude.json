@@ -13,6 +13,19 @@
     "args": ["--append-system-prompt", "{text}"],
     "supported_when": { "args": ["--help"], "contains": "--append-system-prompt" }
   },
+  "oneshot": {
+    "args": ["-p", "{prompt}", "--output-format", "text"],
+    "model_flag_reuse": true,
+    "optional_args": [
+      { "flag": "--max-turns", "values": ["1"] },
+      { "flag": "--permission-mode", "values": ["default"] },
+      { "flag": "--strict-mcp-config" },
+      { "flag": "--mcp-config", "values": ["{\"mcpServers\":{}}"] },
+      { "flag": "--disallowedTools", "values": ["Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task"] },
+      { "flag": "--tools", "values": [""] },
+      { "flag": "--no-session-persistence" }
+    ]
+  },
   "strip_inherited_env": [
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_SESSION_ID",

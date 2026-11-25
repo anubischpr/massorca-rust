@@ -77,10 +77,43 @@ pub struct KindDecl {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<InstructionsDecl>,
+    /// The kind's non-interactive form, which names a chat from its first prompt and reply (decision 0167). Absent means
+    /// the kind cannot name a chat by an agent run, and `agent.generate_title` refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oneshot: Option<OneshotDecl>,
 }
 
 /// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
 pub const TEXT_PLACEHOLDER: &str = "{text}";
+
+/// The placeholder of [`OneshotDecl::args`] that the prompt text replaces (decision 0167).
+pub const PROMPT_PLACEHOLDER: &str = "{prompt}";
+
+/// A kind's non-interactive form (decision 0167): the arguments of one run that prints its reply and exits, with
+/// [`PROMPT_PLACEHOLDER`] exactly once, as `["-p", "{prompt}", "--output-format", "text"]`. The prompt is one argument of
+/// the run, never a shell line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneshotDecl {
+    pub args: Vec<String>,
+    /// Whether a run that names a model also takes the kind's model flag (`model`). Absent means it does not.
+    #[serde(default)]
+    pub model_flag_reuse: bool,
+    /// Arguments a run takes only when the program's `--help` output lists their flag (decision 0167): tool restrictions and
+    /// the like, which a CLI without the flag would refuse. They follow `args`, in declared order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_args: Vec<OptionalArgDecl>,
+}
+
+/// One argument a run takes when the program's `--help` lists its flag (decision 0167): the flag, then its values, each one
+/// argument of the run. A value is literal text, never a placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalArgDecl {
+    pub flag: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
 
 /// A kind's channel for MassOrca's per-launch instructions (decision 0161): launch arguments with [`TEXT_PLACEHOLDER`]
 /// exactly once, as `["--append-system-prompt", "{text}"]`. The text is passed on a run's own command line only, never
@@ -695,6 +728,7 @@ impl KindDecl {
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
         self.instructions_problems(&mut problems);
+        self.oneshot_problems(&mut problems);
         problems
     }
 
@@ -730,6 +764,62 @@ impl KindDecl {
             no_placeholder("instructions.supported_when.args", &probe.args, problems);
             if probe.contains.trim().is_empty() {
                 problems.push("instructions.supported_when.contains must not be empty".to_owned());
+            }
+        }
+    }
+
+    /// `oneshot.args` holds [`PROMPT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
+    /// placeholder; `model_flag_reuse` needs a declared `model`; each `optional_args` flag is a valid flag, listed once,
+    /// with values free of control characters (decision 0167).
+    fn oneshot_problems(&self, problems: &mut Vec<String>) {
+        let Some(oneshot) = &self.oneshot else {
+            return;
+        };
+        let placeholders: usize = oneshot
+            .args
+            .iter()
+            .map(|arg| arg.matches(PROMPT_PLACEHOLDER).count())
+            .sum();
+        if placeholders != 1 {
+            problems.push(format!(
+                "oneshot.args must hold {PROMPT_PLACEHOLDER} exactly once, not {placeholders} times"
+            ));
+        }
+        if oneshot
+            .args
+            .iter()
+            .any(|arg| arg.replace(PROMPT_PLACEHOLDER, "").contains(['{', '}']))
+        {
+            problems.push(format!(
+                "oneshot.args may use {PROMPT_PLACEHOLDER} as its only placeholder"
+            ));
+        }
+        if oneshot.model_flag_reuse && self.model.is_none() {
+            problems.push("oneshot.model_flag_reuse needs a declared model".to_owned());
+        }
+        let mut flags = BTreeSet::new();
+        for optional in &oneshot.optional_args {
+            if !valid_option_flag(&optional.flag) {
+                problems.push(format!(
+                    "oneshot.optional_args flag {:?} must start with - and hold no spaces, = or control characters",
+                    optional.flag
+                ));
+            }
+            if !flags.insert(optional.flag.as_str()) {
+                problems.push(format!(
+                    "oneshot.optional_args lists {:?} twice",
+                    optional.flag
+                ));
+            }
+            if optional
+                .values
+                .iter()
+                .any(|value| value.chars().any(char::is_control))
+            {
+                problems.push(format!(
+                    "oneshot.optional_args values of {:?} must hold no control characters",
+                    optional.flag
+                ));
             }
         }
     }
@@ -2842,5 +2932,123 @@ mod tests {
             .collect();
         constant.sort();
         assert_eq!(declared, constant);
+    }
+
+    #[test]
+    fn a_one_shot_form_names_the_prompt_once_and_no_other_placeholder() {
+        let oneshot =
+            |value: serde_json::Value| problems_of(|kind| kind["oneshot"] = value.clone());
+        assert!(oneshot(serde_json::json!({ "args": ["-p", "{prompt}"] })).is_empty());
+        assert!(
+            oneshot(serde_json::json!({ "args": ["-p"] }))
+                .iter()
+                .any(|problem| problem.contains("{prompt}")),
+            "the prompt is required"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}", "{prompt}"] }))
+                .iter()
+                .any(|problem| problem.contains("exactly once")),
+            "the prompt is named once"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}", "{ref}"] }))
+                .iter()
+                .any(|problem| problem.contains("only placeholder")),
+            "no other placeholder"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}"], "model_flag_reuse": true }))
+                .iter()
+                .any(|problem| problem.contains("model")),
+            "the reuse needs a declared model"
+        );
+    }
+
+    #[test]
+    fn an_optional_argument_has_a_flag_listed_once_and_values_without_control_characters() {
+        let optional = |list: serde_json::Value| {
+            problems_of(|kind| {
+                kind["oneshot"] = serde_json::json!({
+                    "args": ["-p", "{prompt}"],
+                    "optional_args": list.clone()
+                })
+            })
+        };
+        assert!(
+            optional(serde_json::json!([
+                { "flag": "--max-turns", "values": ["1"] },
+                { "flag": "--strict-mcp-config" }
+            ]))
+            .is_empty()
+        );
+        assert!(
+            optional(serde_json::json!([{ "flag": "max-turns" }]))
+                .iter()
+                .any(|problem| problem.contains("optional_args flag")),
+            "a flag starts with a dash"
+        );
+        assert!(
+            optional(
+                serde_json::json!([{ "flag": "--tools" }, { "flag": "--tools", "values": [""] }])
+            )
+            .iter()
+            .any(|problem| problem.contains("twice")),
+            "a flag is listed once"
+        );
+        assert!(
+            optional(serde_json::json!([{ "flag": "--tools", "values": ["a\nb"] }]))
+                .iter()
+                .any(|problem| problem.contains("control characters")),
+            "a value holds no line break"
+        );
+    }
+
+    #[test]
+    fn only_claude_among_the_built_in_kinds_declares_a_one_shot_form_that_reuses_its_model() {
+        let declared: Vec<(String, Vec<String>, bool)> = crate::catalog::built_ins()
+            .into_iter()
+            .filter_map(|decl| {
+                let oneshot = decl.oneshot?;
+                Some((decl.id, oneshot.args, oneshot.model_flag_reuse))
+            })
+            .collect();
+        assert_eq!(
+            declared,
+            vec![(
+                "claude".to_owned(),
+                ["-p", "{prompt}", "--output-format", "text"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                true
+            )]
+        );
+    }
+
+    #[test]
+    fn claude_runs_its_one_shot_form_with_the_restrictions_its_help_can_list() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|decl| decl.id == "claude")
+            .expect("claude is built in");
+        let expected: Vec<OptionalArgDecl> = serde_json::from_value(serde_json::json!([
+            { "flag": "--max-turns", "values": ["1"] },
+            { "flag": "--permission-mode", "values": ["default"] },
+            { "flag": "--strict-mcp-config" },
+            { "flag": "--mcp-config", "values": ["{\"mcpServers\":{}}"] },
+            { "flag": "--disallowedTools", "values": ["Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task"] },
+            { "flag": "--tools", "values": [""] },
+            { "flag": "--no-session-persistence" }
+        ]))
+        .expect("the restrictions parse");
+        assert_eq!(claude.oneshot.expect("declared").optional_args, expected);
+    }
+
+    #[test]
+    fn the_claude_declaration_is_byte_identical_in_the_kinds_and_the_package() {
+        assert_eq!(
+            include_str!("../kinds/claude.json"),
+            include_str!("../../../packages/agents/massorca.claude/agents/claude.json"),
+        );
     }
 }
