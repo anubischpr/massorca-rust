@@ -223,6 +223,8 @@ pub struct Shell {
     chat_watched: Option<String>,
     /// The chat sessions whose older page is being fetched.
     chat_history_pending: BTreeSet<String>,
+    /// The approval requests whose answer is on its way, so a second click sends nothing.
+    chat_answering: BTreeSet<String>,
     /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
     session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
@@ -572,6 +574,7 @@ impl Shell {
             chat_transcripts: HashMap::new(),
             chat_watched: None,
             chat_history_pending: BTreeSet::new(),
+            chat_answering: BTreeSet::new(),
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),

@@ -10,7 +10,10 @@ use massorca_protocol::methods::agents::{
     AgentKind, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueParams,
     AgentSession, AgentSetModeParams, QueuedPrompt,
 };
-use massorca_protocol::methods::chat::{self, ChatHistoryParams, RunType};
+use massorca_protocol::methods::chat::{
+    self, ApprovalDecision, ApprovalScope, ApprovalState, ChatApprovalAnswerParams, ChatHistoryParams,
+    ChatItem, ChatItemBody, RunType,
+};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -21,7 +24,9 @@ use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::terminal_surface::TerminalSurface;
-use massorca_ui::components::transcript::{TranscriptAction, TranscriptRow, TranscriptView};
+use massorca_ui::components::transcript::{
+    ApprovalAnswer, TranscriptAction, TranscriptRow, TranscriptView,
+};
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_READING, SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM,
     TYPE_TITLE_SM,
@@ -887,15 +892,92 @@ impl Shell {
         cx.notify();
     }
 
-    /// Stops the session's run at once, without a confirm. The store follows the service's answer.
-    /// Where an approval answer from the transcript goes. Nothing is sent yet: the service offers
-    /// `agent.chat.approval.answer` only with capability `agent-chat/1` (decision 0101, D6), and no session runs as a chat.
+    /// The `seq` of the pending approval item of `session` that asks `request_id`, as the person sees it. None when the
+    /// request is not pending any more: there is nothing left to answer.
+    fn pending_approval_seq(&self, session: &str, request_id: &str, cx: &App) -> Option<u64> {
+        let state = self.store.read(cx).state();
+        let transcript = self
+            .chat_transcripts
+            .get(session)
+            .or_else(|| state.chat.get(session))?;
+        transcript.items().iter().find_map(|item| match &item.body {
+            ChatItemBody::Approval(approval)
+                if approval.request_id == request_id
+                    && approval.state == ApprovalState::Pending =>
+            {
+                Some(item.seq)
+            }
+            _ => None,
+        })
+    }
+
+    /// Sends the person's answer to a permission request of a chat session, with the `seq` of the item they saw, so an
+    /// answer to a request the CLI sent again since is refused (decision 0101, D6). The item changes through the stream.
     fn answer_transcript(
         &mut self,
-        _session: &str,
-        _action: TranscriptAction,
-        _cx: &mut Context<Self>,
+        session: &str,
+        action: TranscriptAction,
+        cx: &mut Context<Self>,
     ) {
+        let TranscriptAction::Answer { request_id, answer } = action;
+        let request_id = request_id.to_string();
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let Some(seq) = self.pending_approval_seq(session, &request_id, cx) else {
+            return;
+        };
+        if !self.chat_answering.insert(request_id.clone()) {
+            return;
+        }
+        let (decision, scope) = match answer {
+            ApprovalAnswer::Deny => (ApprovalDecision::Deny, None),
+            ApprovalAnswer::Allow => (ApprovalDecision::Allow, Some(ApprovalScope::Once)),
+            ApprovalAnswer::Always => (ApprovalDecision::Allow, Some(ApprovalScope::Always)),
+        };
+        let params = ChatApprovalAnswerParams {
+            session: session.to_owned(),
+            request_id: request_id.clone(),
+            decision,
+            scope,
+            message: None,
+            seq: Some(seq),
+        };
+        self.session_notices.remove(session);
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_chat_answer(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_approval(&id, &request_id, answer, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The service's answer to an approval. The item itself comes through the stream; a refusal says in a short note why
+    /// the answer did not count.
+    fn finish_approval(
+        &mut self,
+        session: &str,
+        request_id: &str,
+        answer: Result<ChatItem, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chat_answering.remove(request_id);
+        if let Err(refusal) = answer {
+            let note = match refusal.code() {
+                Some(chat::APPROVAL_CHANGED) => {
+                    "That request changed before your answer arrived. Read it again and answer."
+                        .to_owned()
+                }
+                Some(chat::APPROVAL_SETTLED) => "That request was already answered.".to_owned(),
+                _ => format!("Could not send your answer: {}", refusal.sentence()),
+            };
+            self.session_notices.insert(session.to_owned(), note);
+        }
+        cx.notify();
     }
 
     /// Whether `session` is a chat whose agent works or waits: its Stop ends the turn and keeps the session.

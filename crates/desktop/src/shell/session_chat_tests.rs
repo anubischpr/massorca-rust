@@ -10,9 +10,11 @@ use massorca_protocol::methods::agents::{
     ReceiptKind,
 };
 use massorca_protocol::methods::chat::{
-    ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams, ChatInterrupted, ChatItem,
-    ChatItemBody, ChatSnapshot, MessageState,
+    Approval, ApprovalDecision, ApprovalScope, ApprovalState, ApprovalSuggestion,
+    ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams,
+    ChatInterrupted, ChatItem, ChatItemBody, ChatSnapshot, ChatUpdate, MessageState,
 };
+use tokio::sync::oneshot;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 
 fn cursor(seq: u64) -> ChatCursor {
@@ -355,4 +357,178 @@ fn the_chat_composer_hides_attach_and_the_model_chip_until_the_service_offers_th
     assert!(cx.debug_bounds("composer-primary").is_some());
     assert!(cx.debug_bounds("composer-attach").is_none());
     assert!(cx.debug_bounds("model-picker-trigger").is_none());
+}
+
+/// A pending permission request in the transcript, as the stream delivers it: item `ap` at `seq` 5.
+fn pending_approval() -> ChatItem {
+    ChatItem {
+        id: "ap".to_owned(),
+        position: 3,
+        seq: 5,
+        turn: None,
+        parent: None,
+        at_ms: 0,
+        body: ChatItemBody::Approval(Approval {
+            request_id: "r-1".to_owned(),
+            tool: "Bash".to_owned(),
+            input_summary: "touch probe.txt".to_owned(),
+            truncated: false,
+            tool_use_id: Some("toolu_1".to_owned()),
+            can_always: true,
+            suggestions: vec![ApprovalSuggestion {
+                kind: "addRules".to_owned(),
+                rules: vec!["Bash(touch probe.txt)".to_owned()],
+                destination: "localSettings".to_owned(),
+            }],
+            state: ApprovalState::Pending,
+            scope: None,
+            settled_at_ms: None,
+        }),
+    }
+}
+
+fn answer_calls(
+    script: &mut Script,
+) -> Vec<(
+    ChatApprovalAnswerParams,
+    oneshot::Sender<Result<ChatItem, Refusal>>,
+)> {
+    let mut answers = Vec::new();
+    while let Some(command) = script.next() {
+        if let Command::Chat(ChatCommand::Answer { params, reply }) = command {
+            answers.push((params, reply));
+        }
+    }
+    answers
+}
+
+#[gpui::test]
+fn the_card_shows_what_always_writes_and_each_button_answers_with_the_seq_it_showed(
+    cx: &mut TestAppContext,
+) {
+    for (button, decision, scope) in [
+        ("Approve", ApprovalDecision::Allow, Some(ApprovalScope::Once)),
+        ("Always", ApprovalDecision::Allow, Some(ApprovalScope::Always)),
+        ("Deny", ApprovalDecision::Deny, None),
+    ] {
+        let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+        let items = vec![pending_approval()];
+        push(&rig, cx, snapshot("s1", items, false));
+        assert!(
+            cx.debug_bounds("approval-always-ap").is_some(),
+            "the rules an Always answer writes are listed"
+        );
+        chat_calls(&mut rig.script);
+
+        let selector: &'static str = match button {
+            "Approve" => "button:ap-Approve",
+            "Always" => "button:ap-Always",
+            _ => "button:ap-Deny",
+        };
+        let center = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is not drawn"))
+            .center();
+        cx.simulate_click(center, gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        let mut answers = answer_calls(&mut rig.script);
+        assert_eq!(answers.len(), 1, "{button}: one answer goes out");
+        let (params, _reply) = answers.remove(0);
+        assert_eq!(params.session, "s1");
+        assert_eq!(params.request_id, "r-1");
+        assert_eq!(params.decision, decision, "{button}");
+        assert_eq!(params.scope, scope, "{button}");
+        assert_eq!(params.seq, Some(5), "{button}: the seq of the item shown");
+    }
+}
+
+#[gpui::test]
+fn a_second_click_while_the_answer_is_on_its_way_sends_nothing(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+    push(&rig, cx, snapshot("s1", vec![pending_approval()], false));
+    chat_calls(&mut rig.script);
+    let center = cx
+        .debug_bounds("button:ap-Approve")
+        .expect("Approve is drawn")
+        .center();
+
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(answer_calls(&mut rig.script).len(), 1);
+}
+
+#[gpui::test]
+fn an_answer_to_a_request_that_changed_or_was_settled_says_so_in_a_short_note(
+    cx: &mut TestAppContext,
+) {
+    for (code, note) in [
+        (
+            "agent.approval_changed",
+            "That request changed before your answer arrived. Read it again and answer.",
+        ),
+        (
+            "agent.approval_settled",
+            "That request was already answered.",
+        ),
+        (
+            "agent.busy",
+            "Could not send your answer: The agent is busy",
+        ),
+    ] {
+        let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+        push(&rig, cx, snapshot("s1", vec![pending_approval()], false));
+        chat_calls(&mut rig.script);
+        let center = cx
+            .debug_bounds("button:ap-Approve")
+            .expect("Approve is drawn")
+            .center();
+        cx.simulate_click(center, gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        let (_, reply) = answer_calls(&mut rig.script).remove(0);
+        reply
+            .send(Err(Refusal::Failed {
+                code: code.to_owned(),
+                message: "the agent is busy".to_owned(),
+            }))
+            .expect("the shell waits for the answer");
+        cx.run_until_parked();
+
+        let shown = rig
+            .shell
+            .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
+        assert_eq!(shown.as_deref(), Some(note), "{code}");
+    }
+}
+
+#[gpui::test]
+fn the_item_the_stream_settles_replaces_the_card_with_its_one_line(cx: &mut TestAppContext) {
+    let (rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+    push(&rig, cx, snapshot("s1", vec![pending_approval()], false));
+    assert!(cx.debug_bounds("button:ap-Approve").is_some());
+
+    let mut settled = pending_approval();
+    settled.seq = 6;
+    if let ChatItemBody::Approval(approval) = &mut settled.body {
+        approval.state = ApprovalState::Allowed;
+        approval.scope = Some(ApprovalScope::Always);
+    }
+    push(
+        &rig,
+        cx,
+        StoreUpdate::Chat {
+            session: "s1".to_owned(),
+            event: ChatEvent::Batch(ChatBatch {
+                cursor: cursor(6),
+                updates: vec![ChatUpdate::Item { item: settled }],
+                activity: None,
+            }),
+        },
+    );
+
+    assert!(cx.debug_bounds("button:ap-Approve").is_none());
+    assert!(cx.debug_bounds("transcript-row-ap").is_some());
 }
