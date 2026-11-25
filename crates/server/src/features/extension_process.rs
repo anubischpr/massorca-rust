@@ -875,8 +875,7 @@ mod tests {
         );
     }
 
-    /// Windows' PATHEXT is upper case, so a `.cmd` shim is resolved and run under that spelling.
-    #[cfg(windows)]
+    /// Windows' PATHEXT is upper case, so a `.cmd` shim is resolved and run under that spelling; Unix ignores it.
     fn windows_pathext() -> Option<String> {
         Some(".COM;.EXE;.BAT;.CMD".to_owned())
     }
