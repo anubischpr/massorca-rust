@@ -25,6 +25,7 @@ fn sample_project() -> projects::Project {
         added_at_ms: 1_767_225_600_000_i64,
         base_ref: None,
         icon: None,
+        remote_owner: None,
     }
 }
 
