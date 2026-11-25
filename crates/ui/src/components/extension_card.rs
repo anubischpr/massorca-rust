@@ -579,7 +579,9 @@ impl RenderOnce for ExtensionCard {
         }
 
         let handler = self.on_action.clone();
-        let card = card.on_click(route_click(&handler, ExtensionAction::Open));
+        let card = card
+            .cursor_pointer()
+            .on_click(route_click(&handler, ExtensionAction::Open));
         let disabled_extension =
             matches!(self.state, ExtensionState::Installed { enabled: false, .. });
         let name_color = if disabled_extension {
