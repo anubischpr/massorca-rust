@@ -6,6 +6,7 @@ use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 
 use super::start_page::start_params;
+use super::workspace_flow::ProjectChoice;
 
 /// The key of the page's composer among the workspace start composers; no workspace id is empty.
 pub const HOME_START: &str = "";
@@ -58,6 +59,19 @@ pub fn home_project<'a>(projects: &'a [Project], chosen: Option<&str>) -> Option
         .or_else(|| projects.first())
 }
 
+/// What Send starts in: "No project" when the person chose it, else the project `home_project` picks, or `None` when
+/// there is none to create in.
+pub fn home_choice(projects: &[Project], chosen: Option<&ProjectChoice>) -> Option<ProjectChoice> {
+    if chosen == Some(&ProjectChoice::NoProject) {
+        return Some(ProjectChoice::NoProject);
+    }
+    let id = match chosen {
+        Some(ProjectChoice::Project(id)) => Some(id.as_str()),
+        _ => None,
+    };
+    home_project(projects, id).map(|project| ProjectChoice::Project(project.id.clone()))
+}
+
 /// The Advanced section's fields as Send reads them. Blank text sends nothing for its field.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkspaceDetails {
@@ -102,6 +116,14 @@ pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> Br
     }
 }
 
+/// The branch pill with "No project": Send starts the agent in the conversations folder, with no worktree.
+pub fn no_project_branch_pill() -> BranchPill {
+    BranchPill {
+        label: "No worktree".to_owned(),
+        detail: "conversations folder".to_owned(),
+    }
+}
+
 /// The `workspace.create` that Send asks for: a new worktree in `project`.
 pub fn create_params(
     project: &str,
@@ -130,6 +152,26 @@ fn non_empty(text: &str) -> Option<String> {
 /// The `agent.start` in the new workspace. A blank prompt starts the agent with none.
 pub fn home_start_params(
     workspace: &str,
+    kind: &str,
+    prompt: &str,
+    permission_mode: Option<String>,
+) -> AgentStartParams {
+    start_in(Some(workspace), kind, prompt, permission_mode)
+}
+
+/// The `agent.start` with no workspace, which the service takes only with `agent-no-project/1`: the session runs in its
+/// own folder in the conversations folder, with no worktree or branch.
+pub fn no_project_start_params(
+    kind: &str,
+    prompt: &str,
+    permission_mode: Option<String>,
+) -> AgentStartParams {
+    start_in(None, kind, prompt, permission_mode)
+}
+
+/// The `agent.start` in `workspace`, or with none. A blank prompt starts the agent with none.
+fn start_in(
+    workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
@@ -274,5 +316,28 @@ mod tests {
         assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn no_project_is_the_choice_when_chosen_and_otherwise_the_project_rule_stands() {
+        let projects = [project("p1", "alpha"), project("p2", "beta")];
+        assert_eq!(
+            home_choice(&projects, Some(&ProjectChoice::NoProject)),
+            Some(ProjectChoice::NoProject)
+        );
+        assert_eq!(
+            home_choice(&projects, None),
+            Some(ProjectChoice::Project("p1".to_owned()))
+        );
+        assert_eq!(home_choice(&[], None), None);
+    }
+
+    #[test]
+    fn a_no_project_start_carries_no_workspace_and_a_blank_prompt_sends_none() {
+        let params = no_project_start_params("claude", "fix it", Some("plan".into()));
+        assert_eq!(params.workspace, None);
+        assert_eq!(params.prompt.as_deref(), Some("fix it"));
+        assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(no_project_start_params("claude", "  ", None).prompt, None);
     }
 }

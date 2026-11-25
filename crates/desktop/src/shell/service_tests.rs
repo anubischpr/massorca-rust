@@ -279,7 +279,10 @@ fn add_a_project_is_refused_under_its_path_then_added_and_chosen_on_the_start_pa
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, _| {
         assert!(shell.dialogs.add_project.is_none());
-        assert_eq!(shell.home_project.as_deref(), Some("p9"));
+        assert_eq!(
+            shell.home_project,
+            Some(ProjectChoice::Project("p9".to_owned()))
+        );
     });
 }
 

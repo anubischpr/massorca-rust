@@ -34,7 +34,7 @@ use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
-use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
+use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
@@ -640,8 +640,12 @@ impl Shell {
             .start_pending
             .as_ref()
             .filter(|pending| pending.workspace == workspace_id);
-        let no_project =
-            workspace_id == HOME_START && self.store.read(cx).state().projects.is_empty();
+        let no_project = workspace_id == HOME_START
+            && home_choice(
+                &self.store.read(cx).state().projects,
+                self.home_project.as_ref(),
+            )
+            .is_none();
         let reason = send_reason(connected, !choices.is_empty(), kind_chosen, starting)
             .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
             .map(SharedString::from);
@@ -664,7 +668,7 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let params = start_params(workspace, &kind.id, prompt, permission_mode);
+        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
