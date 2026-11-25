@@ -40,6 +40,9 @@ pub const AGENT_RELEASE: &str = "agent-release/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
+/// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
+pub const AGENT_CHAT: &str = "agent-chat/1";
 /// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
@@ -48,6 +51,8 @@ pub const GIT: &str = "git/1";
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
 pub const TEAMS: &str = "teams/1";
+/// A team's Conference room (`team.room_list`, `team.room_post`) and the `team.room_changed` topic (decision 0102).
+pub const TEAM_ROOM: &str = "team-room/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).
