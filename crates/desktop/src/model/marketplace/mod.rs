@@ -22,7 +22,7 @@ pub use accounts::{
     connection_rows, import_outcome, terminal_sign_in,
 };
 pub use agent_links::{AgentLink, installed_agent_links};
-pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
+pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text, status_word};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use host_target::HostTarget;

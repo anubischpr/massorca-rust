@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
@@ -505,5 +506,106 @@ async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
         "a fresh profile's Discover has no other category, so no other section"
     );
     assert!(agents >= 4, "the built-in agents are one Agents group");
+    stop_service(service).await;
+}
+
+/// Set in the child process that runs the built-in agent check, so the parent knows to run the check itself.
+const FAKE_CLI_CHILD: &str = "MASSORCA_BRIDGE_FAKE_CLI_CHILD";
+
+/// A stand-in for the built-in agent's CLI, named as its package runs it: it prints nothing and exits 0.
+fn write_fake_cli(bin: &Path) {
+    #[cfg(windows)]
+    {
+        fs::write(bin.join("claude.cmd"), "@echo off\r\nexit /b 0\r\n")
+            .expect("the fake CLI is written");
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let cli = bin.join("claude");
+        fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("the fake CLI is written");
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755))
+            .expect("the fake CLI is executable");
+    }
+}
+
+/// The built-in Claude agent installs from the catalogue and is Enabled, and its Installed row says so. The service
+/// resolves vendor programs on its own PATH (MASSORCA_VENDOR_PATH=process) and a test cannot set the process
+/// environment (unsafe is denied), so the check runs in a child process whose PATH holds one fake CLI.
+#[test]
+fn an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list() {
+    if std::env::var_os(FAKE_CLI_CHILD).is_none() {
+        let bin = tempfile::TempDir::new().expect("a bin folder");
+        write_fake_cli(bin.path());
+        let status = Command::new(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                "an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list",
+                "--nocapture",
+            ])
+            .env(FAKE_CLI_CHILD, "1")
+            .env("PATH", bin.path())
+            .env("MASSORCA_VENDOR_PATH", "process")
+            .status()
+            .expect("the child check runs");
+        assert!(status.success(), "the child check passed");
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(installed_built_in_agent_is_an_enabled_row());
+}
+
+async fn installed_built_in_agent_is_an_enabled_row() {
+    use massorca_desktop::model::marketplace::{
+        MarketplaceSource, ServiceMarketplace, listed, status_word,
+    };
+    use massorca_desktop::model::navigation::MarketplacePage;
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the catalogue", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+    let source = "catalogue:massorca.claude".to_owned();
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the built-in package is reviewed");
+    handle
+        .install_extension(install_params(source, Some(review.consent.clone())))
+        .await
+        .expect("the built-in agent installs without its vendor installer");
+    until(
+        &mut updates,
+        &mut state,
+        "the installed built-in agent",
+        |state| installed_state(state, "massorca.claude") == Some(ExtensionState::Enabled),
+    )
+    .await;
+
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let mut marketplace = ServiceMarketplace::default();
+    marketplace.follow_agent_kinds(&state.agent_kinds);
+    marketplace.follow_extensions(
+        read.installed.as_ref().expect("the installed list"),
+        read.catalogue.as_ref().expect("the catalogue"),
+    );
+    let snapshot = marketplace.snapshot();
+    let installed = listed(&snapshot, MarketplacePage::Installed, "");
+    let row = installed
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some("claude"))
+        .expect("the built-in agent is in the Installed list");
+    assert_eq!(
+        status_word(&row.state).as_deref(),
+        Some("Enabled"),
+        "its row says Enabled"
+    );
     stop_service(service).await;
 }

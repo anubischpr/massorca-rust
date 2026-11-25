@@ -125,7 +125,15 @@ fn the_installed_view_lists_only_installed_items(cx: &mut TestAppContext) {
         page(&shell, cx),
         Page::Marketplace(MarketplacePage::Installed)
     );
-    assert!(shown(cx, "marketplace-item-1"), "Claude is installed");
+    assert!(
+        shown(cx, "marketplace-row-1"),
+        "Claude is installed, as a row"
+    );
+    assert!(
+        !shown(cx, "marketplace-item-1"),
+        "the Installed list is rows, not the Discover cards"
+    );
+    assert!(shown(cx, "marketplace-row-6"), "Quick notes is installed");
     assert!(
         !shown(cx, "marketplace-item-3"),
         "GitHub is found on this PC but not installed"
