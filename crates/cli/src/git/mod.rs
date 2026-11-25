@@ -6,6 +6,7 @@ mod diff;
 mod index;
 mod log;
 mod remote;
+mod show_file;
 mod status;
 mod watch;
 
@@ -45,6 +46,8 @@ pub enum GitCommand {
     Log(log::LogArgs),
     /// Shows the patch of one file.
     Patch(diff::PatchArgs),
+    /// Shows one file's bytes on the working tree, the index or a revision; `--out` writes them.
+    ShowFile(show_file::ShowFileArgs),
     /// Lists the local branches, the current one first.
     Branches(branch::BranchesArgs),
     /// Creates a branch with no upstream, at HEAD or `--start`.
@@ -94,6 +97,7 @@ pub async fn execute(
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
+        GitCommand::ShowFile(args) => show_file::run(&client, args, output).await,
         GitCommand::Branches(args) => branch::run_list(&client, args, output).await,
         GitCommand::BranchCreate(args) => branch::run_create(&client, args, output).await,
         GitCommand::Switch(args) => branch::run_switch(&client, args, output).await,

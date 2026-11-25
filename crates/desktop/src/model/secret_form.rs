@@ -270,6 +270,7 @@ mod tests {
 
     fn project(id: &str, name: &str) -> Project {
         Project {
+            remote_owner: None,
             icon: None,
             id: id.into(),
             kind: ProjectKind::Git,

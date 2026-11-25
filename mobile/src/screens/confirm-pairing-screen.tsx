@@ -67,7 +67,12 @@ export function ConfirmPairingScreen({ navigation, route }: Props) {
   }
 
   return (
-    <ScrollView style={{ backgroundColor: palette['surface.canvas'] }} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={{ backgroundColor: palette['surface.canvas'] }}
+      contentContainerStyle={styles.content}
+      // With the keyboard open, a tap on a button must press it, not only close the keyboard.
+      keyboardShouldPersistTaps="handled"
+    >
       <Text accessibilityRole="header" style={[styles.heading, { color: palette['text.primary'] }]}>
         {CONFIRM_HEADING}
       </Text>

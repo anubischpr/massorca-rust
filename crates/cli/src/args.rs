@@ -357,6 +357,9 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the workspaces of delegated children first, deepest first, with the same checks and flags.
+        #[arg(long)]
+        with_children: bool,
     },
     /// Renames a workspace or sets its comment. A worktree's directory and branch keep their names.
     Update {

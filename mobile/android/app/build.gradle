@@ -88,6 +88,13 @@ android {
             // The Rust library is built for these two ABIs only (mobile/ubrn.config.yaml).
             abiFilters "arm64-v8a", "x86_64"
         }
+        // The CMake path below builds the Rust binding library. This also builds React Native's app library
+        // (libappmodules.so), which the default app build makes; see app-modules.cmake.
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_PROJECT_INCLUDE=${projectDir}/app-modules.cmake"
+            }
+        }
     }
     signingConfigs {
         debug {

@@ -342,3 +342,35 @@ fn adding_a_plain_folder_without_a_kind_warns_on_stderr_in_text_mode_only() {
         .success()
         .stderr(contains(warning).not());
 }
+
+#[test]
+fn the_remote_owner_is_shown_by_list_and_show_and_carried_in_json() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    let repo_text = repo.to_string_lossy().into_owned();
+    sandbox.json_ok("default", &["project", "add", repo_text.as_str()]);
+
+    let shown = sandbox
+        .run("default", &["project", "show", "repo"])
+        .success();
+    assert!(
+        stdout_text(&shown).contains("owner: acme"),
+        "show: {}",
+        stdout_text(&shown)
+    );
+
+    let listed = sandbox.run("default", &["project", "list"]).success();
+    let text = stdout_text(&listed);
+    assert!(
+        text.contains("OWNER") && text.contains("acme"),
+        "list: {text}"
+    );
+
+    let json = sandbox.json_ok("default", &["project", "show", "repo"]);
+    assert_eq!(json["remote_owner"], "acme");
+}
