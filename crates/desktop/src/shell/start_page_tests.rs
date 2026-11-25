@@ -1,12 +1,12 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
-use super::start_page::{picked_options, split_last_segment};
+use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::regions::Region;
-use crate::model::start_page::{StartMode, StartOptions};
+use crate::model::start_page::{CHAT_NEEDS_NEWER_SERVICE, StartMode, StartOptions};
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
@@ -19,7 +19,9 @@ use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
-use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
+use massorca_ui::tokens::{
+    DURATION_TOOLTIP_DELAY, LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4,
+};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -480,6 +482,15 @@ fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut 
     (rig, cx)
 }
 
+/// The service offers chat sessions, as a newer service does on connect (`agent-chat/1`).
+fn offer_chat(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
 fn composer_of(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
     rig.shell
         .update(cx, |shell, cx| shell.start_composer("w1", cx))
@@ -651,6 +662,7 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -695,6 +707,7 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -752,15 +765,15 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
-fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
-    cx: &mut TestAppContext,
-) {
+fn with_the_chat_capability_chat_is_the_default_and_both_segments_switch(cx: &mut TestAppContext) {
     let (rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     let mode = |rig: &Rig, cx: &mut VisualTestContext| {
-        rig.shell.read_with(cx, |shell, _| shell.start_mode("w1"))
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
     };
     assert_eq!(mode(&rig, cx), StartMode::Chat);
     assert!(cx.debug_bounds("start-terminal-note").is_none());
@@ -778,6 +791,108 @@ fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
 }
 
 #[gpui::test]
+fn without_the_chat_capability_the_switch_starts_on_terminal_and_chat_is_off(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    click(cx, "segment-0");
+    assert_eq!(
+        mode(&rig, cx),
+        StartMode::Terminal,
+        "a click on the off Chat segment changes nothing"
+    );
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    let chat = cx
+        .debug_bounds("segment-0")
+        .expect("the Chat segment is drawn")
+        .center();
+    cx.simulate_mouse_move(chat, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the off Chat segment shows why it is off"
+    );
+}
+
+#[gpui::test]
+fn chat_turns_on_by_itself_when_the_service_starts_offering_it(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    offer_chat(&rig, cx);
+    assert_eq!(mode(&rig, cx), StartMode::Chat, "Chat is the default again");
+    assert!(cx.debug_bounds("start-terminal-note").is_none());
+}
+
+#[gpui::test]
+fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, work_panel) = rig.shell.read_with(cx, |shell, _| {
+        (
+            shell.model.canvas(),
+            shell.model.region_visible(Region::WorkPanel),
+        )
+    });
+    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
+    assert!(work_panel, "the Work panel shows the agent's terminal");
+    let (attach, _attach_reply) =
+        attach_call(&mut rig._script).expect("the agent's terminal is attached");
+    assert_eq!(attach.terminal, terminal);
+}
+
+#[test]
+fn the_chat_segment_is_off_with_its_reason_until_the_service_offers_chat() {
+    let off = mode_segments(false);
+    assert!(off[0].is_disabled());
+    assert_eq!(
+        off[0].tooltip_text().map(|text| text.as_ref()),
+        Some(CHAT_NEEDS_NEWER_SERVICE)
+    );
+    assert!(!off[1].is_disabled(), "Terminal is always on");
+    let on = mode_segments(true);
+    assert!(!on[0].is_disabled());
+    assert_eq!(on[0].tooltip_text(), None);
+}
+
+#[gpui::test]
 fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
     cx: &mut TestAppContext,
 ) {
@@ -785,6 +900,7 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     click(cx, "segment-1");
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();

@@ -60,6 +60,8 @@ pub enum StoreUpdate {
     AgentNoProjectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
+    /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
+    AgentChatOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -243,6 +245,8 @@ pub struct StoreState {
     pub agent_no_project: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
+    /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
+    pub agent_chat: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -275,6 +279,7 @@ impl Default for StoreState {
             agent_seen: false,
             agent_no_project: false,
             agent_options: false,
+            agent_chat: false,
             config: Vec::new(),
         }
     }
@@ -358,6 +363,7 @@ impl StoreState {
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
+            StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -697,6 +703,17 @@ mod tests {
         );
         state.apply(StoreUpdate::AgentOptionsOffered(true), Instant::now());
         assert!(state.agent_options);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_offers_agent_chat() {
+        let mut state = StoreState::default();
+        assert!(
+            !state.agent_chat,
+            "no read yet: the start page opens on Terminal"
+        );
+        state.apply(StoreUpdate::AgentChatOffered(true), Instant::now());
+        assert!(state.agent_chat);
     }
 
     fn resynced() -> StoreState {

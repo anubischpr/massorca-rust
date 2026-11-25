@@ -6,6 +6,7 @@ use super::service_tests::{Rig, click, draw, rig};
 use super::workspace_dialogs::ProjectMenuChoice;
 use super::*;
 use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
+use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{Command, Refusal, Script, StoreUpdate};
@@ -111,6 +112,22 @@ fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_home_page_starts_on_terminal_until_the_service_offers_chat(cx: &mut TestAppContext) {
+    let (rig, cx) = home_rig(cx);
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode(HOME_START, app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    rig.updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(mode(&rig, cx), StartMode::Chat);
+}
+
+#[gpui::test]
 fn the_title_names_the_chosen_project_and_the_name_opens_its_menu(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
     draw(cx);
@@ -161,6 +178,9 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
     type_and_send(&rig, cx, "Fix the login bug");
     let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
@@ -540,6 +560,9 @@ fn no_project_once_offered_starts_the_agent_with_no_workspace_and_opens_it(
     let (mut rig, cx) = home_rig(cx);
     rig.updates
         .send(StoreUpdate::AgentNoProjectOffered(true))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::AgentChatOffered(true))
         .expect("the store listens");
     cx.run_until_parked();
     choose_no_project(cx);

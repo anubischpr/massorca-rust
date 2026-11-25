@@ -49,7 +49,15 @@ impl StartMode {
             Self::Terminal
         }
     }
+
+    /// The mode a start opens in: this one while the service offers chat sessions (`agent-chat/1`), else Terminal.
+    pub fn offered(self, chat_offered: bool) -> Self {
+        if chat_offered { self } else { Self::Terminal }
+    }
 }
+
+/// Why the Chat segment is off until the service offers chat sessions.
+pub const CHAT_NEEDS_NEWER_SERVICE: &str = "Chat sessions need a newer service.";
 
 /// The note under the composer while Terminal is chosen (WS-40).
 pub const TERMINAL_NOTE: &str =
@@ -346,6 +354,14 @@ mod tests {
         for mode in [StartMode::Chat, StartMode::Terminal] {
             assert_eq!(StartMode::from_index(mode.index()), mode);
         }
+    }
+
+    #[test]
+    fn without_the_chat_capability_every_start_opens_on_terminal() {
+        assert_eq!(StartMode::Chat.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Terminal.offered(false), StartMode::Terminal);
+        assert_eq!(StartMode::Chat.offered(true), StartMode::Chat);
+        assert_eq!(StartMode::Terminal.offered(true), StartMode::Terminal);
     }
 
     #[test]

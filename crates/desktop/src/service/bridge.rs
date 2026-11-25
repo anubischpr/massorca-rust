@@ -57,6 +57,8 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
+/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
+const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -732,6 +734,9 @@ impl Link {
         )));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
+        ));
+        self.emit(StoreUpdate::AgentChatOffered(
+            client.has_capability(AGENT_CHAT_CAPABILITY),
         ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;

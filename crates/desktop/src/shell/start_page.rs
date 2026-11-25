@@ -40,9 +40,9 @@ use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartOptions,
-    StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_options,
-    start_params,
+    CHAT_NEEDS_NEWER_SERVICE, CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED,
+    StartMode, StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart,
+    send_reason, start_options, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -347,18 +347,18 @@ fn start_mode_switch(
     workspace: String,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_: &mut Window, cx: &mut App| -> AnyElement {
-        let mode = shell
+        let (mode, chat_offered) = shell
             .upgrade()
-            .map(|shell| shell.read(cx).start_mode(&workspace))
-            .unwrap_or_default();
+            .map(|shell| {
+                let shell = shell.read(cx);
+                (shell.start_mode(&workspace, cx), shell.chat_offered(cx))
+            })
+            .unwrap_or((StartMode::Terminal, false));
         let (shell, workspace) = (shell.clone(), workspace.clone());
         SegmentedControl::new(
             "start-mode",
             "start-mode-group",
-            vec![
-                Segment::icon_text(IconName::MessageSquare, "Chat"),
-                Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-            ],
+            mode_segments(chat_offered),
         )
         .selected(mode.index())
         .style(SegmentedStyle::Sunken)
@@ -369,6 +369,20 @@ fn start_mode_switch(
         })
         .into_any_element()
     }
+}
+
+/// The switch's two segments. Chat is off, with its reason, until the service offers chat sessions (`agent-chat/1`).
+pub(super) fn mode_segments(chat_offered: bool) -> Vec<Segment> {
+    let chat = Segment::icon_text(IconName::MessageSquare, "Chat");
+    let chat = if chat_offered {
+        chat
+    } else {
+        chat.disabled(true).tooltip(CHAT_NEEDS_NEWER_SERVICE)
+    };
+    vec![
+        chat,
+        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+    ]
 }
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
@@ -575,12 +589,19 @@ impl Shell {
         entity
     }
 
-    /// Where a session started from `workspace`'s page opens; Chat until the switch says otherwise.
-    pub(super) fn start_mode(&self, workspace: &str) -> StartMode {
+    /// Whether the service offers chat sessions (`agent-chat/1`), as the store read it on the last connect.
+    pub(super) fn chat_offered(&self, cx: &App) -> bool {
+        self.store.read(cx).state().agent_chat
+    }
+
+    /// Where a session started from `workspace`'s page opens: the switch's choice (Chat until it says otherwise),
+    /// or Terminal while the service does not offer chat.
+    pub(super) fn start_mode(&self, workspace: &str, cx: &App) -> StartMode {
         self.start_composers
             .get(workspace)
             .map(|composer| composer.mode)
             .unwrap_or_default()
+            .offered(self.chat_offered(cx))
     }
 
     /// The switch's choice for `workspace`, kept with its composer so it survives redraws.
@@ -686,7 +707,7 @@ impl Shell {
         };
         let options = self.chosen_options(&composer, &kind.id, cx);
         let params = start_params(Some(workspace), &kind.id, prompt, permission_mode, options);
-        let mode = self.start_mode(workspace);
+        let mode = self.start_mode(workspace, cx);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,
