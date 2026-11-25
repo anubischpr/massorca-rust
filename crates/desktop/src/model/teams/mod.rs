@@ -12,6 +12,7 @@ mod new_project;
 mod page;
 mod room;
 mod routine_form;
+mod routine_history;
 mod sample;
 mod sidebar;
 mod state;
@@ -35,6 +36,7 @@ pub use routine_form::{
     MONTH_DAYS, ROUTINE_NAME_LIMIT, ROUTINE_PROMPT_LIMIT, RoutineDraft, RoutineField,
     RoutineProblem, ScheduleKind, WEEKDAYS, schedule_words,
 };
+pub use routine_history::{RoutineHistory, RunRow, RunsState, local_time, run_rows};
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamRow, TeamsSidebar, teams_sidebar,
