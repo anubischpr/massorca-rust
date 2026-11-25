@@ -252,11 +252,25 @@ fn a_path_conflicted_in_the_index_is_refused() {
     run_git(&repo, &["checkout", "-q", "main"]);
     commit_file(&repo, "README.md", "ours\n", "ours");
     // The merge stops at the conflict and leaves its stages in the index, so its failure is the setup.
+    // An identity is needed: without one, git refuses the merge before it reaches the conflict.
     massorca_process::command("git")
-        .args(["merge", "-q", "--no-edit", "theirs"])
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "merge",
+            "-q",
+            "--no-edit",
+            "theirs",
+        ])
         .current_dir(&repo)
         .output()
         .expect("spawn git");
+    assert!(
+        repo.join(".git").join("MERGE_HEAD").exists(),
+        "the merge stopped at the conflict"
+    );
 
     assert_eq!(
         refusal(git().file_content(&repo, &FileSide::Index, "README.md", 1 << 20)),
