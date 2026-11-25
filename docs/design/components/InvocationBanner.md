@@ -57,7 +57,7 @@ The gradient takes its colours from one of three sources, in this order:
 2. **Contrast.** The ring colours are bright, because they are drawn as 2 px strokes. Under a text line they fail: for example `usage.ring.1` (#5aa2ff) gives `text.primary` only 2.2:1 (`usage.ring.3`, 1.6:1). The build then mixes them toward the Canvas until the text passes, so every page loses its hue. The owner's approved green (#558d69) also gives `text.primary` only 3.3:1.
 3. **Coupling and count.** Six colours repeat sooner than eight. A change to the rings for legibility in the rail would also repaint every banner.
 
-**The new tokens.** They are not in `tokens.json` yet; the session that builds this adds them together with the generated code. Each hue is the owner's approved green turned around the colour wheel at the same saturation and lightness. Its lightness is then lowered just enough that `text.primary` reaches 4.5:1 or more in dark. The light values are pale tints that give `text.primary` 13:1 or more.
+**The new tokens.** They are in `tokens.json` (added by the banner build, PR #372). Each hue is the owner's approved green turned around the colour wheel at the same saturation and lightness. Its lightness is then lowered just enough that `text.primary` reaches 4.5:1 or more in dark. The light values are pale tints that give `text.primary` 13:1 or more.
 
 | Token | Dark | Light | Hue |
 |---|---|---|---|
@@ -86,14 +86,13 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 | Pill hover | The pill fill changes to `fill.hover.raised`. |
 | Pill pressed | `fill.pressed.overlay` over the pill. |
 | Pill focus | The standard focus ring outside the pill, at `radius.lg`. |
-| No example prompts | There is no panel. The part shows one sentence instead: "This item lists no example prompts, so there is nothing to invoke." |
+| No example prompts | There is no banner. The page goes straight from the host line to Connection. |
 | One or two prompts | The same panel with fewer pills. Its height follows the pills. |
 | Long prompt | One line with an ellipsis. The full text is in the tooltip and in the accessible name. |
 
 ## Behaviour
 
-- Pressing a pill opens a new chat in the Canvas: the selected workspace's start page or, with no workspace, the start page with none. The full prompt goes into its composer and is not sent.
-- Keyboard: Space presses a focused pill, and Enter presses it through GPUI's keyboard click, as for `Button`.
+- Pressing a pill (by click, Enter or Space) opens a new chat in the Canvas: the selected workspace's start page or, with no workspace, the start page with none. The pill's full prompt, including its `@Tag`, goes into the composer and is not sent.
 - The footer names the item's mention from `listing.mention`, or else its name.
 - Each pill is a button and a tab stop, in order from top to bottom. The panel itself is not a tab stop.
 - Reduced motion has no effect, because nothing moves.
@@ -120,7 +119,5 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 
 ## Token gaps and open points
 
-- Build status: the first build (PR #364) has pills with `radius.full`, a `text.secondary` footer, 20 px top and bottom padding, and `usage.ring.1` to `usage.ring.6` for items with no colour. This spec and Ruling R-IB1 replace those; the building session changes them.
-
-- New tokens: `banner.palette.1` to `banner.palette.8` and `banner.end` (Ruling R-IB1). They are added to `tokens.json` by the session that builds this.
+- Tokens: `banner.palette.1` to `banner.palette.8` and `banner.end` (Ruling R-IB1) are in `tokens.json`.
 - Sizes use existing tokens. The 44 px pill height is a fixed measure from the approved screenshot, not a new token.

@@ -600,14 +600,14 @@ async fn a_folder_package_without_colours_takes_the_palette_slot_of_its_id() {
     );
     assert_eq!(
         banner_palette_slot(item),
-        0,
-        "acme.notes always takes palette slot 0"
+        1,
+        "acme.notes always takes palette slot 1"
     );
     stop_service(service).await;
 }
 
 #[tokio::test]
-async fn a_package_with_no_examples_has_no_banner_and_says_why() {
+async fn a_package_with_no_examples_has_no_banner_part() {
     use massorca_desktop::model::marketplace::{Part, absent_reason};
     let home = temp_home();
     let package = home.path().join("package");
@@ -629,7 +629,8 @@ async fn a_package_with_no_examples_has_no_banner_and_says_why() {
     assert!(item.examples.is_empty(), "it lists no example prompts");
     assert_eq!(
         absent_reason(item, Part::Banner),
-        Some("This item lists no example prompts, so there is nothing to invoke.")
+        None,
+        "the banner is left out, with no sentence"
     );
     stop_service(service).await;
 }

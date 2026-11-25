@@ -296,7 +296,7 @@ Ring anatomy: `size.usage.ring` (32 px), stroke 2 px, track `usage.ring.track`, 
 
 ### 2.12.1 Banner palette (Ruling R-IB1, 2026-11-25)
 
-The gradient of the Marketplace invocation banner (components/InvocationBanner.md, A99) for an item whose listing declares no colour. The colour carries no meaning: it only tells item pages apart. An item gets slot N = FNV-1a of its extension ID (or its name) modulo 8, plus 1. `banner.end` is the second stop for an item with no colour or with one colour. Do not use `usage.ring.*` for this; those colours mean provider slots. Every value gives `text.primary` at least 4.5:1. **Not yet in tokens.json**: the session that builds the banner adds these tokens together with the generated code.
+The gradient of the Marketplace invocation banner (components/InvocationBanner.md, A99) for an item whose listing declares no colour. The colour carries no meaning: it only tells item pages apart. An item gets slot N = FNV-1a of its extension ID (or its name) modulo 8, plus 1. `banner.end` is the second stop for an item with no colour or with one colour. Do not use `usage.ring.*` for this; those colours mean provider slots. Every value gives `text.primary` at least 4.5:1. The tokens are in tokens.json (banner build, PR #372).
 
 | Token | Dark | Light | Use |
 |---|---|---|---|
