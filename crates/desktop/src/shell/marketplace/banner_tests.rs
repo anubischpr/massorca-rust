@@ -1,0 +1,66 @@
+//! Element and model tests of an item page's banner: its colours, and what a pill press does.
+
+use super::extension_tests::{catalogue_package, open_listed};
+use super::item::banner_colours;
+use crate::model::home_start::HOME_START;
+use crate::shell::service_tests::click;
+use gpui::TestAppContext;
+use massorca_protocol::methods::extensions::{Banner, BannerExample, ExtensionItem};
+use massorca_ui::tokens::{Color, Palette};
+
+/// A catalogue package with two listed colours and one mention example, "@notes summarise my notes".
+fn banner_package() -> ExtensionItem {
+    let mut package = catalogue_package();
+    package.listing.mention = Some("notes".to_owned());
+    package.listing.banner = Some(Banner {
+        image: None,
+        colors: vec!["#3F9B6E".to_owned(), "#8E8E93".to_owned()],
+        examples: vec![BannerExample {
+            kind: "mention".to_owned(),
+            text: Some("@notes".to_owned()),
+            caption: "@notes summarise my notes".to_owned(),
+        }],
+    });
+    package
+}
+
+#[test]
+fn the_banner_takes_its_listed_colours_or_else_the_palette_colour_of_its_slot() {
+    let palette = Palette::DARK;
+    let listed = (
+        Color::rgba8(0xD9, 0x77, 0x57, 1.0),
+        Some(Color::rgba8(0xB5, 0x53, 0x2F, 1.0)),
+    );
+    assert_eq!(banner_colours(Some(listed), 3, &palette), listed);
+    assert_eq!(
+        banner_colours(None, 3, &palette),
+        (palette.usage.ring_4, None)
+    );
+    assert_eq!(
+        banner_colours(None, 9, &palette),
+        (palette.usage.ring_4, None),
+        "the slot wraps over the six palette colours"
+    );
+    assert_ne!(
+        banner_colours(None, 0, &palette),
+        banner_colours(None, 1, &palette),
+        "two slots give two colours"
+    );
+}
+
+#[gpui::test]
+fn a_banner_pill_opens_a_new_chat_with_its_prompt_in_the_composer(cx: &mut TestAppContext) {
+    let (rig, cx, _) = open_listed(cx, Vec::new(), vec![banner_package()]);
+    let key = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .selected_workspace()
+            .map_or_else(|| HOME_START.to_owned(), str::to_owned)
+    });
+    click(cx, "invocation-pill-0");
+    let composer = rig
+        .shell
+        .update(cx, |shell, cx| shell.start_composer(&key, cx));
+    let draft = composer.read_with(cx, |composer, cx| composer.draft(cx));
+    assert_eq!(draft, "@notes summarise my notes");
+}
