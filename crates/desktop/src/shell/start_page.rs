@@ -45,7 +45,7 @@ use crate::model::permission_modes::{DEFAULT_TAG, ModeChoice, remembered_mode, s
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
     StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, fast_reason,
-    send_reason, start_options, start_params,
+    send_reason, start_options, start_params, start_refusal_sentence,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -1043,7 +1043,7 @@ impl Shell {
             }
             Err(refusal) => composer.update(cx, |composer, cx| {
                 composer.set_draft(prompt, cx);
-                composer.set_error(Some(refusal.sentence().into()), cx);
+                composer.set_error(Some(start_refusal_sentence(&refusal).into()), cx);
             }),
         }
         cx.notify();

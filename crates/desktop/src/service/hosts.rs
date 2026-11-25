@@ -3,6 +3,7 @@
 //! service is down.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use massorca_client::{Client, ClientError, HostRecord, Hosts, default_device_name};
 use massorca_core_remote::bootstrap::{
@@ -14,8 +15,10 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::pairing::Offer;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
+use super::host_sessions::{Followed, connected, follow};
 use super::refusal::{Refusal, sentence};
 use super::update::{HostLink, StoreUpdate};
 
@@ -63,9 +66,10 @@ pub(super) fn spawn(
     profile: Profile,
     command: Command,
     updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: &Followed,
 ) {
     match command {
-        Command::RefreshHosts => refresh(&profile, &updates),
+        Command::RefreshHosts => refresh(&profile, &updates, followed),
         Command::AddSshHost { host, reply } => {
             tokio::spawn(async move {
                 let result = add_ssh(&profile, host, &updates).await;
@@ -143,33 +147,43 @@ impl ServiceHandle {
     }
 }
 
-/// Lists the hosts, then checks each one at once; each check reports when it finishes.
-fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>) {
+/// Lists the hosts, then checks each one that no task follows at once; each check reports when it finishes. A host
+/// a task follows reports through that task's own connection, so it is not checked again here.
+fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>, followed: &Followed) {
     let hosts = Hosts::of(profile);
     let Ok(records) = hosts.list() else {
         return;
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
     for record in records {
-        tokio::spawn(probe(hosts.clone(), record.name, updates.clone()));
+        if let Some(claim) = followed.claim(&record.name) {
+            tokio::spawn(follow(profile.clone(), record.name, claim, updates.clone()));
+        }
     }
 }
 
-async fn probe(hosts: Hosts, name: String, updates: mpsc::UnboundedSender<StoreUpdate>) {
-    let link = match Client::connect_host(&hosts, &name, &peer()).await {
-        Ok(client) => connected(&client),
-        Err(error) => HostLink::from_error(&error),
-    };
-    let _ = updates.send(StoreUpdate::HostLinkChanged { name, link });
+/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs. This is the fallback for a host
+/// with no live event subscription: a host that a task follows is left to that task.
+pub(super) fn check_hosts_again(
+    profile: Profile,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: Followed,
+) {
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(HOST_CHECK_EVERY);
+        every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            if updates.is_closed() {
+                return;
+            }
+            refresh(&profile, &updates, &followed);
+        }
+    });
 }
 
-fn connected(client: &Client) -> HostLink {
-    let server = &client.welcome().server;
-    HostLink::Connected {
-        server: server.name.clone(),
-        version: server.version.clone(),
-    }
-}
+/// How often the paired hosts without a live event subscription are checked again (STAT-16, STAT-17).
+const HOST_CHECK_EVERY: Duration = Duration::from_secs(30);
 
 /// Tells the store the hosts as they are now, then what this call found about the host it changed.
 fn announce(

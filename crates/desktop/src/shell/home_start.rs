@@ -32,8 +32,8 @@ use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     BranchPill, CHOOSE_A_PROJECT, FOLDER_NO_GIT_REASON, HOME_START, NEW_WORKTREE_REASON,
     NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails, branch_pill, create_params,
-    home_choice, home_start_params, name_is_derived, no_project_branch_pill,
-    no_project_start_params,
+    folder_start_workspace, home_choice, home_start_params, name_is_derived,
+    no_project_branch_pill, no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
@@ -560,6 +560,18 @@ impl Shell {
         // A name derived from the prompt may be made unique by the service; a typed name is never changed.
         let derived = name_is_derived(&details);
         let unique_offered = self.store.read(cx).state().workspace_unique_name;
+        let existing_folder = match &choice {
+            ProjectChoice::Project(id) => {
+                let state = self.store.read(cx).state();
+                state
+                    .projects
+                    .iter()
+                    .find(|project| &project.id == id)
+                    .and_then(|project| folder_start_workspace(project, &state.workspaces))
+                    .map(|workspace| workspace.id.clone())
+            }
+            ProjectChoice::NoProject => None,
+        };
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -570,20 +582,24 @@ impl Shell {
                     service.start_session(params, chat).await
                 }
                 ProjectChoice::Project(project) => {
-                    match create_for_start(
-                        &service,
-                        create_params(&project, &prompt, &details),
-                        derived,
-                        unique_offered,
-                    )
-                    .await
-                    {
+                    let started = match existing_folder {
+                        Some(workspace) => Ok(workspace),
+                        None => create_for_start(
+                            &service,
+                            create_params(&project, &prompt, &details),
+                            derived,
+                            unique_offered,
+                        )
+                        .await
+                        .map(|workspace| workspace.id),
+                    };
+                    match started {
                         Ok(workspace) => {
                             let _ = shell.update(cx, |shell, cx| {
-                                shell.remember_chosen_kind(&workspace.id, &kind.id, cx);
+                                shell.remember_chosen_kind(&workspace, &kind.id, cx);
                             });
                             let params = home_start_params(
-                                &workspace.id,
+                                &workspace,
                                 &kind.id,
                                 &prompt,
                                 permission_mode,

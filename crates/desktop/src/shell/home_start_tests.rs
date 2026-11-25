@@ -14,7 +14,7 @@ use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{ChatCommand, Command, KindChat, Refusal, Script, StoreUpdate};
 use gpui::{Focusable, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
-use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::MenuEntry;
@@ -941,4 +941,89 @@ fn no_project_sends_while_no_project_is_listed_once_offered(cx: &mut TestAppCont
     let (start, _reply) = expect_start(&mut rig.script);
     assert_eq!(start.workspace, None);
     assert_eq!(start.prompt.as_deref(), Some("Fix the login bug"));
+}
+
+/// The home page of a rig whose only project is `project`, which lists `workspaces`.
+fn project_home(
+    cx: &mut TestAppContext,
+    project: Project,
+    workspaces: Vec<Workspace>,
+) -> (Rig, &mut VisualTestContext) {
+    let (rig, cx) = rig(cx, &[("p0", "seed")]);
+    rig.updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project],
+            workspaces,
+        })
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![agent_kind(
+            "claude",
+            "Claude",
+            PackageState::Enabled,
+        )]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "button:sidebar-create");
+    offer_chat(&rig);
+    (rig, cx)
+}
+
+#[gpui::test]
+fn a_folder_project_starts_in_its_existing_folder_workspace(cx: &mut TestAppContext) {
+    let folder = Project {
+        kind: ProjectKind::Folder,
+        path: "/work/notes".to_owned(),
+        ..project("p1", "notes")
+    };
+    let existing = Workspace {
+        path: "/work/notes".to_owned(),
+        ..workspace("w1", "p1", "notes", 1)
+    };
+    let (mut rig, cx) = project_home(cx, folder, vec![existing]);
+    type_and_send(&rig, cx, "Summarise the notes");
+    let (start, reply) = expect_start(&mut rig.script);
+    assert_eq!(
+        start.workspace.as_deref(),
+        Some("w1"),
+        "the start reuses the folder workspace, so no create runs first"
+    );
+    assert_eq!(start.prompt.as_deref(), Some("Summarise the notes"));
+    reply
+        .send(Ok(agent("s1", "w1", 1)))
+        .expect("the shell waits for the start");
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_folder_project_without_a_workspace_at_its_folder_creates_one(cx: &mut TestAppContext) {
+    let folder = Project {
+        kind: ProjectKind::Folder,
+        path: "/work/notes".to_owned(),
+        ..project("p1", "notes")
+    };
+    let (mut rig, cx) = project_home(cx, folder, Vec::new());
+    type_and_send(&rig, cx, "Summarise the notes");
+    let (create, _unique, reply) = expect_create(&mut rig.script);
+    assert_eq!(create.project, "p1");
+    let created = workspace("w9", "p1", "summarise-the-notes", 9);
+    reply
+        .send(Ok(created.clone()))
+        .expect("the shell waits for the create");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(created))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let (start, _reply) = expect_start(&mut rig.script);
+    assert_eq!(start.workspace.as_deref(), Some("w9"));
+}
+
+#[gpui::test]
+fn a_git_project_still_creates_its_worktree_with_a_workspace_at_its_path(cx: &mut TestAppContext) {
+    let git = project("p1", "notes");
+    let existing = workspace("w1", "p1", "notes", 1);
+    let (mut rig, cx) = project_home(cx, git, vec![existing]);
+    type_and_send(&rig, cx, "Summarise the notes");
+    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    assert_eq!(create.project, "p1", "a git project makes its own worktree");
 }
