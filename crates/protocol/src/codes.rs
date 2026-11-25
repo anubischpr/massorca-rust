@@ -262,6 +262,15 @@ pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
 
+/// `marketplace.service.*` names a service this build does not know.
+pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";
+/// The service cannot do this from here: a status-only row, GitLab without `glab`, or a GitLab disconnect.
+pub const SERVICE_UNAVAILABLE: &str = "marketplace.service_unavailable";
+/// The service's program refused the token. The message is a fixed sentence, never the program's output.
+pub const SERVICE_REJECTED: &str = "marketplace.service_rejected";
+/// The service's program could not be run or did not finish in time.
+pub const SERVICE_FAILED: &str = "marketplace.service_failed";
+
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
 
