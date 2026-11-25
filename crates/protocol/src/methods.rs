@@ -15,6 +15,7 @@ pub mod host;
 pub mod projects;
 pub mod secrets;
 pub mod service;
+pub mod skill_placement;
 pub mod skills;
 pub mod tasks;
 pub mod team_room;

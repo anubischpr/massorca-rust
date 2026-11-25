@@ -61,6 +61,8 @@ pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
+/// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
+pub const SKILLS_PLACE: &str = "skills-place/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
