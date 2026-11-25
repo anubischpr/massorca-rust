@@ -395,6 +395,9 @@ CSP. Nothing above changes.
   `skills.unplace` need host administration. They place a home skill that discovery lists into the folders of the chosen agent tools (global scope): one
   canonical copy under `.agents/skills`, then an alias to it in each agent folder, or a verified copy where an alias is
   refused. Removal takes away only what MassOrca placed and left unchanged. Decision 0150. `massorca skills preview|place|unplace|managed` lists them.
+- **Capability `extensions-programs/1` (SKL-30).** `extensions.program_update_review` reads; `extensions.program_update`
+  needs host administration. They update a host program a tool package installed (Git, GitHub CLI, Node.js), with the
+  reviewed vendor command. Decision 0151. `massorca extension program-update <id> <program>` runs them.
 - **Per extension.** Each enabled extension adds the capability
   `ext/<id>@<major>` and the methods `ext.<id>.*`, such as `view-data`,
   `view-action` and `command`.
