@@ -386,7 +386,8 @@ pub(super) fn agent_brands(
         if entry.listing.category != "agents" {
             continue;
         }
-        let (Some(kind), Some(banner)) = (entry.agents.first(), entry.listing.banner.as_ref()) else {
+        let (Some(kind), Some(banner)) = (entry.agents.first(), entry.listing.banner.as_ref())
+        else {
             continue;
         };
         let Some(first) = banner.colors.first().and_then(|text| hex_colour(text)) else {

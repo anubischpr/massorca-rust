@@ -1803,7 +1803,8 @@ fn the_picker_gets_each_kinds_declared_levels_and_its_listed_brand_colours() {
         id: id.to_owned(),
         label: label.to_owned(),
     };
-    let mut claude = crate::service::fixtures::agent_kind("claude", "Claude", PackageState::Enabled);
+    let mut claude =
+        crate::service::fixtures::agent_kind("claude", "Claude", PackageState::Enabled);
     claude.effort = Some(KindEffort {
         levels: vec![level("low", "Low"), level("xhigh", "Extra High")],
         default: Some("xhigh".to_owned()),
@@ -1825,8 +1826,15 @@ fn the_picker_gets_each_kinds_declared_levels_and_its_listed_brand_colours() {
             .collect::<Vec<&str>>(),
         ["Low", "Extra High"]
     );
-    assert_eq!(row.default_effort, 1, "the kind's declared default is preselected");
-    assert_eq!(agents[0].brand, Some(brand), "the agent carries its listed colours");
+    assert_eq!(
+        row.default_effort, 1,
+        "the kind's declared default is preselected"
+    );
+    assert_eq!(
+        agents[0].brand,
+        Some(brand),
+        "the agent carries its listed colours"
+    );
 }
 
 #[test]

@@ -10,7 +10,8 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use gpui::{
-    Bounds, Corners, Pixels, Window, fill, hsla, linear_color_stop, linear_gradient, point, px, size,
+    Bounds, Corners, Pixels, Window, fill, hsla, linear_color_stop, linear_gradient, point, px,
+    size,
 };
 
 use crate::tokens::{DURATION_SLIDER_MOVE, DURATION_SLIDER_SHIMMER};
@@ -198,17 +199,28 @@ pub fn paint_top(bounds: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &m
     );
     window.paint_quad(fill(
         lower,
-        linear_gradient(0., linear_color_stop(clear, 0.), linear_color_stop(white, 1.)),
+        linear_gradient(
+            0.,
+            linear_color_stop(clear, 0.),
+            linear_color_stop(white, 1.),
+        ),
     ));
     window.paint_quad(fill(
         upper,
-        linear_gradient(0., linear_color_stop(white, 0.), linear_color_stop(clear, 1.)),
+        linear_gradient(
+            0.,
+            linear_color_stop(white, 0.),
+            linear_color_stop(clear, 1.),
+        ),
     ));
     for particle in particles() {
         let centre_y = height - particle_offset(&particle, height, elapsed);
         let radius = particle.radius;
         let at = Bounds::new(
-            point(origin.x + px(particle.x - radius), origin.y + px(centre_y - radius)),
+            point(
+                origin.x + px(particle.x - radius),
+                origin.y + px(centre_y - radius),
+            ),
             size(px(2.0 * radius), px(2.0 * radius)),
         );
         let alpha = particle_alpha(&particle, elapsed);
@@ -227,8 +239,16 @@ mod tests {
         let particles = particles();
         assert_eq!(particles.len(), PARTICLE_COUNT);
         for particle in &particles {
-            assert!((0.7..=2.0).contains(&particle.radius), "radius {}", particle.radius);
-            assert!((4.0..=14.0).contains(&particle.rise), "rise {}", particle.rise);
+            assert!(
+                (0.7..=2.0).contains(&particle.radius),
+                "radius {}",
+                particle.radius
+            );
+            assert!(
+                (4.0..=14.0).contains(&particle.rise),
+                "rise {}",
+                particle.rise
+            );
             let cycle = TAU / particle.twinkle;
             assert!((2.6..=7.9).contains(&cycle), "cycle {cycle}");
             assert!((3.0..=25.0).contains(&particle.x), "x {}", particle.x);
@@ -281,23 +301,47 @@ mod tests {
     #[test]
     fn the_shimmer_band_climbs_the_fill_once_per_period() {
         assert_eq!(shimmer_period(), 1.6);
-        assert_eq!(shimmer_offset(0.0, 200.0), -SHIMMER_BAND, "it starts below the fill");
-        assert_eq!(shimmer_offset(1.6, 200.0), -SHIMMER_BAND, "one period later it starts again");
-        assert!((shimmer_offset(0.8, 200.0) - 77.0).abs() < 0.01, "halfway up the fill");
-        assert!(shimmer_offset(1.5, 200.0) > 200.0 - SHIMMER_BAND, "it nearly leaves the top");
+        assert_eq!(
+            shimmer_offset(0.0, 200.0),
+            -SHIMMER_BAND,
+            "it starts below the fill"
+        );
+        assert_eq!(
+            shimmer_offset(1.6, 200.0),
+            -SHIMMER_BAND,
+            "one period later it starts again"
+        );
+        assert!(
+            (shimmer_offset(0.8, 200.0) - 77.0).abs() < 0.01,
+            "halfway up the fill"
+        );
+        assert!(
+            shimmer_offset(1.5, 200.0) > 200.0 - SHIMMER_BAND,
+            "it nearly leaves the top"
+        );
     }
 
     #[test]
     fn a_held_shimmer_rests_at_the_top_of_the_fill() {
-        assert_eq!(held_shimmer_offset(200.0), 154.0, "its top edge is the fill's top edge");
+        assert_eq!(
+            held_shimmer_offset(200.0),
+            154.0,
+            "its top edge is the fill's top edge"
+        );
     }
 
     #[test]
     fn frames_are_requested_only_while_open_on_the_top_level_and_not_reduced() {
         assert!(effect_frames(true, true, false));
         assert!(!effect_frames(false, true, false), "closed: no frames");
-        assert!(!effect_frames(true, false, false), "below the top: no frames");
-        assert!(!effect_frames(true, true, true), "reduced motion holds still");
+        assert!(
+            !effect_frames(true, false, false),
+            "below the top: no frames"
+        );
+        assert!(
+            !effect_frames(true, true, true),
+            "reduced motion holds still"
+        );
     }
 
     #[test]
@@ -312,7 +356,14 @@ mod tests {
     fn the_move_eases_out_from_the_old_stop_to_the_new_one() {
         assert_eq!(move_progress(0.0, false), 0.0);
         assert!((move_progress(move_seconds(), false) - 1.0).abs() < 1e-3);
-        assert!(move_progress(move_seconds() / 2.0, false) > 0.5, "ease.standard starts fast");
-        assert_eq!(move_progress(0.0, true), 1.0, "reduced motion jumps to the new stop");
+        assert!(
+            move_progress(move_seconds() / 2.0, false) > 0.5,
+            "ease.standard starts fast"
+        );
+        assert_eq!(
+            move_progress(0.0, true),
+            1.0,
+            "reduced motion jumps to the new stop"
+        );
     }
 }

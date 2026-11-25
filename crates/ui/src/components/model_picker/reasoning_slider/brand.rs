@@ -70,7 +70,10 @@ mod tests {
             second: None,
         };
         let fill = brand_colours(Some(&brand), accent());
-        assert_eq!((fill.first, fill.second), (rgb(255, 46, 138), rgb(255, 46, 138)));
+        assert_eq!(
+            (fill.first, fill.second),
+            (rgb(255, 46, 138), rgb(255, 46, 138))
+        );
     }
 
     #[test]

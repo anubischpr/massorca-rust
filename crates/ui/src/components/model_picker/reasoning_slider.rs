@@ -2,8 +2,8 @@
 //! stop per level the model declares. It draws the track, the stops, the brand fill, the thumb and the
 //! level labels, and reports each change to its owner, which keeps the popover open.
 
-pub(super) mod effects;
 mod brand;
+pub(super) mod effects;
 mod stops;
 
 use std::rc::Rc;
@@ -18,8 +18,8 @@ use gpui::{
 };
 
 pub use brand::{AgentBrand, BrandColours, brand_colours, name_colour};
-pub use stops::{has_slider, is_top_level};
 use stops::{STOP_INSET, Slide, nearest_stop, stop_fraction, value_text};
+pub use stops::{has_slider, is_top_level};
 
 use crate::components::popover::TriggerBounds;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
@@ -225,7 +225,9 @@ impl RenderOnce for ReasoningSlider {
             .absolute()
             .top(relative(1.0 - fraction))
             .mt(px(-SIZE_REASONING_SLIDER_THUMB / 2.))
-            .left(px((SIZE_REASONING_SLIDER_TRACK - SIZE_REASONING_SLIDER_THUMB) / 2.))
+            .left(px((SIZE_REASONING_SLIDER_TRACK
+                - SIZE_REASONING_SLIDER_THUMB)
+                / 2.))
             .size(px(SIZE_REASONING_SLIDER_THUMB))
             .rounded(px(RADIUS_FULL))
             .bg(p.slider.thumb)
@@ -314,7 +316,11 @@ impl RenderOnce for ReasoningSlider {
                 .items_center()
                 .cursor_pointer()
                 .text_style(if active { TYPE_BODY_STRONG } else { TYPE_BODY })
-                .text_color(if active { p.text.primary } else { p.text.tertiary })
+                .text_color(if active {
+                    p.text.primary
+                } else {
+                    p.text.tertiary
+                })
                 .on_click(move |_: &ClickEvent, window, cx| pick(index, window, cx))
                 .child(self.levels[index].clone())
         });

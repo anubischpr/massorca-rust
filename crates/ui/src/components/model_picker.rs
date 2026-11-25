@@ -8,10 +8,10 @@ pub mod state;
 mod columns;
 mod reasoning_slider;
 
+pub use reasoning_slider::AgentBrand;
 pub use state::{
     AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState, PickerView, RowRef,
 };
-pub use reasoning_slider::AgentBrand;
 
 use std::fmt;
 use std::time::Instant;
@@ -278,7 +278,9 @@ impl Render for ModelPicker {
         if self.effort_move.is_some() && !moving {
             self.effort_move = None;
         }
-        if reasoning_slider::effects::effect_frames(open, self.top_level_shown(), reduced) || (open && moving) {
+        if reasoning_slider::effects::effect_frames(open, self.top_level_shown(), reduced)
+            || (open && moving)
+        {
             reasoning_slider::effects::request_frame(window);
         }
         let aria = match &effort {
@@ -667,8 +669,14 @@ mod tests {
         }
         let bottom = f32::from(bar.bottom()) - centres[0];
         let top = centres[3] - f32::from(bar.top());
-        assert!((bottom - 14.0).abs() < 0.5, "the bottom stop sits 14 px in: {bottom}");
-        assert!((top - 14.0).abs() < 0.5, "the top stop sits 14 px in: {top}");
+        assert!(
+            (bottom - 14.0).abs() < 0.5,
+            "the bottom stop sits 14 px in: {bottom}"
+        );
+        assert!(
+            (top - 14.0).abs() < 0.5,
+            "the top stop sits 14 px in: {top}"
+        );
     }
 
     #[gpui::test]
@@ -681,9 +689,17 @@ mod tests {
             .expect("the slider is drawn");
         let x = bar.center().x;
         click_at(cx, gpui::point(x, bar.bottom() - gpui::px(3.)));
-        assert_eq!(last_effort(&choices), Some(0), "the bottom of the bar is the lowest level");
+        assert_eq!(
+            last_effort(&choices),
+            Some(0),
+            "the bottom of the bar is the lowest level"
+        );
         click_at(cx, gpui::point(x, bar.top() + gpui::px(3.)));
-        assert_eq!(last_effort(&choices), Some(3), "the top of the bar is the top level");
+        assert_eq!(
+            last_effort(&choices),
+            Some(3),
+            "the top of the bar is the top level"
+        );
         assert!(
             picker.read_with(cx, |picker, _| picker.is_open()),
             "a click on the bar keeps the popover open"
@@ -712,7 +728,11 @@ mod tests {
         assert_eq!(last_effort(&choices), Some(3), "End goes to the top level");
         cx.simulate_keystrokes("home");
         cx.run_until_parked();
-        assert_eq!(last_effort(&choices), Some(0), "Home goes to the bottom level");
+        assert_eq!(
+            last_effort(&choices),
+            Some(0),
+            "Home goes to the bottom level"
+        );
     }
 
     #[gpui::test]

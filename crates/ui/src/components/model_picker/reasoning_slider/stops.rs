@@ -82,8 +82,16 @@ mod tests {
     fn a_pointer_snaps_to_the_nearest_stop() {
         assert_eq!(nearest_stop(70.0, 220.0, 5), 1);
         assert_eq!(nearest_stop(90.0, 220.0, 5), 2);
-        assert_eq!(nearest_stop(-10.0, 220.0, 5), 0, "below the bar snaps to the first stop");
-        assert_eq!(nearest_stop(500.0, 220.0, 5), 4, "above the bar snaps to the last stop");
+        assert_eq!(
+            nearest_stop(-10.0, 220.0, 5),
+            0,
+            "below the bar snaps to the first stop"
+        );
+        assert_eq!(
+            nearest_stop(500.0, 220.0, 5),
+            4,
+            "above the bar snaps to the last stop"
+        );
     }
 
     #[test]
@@ -122,6 +130,9 @@ mod tests {
     fn only_the_last_level_of_a_slider_is_the_top_level() {
         assert!(!is_top_level(0, 5));
         assert!(is_top_level(4, 5));
-        assert!(!is_top_level(0, 1), "a single level has no slider and no top effects");
+        assert!(
+            !is_top_level(0, 1),
+            "a single level has no slider and no top effects"
+        );
     }
 }

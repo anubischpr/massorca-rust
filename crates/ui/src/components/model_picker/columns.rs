@@ -519,9 +519,9 @@ impl ModelPicker {
             elapsed: clock_seconds(reduced),
             reduced,
             moving_from: self.effort_move.map(|moved| moved.from),
-            progress: self
-                .effort_move
-                .map_or(1.0, |moved| move_progress(moved.started.elapsed().as_secs_f32(), reduced)),
+            progress: self.effort_move.map_or(1.0, |moved| {
+                move_progress(moved.started.elapsed().as_secs_f32(), reduced)
+            }),
         };
         let level = div()
             .flex()
