@@ -168,6 +168,34 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.scripts",
+            "Show a project's orca.yaml scripts with their hashes and trust",
+            "project.scripts",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": { "project": { "type": "string" }, "workspace": { "type": "string" } }
+            }),
+        ),
+        command(
+            "project.trust-scripts",
+            "Show a project's orca.yaml scripts and trust one by its hash",
+            "project.trust_script",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "hash": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Hashes of shown scripts to trust; each is sent to project.trust_script"
+                    }
+                }
+            }),
+        ),
+        command(
             "workspace.create",
             "Create a workspace",
             "workspace.create",
@@ -263,7 +291,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             json!({
                 "type": "object",
                 "required": ["workspace"],
-                "properties": { "workspace": { "type": "string" }, "force": { "type": "boolean" } }
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "force": { "type": "boolean" },
+                    "allow_failed_archive": { "type": "boolean" }
+                }
             }),
         ),
         command(

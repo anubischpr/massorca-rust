@@ -53,19 +53,21 @@ machine.
 | `project list` | Lists every project, ordered by name, with its icon in an `ICON` column. |
 | `project show <PROJECT>` | Shows one project, with its icon when it has one. `PROJECT` is its id, name or path. |
 | `project update <PROJECT> (--icon ICON \| --clear-icon)` | Sets the project's icon with `--icon`, which takes the forms of `project add --icon`, or removes it with `--clear-icon`, so the project shows the default icon. Prints the icon. |
+| `project scripts <PROJECT> [--workspace WORKSPACE]` | Shows the scripts as `project trust-scripts` without `--hash` does, and changes nothing. |
+| `project trust-scripts <PROJECT> [--workspace WORKSPACE] [--hash HASH]...` | Shows the `setup` and `archive` scripts of the project's `orca.yaml`, or of `WORKSPACE`'s copy (its `setup` only: removal reads `archive` from the project's), each with its SHA-256 and whether it is `trusted`, `not trusted` or `changed since it was trusted`, and the command that trusts it. `--hash` trusts the shown script with that hash; repeat it for both. A hash no shown script has exits 2 with `usage.unknown_script_hash`, and one that no longer matches the file is refused with `script.changed`. Trusting needs host-admin. A script runs only while its exact content is trusted (decision 0095). |
 | `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
-| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). |
-| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). A script whose content is not trusted does not run: the output prints `setup skipped: <reason>` and its hash, and `--json` carries `setup.outcome` `untrusted` (decision 0095). |
+| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project, with git's `locked` and `prunable` state. Each other linked worktree of a project that no workspace records, under its workspaces root or elsewhere, is listed as `unregistered` with the same state; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
 | `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
-| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--allow-failed-archive]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. A worktree's trusted `archive` script runs first; `--allow-failed-archive` removes it even when that script fails. |
 | `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
 | `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
-| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. An agent run's terminal also shows `git credential guard: on`: git inside it never waits for a credential prompt. |
 | `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
 | `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
 | `terminal attach <TERMINAL>` | Interactive: shows the terminal and types into it. `Ctrl+]` detaches. |
@@ -162,6 +164,13 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+- Before anything is stopped or removed, the project's `orca.yaml` `scripts.archive` runs in the
+  worktree, in a service terminal titled `Archive`, for up to 120 seconds, and the output prints
+  `archive script ran in terminal <ID>`. A non-zero exit or a timeout refuses the removal with
+  `workspace.archive_failed`, and the workspace stays `ready`; `--allow-failed-archive` removes it
+  anyway and prints `archive failed, removed anyway: <reason>`. An untrusted script does not run
+  (`archive skipped: <reason>`) and the removal goes ahead. Folder workspaces have no archive
+  script (decision 0095).
 
 ### Terminals
 

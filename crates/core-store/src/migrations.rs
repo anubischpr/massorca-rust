@@ -571,6 +571,20 @@ ALTER TABLE agent_sessions ADD COLUMN archived_at INTEGER;
 "#,
         foreign_keys_off: false,
     },
+    // Trusted repository scripts (decision 0095): per project and script kind, the SHA-256 of the one content the owner
+    // trusted. A changed script has another hash, so it needs trust again.
+    Migration {
+        sql: r#"
+CREATE TABLE script_trust (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    trusted_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind)
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
