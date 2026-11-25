@@ -1079,3 +1079,16 @@ fn a_refused_update_opens_the_item_page_with_the_refusal(cx: &mut TestAppContext
         "the refusal is shown on the item page"
     );
 }
+
+#[gpui::test]
+fn an_agent_page_header_draws_the_agents_own_mark(cx: &mut TestAppContext) {
+    let (_rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    assert!(cx.debug_bounds("marketplace-header-agent").is_some());
+    assert!(cx.debug_bounds("marketplace-header-icon").is_none());
+}

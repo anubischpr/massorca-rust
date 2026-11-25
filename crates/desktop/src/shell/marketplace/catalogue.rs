@@ -297,6 +297,11 @@ fn agent_mark(agent_kind: Option<&str>) -> Option<AgentKind> {
     (mark != AgentKind::Unknown).then_some(mark)
 }
 
+/// The mark to draw for an item wherever it appears: its agent's own mark, if it has one.
+pub(super) fn item_mark(item: &MarketplaceItem) -> Option<AgentKind> {
+    agent_mark(item.agent_kind.as_deref())
+}
+
 /// One item as a card. Its Switch changes the sample; every other press opens the item's page,
 /// where its actions live (Review and install is not available yet).
 fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> ExtensionCard {
@@ -314,7 +319,7 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
     .settings(item.has_settings);
-    card = match agent_mark(item.agent_kind.as_deref()) {
+    card = match item_mark(item) {
         Some(mark) => card.agent(mark),
         None => match item_images::logo(frame, item, cx) {
             Some(logo) => card.logo(logo),
