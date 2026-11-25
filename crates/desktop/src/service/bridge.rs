@@ -48,6 +48,7 @@ use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
+use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
@@ -59,6 +60,10 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
+/// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
+const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
+/// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
+const WORKSPACE_UNIQUE_NAME_CAPABILITY: &str = "workspace-unique-name/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -71,7 +76,13 @@ pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
+        unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
+    },
+    /// `git.branches` for one workspace: the local branch names, the current one first.
+    GitBranches {
+        workspace: String,
+        reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
     Remove {
         params: WorkspaceRemoveParams,
@@ -302,7 +313,28 @@ impl ServiceHandle {
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        self.ask(|reply| Command::Create { params, reply }).await
+        self.create_workspace_with(params, false).await
+    }
+
+    /// `workspace.create` with the collision-free option when `unique_name` is set (capability `workspace-unique-name/1`).
+    pub async fn create_workspace_with(
+        &self,
+        params: WorkspaceCreateParams,
+        unique_name: bool,
+    ) -> Result<Workspace, Refusal> {
+        self.ask(|reply| Command::Create {
+            params,
+            unique_name,
+            reply,
+        })
+        .await
+    }
+
+    /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
+    /// repository, so any workspace of the project lists them all.
+    pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
+        self.ask(|reply| Command::GitBranches { workspace, reply })
+            .await
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -763,6 +795,12 @@ impl Link {
         self.emit(StoreUpdate::AgentChatOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
         ));
+        self.emit(StoreUpdate::AgentFastOffered(
+            client.has_capability(AGENT_FAST_CAPABILITY),
+        ));
+        self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
+            client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1022,10 +1060,34 @@ fn spawn_call(
 ) {
     let client = client.clone();
     match command {
-        Command::Create { params, reply } => {
+        Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .workspace_create(&params)
+                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .await
+                    .map(|listed| {
+                        listed
+                            .branches
+                            .into_iter()
+                            .map(|branch| branch.name)
+                            .collect()
+                    })
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::Create {
+            params,
+            unique_name,
+            reply,
+        } => {
+            tokio::spawn(async move {
+                let request = WorkspaceCreateRequest {
+                    create: &params,
+                    unique_name,
+                };
+                let result = client
+                    .call::<_, Workspace>(massorca_protocol::methods::workspaces::CREATE, &request)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1173,6 +1235,9 @@ fn refuse_while_down(command: Command) {
     let refusal = Refusal::unavailable("The service is not connected.");
     match command {
         Command::Create { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitBranches { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Remove { reply, .. } => {

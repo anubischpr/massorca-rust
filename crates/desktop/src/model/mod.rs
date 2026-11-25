@@ -3,6 +3,7 @@
 pub mod add_host;
 pub mod agent_delegate;
 pub mod agent_kinds;
+pub mod agent_models;
 pub mod agent_queue;
 pub mod agent_sessions;
 pub mod app_theme;
@@ -13,6 +14,7 @@ pub mod devices;
 pub mod home_start;
 pub mod hosts;
 pub mod marketplace;
+pub mod mode_presentation;
 pub mod morph;
 pub mod navigation;
 pub mod pairing;

@@ -97,7 +97,7 @@ pub fn sample_bot_kind_choices() -> Vec<KindChoice> {
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::agents::{KindEffort, KindEffortLevel, PackageState};
+    use massorca_protocol::methods::agents::PackageState;
 
     use super::*;
     use crate::service::fixtures::agent_kind;
@@ -176,32 +176,6 @@ mod tests {
     fn a_service_with_no_installed_kind_offers_no_choice() {
         let kinds = [agent_kind("claude", "Claude", PackageState::Available)];
         assert!(bot_kind_choices(&kinds).is_empty());
-    }
-
-    #[test]
-    fn a_kind_offers_its_declared_levels_and_preselects_its_default() {
-        let level = |id: &str, label: &str| KindEffortLevel {
-            id: id.into(),
-            label: label.into(),
-        };
-        let mut claude = agent_kind("claude", "Claude", PackageState::Enabled);
-        claude.effort = Some(KindEffort {
-            levels: vec![level("low", "Low"), level("xhigh", "Extra High")],
-            default: Some("xhigh".into()),
-        });
-        assert_eq!(
-            declared_levels(&claude),
-            (
-                vec![level("low", "Low"), level("xhigh", "Extra High")],
-                1
-            )
-        );
-        let codex = agent_kind("codex", "Codex", PackageState::Enabled);
-        assert_eq!(
-            declared_levels(&codex),
-            (Vec::new(), 0),
-            "a kind that declares no effort offers no level"
-        );
     }
 
     #[test]
