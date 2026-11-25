@@ -313,3 +313,5 @@ pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_ref
 pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
 /// `extensions.update` found the installed package already in place: nothing changed.
 pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
+/// `extensions.rollback` found no version kept for the package: nothing changed.
+pub const EXTENSION_NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";

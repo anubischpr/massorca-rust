@@ -7,7 +7,7 @@ use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_L
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry, WorkspaceMenuId,
-    chosen_workspace_item, project_menu_rows, workspace_menu,
+    chosen_workspace_item, project_menu_rows, session_menu, workspace_menu,
 };
 use crate::service::Refusal;
 use gpui::{
@@ -140,6 +140,7 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
         WorkspaceMenuId::OpenFileManager => IconName::Folder,
         WorkspaceMenuId::OpenTerminal => IconName::SquareTerminal,
         WorkspaceMenuId::OpenEditor | WorkspaceMenuId::Developer => IconName::Code,
+        WorkspaceMenuId::OpenFolder => IconName::Folder,
         WorkspaceMenuId::Rename | WorkspaceMenuId::EditWorkspace => IconName::Pencil,
         WorkspaceMenuId::SourceControl | WorkspaceMenuId::CopyBranch => IconName::GitBranch,
         WorkspaceMenuId::CopyPath => IconName::Copy,
@@ -149,7 +150,11 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
 }
 
 impl Shell {
-    /// The context menu of a workspace row (D-WS-02), built from the workspace's record.
+    /// The context menu of a workspace (D-WS-02). No tree row opens it now (A97); the project row menu will.
+    #[expect(
+        dead_code,
+        reason = "workspace menu waits for the project row menu (A97)"
+    )]
     pub(super) fn open_workspace_menu(
         &mut self,
         id: String,
@@ -171,6 +176,30 @@ impl Shell {
         self.open_menu(
             menu_entries(&rows),
             MenuTarget::Workspace { id, rows },
+            OverlayLayer::Page,
+            window.mouse_position(),
+            window,
+            cx,
+        );
+    }
+
+    /// The context menu of a session row (A97): its workspace's path, folder and Work panel rows.
+    pub(super) fn open_session_menu(
+        &mut self,
+        workspace_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.service.is_none() {
+            return;
+        }
+        let rows = session_menu();
+        self.open_menu(
+            menu_entries(&rows),
+            MenuTarget::Workspace {
+                id: workspace_id,
+                rows,
+            },
             OverlayLayer::Page,
             window.mouse_position(),
             window,
@@ -208,6 +237,7 @@ impl Shell {
             | WorkspaceMenuId::EditWorkspace
             | WorkspaceMenuId::SourceControl
             | WorkspaceMenuId::Developer
+            | WorkspaceMenuId::OpenFolder
             | WorkspaceMenuId::RevealInWorkPanel => {}
         }
     }

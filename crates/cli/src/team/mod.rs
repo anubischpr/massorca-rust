@@ -5,9 +5,11 @@ mod text;
 
 use routine::RoutineCommand;
 
+use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
+use massorca_protocol::methods::team_room::{TeamRoomListParams, TeamRoomPostParams};
 use massorca_protocol::methods::teams::{
     BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
     TeamCreateParams, TeamProjectAddParams, TeamRef, TeamRemoveParams,
@@ -56,6 +58,11 @@ pub enum TeamCommand {
     Memory {
         #[command(subcommand)]
         command: TeamMemoryCommand,
+    },
+    /// Reads and posts to a team's Conference room. A person's line becomes a task for a bot, which starts at once.
+    Room {
+        #[command(subcommand)]
+        command: TeamRoomCommand,
     },
     /// Lists, adds, changes, pauses, runs and removes a team's routines: schedules that start a bot on a task.
     Routine {
@@ -227,6 +234,33 @@ pub enum TeamMemoryCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum TeamRoomCommand {
+    /// Lists a team's room, oldest first: who wrote each line, its text, and the task it is about.
+    List {
+        /// Team id or name.
+        team: String,
+        /// Only the newest this many lines (200 without it).
+        #[arg(long, value_name = "N")]
+        limit: Option<u32>,
+    },
+    /// Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with
+    /// @name, else --to, else the lead, else the first bot, and the task starts. With --bot, that bot posts the line.
+    /// Inside an agent run, the line is posted as the bot of the run's own task, and naming another bot is refused.
+    Post {
+        /// Team id or name.
+        team: String,
+        /// The line.
+        text: String,
+        /// Post as this bot: id or name within the team.
+        #[arg(long, value_name = "BOT")]
+        bot: Option<String>,
+        /// The bot a person's line goes to when it names none: id or name within the team.
+        #[arg(long, value_name = "BOT", conflicts_with = "bot")]
+        to: Option<String>,
+    },
+}
+
 #[derive(Debug, Args)]
 pub struct TeamMemoryAddArgs {
     /// Team id or name.
@@ -381,6 +415,7 @@ pub async fn execute(
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
+        TeamCommand::Room { command } => run_room(&client, command, output).await?,
         TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
         TeamCommand::Board { team, project } => {
             let board = client.team_board(&BoardParams { team, project }).await?;
@@ -536,6 +571,56 @@ async fn run_memory(
         }
     }
     Ok(())
+}
+
+async fn run_room(
+    client: &Client,
+    command: TeamRoomCommand,
+    output: Output,
+) -> Result<(), CliError> {
+    match command {
+        TeamRoomCommand::List { team, limit } => {
+            let room = client
+                .team_room_list(&TeamRoomListParams { team, limit })
+                .await?;
+            let lines = if room.messages.is_empty() {
+                vec!["no lines".to_owned()]
+            } else {
+                text::room_lines(&room.messages)
+            };
+            output.success(&room, &lines);
+        }
+        TeamRoomCommand::Post {
+            team,
+            text,
+            bot,
+            to,
+        } => {
+            // Inside an agent run, the run's session and token bind the line to the bot of that run's task.
+            let (session, agent_token) = agent_run();
+            let posted = client
+                .team_room_post(&TeamRoomPostParams {
+                    team,
+                    text,
+                    bot,
+                    to,
+                    session,
+                    agent_token,
+                })
+                .await?;
+            output.success(&posted, &text::room_lines(&posted.messages));
+        }
+    }
+    Ok(())
+}
+
+/// The session and run token of the agent run this command runs in, when both are set.
+fn agent_run() -> (Option<String>, Option<String>) {
+    let read = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    match (read(ENV_SESSION), read(ENV_TOKEN)) {
+        (Some(session), Some(token)) => (Some(session), Some(token)),
+        _ => (None, None),
+    }
 }
 
 fn create_params(args: CreateArgs) -> TeamCreateParams {

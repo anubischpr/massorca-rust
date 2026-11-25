@@ -196,6 +196,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };
@@ -241,6 +242,7 @@ fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: Some(KindModel {
             choices: vec![
                 KindModelChoice {
@@ -323,6 +325,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };
@@ -942,5 +945,26 @@ fn import_candidates_and_an_import_without_a_folder_omit_absent_fields() {
                 { "name": ".claude.json", "required": false, "found": false, "reason": "a link" }
             ]
         }] }),
+    );
+}
+
+#[test]
+fn an_import_that_updated_an_account_names_it_and_a_new_one_omits_the_field() {
+    let updated: agents::AccountsImported = serde_json::from_value(json!({
+        "result": "imported",
+        "updated": "0195c0de-0000-7000-8000-000000000002"
+    }))
+    .expect("an updated import decodes");
+    assert_eq!(
+        updated.updated.as_deref(),
+        Some("0195c0de-0000-7000-8000-000000000002")
+    );
+    let older: agents::AccountsImported =
+        serde_json::from_value(json!({ "result": "imported" })).expect("an older result decodes");
+    assert_eq!(older.updated, None);
+    assert_eq!(
+        serde_json::to_value(&older).expect("encodes"),
+        json!({ "result": "imported" }),
+        "a new account's result has no `updated`"
     );
 }
