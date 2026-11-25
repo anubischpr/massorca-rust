@@ -612,6 +612,40 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.chat.subscribe",
+            "Stream a chat session's transcript from a cursor",
+            "agent.chat.subscribe",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "after": {
+                        "type": "object",
+                        "properties": { "epoch": { "type": "string" }, "seq": { "type": "integer" } }
+                    },
+                    "limit": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.history",
+            "Page back through a chat session's transcript",
+            "agent.chat.history",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "before": {
+                        "type": "object",
+                        "properties": { "epoch": { "type": "string" }, "seq": { "type": "integer" } }
+                    },
+                    "limit": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
             "agent.delegate",
             "Start a child session for a parent session",
             "agent.delegate",

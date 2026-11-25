@@ -102,6 +102,7 @@ impl Composer {
         if self.access != modes {
             self.access = modes;
             self.access_details.clear();
+            self.access_tags.clear();
             self.access_menu = None;
         }
         cx.notify();
@@ -129,6 +130,21 @@ impl Composer {
     /// The secondary text of access mode `index`, if it has one.
     pub fn access_detail(&self, index: usize) -> Option<&SharedString> {
         self.access_details.get(index).and_then(Option::as_ref)
+    }
+
+    /// Sets each access mode's tag by index (`None` for none), such as "Default", shown after its menu row's name.
+    /// Call it after `set_access_modes`, which clears it when the modes change.
+    pub fn set_access_tags(&mut self, tags: Vec<Option<SharedString>>, cx: &mut Context<Self>) {
+        if self.access_tags != tags {
+            self.access_tags = tags;
+            self.access_menu = None;
+            cx.notify();
+        }
+    }
+
+    /// The tag of access mode `index`, if it has one.
+    pub fn access_tag(&self, index: usize) -> Option<&SharedString> {
+        self.access_tags.get(index).and_then(Option::as_ref)
     }
 
     /// The selected access mode's index.
@@ -173,9 +189,15 @@ impl Composer {
             .iter()
             .enumerate()
             .map(|(index, mode)| {
-                let item = MenuItem::new(mode.name.clone())
+                let mut item = MenuItem::new(mode.name.clone())
                     .icon(mode.icon)
                     .checked(index == self.access_index);
+                if mode.bypass {
+                    item = item.warning();
+                }
+                if let Some(tag) = self.access_tag(index) {
+                    item = item.tag(tag.clone());
+                }
                 match self.access_detail(index) {
                     Some(detail) => item.secondary(detail.clone()).into(),
                     None => item.into(),

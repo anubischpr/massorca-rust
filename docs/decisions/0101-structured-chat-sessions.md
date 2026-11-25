@@ -79,7 +79,9 @@ state: replace by id or add) or `append { id, seq, offset, text }` (text added t
 `thinking`: apply when the held text is exactly `offset` bytes, skip when it is longer, resubscribe when it is
 shorter). When `after` is older than the replay window, names another epoch, or the subscriber overflows its buffer,
 the stream sends `reset { reason }` and then a fresh snapshot. `end { reason }` closes it (the session was forgotten,
-or the service shuts down). The snapshot carries `latest_turn` and not a list of turns: the open turn is what a client
+or the service shuts down). Amended with the first service slice: a shutdown ends the stream as it ends every stream,
+with the connection's `service.shutting_down`, which it sends before anything else; `end { shutting_down }` stays in
+the vocabulary and is not sent. The snapshot carries `latest_turn` and not a list of turns: the open turn is what a client
 needs to show a running state, and the page already holds the turn items in its range.
 
 D5 History. `agent.chat.history { session, before?, limit? }` returns `{ epoch, items, has_older }`, the items before
@@ -142,9 +144,24 @@ know decode as `unknown` and are skipped, so these can be added later without a 
 - That `--resume <id>` in stream-json mode replays nothing on stdout, or what it does replay.
 - How sub-agent frames name their parent (`parent_tool_use_id`) and whether plans arrive as `TodoWrite` tool calls.
 
+## Implementation notes
+
+Details this decision left open, fixed by the first service slice (`docs/architecture/agents.md`, "Chat runs and the
+journal"):
+
+- The record's `run` landed with the run type: a session row says `terminal` or `chat`, and a chat run's id plays the
+  part a terminal id plays for a terminal run's end (decision 0058).
+- A journal keeps at most 10 000 items; adding past it drops the oldest. A cursor older than a dropped change, or one
+  that would replay more than 1 000 items, gets `reset { too_old }`. A cursor beyond the journal's newest change is
+  treated as another epoch's (`reset { epoch_changed }`).
+- A turn left open when its run ends becomes `interrupted` when the run was stopped, `unverifiable` otherwise; a prompt
+  that opens a turn while another is open ends that one `unverifiable` first.
+- The error codes moved to `codes.rs` (`AGENT_CHAT_UNSUPPORTED`, `AGENT_NOT_CHAT`, `AGENT_APPROVAL_SETTLED`,
+  `AGENT_CURSOR_STALE`); the constants in `chat.rs` name them.
+
 ## Consequences
 
 - The desktop builds its Chat segment against these types now and turns it on when `agent-chat/1` is offered.
 - The service slices follow: the Claude adapter and version probe, the journal store, the stream, approvals and
   interrupt, then history. `AgentSession.run` lands with the first of them.
-- Error codes are defined in `chat.rs` with their methods and move to `codes.rs` when the service starts sending them.
+- Error codes are defined in `codes.rs`; `chat.rs` names them beside their methods.

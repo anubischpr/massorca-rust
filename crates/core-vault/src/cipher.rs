@@ -46,7 +46,16 @@ impl Aad {
         if !is_valid_name(name) {
             return Err(AadError::InvalidName);
         }
-        let scope = scope.to_string();
+        Ok(Self::from_parts(id, &scope.to_string(), name))
+    }
+
+    /// The associated data of a service entry's row, whose scope text is `service:<service>`. The caller has
+    /// checked the id, service and name.
+    pub(crate) fn for_service_row(id: &str, scope: &str, name: &str) -> Self {
+        Self::from_parts(id, scope, name)
+    }
+
+    fn from_parts(id: &str, scope: &str, name: &str) -> Self {
         let mut bytes =
             Vec::with_capacity(AAD_PREFIX.len() + id.len() + scope.len() + name.len() + 3);
         for part in [AAD_PREFIX, id.as_bytes(), scope.as_bytes(), name.as_bytes()] {
@@ -55,7 +64,7 @@ impl Aad {
             }
             bytes.extend_from_slice(part);
         }
-        Ok(Self(bytes))
+        Self(bytes)
     }
 }
 

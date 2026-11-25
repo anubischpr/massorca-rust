@@ -6,10 +6,10 @@ use gpui::{AnyElement, App, Context, Entity, WeakEntity, div};
 use massorca_protocol::methods::agents::AccountsImportParams;
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::TYPE_BODY_SM;
+use massorca_ui::tokens::{TYPE_BODY, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
-use crate::model::marketplace::{HostTarget, import_outcome};
+use crate::model::marketplace::{HostTarget, import_outcome, import_update_sentence};
 use crate::shell::Shell;
 use crate::shell::path_field::{PickKind, path_field};
 
@@ -23,6 +23,8 @@ pub(in crate::shell) struct ImportDialog {
     error: Option<String>,
     /// An import is running, so Import waits for its answer.
     running: bool,
+    /// The sentence of an import that updated an existing account, shown until Done.
+    done: Option<String>,
 }
 
 impl ImportDialog {
@@ -51,6 +53,7 @@ impl Shell {
             field,
             error: None,
             running: false,
+            done: None,
         });
         cx.notify();
     }
@@ -85,11 +88,14 @@ impl Shell {
             from: Some(from),
             label: None,
         };
+        let agent = agent_name(self, &params.kind);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = service.accounts_import(params).await;
             let outcome = match result {
-                Ok(imported) => import_outcome(&imported),
+                Ok(imported) => {
+                    import_outcome(&imported).map(|()| import_update_sentence(&imported, &agent))
+                }
                 Err(refusal) => Err(refusal.sentence()),
             };
             let _ = this.update(cx, |shell, cx| shell.finish_account_import(outcome, cx));
@@ -97,9 +103,19 @@ impl Shell {
         .detach();
     }
 
-    fn finish_account_import(&mut self, outcome: Result<(), String>, cx: &mut Context<Self>) {
+    fn finish_account_import(
+        &mut self,
+        outcome: Result<Option<String>, String>,
+        cx: &mut Context<Self>,
+    ) {
         match outcome {
-            Ok(()) => self.marketplace_accounts.import = None,
+            Ok(None) => self.marketplace_accounts.import = None,
+            Ok(Some(sentence)) => {
+                if let Some(dialog) = self.marketplace_accounts.import.as_mut() {
+                    dialog.running = false;
+                    dialog.done = Some(sentence);
+                }
+            }
             Err(reason) => {
                 if let Some(dialog) = self.marketplace_accounts.import.as_mut() {
                     dialog.running = false;
@@ -114,13 +130,10 @@ impl Shell {
 /// The import dialog, if one is open.
 pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Option<AnyElement> {
     let import = shell.marketplace_accounts.import.as_ref()?;
-    let agent = shell
-        .model()
-        .marketplace()
-        .items
-        .iter()
-        .find(|item| item.agent_kind.as_deref() == Some(import.kind.as_str()))
-        .map_or_else(|| import.kind.clone(), |item| item.name.clone());
+    let agent = agent_name(shell, &import.kind);
+    if let Some(sentence) = &import.done {
+        return Some(updated_dialog(&agent, sentence, weak, cx));
+    }
     let theme = *cx.theme();
     let (submit, dismiss) = (weak.clone(), weak.clone());
     let mut dialog = Dialog::new("marketplace-import", format!("Import account to {agent}"))
@@ -155,4 +168,38 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
+}
+
+/// The name of the agent of `kind` as the Marketplace lists it, or the kind itself when no listed item offers it.
+fn agent_name(shell: &Shell, kind: &str) -> String {
+    shell
+        .model()
+        .marketplace()
+        .items
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some(kind))
+        .map_or_else(|| kind.to_owned(), |item| item.name.clone())
+}
+
+/// The dialog after an import that updated an existing account: its sentence, and Done, which closes it.
+fn updated_dialog(agent: &str, sentence: &str, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let (done, dismiss) = (weak.clone(), weak.clone());
+    Dialog::new("marketplace-import", format!("Import account to {agent}"))
+        .open(true)
+        .child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(sentence.to_owned()),
+        )
+        .action("Done")
+        .cancel_label("Close")
+        .on_action(move |_, cx| {
+            let _ = done.update(cx, |shell, cx| shell.close_account_import(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.close_account_import(cx));
+        })
+        .into_any_element()
 }

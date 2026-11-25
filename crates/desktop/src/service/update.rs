@@ -24,6 +24,7 @@ use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
 use super::skills::SkillsRead;
+use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
@@ -50,6 +51,11 @@ pub enum StoreUpdate {
     AgentChanged(AgentSession),
     /// An agent session the service forgot.
     AgentGone(String),
+    /// The agent kind chosen when this app created a workspace; kept until the workspace has a session (A97).
+    WorkspaceKindChosen {
+        workspace: String,
+        kind: String,
+    },
     /// Every agent kind the service declares, after a connect. Replaces what was held.
     AgentKindsResync(Vec<AgentKind>),
     /// Every session's prompt queue after a connect, or `None` when the service offers no queue. Replaces what was held.
@@ -64,12 +70,20 @@ pub enum StoreUpdate {
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
     AgentChatOffered(bool),
+    /// Whether the service offers a fast speed on `agent.start` (`agent-fast/1`), read on each connect.
+    AgentFastOffered(bool),
+    /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`), read on each connect.
+    WorkspaceUniqueNameOffered(bool),
+    /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
+    AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
     AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
+    /// What a read of one team's Conference room answered; the newest answer per team is kept.
+    TeamRoom(TeamRoomRead),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
     /// What a paired host's Marketplace reads answered; the newest answer per host is kept.
@@ -226,6 +240,8 @@ pub struct StoreState {
     pub team_read: u64,
     /// The numbers the pages give the ids of the teams, their cards and their bots.
     pub team_ids: TeamIds,
+    /// The Conference rooms read so far, by the service's team id (decision 0102).
+    pub team_rooms: TeamRooms,
     /// The hosts this computer paired with, by name.
     pub hosts: Vec<HostEntry>,
     /// The devices paired with this computer's service, once listed.
@@ -255,10 +271,20 @@ pub struct StoreState {
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
     pub agent_chat: bool,
+    /// Whether the service offers a fast speed (`agent-fast/1`); without it Fast is off, with its reason.
+    pub agent_fast: bool,
+    /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`); without it a derived
+    /// name is retried with a suffix on the client.
+    pub workspace_unique_name: bool,
+    /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
+    pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
+    /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
+    /// it). In memory only; a session ends the entry, so no placeholder comes back once its session is archived (A97).
+    pub awaiting_session: BTreeMap<String, Option<String>>,
 }
 
 impl Default for StoreState {
@@ -277,6 +303,7 @@ impl Default for StoreState {
             teams: None,
             team_read: 0,
             team_ids: TeamIds::default(),
+            team_rooms: TeamRooms::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
@@ -291,8 +318,12 @@ impl Default for StoreState {
             agent_no_project: false,
             agent_options: false,
             agent_chat: false,
+            agent_fast: false,
+            workspace_unique_name: false,
+            agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
+            awaiting_session: BTreeMap::new(),
         }
     }
 }
@@ -323,6 +354,8 @@ impl StoreState {
                 self.workspaces.sort_by(workspace_order);
                 self.git
                     .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
+                self.awaiting_session
+                    .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
                 self.loaded = true;
             }
             StoreUpdate::ProjectChanged(project) => {
@@ -331,12 +364,22 @@ impl StoreState {
             }
             StoreUpdate::ProjectGone(id) => self.projects.retain(|p| p.id != id),
             StoreUpdate::WorkspaceChanged(workspace) => {
+                // Only a workspace that appears after the first list was created while this app runs (A97).
+                if self.loaded
+                    && self.workspace(&workspace.id).is_none()
+                    && !self.workspace_has_session(&workspace.id)
+                {
+                    self.awaiting_session
+                        .entry(workspace.id.clone())
+                        .or_insert(None);
+                }
                 replace_by(&mut self.workspaces, workspace, |w| w.id.clone());
                 self.workspaces.sort_by(workspace_order);
             }
             StoreUpdate::WorkspaceGone(id) => {
                 self.workspaces.retain(|w| w.id != id);
                 self.git.remove(&id);
+                self.awaiting_session.remove(&id);
             }
             StoreUpdate::TerminalsResync(mut terminals) => {
                 terminals.sort_by(terminal_order);
@@ -351,10 +394,18 @@ impl StoreState {
                 sessions.sort_by(agent_order);
                 self.agents = sessions;
                 self.agents_answered = true;
+                self.awaiting_session
+                    .retain(|id, _| !self.agents.iter().any(|s| &s.workspace_id == id));
             }
             StoreUpdate::AgentChanged(session) => {
+                self.awaiting_session.remove(&session.workspace_id);
                 replace_by(&mut self.agents, session, |s| s.id.clone());
                 self.agents.sort_by(agent_order);
+            }
+            StoreUpdate::WorkspaceKindChosen { workspace, kind } => {
+                if !self.workspace_has_session(&workspace) {
+                    self.awaiting_session.insert(workspace, Some(kind));
+                }
             }
             StoreUpdate::AgentGone(id) => {
                 self.agents.retain(|s| s.id != id);
@@ -376,6 +427,11 @@ impl StoreState {
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
+            StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
+            StoreUpdate::WorkspaceUniqueNameOffered(offered) => {
+                self.workspace_unique_name = offered;
+            }
+            StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
@@ -388,6 +444,7 @@ impl StoreState {
             }
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),
@@ -432,6 +489,13 @@ impl StoreState {
         self.config
             .iter()
             .find(|value| value.owner == DEFAULT_OWNER && value.key == key)
+    }
+
+    /// Whether the held agent sessions include one in this workspace.
+    pub fn workspace_has_session(&self, workspace_id: &str) -> bool {
+        self.agents
+            .iter()
+            .any(|session| session.workspace_id == workspace_id)
     }
 
     /// Keeps the newest read: an older answer that arrives late changes nothing.
@@ -595,6 +659,7 @@ pub(crate) mod fixtures {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: created,
             execution: Execution {
                 state: TerminalState::Live,
@@ -747,6 +812,28 @@ mod tests {
         );
         state.apply(StoreUpdate::AgentChatOffered(true), Instant::now());
         assert!(state.agent_chat);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_makes_workspace_names_unique() {
+        let mut state = StoreState::default();
+        assert!(
+            !state.workspace_unique_name,
+            "no read yet: the client retries"
+        );
+        state.apply(
+            StoreUpdate::WorkspaceUniqueNameOffered(true),
+            Instant::now(),
+        );
+        assert!(state.workspace_unique_name);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_offers_agent_fast() {
+        let mut state = StoreState::default();
+        assert!(!state.agent_fast, "no read yet: Fast stays off");
+        state.apply(StoreUpdate::AgentFastOffered(true), Instant::now());
+        assert!(state.agent_fast);
     }
 
     fn resynced() -> StoreState {
