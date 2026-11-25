@@ -15,14 +15,15 @@ use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentPromptParams,
-    AgentQueueList, AgentSession, AgentSetModeParams, ModeApplied, ModeSource, PackageState,
-    PromptReceipt, QUEUE_REASON_PAUSED_STOPPED, QueuedPrompt, ReceiptKind,
+    AgentQueueList, AgentSession, AgentSetModeParams, AgentStartParams, ModeApplied, ModeSource,
+    PackageState, PromptReceipt, QUEUE_REASON_PAUSED_STOPPED, QueuedPrompt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::components::composer::ComposerEvent;
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::components::select::{SelectEvent, SelectView};
+use massorca_ui::components::terminal_surface::feed::FeedEvent;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -722,6 +723,120 @@ fn header_chip_of(rig: &Rig, cx: &VisualTestContext) -> (Vec<String>, Option<usi
         let chip = &shell.session_mode_chips["s1"];
         (chip.names.clone(), chip.entity.read(cx).selected_index())
     })
+}
+
+/// The next `agent.start` the shell sends, with the reply that answers it.
+type StartCall = (
+    AgentStartParams,
+    oneshot::Sender<Result<AgentSession, Refusal>>,
+);
+
+fn start_call(script: &mut Script) -> Option<StartCall> {
+    while let Some(command) = script.next() {
+        if let Command::AgentStart { params, reply } = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn an_agent_runs_exit_draws_no_restart_because_its_session_view_answers_it(
+    cx: &mut TestAppContext,
+) {
+    let mut session = s1(false, None);
+    session.terminal_id = Some("t1".to_owned());
+    let (rig, cx) = session_rig(cx, vec![kind(true)], vec![session]);
+    let surface = rig
+        .shell
+        .read_with(cx, |shell, _| shell.terminal_views["t1"].surface.clone());
+    surface.update(cx, |surface, cx| {
+        surface
+            .apply(FeedEvent::Exited { code: Some(0) }, cx)
+            .expect("the exit is applied")
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("terminal-restart").is_none());
+}
+
+#[gpui::test]
+fn start_a_new_session_here_starts_the_same_agent_in_the_same_workspace(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(true, None)]);
+    click(cx, "button:session-start-new");
+    let (params, reply) =
+        start_call(&mut rig.script).expect("the new session is started through agent.start");
+    assert_eq!(params.workspace.as_deref(), Some("w1"));
+    assert_eq!(params.kind, "claude");
+    assert_eq!(
+        params.prompt, None,
+        "no prompt or saved conversation carries over"
+    );
+    let started = agent("s2", "w1", 20);
+    reply
+        .send(Ok(started.clone()))
+        .expect("the shell waits for the answer");
+    rig.updates
+        .send(StoreUpdate::AgentChanged(started))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let active = rig
+        .shell
+        .read_with(cx, |shell, _| shell.model.snapshot().active_session.clone());
+    assert_eq!(active.as_deref(), Some("s2"), "the new session opens here");
+}
+
+#[gpui::test]
+fn a_refused_start_a_new_session_says_why_above_the_terminal(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(true, None)]);
+    click(cx, "button:session-start-new");
+    let (_, reply) = start_call(&mut rig.script).expect("the start is sent to the service");
+    let refusal = refused(codes::AGENT_BUSY, "the workspace is busy");
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("session-notice").is_some());
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
+    assert_eq!(
+        notice,
+        Some(format!(
+            "Could not start a new session: {}",
+            refusal.sentence()
+        ))
+    );
+}
+
+#[gpui::test]
+fn a_resume_refused_for_a_missing_conversation_says_so_and_offers_a_new_start(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = session_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(true, Some(ActivityState::Done))],
+    );
+    click(cx, "button:session-resume");
+    let (_, reply) = resume_call(&mut rig.script).expect("the resume is sent to the service");
+    reply
+        .send(Err(refused(
+            codes::AGENT_RESUME_UNAVAILABLE,
+            "its agent ref is not known",
+        )))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        ended_of(&rig, cx),
+        Some(("The saved conversation could not be found.", false, true))
+    );
+    assert!(
+        cx.debug_bounds("session-notice").is_none(),
+        "the reason replaces the refusal sentence"
+    );
 }
 
 #[gpui::test]
