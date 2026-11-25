@@ -259,6 +259,10 @@ Linux only. No automated run opens a visible window.
   (`model/marketplace/rollback_review.rs`) reads "Roll back <name>?" with one sentence that names the version it puts
   back; Show details holds the versions and the consent. The first call names no consent, so the confirm shows the
   consent the service gives (`shell/marketplace/rollback.rs`). Nothing kept opens the item page with its sentence.
+- "View log" in the same menu, when the service offers `extensions-log/1`, opens the package's run log
+  (`shell/marketplace/log_view.rs`, `model/marketplace/run_log.rs`). Each run is one line: its time in UTC to the minute
+  (the desktop keeps no time zone), its action, its versions and its outcome, in the service's order. A run that wrote
+  output shows it under Show details; Copy details copies the whole log. No runs says "No runs recorded yet."
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

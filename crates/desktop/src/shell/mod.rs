@@ -236,6 +236,8 @@ pub struct Shell {
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
     /// The rollback confirm on screen, if any: the version the service would restore, and its consent (decision 0100).
     marketplace_rollback: Option<marketplace::RollbackConfirm>,
+    /// The run log on screen, if any: the package's runs as the service lists them (decision 0100).
+    marketplace_run_log: Option<marketplace::RunLogView>,
     /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
     /// The Add extension dialog on screen, if any.
@@ -544,6 +546,7 @@ impl Shell {
             marketplace_error: None,
             marketplace_uninstall: None,
             marketplace_rollback: None,
+            marketplace_run_log: None,
             marketplace_review: None,
             marketplace_add: None,
             marketplace_item_error: None,

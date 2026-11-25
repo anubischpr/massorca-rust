@@ -68,9 +68,10 @@ fn manager_row(
     let id = item.id;
     let shell = frame.shell.clone();
     let menu = menu.clone();
-    let (previous, rollback_offered) = (
+    let (previous, rollback_offered, log_offered) = (
         item.previous_version.clone(),
         frame.snapshot.rollback_offered,
+        frame.snapshot.log_offered,
     );
     let mut row = ExtensionManagerRow::new(
         SharedString::from(format!("marketplace-row-{}", item.id.0)),
@@ -93,7 +94,7 @@ fn manager_row(
         }
         ExtensionAction::More => {
             let (entries, actions): (Vec<MenuEntry>, Vec<Option<RowAction>>) =
-                row_menu(previous.as_deref(), rollback_offered)
+                row_menu(previous.as_deref(), rollback_offered, log_offered)
                     .into_iter()
                     .unzip();
             let chosen = shell.clone();
@@ -105,6 +106,10 @@ fn manager_row(
                     Some(RowAction::Rollback) => {
                         let _ =
                             chosen.update(cx, |shell, cx| shell.ask_marketplace_rollback(id, cx));
+                    }
+                    Some(RowAction::ViewLog) => {
+                        let _ =
+                            chosen.update(cx, |shell, cx| shell.ask_marketplace_run_log(id, cx));
                     }
                     Some(RowAction::Remove) => {
                         let _ =
@@ -128,17 +133,28 @@ fn manager_row(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowAction {
     Rollback,
+    ViewLog,
     Remove,
 }
 
 /// The entries of an installed row's menu in the artboard's order, each with what choosing it does; a separator has
-/// none. Roll back to the version an update replaced comes first, when the service offers it and a version is kept, so
-/// the menu never lists an action that does not work.
-fn row_menu(previous: Option<&str>, rollback_offered: bool) -> Vec<(MenuEntry, Option<RowAction>)> {
+/// none. Roll back to the version an update replaced comes first and View log after it, each when the service offers
+/// it (and a version is kept, for the roll back), so the menu never lists an action that does not work.
+fn row_menu(
+    previous: Option<&str>,
+    rollback_offered: bool,
+    log_offered: bool,
+) -> Vec<(MenuEntry, Option<RowAction>)> {
     let mut menu: Vec<(MenuEntry, Option<RowAction>)> = Vec::new();
     if let (true, Some(version)) = (rollback_offered, previous) {
         let roll_back = MenuItem::new(format!("Roll back to {version}")).icon(IconName::History);
         menu.push((roll_back.into(), Some(RowAction::Rollback)));
+    }
+    if log_offered {
+        let view_log = MenuItem::new("View log").icon(IconName::FileText);
+        menu.push((view_log.into(), Some(RowAction::ViewLog)));
+    }
+    if !menu.is_empty() {
         menu.push((MenuEntry::Separator, None));
     }
     let remove = MenuItem::new("Remove").icon(IconName::Trash2).destructive();
@@ -160,20 +176,25 @@ mod tests {
     }
 
     #[test]
-    fn roll_back_to_the_kept_version_comes_first_above_remove_when_offered() {
-        let menu = row_menu(Some("0.9.0"), true);
-        assert_eq!(labels(&menu), ["Roll back to 0.9.0", "Remove"]);
+    fn roll_back_then_view_log_then_remove_in_the_artboard_order() {
+        let menu = row_menu(Some("0.9.0"), true, true);
+        assert_eq!(labels(&menu), ["Roll back to 0.9.0", "View log", "Remove"]);
         assert!(matches!(menu[0].1, Some(RowAction::Rollback)));
-        assert!(matches!(menu[1].0, MenuEntry::Separator));
-        assert!(matches!(menu[2].1, Some(RowAction::Remove)));
+        assert!(matches!(menu[1].1, Some(RowAction::ViewLog)));
+        assert!(matches!(menu[2].0, MenuEntry::Separator));
+        assert!(matches!(menu[3].1, Some(RowAction::Remove)));
     }
 
     #[test]
-    fn the_row_menu_lists_only_remove_without_an_offer_or_a_kept_version() {
-        for (previous, offered) in [(Some("0.9.0"), false), (None, true)] {
-            let menu = row_menu(previous, offered);
-            assert_eq!(labels(&menu), ["Remove"], "{previous:?} {offered}");
-            assert_eq!(menu.len(), 1, "no separator above Remove alone");
+    fn the_row_menu_lists_only_what_the_service_offers() {
+        let cases: [(Option<&str>, bool, bool, Vec<&str>); 3] = [
+            (Some("0.9.0"), false, false, vec!["Remove"]),
+            (None, true, false, vec!["Remove"]),
+            (None, false, true, vec!["View log", "Remove"]),
+        ];
+        for (previous, rollback, log, expected) in cases {
+            let menu = row_menu(previous, rollback, log);
+            assert_eq!(labels(&menu), expected, "{previous:?} {rollback} {log}");
         }
     }
 }

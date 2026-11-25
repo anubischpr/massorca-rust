@@ -17,6 +17,7 @@ mod item;
 mod item_images;
 #[cfg(test)]
 mod item_images_tests;
+mod log_view;
 mod more_menu;
 mod package;
 mod review;
@@ -33,6 +34,7 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use log_view::RunLogView;
 pub(super) use rollback::RollbackConfirm;
 use std::collections::BTreeSet;
 
