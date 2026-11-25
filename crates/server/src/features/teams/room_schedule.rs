@@ -55,9 +55,9 @@ const NOT_TOMORROW: [&str; 6] = ["la", "esta", "de", "en", "por", "pasado"];
 const BREAK: &str = "|";
 
 /// The moment `text` asks for, with `today` the host's date: one day phrase (`YYYY-MM-DD`, today, tomorrow or a
-/// weekday, which means its next one after today) and one asked-for time phrase (`HH:MM`, `9pm`, `9:30 pm`, or a bare
-/// hour from 12 to 23 or 0 after "at" or "a las"). A bare hour from 1 to 11 says neither morning nor evening, so it is
-/// not read. Two different days or two different times are not a request to schedule.
+/// weekday, which means its next one after today) and one asked-for time phrase (`HH:MM` with two hour digits, `9pm`,
+/// `9:30 pm`, or a bare hour from 12 to 23 or 0 after "at" or "a las"). A bare hour from 1 to 11, or `H:MM` with one
+/// hour digit from 1 to 9, says neither morning nor evening, so it is not read. Two different days or two different times are not a request to schedule.
 pub(super) fn scheduled_moment(text: &str, today: Date) -> Option<Moment> {
     let words = words(text);
     let asked = words
@@ -70,8 +70,11 @@ pub(super) fn scheduled_moment(text: &str, today: Date) -> Option<Moment> {
         if let Some(date) = day_of(word, previous.map(String::as_str), today) {
             dates.push(date);
         }
-        if let Some(time) = time_of(&words, index, today, asked) {
-            times.push(time);
+        match time_of(&words, index, today, asked) {
+            Some(Reading::Clock(time)) => times.push(time),
+            // A line that asks for a time it does not make clear is not scheduled at all.
+            Some(Reading::Unclear) => return None,
+            None => {}
         }
     }
     Some(Moment {
@@ -145,7 +148,13 @@ fn iso_date(word: &str) -> Option<Date> {
 
 /// The time the word at `index` asks for, read with its neighbours. It counts after "at" or "a las", or anywhere in a
 /// line that says schedule or remind (`asked`).
-fn time_of(words: &[String], index: usize, today: Date, asked: bool) -> Option<Time> {
+/// An asked-for time: a clock time, or one that could be morning or evening.
+enum Reading {
+    Clock(Time),
+    Unclear,
+}
+
+fn time_of(words: &[String], index: usize, today: Date, asked: bool) -> Option<Reading> {
     let word = words[index].as_str();
     let next = words.get(index + 1).map(String::as_str);
     let previous = |back: usize| {
@@ -161,14 +170,22 @@ fn time_of(words: &[String], index: usize, today: Date, asked: bool) -> Option<T
         if !(cued || asked) || hour.is_empty() || hour.len() > 2 || minute.len() != 2 {
             return None;
         }
-        return clock(hour.parse().ok()?, minute.parse().ok()?, meridiem);
+        // "3:30" could be morning or evening; "03:30" and "3:30 pm" say which.
+        let time = clock(hour.parse().ok()?, minute.parse().ok()?, meridiem)?;
+        if hour.len() == 1 && hour != "0" && meridiem.is_none() {
+            return Some(Reading::Unclear);
+        }
+        return Some(Reading::Clock(time));
     }
     if word.is_empty() || word.len() > 2 || !word.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let hour: i8 = word.parse().ok()?;
     if meridiem.is_some() {
-        return (cued || asked).then(|| clock(hour, 0, meridiem)).flatten();
+        return (cued || asked)
+            .then(|| clock(hour, 0, meridiem))
+            .flatten()
+            .map(Reading::Clock);
     }
     // A bare hour needs "at" or "a las", the end of a clause or a day after it ("at 15 places" is not a time), and an
     // hour that cannot be morning or evening.
@@ -176,10 +193,13 @@ fn time_of(words: &[String], index: usize, today: Date, asked: bool) -> Option<T
         matches!(next, BREAK | "on" | "el" | "o'clock" | "h")
             || day_of(next, Some(word), today).is_some()
     });
-    let unambiguous = hour == 0 || (12..=23).contains(&hour);
-    (cued && ends && unambiguous)
-        .then(|| clock(hour, 0, None))
-        .flatten()
+    if !(cued && ends) {
+        return None;
+    }
+    if (1..=11).contains(&hour) {
+        return Some(Reading::Unclear);
+    }
+    clock(hour, 0, None).map(Reading::Clock)
 }
 
 fn clock(hour: i8, minute: i8, meridiem: Option<&str>) -> Option<Time> {
@@ -286,6 +306,18 @@ mod tests {
         assert_eq!(at("tomorrow at 3"), None);
         assert_eq!(at("mañana a las 5"), None);
         assert_eq!(at("Friday at 9, run the release"), None);
+        assert_eq!(at("tomorrow at 3:30, call the client"), None);
+        assert_eq!(at("mañana a las 5:30 llama al cliente"), None);
+        assert_eq!(
+            at("today at 9:00 or at 10:00"),
+            None,
+            "an unclear time is not dropped for a clear one"
+        );
+        assert_eq!(
+            at("tomorrow at 03:30, call the client"),
+            moment("2030-01-03", "03:30"),
+            "two hour digits are a 24-hour clock"
+        );
         assert_eq!(at("tomorrow at 3pm"), moment("2030-01-03", "15:00"));
     }
 
@@ -300,7 +332,7 @@ mod tests {
             "a count, not a time"
         );
         assert_eq!(at("tomorrow or friday at 18:00"), None, "two days");
-        assert_eq!(at("today at 9:00 or at 10:00"), None, "two times");
+        assert_eq!(at("today at 09:00 or at 10:00"), None, "two times");
         assert_eq!(at("today at 25:00"), None, "not a clock time");
         assert_eq!(at("2030-02-30 at 9am"), None, "not a date");
         assert_eq!(at("ratio 16:9 tomorrow"), None);

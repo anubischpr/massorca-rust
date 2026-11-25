@@ -24,7 +24,9 @@ just to read a date.
     deploy today will break login") is not asked for;
   - a time is `HH:MM`, `H:MM am|pm`, `Ham|pm`, or a bare hour after `at` or `a las` that ends a clause or comes before
     a day (`at 17,`, `at 17 on friday`). A bare hour from 1 to 11 says neither morning nor evening, so `at 3` and
-    `a las 5` are not read; 0 and 12 to 23 are;
+    `a las 5` are not read; 0 and 12 to 23 are. For the same reason `H:MM` with one hour digit from 1 to 9 and no
+    am/pm (`at 3:30`) is not read, while `03:30` and `3:30 pm` are. A line with such an unclear time is not scheduled
+    even when it also names a clear one;
   - two different days, two different times, or a missing one leave the line a task, as before.
 - Today is the date on the host's zone (UTC when the host's zone cannot be read, as core-schedule reads it), the zone
   a routine without a zone runs on. The room sends no zone; the routine's zone is the host's, as a routine made in the
