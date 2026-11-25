@@ -36,6 +36,7 @@ mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod transcript_rows;
 mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
@@ -212,6 +213,8 @@ pub struct Shell {
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
+    chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
     /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
     session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
@@ -544,6 +547,7 @@ impl Shell {
             session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            chat_transcripts: HashMap::new(),
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
