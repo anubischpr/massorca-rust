@@ -5,7 +5,7 @@ use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 
-use super::start_page::start_params;
+use super::start_page::{StartOptions, start_params};
 
 /// The key of the page's composer among the workspace start composers; no workspace id is empty.
 pub const HOME_START: &str = "";
@@ -133,8 +133,9 @@ pub fn home_start_params(
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
+    options: StartOptions,
 ) -> AgentStartParams {
-    let mut params = start_params(workspace, kind, prompt, permission_mode);
+    let mut params = start_params(workspace, kind, prompt, permission_mode, options);
     if prompt.trim().is_empty() {
         params.prompt = None;
     }
@@ -269,8 +270,12 @@ mod tests {
 
     #[test]
     fn a_blank_prompt_starts_the_agent_with_no_prompt() {
-        assert_eq!(home_start_params("w9", "claude", "  ", None).prompt, None);
-        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()));
+        let none = StartOptions::default;
+        assert_eq!(
+            home_start_params("w9", "claude", "  ", None, none()).prompt,
+            None
+        );
+        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()), none());
         assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));

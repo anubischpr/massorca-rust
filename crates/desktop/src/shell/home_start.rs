@@ -363,14 +363,20 @@ impl Shell {
             workspace: HOME_START.to_owned(),
             kind_name: kind.name,
         });
+        let options = self.chosen_options(&composer, &kind.id, cx);
         let create = create_params(&project, prompt, &details);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let answer = match service.create_workspace(create).await {
                 Ok(workspace) => {
-                    let params =
-                        home_start_params(&workspace.id, &kind.id, &prompt, permission_mode);
+                    let params = home_start_params(
+                        &workspace.id,
+                        &kind.id,
+                        &prompt,
+                        permission_mode,
+                        options,
+                    );
                     service.agent_start(params).await
                 }
                 Err(refusal) => Err(refusal),

@@ -40,8 +40,9 @@ use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartingSession,
-    TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_params,
+    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartOptions,
+    StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_options,
+    start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -300,6 +301,21 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
             }],
         })
         .collect()
+}
+
+/// The model and effort the picker chose for `kind`, as `agent.start` takes them when the service offers them.
+pub(super) fn picked_options(picker: &PickerState, offered: bool, kind: &str) -> StartOptions {
+    let Some(model) = picker.current_model() else {
+        return StartOptions::default();
+    };
+    let efforts: Vec<&str> = model.efforts.iter().map(|label| label.as_ref()).collect();
+    start_options(
+        offered,
+        kind,
+        &picker.choice().model,
+        &efforts,
+        picker.choice().effort,
+    )
 }
 
 /// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
@@ -664,7 +680,8 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let params = start_params(workspace, &kind.id, prompt, permission_mode);
+        let options = self.chosen_options(&composer, &kind.id, cx);
+        let params = start_params(workspace, &kind.id, prompt, permission_mode, options);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
@@ -712,6 +729,17 @@ impl Shell {
             .and_then(|choice| choice.id.clone());
         let kind = declared.id.clone();
         ui_state::remember_start_mode(cx, &kind, mode.as_deref());
+    }
+
+    /// The model and effort `composer`'s picker chose for `kind`, sent only when the service offers them.
+    pub(super) fn chosen_options(
+        &self,
+        composer: &Entity<Composer>,
+        kind: &str,
+        cx: &App,
+    ) -> StartOptions {
+        let offered = self.store.read(cx).state().agent_options;
+        picked_options(composer.read(cx).picker().read(cx).state(), offered, kind)
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send

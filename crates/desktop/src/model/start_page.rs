@@ -114,6 +114,54 @@ pub fn send_reason(
     }
 }
 
+/// The model and effort a start asks for (capability `agent-options/1`, decision 0092). Both absent sends neither.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// The protocol value of a picker effort label: the values the Claude kind's `--effort` takes.
+pub fn effort_value(label: &str) -> Option<&'static str> {
+    match label {
+        "Low" => Some("low"),
+        "Medium" => Some("medium"),
+        "High" => Some("high"),
+        "Extra High" => Some("xhigh"),
+        "Max" => Some("max"),
+        _ => None,
+    }
+}
+
+/// Whether the picker row `model` is a real model of `kind`, not the kind's own row. No kind declares models yet, so
+/// each kind's only row is itself; the per-kind model lists from the kind options PR make the other rows real.
+pub fn is_real_model(kind: &str, model: &str) -> bool {
+    model != kind
+}
+
+/// The options a start sends for the picker's row `model` of `kind`, whose effort is the index `effort` of `efforts`
+/// (the labels). Sent only when the service offers `agent-options/1`, the row is a real model, and the effort names a
+/// level the model offers.
+pub fn start_options(
+    offered: bool,
+    kind: &str,
+    model: &str,
+    efforts: &[&str],
+    effort: Option<usize>,
+) -> StartOptions {
+    if !offered || !is_real_model(kind, model) {
+        return StartOptions::default();
+    }
+    let effort = effort
+        .and_then(|index| efforts.get(index))
+        .and_then(|label| effort_value(label))
+        .map(str::to_owned);
+    StartOptions {
+        model: Some(model.to_owned()),
+        effort,
+    }
+}
+
 /// The `agent.start` call that opens a session in `workspace` with `prompt`, at the Work panel's terminal size. A
 /// `permission_mode` is sent only when the person picked one; without it the vendor CLI starts in its own default.
 pub fn start_params(
@@ -121,6 +169,7 @@ pub fn start_params(
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
+    options: StartOptions,
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: Some(workspace.to_owned()),
@@ -134,9 +183,8 @@ pub fn start_params(
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
         permission_mode,
-        // The picker's model and effort are not sent yet; the per-kind model lists come with the kind options.
-        model: None,
-        effort: None,
+        model: options.model,
+        effort: options.effort,
     }
 }
 
@@ -301,11 +349,80 @@ mod tests {
 
     #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
-        let params = start_params("w1", "claude", "fix the login", None);
+        let params = start_params(
+            "w1",
+            "claude",
+            "fix the login",
+            None,
+            StartOptions::default(),
+        );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
         assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+    }
+
+    const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
+
+    #[test]
+    fn each_picker_effort_label_is_the_protocol_value_the_claude_kind_takes() {
+        let values: Vec<_> = LEVELS.iter().map(|label| effort_value(label)).collect();
+        assert_eq!(
+            values,
+            [
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("xhigh"),
+                Some("max")
+            ]
+        );
+        assert_eq!(effort_value("Turbo"), None);
+    }
+
+    #[test]
+    fn without_the_capability_neither_model_nor_effort_is_sent() {
+        let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
+        assert_eq!(options, StartOptions::default());
+        let params = start_params("w1", "claude", "hi", None, options);
+        assert_eq!((params.model, params.effort), (None, None));
+    }
+
+    #[test]
+    fn a_kind_row_is_not_a_model_so_neither_is_sent_even_when_offered() {
+        assert!(!is_real_model("claude", "claude"));
+        assert_eq!(
+            start_options(true, "claude", "claude", &[], None),
+            StartOptions::default()
+        );
+    }
+
+    #[test]
+    fn a_real_model_sends_its_model_and_the_effort_the_row_chose() {
+        let options = start_options(true, "claude", "opus", &LEVELS, Some(3));
+        assert_eq!(
+            options,
+            StartOptions {
+                model: Some("opus".to_owned()),
+                effort: Some("xhigh".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_model_without_an_effort_sends_the_model_alone_and_an_unknown_level_sends_no_effort() {
+        assert_eq!(
+            start_options(true, "claude", "haiku", &[], None).effort,
+            None
+        );
+        assert_eq!(
+            start_options(true, "claude", "opus", &["Turbo"], Some(0)).effort,
+            None
+        );
+        assert_eq!(
+            start_options(true, "claude", "opus", &LEVELS, Some(9)).effort,
+            None
+        );
     }
 }

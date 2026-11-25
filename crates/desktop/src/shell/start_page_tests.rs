@@ -1,12 +1,12 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
-use super::start_page::split_last_segment;
+use super::start_page::{picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::regions::Region;
-use crate::model::start_page::StartMode;
+use crate::model::start_page::{StartMode, StartOptions};
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
@@ -967,4 +967,98 @@ fn a_remembered_pick_comes_back_on_the_start_chip_and_is_sent(cx: &mut TestAppCo
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
     assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+}
+
+#[gpui::test]
+fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
+}
+
+#[gpui::test]
+fn with_the_capability_a_kind_with_no_models_still_sends_neither(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentOptionsOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
+}
+
+/// Claude's picker rows with real models, Opus with five levels and Haiku with none, the row `model` chosen at `effort`.
+fn picker_of_claude(
+    model: &str,
+    effort: Option<usize>,
+) -> massorca_ui::components::model_picker::PickerState {
+    use massorca_ui::components::agent_icon::AgentKind as PickerKind;
+    use massorca_ui::components::model_picker::{
+        AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
+    };
+    let levels = ["Low", "Medium", "High", "Extra High", "Max"]
+        .map(gpui::SharedString::from)
+        .to_vec();
+    let row = |id: &str, name: &str, efforts: Vec<gpui::SharedString>| ModelOption {
+        id: id.to_owned().into(),
+        name: name.to_owned().into(),
+        efforts,
+        default_effort: 0,
+        fast: false,
+    };
+    let agent = AgentOption {
+        kind: PickerKind::Claude,
+        availability: AgentAvailability::Ready,
+        list: ModelList::Loaded,
+        models: vec![
+            row("opus", "Opus", levels),
+            row("haiku", "Haiku", Vec::new()),
+        ],
+    };
+    PickerState::new(
+        vec![agent],
+        Choice {
+            model: model.to_owned().into(),
+            effort,
+            fast: false,
+        },
+    )
+}
+
+#[test]
+fn a_picked_real_model_sends_its_model_and_effort_only_when_offered() {
+    let picker = picker_of_claude("opus", Some(3));
+    assert_eq!(
+        picked_options(&picker, true, "claude"),
+        StartOptions {
+            model: Some("opus".to_owned()),
+            effort: Some("xhigh".to_owned()),
+        }
+    );
+    assert_eq!(
+        picked_options(&picker, false, "claude"),
+        StartOptions::default()
+    );
+}
+
+#[test]
+fn a_real_model_without_levels_sends_the_model_and_no_effort() {
+    let picker = picker_of_claude("haiku", Some(3));
+    assert_eq!(
+        picked_options(&picker, true, "claude"),
+        StartOptions {
+            model: Some("haiku".to_owned()),
+            effort: None,
+        }
+    );
 }
