@@ -17,7 +17,8 @@ use massorca_protocol::methods::agents::{
     AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
     AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
     CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, PromptReceipt, QueuedPrompt,
+    CredentialsShown, ImportCandidate, ImportCandidates, ImportCandidatesParams, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -54,14 +55,18 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_RELEASE, Owner::Core)?,
-        // A start with no workspace runs in the conversations folder (decision 0092).
+        // A start with no workspace runs in the conversations folder (decision 0094).
         registries
             .capabilities
             .register(capabilities::AGENT_NO_PROJECT, Owner::Core)?,
-        // `model` and `effort` on a start (decision 0092).
+        // `model` and `effort` on a start (decision 0094).
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // Import source detection, and an import without a folder (decision 0097).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_IMPORT_DETECT, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -281,6 +286,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         methods.register(
             Owner::Core,
+            agents::ACCOUNTS_IMPORT_CANDIDATES,
+            capabilities::AGENT_IMPORT_DETECT,
+            Permission::Read,
+            accounts_import_candidates,
+        )?,
+        methods.register(
+            Owner::Core,
             agents::ACCOUNTS_ACTIVATE,
             agents_cap,
             Permission::Workspace,
@@ -397,7 +409,13 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
     let session = on_agents(&ctx, move |agents| {
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
-        agents.resume(&params.session, params.permission_mode.as_deref(), grant)
+        agents.resume_at(
+            &params.session,
+            params.permission_mode.as_deref(),
+            grant,
+            params.cols,
+            params.rows,
+        )
     })
     .await?;
     Ok(for_caller(&ctx, session))
@@ -789,13 +807,14 @@ async fn accounts_sign_in(
     Ok(added)
 }
 
-/// Import into a new account from a directory the person names (decision 0059).
+/// Import into a new account from a directory the person names (decision 0059), or without one from where the kind's
+/// CLI keeps each file (decision 0097).
 async fn accounts_import(
     ctx: RequestCtx,
     params: AccountsImportParams,
 ) -> Result<AccountsImported, ErrorBody> {
     let mut imported = on_agents(&ctx, move |agents| {
-        agents.accounts_import(&params.kind, &params.from, params.label)
+        agents.accounts_import(&params.kind, params.from.as_deref(), params.label)
     })
     .await?;
     imported.account = imported
@@ -834,6 +853,38 @@ async fn accounts_check(
     })
     .await?;
     Ok(account_for_caller(&ctx.principal, account))
+}
+
+/// Where an import without a folder would copy each kind's files from (decision 0097). Metadata only; host paths only
+/// for a caller that sees account details ([`sees_account_details`]).
+async fn accounts_import_candidates(
+    ctx: RequestCtx,
+    params: ImportCandidatesParams,
+) -> Result<ImportCandidates, ErrorBody> {
+    let candidates = on_agents(&ctx, move |agents| {
+        agents.import_candidates(params.kind.as_deref())
+    })
+    .await?;
+    let details = sees_account_details(&ctx.principal);
+    Ok(ImportCandidates {
+        candidates: candidates
+            .into_iter()
+            .map(|candidate| candidate_for_caller(details, candidate))
+            .collect(),
+    })
+}
+
+/// A candidate as a caller may see it: without its folder, paths and override variables when it does not see account
+/// details.
+fn candidate_for_caller(details: bool, mut candidate: ImportCandidate) -> ImportCandidate {
+    if !details {
+        candidate.folder = None;
+        for file in &mut candidate.files {
+            file.path = None;
+            file.env = None;
+        }
+    }
+    candidate
 }
 
 /// An account as `principal` may see it: without its identity below `workspace` ([`sees_account_details`]). Every
@@ -902,5 +953,38 @@ where
             codes::INTERNAL,
             format!("the agents task failed: {error}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_protocol::methods::agents::{CandidateFile, ImportCandidate};
+
+    use super::candidate_for_caller;
+
+    fn detected() -> ImportCandidate {
+        ImportCandidate {
+            kind: "fake".to_owned(),
+            ready: true,
+            folder: Some("<home>/.fakevendor".to_owned()),
+            files: vec![CandidateFile {
+                name: "token.fake".to_owned(),
+                required: true,
+                found: true,
+                path: Some("<home>/.fakevendor/token.fake".to_owned()),
+                env: Some("FAKE_VENDOR_DIR".to_owned()),
+                reason: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_caller_below_workspace_sees_no_folder_path_or_override_variable() {
+        assert_eq!(candidate_for_caller(true, detected()), detected());
+        let masked = candidate_for_caller(false, detected());
+        assert_eq!(masked.folder, None);
+        assert_eq!(masked.files[0].path, None);
+        assert_eq!(masked.files[0].env, None);
+        assert!(masked.ready && masked.files[0].found && masked.files[0].required);
     }
 }

@@ -150,6 +150,31 @@ async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
 }
 
 #[tokio::test]
+async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_absent() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+
+    let offered = timeout(WAIT, async {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if let StoreUpdate::AgentChatOffered(flag) = update {
+                return flag;
+            }
+        }
+    })
+    .await
+    .expect("the offer arrives after the connect");
+    // No service ships chat sessions yet, so every start page stays on Terminal.
+    assert!(!offered);
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
 async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_tree_is_read_again()
 {
     let home = temp_home();

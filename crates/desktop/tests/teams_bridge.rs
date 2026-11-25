@@ -15,8 +15,8 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    BotAddParams, BotRemoveParams, BotUpdateParams, CodeSource, TeamAccess, TeamCreateParams,
-    TeamProjectAddParams, TeamRef, TeamUpdateParams,
+    BoardParams, BotAddParams, BotRemoveParams, BotUpdateParams, CodeSource, TeamAccess,
+    TeamCreateParams, TeamProjectAddParams, TeamRef, TeamUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -43,6 +43,8 @@ fn temp_home() -> TempHome {
 }
 
 const WAIT: Duration = Duration::from_secs(30);
+/// Noticing a stopped service waits on the link's own loss detection, which a loaded runner slows down.
+const LINK_LOSS_WAIT: Duration = Duration::from_secs(120);
 
 fn profile(home: &Path) -> Profile {
     Profile::resolve_with(Some(home.to_path_buf()), Some("default".to_owned()), |_| {
@@ -97,7 +99,32 @@ async fn until(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
-    let folded = timeout(WAIT, async {
+    until_within(WAIT, updates, state, what, done).await;
+}
+
+/// Folds the bridge's updates until it reports the stopped service: the link is no longer connected.
+async fn until_the_link_stops(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+) {
+    until_within(
+        LINK_LOSS_WAIT,
+        updates,
+        state,
+        "the link to stop",
+        |state| !state.connection.is_connected(),
+    )
+    .await;
+}
+
+async fn until_within(
+    budget: Duration,
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    done: impl Fn(&StoreState) -> bool,
+) {
+    let folded = timeout(budget, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
             state.apply(update, Instant::now());
@@ -224,10 +251,7 @@ async fn the_teams_are_not_claimed_once_the_service_is_gone() {
     assert!(teams_view(&state).is_connected());
 
     stop_service(service).await;
-    until(&mut updates, &mut state, "the link to stop", |state| {
-        !state.connection.is_connected()
-    })
-    .await;
+    until_the_link_stops(&mut updates, &mut state).await;
     assert!(!teams_view(&state).is_connected());
 }
 
@@ -354,10 +378,7 @@ async fn a_write_is_refused_while_the_service_is_down() {
     })
     .await;
     stop_service(service).await;
-    until(&mut updates, &mut state, "the link to stop", |state| {
-        !state.connection.is_connected()
-    })
-    .await;
+    until_the_link_stops(&mut updates, &mut state).await;
     let refusal = handle
         .create_team(TeamCreateParams {
             name: "Ops".to_owned(),
@@ -1283,6 +1304,121 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
     assert!(
         matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
         "{refusal:?}"
+    );
+    stop_service(service).await;
+}
+
+/// The protocol id of the first card the store shows, as the bridge numbers it.
+fn first_card_key(state: &StoreState) -> String {
+    let view = teams_view(state);
+    let task = view.teams()[0].tasks[0].id;
+    state
+        .team_ids
+        .key(task.0)
+        .expect("the card is numbered")
+        .to_owned()
+}
+
+/// A team named Ops with one card that has no bot. Returns a client of the service and the team's id.
+async fn team_with_an_unassigned_card(home: &Path) -> (Client, String) {
+    let client = client_of(home).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .task_create(&TaskCreateParams {
+            team: team.id.clone(),
+            title: "Rotate the keys".to_owned(),
+            body: None,
+            bot: None,
+            project: None,
+            origin: None,
+        })
+        .await
+        .expect("the task is created");
+    (client, team.id)
+}
+
+/// How many cards the service's Board holds in Open.
+async fn open_cards(client: &Client, team: &str) -> usize {
+    let board = client
+        .team_board(&BoardParams {
+            team: team.to_owned(),
+            project: None,
+        })
+        .await
+        .expect("the Board is read");
+    assert_eq!(board.columns[0].column, Column::Open);
+    board.columns[0].cards.len()
+}
+
+#[tokio::test]
+async fn a_card_without_a_bot_is_refused_its_start_in_the_services_words() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (client, team) = team_with_an_unassigned_card(home.path()).await;
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the card", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|listed| !listed.tasks.is_empty())
+    })
+    .await;
+    let refusal = handle
+        .start_task(first_card_key(&state))
+        .await
+        .expect_err("a card without a bot does not start");
+    assert!(
+        refusal.message().contains("has no bot"),
+        "{}",
+        refusal.message()
+    );
+    assert_eq!(
+        open_cards(&client, &team).await,
+        1,
+        "the card stays in Open"
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_card_with_no_run_is_not_stopped_and_the_service_says_so() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (client, team) = team_with_an_unassigned_card(home.path()).await;
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the card", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|listed| !listed.tasks.is_empty())
+    })
+    .await;
+    let refusal = handle
+        .stop_task(first_card_key(&state))
+        .await
+        .expect_err("a card with no run has nothing to stop");
+    assert!(
+        refusal.message().contains("is not running"),
+        "{}",
+        refusal.message()
+    );
+    assert_eq!(
+        open_cards(&client, &team).await,
+        1,
+        "the card stays in Open"
     );
     stop_service(service).await;
 }

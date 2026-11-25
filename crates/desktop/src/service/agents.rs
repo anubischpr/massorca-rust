@@ -98,17 +98,20 @@ impl ServiceHandle {
             .await
     }
 
-    /// `agent.resume`: starts a new run of an exited session, in `permission_mode` when it names one. The store takes
-    /// the session from the answer.
+    /// `agent.resume`: starts a new run of an exited session, in `permission_mode` when it names one, its terminal at
+    /// `grid` (cols, rows) when given. The store takes the session from the answer.
     pub async fn agent_resume(
         &self,
         session: &str,
         permission_mode: Option<String>,
+        grid: Option<(u16, u16)>,
     ) -> Result<AgentSession, Refusal> {
         self.ask(|reply| Command::AgentResume {
             params: AgentResumeParams {
                 session: session.to_owned(),
                 permission_mode,
+                cols: grid.map(|(cols, _)| cols),
+                rows: grid.map(|(_, rows)| rows),
             },
             reply,
         })

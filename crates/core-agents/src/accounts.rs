@@ -16,17 +16,20 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountOrigin, AccountState, AccountSummary, AccountsChanged, AccountsImported,
     AccountsRemoved, CredentialsImported, CredentialsRemoved, CredentialsShown, ImportResult,
+    PackageState,
 };
 
 use crate::account_check::{
     MAX_TEXT_CHARS, Verdict, account_strip_names, normalized_identity, parse_state, run_program,
     settle, state_name, unknown, verdict,
 };
-use crate::credentials;
+use crate::credentials::{self, ImportFrom};
 use crate::kind::{KindDecl, valid_id};
+use crate::packages::{BuiltInPackages, FIRST_PARTY_PREFIX, KindPackages};
 use crate::paths;
 use crate::sessions::{AgentError, Agents, Change};
 use crate::sign_in::{SignInEnd, SignInOutcome, sign_in_outcome};
+use crate::state_file;
 
 /// The label of an account when the person gives none.
 pub(crate) const DEFAULT_LABEL: &str = "account";
@@ -54,6 +57,19 @@ pub struct AccountUse {
 pub(crate) struct AccountBusy {
     pub(crate) pending: HashMap<String, String>,
     pub(crate) removing: HashSet<String>,
+}
+
+/// What a decision did with a new account its check reports signed in (decisions 0059 and 0098).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Kept {
+    /// Kept as a new account, or nothing else to report.
+    New,
+    /// The login was already this account: it now has the new files, and the new account is gone.
+    Updated(String),
+    /// The login is already this account, which is busy; the new account is deleted and that account is unchanged.
+    Duplicate(String),
+    /// The login is already this account, whose files could not be replaced; the new account is deleted.
+    NotUpdated { existing: String, message: String },
 }
 
 /// Marks an account as being removed until dropped, so no run starts on it and no other change touches it.
@@ -119,6 +135,29 @@ fn undecided(account: &str) -> AgentError {
     )
 }
 
+/// Repairs the state file of an account home before a launch (decision 0099), under the homes gate. A state file that
+/// cannot be repaired refuses the launch, as the check reports the account as needing a sign-in: the CLI would open its
+/// first-run setup instead.
+fn repair_state(decl: &KindDecl, home: &Path) -> Result<(), AgentError> {
+    let Some(rule) = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| credentials.state.as_ref())
+    else {
+        return Ok(());
+    };
+    state_file::ensure(home, rule).map(|_| ()).map_err(|reason| {
+        AgentError::new(
+            codes::AGENT_CREDENTIALS_INVALID,
+            format!(
+                "the account's {} for agent kind {} cannot be used ({reason}); delete that file in the account's folder, or remove the account and add it again",
+                rule.file,
+                decl.id
+            ),
+        )
+    })
+}
+
 fn already_has_home(kind: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_CREDENTIALS_EXIST,
@@ -176,18 +215,24 @@ impl Agents {
     /// Imports the kind's declared files from `from` into a new account (decision 0059), then decides it with its check. The
     /// account stays undecided until the check keeps it, so a refused import never counts as the kind's history. The result
     /// is `imported`; `failed` when the check reports the login is not signed in (the new account is then deleted, without a
-    /// sign-out: the login is the person's); or `not_found` when none of the declared files is in `from`.
+    /// sign-out: the login is the person's); or `not_found` when a required file is missing, with a reason naming each one and
+    /// where it was looked for. Without `from`, each declared file is read from where the kind's CLI keeps it (decision
+    /// 0097).
     pub fn accounts_import(
         &self,
         kind: &str,
-        from: &str,
+        from: Option<&str>,
         label: Option<String>,
     ) -> Result<AccountsImported, AgentError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
         valid_label(&label)?;
         self.require_enabled_kind(kind)?;
-        let (account, _, mark) =
-            match self.import_new_account(kind, Path::new(from), &label, ORIGIN_IMPORT) {
+        let from = match from {
+            Some(folder) => ImportFrom::Folder(Path::new(folder)),
+            None => ImportFrom::Detected,
+        };
+        let (account, imported, mark) =
+            match self.import_new_account(kind, from, &label, ORIGIN_IMPORT) {
                 Ok(added) => added,
                 Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
                     return Err(error);
@@ -196,16 +241,11 @@ impl Agents {
                     return Ok(AccountsImported {
                         result: ImportResult::NotFound,
                         account: None,
-                        reason: Some("none of the declared files is in the source".to_owned()),
-                    });
-                }
-                Err(error) => {
-                    return Ok(AccountsImported {
-                        result: ImportResult::Failed,
-                        account: None,
                         reason: Some(error.message),
+                        updated: None,
                     });
                 }
+                Err(error) => return Ok(failed_import(error.message)),
             };
         let verdict = self.check_imported(kind, &account);
         let files = credentials::account_files_present(
@@ -219,35 +259,53 @@ impl Agents {
         match sign_in_outcome(verdict.as_ref(), files, SignInEnd::TerminalEnded) {
             SignInOutcome::Discard => {
                 self.discard_marked(kind, &account, refused);
-                return Ok(AccountsImported {
-                    result: ImportResult::Failed,
-                    account: None,
-                    reason: Some("the check reports the login is not signed in".to_owned()),
-                });
+                return Ok(failed_import(
+                    "the check reports the login is not signed in".to_owned(),
+                ));
             }
-            outcome => {
-                if let Some(existing) =
-                    self.store_outcome(kind, &account, outcome, mark, None, refused)
-                {
+            outcome => match self.store_outcome(kind, &account, outcome, mark, None, refused) {
+                Kept::New => {}
+                Kept::Updated(existing) => {
+                    let row = self.account_of(kind, &existing)?;
+                    let summary = self.summary(
+                        &row,
+                        self.store().get_active_agent_account(kind)?.as_deref(),
+                    )?;
                     return Ok(AccountsImported {
-                        result: ImportResult::Failed,
-                        account: None,
-                        reason: Some(format!(
-                            "this login is already account {existing} of {kind}; activate that account instead"
-                        )),
+                        result: ImportResult::Imported,
+                        account: Some(summary),
+                        reason: None,
+                        updated: Some(existing),
                     });
                 }
-            }
+                Kept::Duplicate(existing) => {
+                    return Ok(failed_import(format!(
+                        "this login is already account {existing} of {kind}, which is busy; try again once it is free"
+                    )));
+                }
+                Kept::NotUpdated { existing, message } => {
+                    return Ok(failed_import(format!(
+                        "this login is already account {existing} of {kind}, whose files could not be replaced: {message}"
+                    )));
+                }
+            },
         }
         let row = self.account_of(kind, &account)?;
         let summary = self.summary(
             &row,
             self.store().get_active_agent_account(kind)?.as_deref(),
         )?;
+        // A state file built without its source says so (decision 0099); the import still succeeded.
+        let notes: Vec<String> = imported
+            .files
+            .into_iter()
+            .filter_map(|file| file.reason)
+            .collect();
         Ok(AccountsImported {
             result: ImportResult::Imported,
             account: Some(summary),
-            reason: None,
+            reason: (!notes.is_empty()).then(|| notes.join("; ")),
+            updated: None,
         })
     }
 
@@ -574,7 +632,7 @@ impl Agents {
         mark: DecisionMark,
         sign_out: Option<(KindDecl, PathBuf)>,
         refused: AccountState,
-    ) -> Option<String> {
+    ) -> Kept {
         match outcome {
             SignInOutcome::Discard => {
                 if let Some((decl, program)) = &sign_out {
@@ -585,17 +643,18 @@ impl Agents {
             SignInOutcome::Undecided => self.leave_undecided(kind, account),
             SignInOutcome::Unknown => self.keep_marked(kind, account, AccountState::Unknown, None),
             SignInOutcome::SignedIn { identity } => {
-                let duplicate = self.keep_signed_in(kind, account, identity);
+                let kept = self.keep_signed_in(kind, account, identity);
                 drop(mark);
-                return duplicate;
+                return kept;
             }
         }
         drop(mark);
-        None
+        Kept::New
     }
 
     /// The other account of `kind` already signed in as `identity`, if any (ACC-03). Identities are compared trimmed and
-    /// without case, as pv96 compares a duplicate add's email. A new account that matches is refused, never signed out.
+    /// without case, as pv96 compares a duplicate add's email. A new account that matches updates that account (decision
+    /// 0098), and is never signed out.
     pub(crate) fn duplicate_of(
         &self,
         kind: &str,
@@ -620,16 +679,16 @@ impl Agents {
             .map(|row| row.id))
     }
 
-    /// Keeps a new account its check reports signed in, while the caller holds its mark, unless another account of the
-    /// kind already has its identity (ACC-03). The comparison and the write happen under one hold of the homes gate, so two
-    /// decisions of the same login cannot both keep it. A duplicate is deleted and announced as `conflict`, never signed
-    /// out (the vendor sign-out would end the session the existing account shares); its id is returned.
-    fn keep_signed_in(
-        &self,
-        kind: &str,
-        account: &str,
-        identity: Option<String>,
-    ) -> Option<String> {
+    /// Keeps a new account its check reports signed in, while the caller holds its mark (decision 0059). When another
+    /// account of the kind already has its identity (ACC-03), that account is updated instead (decision 0098): the new
+    /// account's declared credential files overwrite those files in its home (nothing else there changes), its state
+    /// and identity are refreshed, and its id, label, origin, active mark and
+    /// project choices stay; the new account's row is deleted. An existing account that is busy (a live run, a removal, a
+    /// sign-in or a decision of its own, or a sign-in still undecided in the store) is left alone and the new account is
+    /// deleted, as before 0098. Neither is ever signed out: the vendor sign-out would end the session both share. The
+    /// comparison and the writes happen under one hold of the homes gate, so two decisions of the same login cannot both
+    /// keep it.
+    fn keep_signed_in(&self, kind: &str, account: &str, identity: Option<String>) -> Kept {
         let gate = credentials::lock_homes();
         let duplicate = match identity.as_deref() {
             Some(identity) => self
@@ -645,27 +704,81 @@ impl Agents {
             None => None,
         };
         if let Some(existing) = duplicate {
+            let busy =
+                self.account_is_busy(&existing) || self.store_pending(&existing).unwrap_or(true);
+            let kept = if busy {
+                Kept::Duplicate(existing.clone())
+            } else {
+                match self.update_existing(kind, account, &existing, identity.as_deref()) {
+                    Ok(()) => Kept::Updated(existing.clone()),
+                    Err(error) => {
+                        tracing::warn!(kind, code = error.code, "an account could not be updated");
+                        Kept::NotUpdated {
+                            existing: existing.clone(),
+                            message: error.message,
+                        }
+                    }
+                }
+            };
             drop(gate);
-            tracing::warn!(
-                kind,
-                existing = %existing,
-                "a new account of a login that is already an account is discarded"
-            );
-            self.discard_marked(kind, account, AccountState::Conflict);
-            return Some(existing);
+            if matches!(kept, Kept::Updated(_)) {
+                // The new account is gone and the existing one has its files: both are announced once.
+                self.notify_account(kind, account, AccountState::SignedIn);
+                self.notify_account(kind, &existing, AccountState::SignedIn);
+            } else {
+                tracing::warn!(
+                    kind,
+                    existing = %existing,
+                    "a new account of a login that is already an account is discarded"
+                );
+                self.discard_marked(kind, account, AccountState::Conflict);
+            }
+            return kept;
         }
         match self.keep_decided(kind, account, AccountState::SignedIn, identity.as_deref()) {
             Ok(true) => {}
-            Ok(false) => return None,
+            Ok(false) => return Kept::New,
             Err(error) => {
                 tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
-                return None;
+                return Kept::New;
             }
         }
         self.make_active_if_none(kind, account);
         drop(gate);
         self.notify_account(kind, account, AccountState::SignedIn);
-        None
+        Kept::New
+    }
+
+    /// Gives `existing` the declared credential files of the new account `account`, leaving every other file of its home
+    /// as it is, records its check (decision 0098), then deletes the new account's home and row. The caller holds the homes gate and the new account's mark, and has
+    /// checked that `existing` is not busy. A failed swap leaves `existing` as it was.
+    fn update_existing(
+        &self,
+        kind: &str,
+        account: &str,
+        existing: &str,
+        identity: Option<&str>,
+    ) -> Result<(), AgentError> {
+        credentials::update_account_files_locked(
+            self.profile_dir(),
+            self.kind_packages(),
+            kind,
+            account,
+            existing,
+        )?;
+        self.store().set_agent_account_check(
+            existing,
+            state_name(AccountState::SignedIn),
+            identity,
+        )?;
+        if let Err(error) = self.store().delete_agent_account(account) {
+            tracing::warn!(kind, code = %error, "an updating account's row could not be deleted");
+        }
+        tracing::info!(
+            kind,
+            "a second import or sign-in of an account's login updated it"
+        );
+        Ok(())
     }
 
     /// Keeps an account whose mark the caller holds: its check's state and identity are stored, its sign-in mark is cleared
@@ -741,9 +854,10 @@ impl Agents {
     pub(crate) fn resolve_home(
         &self,
         gate: &MutexGuard<'_, ()>,
-        kind: &str,
+        decl: &KindDecl,
         project: &str,
     ) -> Result<AccountUse, AgentError> {
+        let kind = decl.id.as_str();
         self.migrate_legacy(gate, kind)?;
         let chosen = match self.store().get_agent_account_choice(kind, project)? {
             Some(account) => Some(account),
@@ -772,6 +886,7 @@ impl Agents {
                     ),
                 )
             })?;
+        repair_state(decl, &home)?;
         Ok(AccountUse {
             home: Some(home),
             account: Some(account),
@@ -790,6 +905,142 @@ impl Agents {
         )
     }
 
+    /// The cleanup of a package removed with its agent homes (decision 0098): for each kind the package provided, deletes
+    /// every account of the kind (its home under `<profile>/agents/accounts/<kind>/` and its row, which takes its active
+    /// mark and project choices with it), any account directory left without a row, the hidden folders an interrupted
+    /// import or replace left there, the kind's account folder itself, and the kind's 0056 home with its hidden siblings.
+    /// Nothing is signed out, so an account a MassOrca sign-in made keeps its login valid at the vendor. Left alone: a kind
+    /// another installed package still provides; a kind the built-in catalogue declares, when the package is not a
+    /// first-party one (reported); and an account busy with a sign-in, a decision, a removal or a live run (reported).
+    /// Links are refused as by every removal. Every kind is tried; what was left is returned as one error, with the code
+    /// of its first problem.
+    pub fn remove_package_accounts(
+        &self,
+        package_id: &str,
+        kinds: &[String],
+    ) -> Result<(), AgentError> {
+        let still_provided: HashSet<String> = self
+            .kind_packages()
+            .kinds()
+            .into_iter()
+            // An unknown state is a lockfile that cannot be read: the kind may still be installed, so it is kept.
+            .filter(|kind| {
+                kind.package_id != package_id
+                    && matches!(
+                        kind.state,
+                        PackageState::Enabled | PackageState::Disabled | PackageState::Unknown
+                    )
+            })
+            .map(|kind| kind.kind_id)
+            .collect();
+        let built_in: HashSet<String> = BuiltInPackages
+            .kinds()
+            .into_iter()
+            .map(|kind| kind.kind_id)
+            .collect();
+        let first_party = package_id.starts_with(FIRST_PARTY_PREFIX);
+        let mut problems: Vec<AgentError> = Vec::new();
+        for kind in kinds {
+            if !valid_id(kind) {
+                continue;
+            }
+            if !first_party && built_in.contains(kind) {
+                problems.push(AgentError::new(
+                    codes::AGENT_HOOK_REFUSED,
+                    format!(
+                        "the accounts of {kind} were left: it is a built-in agent kind, which package {package_id} does not own"
+                    ),
+                ));
+                continue;
+            }
+            if still_provided.contains(kind) {
+                continue;
+            }
+            let removed = {
+                let _gate = credentials::lock_homes();
+                self.remove_kind_accounts_locked(kind, &mut problems)
+            };
+            for (account, state) in removed {
+                self.notify_account(kind, &account, state);
+            }
+        }
+        let Some(first) = problems.first() else {
+            return Ok(());
+        };
+        let messages: Vec<&str> = problems
+            .iter()
+            .map(|problem| problem.message.as_str())
+            .collect();
+        Err(AgentError::new(
+            first.code,
+            format!(
+                "some accounts of package {package_id} were not deleted: {}",
+                messages.join("; ")
+            ),
+        ))
+    }
+
+    /// The body of [`Agents::remove_package_accounts`] for one kind, under the homes gate. Returns the deleted accounts with
+    /// their last state, to be announced once the gate is released; adds what it could not delete to `problems`.
+    fn remove_kind_accounts_locked(
+        &self,
+        kind: &str,
+        problems: &mut Vec<AgentError>,
+    ) -> Vec<(String, AccountState)> {
+        let mut removed = Vec::new();
+        let named = |error: AgentError, what: String| {
+            AgentError::new(error.code, format!("{what}: {}", error.message))
+        };
+        let rows = match self.store().list_agent_accounts(kind) {
+            Ok(rows) => rows,
+            Err(error) => {
+                problems.push(named(error.into(), format!("the accounts of {kind}")));
+                return removed;
+            }
+        };
+        let mut with_row = HashSet::new();
+        for row in rows {
+            with_row.insert(row.id.clone());
+            if self.account_is_busy(&row.id) {
+                problems.push(busy(&row.id, "busy"));
+                continue;
+            }
+            if let Err(error) =
+                credentials::remove_account_locked(self.profile_dir(), kind, &row.id)
+            {
+                problems.push(named(error, format!("account {} of {kind}", row.id)));
+                continue;
+            }
+            match self.store().delete_agent_account(&row.id) {
+                Ok(_) => removed.push((row.id.clone(), parse_state(&row.state))),
+                Err(error) => {
+                    problems.push(named(error.into(), format!("account {} of {kind}", row.id)));
+                }
+            }
+        }
+        for account in self.account_dirs(kind) {
+            if with_row.contains(&account) || self.account_is_busy(&account) {
+                continue;
+            }
+            if let Err(error) =
+                credentials::remove_account_locked(self.profile_dir(), kind, &account)
+            {
+                problems.push(named(
+                    error,
+                    format!("account directory {account} of {kind}"),
+                ));
+            }
+        }
+        if let Err(error) = credentials::remove_locked(self.profile_dir(), kind) {
+            problems.push(named(error, format!("the credential home of {kind}")));
+        }
+        problems.extend(credentials::remove_kind_leftovers_locked(
+            self.profile_dir(),
+            kind,
+        ));
+        removed
+    }
+
     /// `agent.credentials.import` (deprecated, 0056): imports into a new account that becomes the active one. The active
     /// account is refused unless `replace` is set, and is then removed once the new one is in place. This import checks no
     /// login, so the new account is kept as it was imported: decided, as `unknown`.
@@ -804,8 +1055,12 @@ impl Agents {
         if active.is_some() && !replace {
             return Err(already_has_home(kind));
         }
-        let (account, imported, mark) =
-            self.import_new_account(kind, Path::new(from), DEFAULT_LABEL, ORIGIN_IMPORT)?;
+        let (account, imported, mark) = self.import_new_account(
+            kind,
+            ImportFrom::Folder(Path::new(from)),
+            DEFAULT_LABEL,
+            ORIGIN_IMPORT,
+        )?;
         if let Some(old) = active
             && let Err(error) = self.accounts_remove(kind, &old)
         {
@@ -851,6 +1106,11 @@ impl Agents {
     ///   of its own; a check that cannot tell leaves a sign-in pending.
     pub fn startup_sweep(&self) {
         let profile = self.profile_dir().to_path_buf();
+        // A crash during a replace may have left a home aside: it is put back, or deleted once its swap finished (0098).
+        {
+            let _gate = credentials::lock_homes();
+            credentials::restore_replaced_leftovers_locked(&profile);
+        }
         match self.store().list_all_agent_accounts() {
             Ok(rows) => {
                 for row in rows.iter().filter(|row| row.origin == ORIGIN_MIGRATED) {
@@ -1036,7 +1296,7 @@ impl Agents {
     pub(crate) fn import_new_account(
         &self,
         kind: &str,
-        from: &Path,
+        from: ImportFrom<'_>,
         label: &str,
         origin: &str,
     ) -> Result<(String, CredentialsImported, DecisionMark), AgentError> {
@@ -1090,9 +1350,27 @@ impl Agents {
         let credential_decl = decl.credentials.as_ref()?;
         let home = {
             let _gate = credentials::lock_homes();
-            credentials::usable_account_home(self.profile_dir(), &decl.id, account)
+            let home = credentials::usable_account_home(self.profile_dir(), &decl.id, account)
                 .ok()
-                .flatten()?
+                .flatten()?;
+            // The check sees the home the session will: its state file repaired first (decision 0099). One that cannot
+            // be repaired would open the CLI's first-run setup, so the account needs a new sign-in or import.
+            if let Some(rule) = &credential_decl.state
+                && let Err(reason) = state_file::ensure(&home, rule)
+            {
+                tracing::warn!(kind = %decl.id, file = %rule.file, %reason, "the account's state file cannot be repaired");
+                // Only a lasting reason means the account needs a new sign-in; a passing one says nothing about it.
+                let state = if state_file::lasting(&reason, rule) {
+                    AccountState::NeedsSignIn
+                } else {
+                    AccountState::Unknown
+                };
+                return Some(Verdict {
+                    state,
+                    identity: None,
+                });
+            }
+            home
         };
         let run = run_program(
             program,
@@ -1198,7 +1476,17 @@ impl Agents {
     }
 }
 
-/// Whether an import failed only because none of the declared files is in the source: every reason is `missing`.
+/// An import that kept no account, with its reason.
+fn failed_import(reason: String) -> AccountsImported {
+    AccountsImported {
+        result: ImportResult::Failed,
+        account: None,
+        reason: Some(reason),
+        updated: None,
+    }
+}
+
+/// Whether an import failed only because required files are missing: every reason is `missing`.
 fn all_missing(error: &AgentError) -> bool {
     error
         .data
@@ -1226,6 +1514,30 @@ mod tests {
             state: state.to_owned(),
             origin: origin.to_owned(),
         }
+    }
+
+    #[test]
+    fn a_third_party_package_never_cleans_a_built_in_kind() {
+        let (agents, _, profile) = service();
+        let mut account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
+        account.kind = "claude".to_owned();
+        agents.store().insert_agent_account(&account).unwrap();
+        let home = {
+            let _gate = credentials::lock_homes();
+            credentials::create_account_home(profile.path(), "claude", &account.id).unwrap()
+        };
+
+        let refused = agents
+            .remove_package_accounts("acme.kit", &["claude".to_owned()])
+            .expect_err("the built-in kind is skipped and reported");
+
+        assert_eq!(refused.code, codes::AGENT_HOOK_REFUSED);
+        assert!(refused.message.contains("claude"), "{}", refused.message);
+        assert!(home.is_dir(), "the account's home stays");
+        assert_eq!(
+            agents.store().list_agent_accounts("claude").unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1312,7 +1624,12 @@ mod tests {
         fs::write(source.path().join("token.json"), "{}").expect("write a token");
 
         let (account, _, _mark) = agents
-            .import_new_account("fake", source.path(), "work", ORIGIN_IMPORT)
+            .import_new_account(
+                "fake",
+                ImportFrom::Folder(source.path()),
+                "work",
+                ORIGIN_IMPORT,
+            )
             .expect("the import copies the declared file");
         assert!(
             !agents.store().kind_has_had_account("fake").unwrap(),
@@ -1384,7 +1701,7 @@ mod tests {
         let source = source_with_token();
 
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         let account = imported.account.expect("the import keeps its account");
         let events = account_events(&changes);
@@ -1411,7 +1728,7 @@ mod tests {
         let source = source_with_token();
 
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         assert_eq!(imported.result, ImportResult::Failed, "{imported:?}");
         assert!(
@@ -1452,7 +1769,7 @@ mod tests {
         declare_kind(profile.path(), "fake-agent", None);
         let source = source_with_token();
         let imported = agents
-            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .accounts_import("fake", source.path().to_str(), None)
             .expect("the import runs");
         let account = imported.account.expect("the import keeps its account");
         let changes = collect_changes(&agents);

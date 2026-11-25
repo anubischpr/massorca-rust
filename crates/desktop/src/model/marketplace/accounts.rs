@@ -82,7 +82,7 @@ pub fn connection_rows(
             };
             AccountView {
                 id: account.id,
-                label: account.label.clone(),
+                label: shown_label(&account.label, account.identity.as_deref()),
                 state: account.state,
                 signed_in,
                 active: account.active,
@@ -94,6 +94,18 @@ pub fn connection_rows(
             }
         })
         .collect()
+}
+
+/// The label the service gives an account nobody named.
+const DEFAULT_LABEL: &str = "account";
+
+/// The name a row shows: a label the person set, else the account's identity, else the default label. The identity
+/// is masked below workspace scope, so it can be absent.
+fn shown_label(label: &str, identity: Option<&str>) -> String {
+    match identity {
+        Some(identity) if label == DEFAULT_LABEL && !identity.is_empty() => identity.to_owned(),
+        _ => label.to_owned(),
+    }
 }
 
 /// Where a sign-in in the service's terminal stands, from the dialog's point of view.
@@ -263,6 +275,7 @@ mod tests {
             result,
             account: None,
             reason: reason.map(str::to_owned),
+            updated: None,
         }
     }
 
@@ -319,6 +332,37 @@ mod tests {
         assert_eq!(rows[1].signed_in, "Last signed in as second@example.com");
         assert_eq!(rows[1].used_by, "Not used by any project");
         assert!(!rows[1].active);
+    }
+
+    /// The sample's Claude rows after giving the first account `label` and `identity`.
+    fn labelled(label: &str, identity: Option<&str>) -> String {
+        let mut snapshot = SampleMarketplaceSource::default().snapshot();
+        let account = snapshot
+            .accounts
+            .iter_mut()
+            .find(|account| account.agent_kind == "claude")
+            .expect("the sample has a Claude account");
+        account.label = label.to_owned();
+        account.identity = identity.map(str::to_owned);
+        account_views(&snapshot, "claude").remove(0).label
+    }
+
+    #[test]
+    fn the_identity_takes_the_place_of_the_default_label() {
+        assert_eq!(
+            labelled("account", Some("me@example.com")),
+            "me@example.com"
+        );
+    }
+
+    #[test]
+    fn a_label_the_person_set_stays_first() {
+        assert_eq!(labelled("Work", Some("me@example.com")), "Work");
+    }
+
+    #[test]
+    fn without_an_identity_the_label_stays() {
+        assert_eq!(labelled("account", None), "account");
     }
 
     #[test]

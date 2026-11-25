@@ -4,15 +4,15 @@
 use super::super::Shell;
 use super::super::change;
 use super::super::sidebar::row_focus;
+use super::filters::sidebar_filters_button;
 use super::new_project::new_project_button;
-use super::{team_shape, waiting_icon};
+use super::team_shape;
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
 use crate::model::teams::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamId, TeamPage, TeamRow, TeamsSidebar,
 };
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
-use massorca_ui::components::button::ButtonSize;
 use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
 use massorca_ui::components::team_character::TeamCharacterMark;
 use massorca_ui::tokens::{
@@ -47,8 +47,7 @@ pub(in crate::shell) fn teams_list(
     }
 }
 
-/// The PROJECTS header of the team in view: Filters, which waits for a layer that does not exist yet, and
-/// New project (4.1).
+/// The PROJECTS header of the team in view: Filters and New project (4.1).
 fn teams_projects_header(
     team: TeamId,
     shell: &WeakEntity<Shell>,
@@ -74,10 +73,7 @@ fn teams_projects_header(
                 .flex_row()
                 .items_center()
                 .gap(px(SPACE_HALF))
-                .child(
-                    waiting_icon("teams-filters", IconName::ListFilter, "Filters")
-                        .size(ButtonSize::Compact),
-                )
+                .child(sidebar_filters_button(shell))
                 .child(new_project_button(team, shell)),
         )
 }

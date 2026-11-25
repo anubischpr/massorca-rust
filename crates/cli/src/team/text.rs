@@ -1,5 +1,6 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
+use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
 use massorca_protocol::methods::teams::{
     Board, Bot, CodeSource, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday,
     Team, TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
@@ -265,4 +266,28 @@ fn weekday_word(day: RoutineWeekday) -> &'static str {
         RoutineWeekday::Sunday => "sunday",
         RoutineWeekday::Unknown => "unknown",
     }
+}
+
+/// One room line per row: its author (`you` or the bot's name), its text, then the task it is about and its Board
+/// column.
+pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .map(|line| {
+            let author = match line.author {
+                RoomAuthor::Person => "you",
+                RoomAuthor::Bot => line.bot_name.as_deref().unwrap_or("a removed bot"),
+                RoomAuthor::Unknown => "unknown",
+            };
+            match &line.task {
+                Some(task) => format!(
+                    "{author}	{}	{} ({})",
+                    line.text,
+                    task.id,
+                    task.column.label()
+                ),
+                None => format!("{author}	{}", line.text),
+            }
+        })
+        .collect()
 }
