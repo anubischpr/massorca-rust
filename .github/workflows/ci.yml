@@ -378,7 +378,6 @@ jobs:
             ${{ runner.temp }}/massorca-service.log
             ${{ runner.temp }}/logcat-full.txt
             ${{ runner.temp }}/logcat-crash.txt
-            ${{ runner.temp }}/maestro-debug
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
