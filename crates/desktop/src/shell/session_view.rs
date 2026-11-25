@@ -20,6 +20,7 @@ use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::terminal_surface::TerminalSurface;
+use massorca_ui::components::transcript::{TranscriptAction, TranscriptRow, TranscriptView};
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_READING, SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM,
     TYPE_TITLE_SM,
@@ -28,6 +29,7 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use super::sidebar_rows::glyph_state;
+use super::transcript_rows::transcript_rows;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
@@ -177,10 +179,33 @@ pub(super) struct SessionFrame {
     pub session: String,
     /// Whether the header offers Delegate: a service is connected and the session's run has not ended.
     pub can_delegate: bool,
+    /// Whether the service cannot be reached, so a chat's answers would not reach the agent.
+    pub host_unreachable: bool,
+    /// A chat session's transcript rows; a session with rows shows them in place of the terminal.
+    pub transcript: Option<Vec<TranscriptRow>>,
 }
 
 /// The height of the session view's header, the band above the terminal's pane (`start_grid` fits the pane below it).
 pub(super) const SESSION_HEADER_HEIGHT: f32 = SIZE_TOOLBAR;
+
+/// A chat session's body: its transcript, whose answers go to the shell's answer hook.
+fn transcript_body(
+    rows: Vec<TranscriptRow>,
+    shell: &WeakEntity<Shell>,
+    session: &str,
+    host_unreachable: bool,
+) -> AnyElement {
+    let (shell, session) = (shell.clone(), session.to_owned());
+    let host = host_unreachable.then(|| SharedString::from("the host"));
+    let view = TranscriptView::new(format!("session-transcript-{session}"), rows)
+        .host_unreachable(host)
+        .on_action(move |action, _, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.answer_transcript(&session, action, cx)
+            });
+        });
+    div().flex_1().min_h_0().child(view).into_any_element()
+}
 
 /// The session view: its header, then the terminal's pane, or the refusal of its attach with Retry, then the notice of
 /// a refused stop or resume, and the composer.
@@ -301,8 +326,16 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                     }),
             )
         });
-    let body = match (frame.failure, frame.terminal, frame.surface) {
-        (Some(detail), Some(terminal), _) => {
+    let body = match (
+        frame.transcript,
+        frame.failure,
+        frame.terminal,
+        frame.surface,
+    ) {
+        (Some(rows), _, _, _) => {
+            transcript_body(rows, &frame.shell, &frame.session, frame.host_unreachable)
+        }
+        (_, Some(detail), Some(terminal), _) => {
             let (shell, workspace) = (frame.shell, frame.workspace);
             attach_failed_banner(SESSION_ATTACH_FAILED, detail, move |_, cx| {
                 let _ = shell.update(cx, |shell, cx| {
@@ -310,8 +343,13 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                 });
             })
         }
-        (_, _, Some(surface)) => div().flex_1().min_h_0().child(surface).into_any_element(),
-        (_, None, _) => div()
+        (_, _, _, Some(surface)) => div()
+            .debug_selector(|| "session-terminal".to_owned())
+            .flex_1()
+            .min_h_0()
+            .child(surface)
+            .into_any_element(),
+        (_, _, None, _) => div()
             .flex_1()
             .flex()
             .items_center()
@@ -383,8 +421,10 @@ impl Shell {
                 .and_then(|queues| queues.get(&id).cloned());
             (session, state.agent_kinds.clone(), queue)
         };
+        let transcript = self.chat_transcripts.get(&id).map(transcript_rows);
         if let Some(terminal) = session.terminal_id.as_deref()
             && !self.terminal_views.contains_key(terminal)
+            && transcript.is_none()
         {
             self.attach_view(&session.workspace_id, terminal, cx);
         }
@@ -426,7 +466,8 @@ impl Shell {
                 }
             }
         });
-        let terminal_arm = is_terminal_arm(&session);
+        // The chat arm turns on with AgentSession.run; until then only a transcript fixture gives a session one.
+        let terminal_arm = is_terminal_arm(&session) && transcript.is_none();
         let (mode_chip, mode_note) = match (&modes, terminal_arm) {
             (Some(modes), true) => (
                 Some(self.session_mode_chip(&id, modes, cx)),
@@ -489,6 +530,8 @@ impl Shell {
             session: id.clone(),
             can_delegate: self.service.is_some()
                 && session.execution.state != TerminalState::Exited,
+            host_unreachable: self.service.is_none(),
+            transcript,
         })
     }
 
@@ -751,6 +794,16 @@ impl Shell {
     }
 
     /// Stops the session's run at once, without a confirm. The store follows the service's answer.
+    /// Where an approval answer from the transcript goes. Nothing is sent yet: the service offers
+    /// `agent.chat.approval.answer` only with capability `agent-chat/1` (decision 0101, D6), and no session runs as a chat.
+    fn answer_transcript(
+        &mut self,
+        _session: &str,
+        _action: TranscriptAction,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
     fn stop_session(&mut self, session: &str, cx: &mut Context<Self>) {
         let Some(service) = self.begin_session_call(session, SessionCall::Stopping, cx) else {
             return;

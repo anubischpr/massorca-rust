@@ -17,6 +17,7 @@ mod session;
 mod settings;
 mod teams;
 mod terminal;
+mod transcript;
 
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_HEADING, TYPE_LABEL};
@@ -48,6 +49,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(layout::stories());
     all.extend(panels::stories());
     all.extend(session::stories());
+    all.extend(transcript::stories());
     all.extend(composer::stories());
     all.extend(terminal::stories());
     all.extend(teams::stories());

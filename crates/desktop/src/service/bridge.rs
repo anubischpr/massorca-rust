@@ -60,8 +60,6 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
-/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
-const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
 /// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
 const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
 /// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
@@ -795,7 +793,7 @@ impl Link {
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
         self.emit(StoreUpdate::AgentChatOffered(
-            client.has_capability(AGENT_CHAT_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
         ));
         self.emit(StoreUpdate::AgentFastOffered(
             client.has_capability(AGENT_FAST_CAPABILITY),

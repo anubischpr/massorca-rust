@@ -626,6 +626,8 @@ pub(crate) mod fixtures {
             retained: false,
             released: false,
             resume: None,
+            delegation: None,
+            notes: Vec::new(),
         }
     }
 

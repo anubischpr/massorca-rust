@@ -111,7 +111,8 @@ fn cannot_chat(name: &str, chat: Option<&KindChat>) -> String {
                 None => format!("{name} cannot run chat sessions."),
             }
         }
-        None => format!("{name} cannot run chat sessions."),
+        // A reason from a newer service reads as the plain one.
+        Some(ChatUnsupportedReason::Unknown) | None => format!("{name} cannot run chat sessions."),
     }
 }
 
@@ -478,6 +479,15 @@ mod tests {
             reason_for(None).as_deref(),
             Some("Claude cannot run chat sessions."),
             "a kind the service lists no chat for cannot chat"
+        );
+    }
+
+    #[test]
+    fn a_reason_from_a_newer_service_reads_as_the_plain_reason() {
+        let newer = agent_chat(false, Some(ChatUnsupportedReason::Unknown));
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&newer)))).reason(),
+            Some("Claude cannot run chat sessions.")
         );
     }
 
