@@ -262,3 +262,309 @@ impl Agents {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use super::*;
+    use crate::credentials::MAX_FILE_BYTES;
+
+    fn source(file: &str, env: Option<&str>, dir: &str) -> CredentialSource {
+        CredentialSource {
+            file: file.to_owned(),
+            env: env.map(str::to_owned),
+            dir: dir.to_owned(),
+            windows: None,
+            macos: None,
+            linux: None,
+        }
+    }
+
+    /// An environment of exactly `vars`.
+    fn env_of(vars: &[(&str, &Path)]) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let vars: BTreeMap<String, OsString> = vars
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.as_os_str().to_owned()))
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
+    fn no_env(_: &str) -> Option<OsString> {
+        None
+    }
+
+    fn fake_credentials(dir_a: &str, dir_b: &str) -> CredentialsDecl {
+        CredentialsDecl {
+            home_env: "FAKE_AGENT_HOME".to_owned(),
+            files: vec!["token.fake".to_owned(), "extra.fake".to_owned()],
+            strip_env: Vec::new(),
+            optional: vec!["extra.fake".to_owned()],
+            sources: vec![
+                source("token.fake", Some("FAKE_VENDOR_DIR"), dir_a),
+                source("extra.fake", Some("FAKE_VENDOR_DIR"), dir_b),
+            ],
+        }
+    }
+
+    #[test]
+    fn home_comes_from_userprofile_on_windows_and_home_elsewhere() {
+        let windows_home = tempfile::tempdir().unwrap();
+        let unix_home = tempfile::tempdir().unwrap();
+        let env = env_of(&[
+            ("USERPROFILE", windows_home.path()),
+            ("HOME", unix_home.path()),
+        ]);
+        assert_eq!(
+            user_home(Platform::Windows, &env).as_deref(),
+            Some(windows_home.path())
+        );
+        for platform in [Platform::Linux, Platform::Macos, Platform::Other] {
+            assert_eq!(user_home(platform, &env).as_deref(), Some(unix_home.path()));
+        }
+        let relative = env_of(&[("HOME", Path::new("relative/home"))]);
+        assert_eq!(user_home(Platform::Linux, &relative), None);
+        assert_eq!(user_home(Platform::Linux, &no_env), None);
+    }
+
+    #[test]
+    fn home_is_substituted_and_the_platform_template_wins_over_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let mut declared = source("token.fake", None, "{home}/.fake");
+        declared.windows = Some("{home}\\AppData\\Fake".to_owned());
+        declared.linux = Some("{home}/.config/fake".to_owned());
+
+        let on = |platform| {
+            resolve(&declared, platform, Some(home.path()), &no_env)
+                .unwrap()
+                .dir
+        };
+        assert_eq!(
+            on(Platform::Windows),
+            home.path().join("AppData").join("Fake")
+        );
+        assert_eq!(
+            on(Platform::Linux),
+            home.path().join(".config").join("fake")
+        );
+        assert_eq!(on(Platform::Macos), home.path().join(".fake"));
+        assert_eq!(on(Platform::Other), home.path().join(".fake"));
+
+        assert_eq!(
+            expand("{home}", Some(home.path())).as_deref(),
+            Some(home.path())
+        );
+        assert_eq!(expand("{home}/.fake", None), None, "no home, no folder");
+        assert_eq!(expand("{home}/../elsewhere", Some(home.path())), None);
+        let absolute = home.path().join("fixed");
+        assert_eq!(
+            expand(absolute.to_str().unwrap(), None).as_deref(),
+            Some(absolute.as_path())
+        );
+    }
+
+    #[test]
+    fn the_override_variable_is_used_only_when_set_and_absolute() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let declared = source("token.fake", Some("FAKE_VENDOR_DIR"), "{home}/.fake");
+
+        let set = env_of(&[("FAKE_VENDOR_DIR", elsewhere.path())]);
+        assert_eq!(
+            resolve(&declared, Platform::Linux, Some(home.path()), &set),
+            Some(Located {
+                dir: elsewhere.path().to_path_buf(),
+                env: Some("FAKE_VENDOR_DIR".to_owned()),
+            })
+        );
+        let unset = resolve(&declared, Platform::Linux, Some(home.path()), &no_env).unwrap();
+        assert_eq!(unset.dir, home.path().join(".fake"));
+        assert_eq!(unset.env, None);
+
+        let relative = env_of(&[("FAKE_VENDOR_DIR", Path::new("relative/dir"))]);
+        let ignored = resolve(&declared, Platform::Linux, Some(home.path()), &relative).unwrap();
+        assert_eq!(
+            ignored.dir,
+            home.path().join(".fake"),
+            "a relative override is ignored"
+        );
+        assert_eq!(ignored.env, None);
+
+        let empty = |name: &str| (name == "FAKE_VENDOR_DIR").then(OsString::new);
+        assert_eq!(
+            resolve(&declared, Platform::Linux, Some(home.path()), &empty)
+                .unwrap()
+                .env,
+            None
+        );
+    }
+
+    #[test]
+    fn detection_finds_each_file_in_its_own_folder_and_marks_missing_ones() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".fake")).unwrap();
+        fs::write(home.path().join(".fake").join("token.fake"), "fake").unwrap();
+        fs::write(home.path().join("extra.fake"), "fake").unwrap();
+        let credentials = fake_credentials("{home}/.fake", "{home}");
+
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert_eq!(
+            files,
+            [
+                DetectedFile {
+                    name: "token.fake".to_owned(),
+                    required: true,
+                    path: Some(home.path().join(".fake").join("token.fake")),
+                    env: None,
+                    found: true,
+                    reason: None,
+                },
+                DetectedFile {
+                    name: "extra.fake".to_owned(),
+                    required: false,
+                    path: Some(home.path().join("extra.fake")),
+                    env: None,
+                    found: true,
+                    reason: None,
+                },
+            ]
+        );
+        let shown = candidate("fake", &files);
+        assert!(shown.ready);
+        assert_eq!(
+            shown.folder,
+            Some(home.path().join(".fake").display().to_string())
+        );
+
+        fs::remove_file(home.path().join("extra.fake")).unwrap();
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert!(!files[1].found);
+        assert!(
+            candidate("fake", &files).ready,
+            "a missing optional file keeps it ready"
+        );
+
+        fs::remove_file(home.path().join(".fake").join("token.fake")).unwrap();
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert!(!files[0].found);
+        assert!(!candidate("fake", &files).ready);
+    }
+
+    #[test]
+    fn detection_follows_the_override_variable() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("token.fake"), "fake").unwrap();
+        let env = env_of(&[("FAKE_VENDOR_DIR", elsewhere.path())]);
+        let files = detect(
+            &fake_credentials("{home}/.fake", "{home}"),
+            Platform::Linux,
+            Some(home.path()),
+            &env,
+        );
+        assert_eq!(files[0].path, Some(elsewhere.path().join("token.fake")));
+        assert_eq!(files[0].env.as_deref(), Some("FAKE_VENDOR_DIR"));
+        assert!(files[0].found);
+    }
+
+    #[test]
+    fn detection_refuses_links_directories_and_oversized_files_without_reading_them() {
+        let home = tempfile::tempdir().unwrap();
+        let credentials = fake_credentials("{home}", "{home}");
+        let token = home.path().join("token.fake");
+
+        // Oversized: a sparse file of the limit plus one byte, judged by its length.
+        let file = fs::File::create(&token).unwrap();
+        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        drop(file);
+        let files = detect(&credentials, Platform::Linux, Some(home.path()), &no_env);
+        assert!(!files[0].found, "larger than the limit");
+        assert_eq!(files[0].reason.as_deref(), Some("larger than 1 MiB"));
+        assert_eq!(files[1].reason, None, "a missing file has no reason");
+
+        fs::File::create(&token)
+            .unwrap()
+            .set_len(MAX_FILE_BYTES)
+            .unwrap();
+        assert!(detect(&credentials, Platform::Linux, Some(home.path()), &no_env)[0].found);
+
+        fs::remove_file(&token).unwrap();
+        fs::create_dir(&token).unwrap();
+        assert!(!detect(&credentials, Platform::Linux, Some(home.path()), &no_env)[0].found);
+        fs::remove_dir(&token).unwrap();
+
+        let target = home.path().join("target.fake");
+        fs::write(&target, "fake").unwrap();
+        if make_link(&target, &token).is_ok() {
+            assert!(
+                !detect(&credentials, Platform::Linux, Some(home.path()), &no_env)[0].found,
+                "a link is refused"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detection_never_opens_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let token = home.path().join("token.fake");
+        fs::write(&token, "fake").unwrap();
+        fs::set_permissions(&token, fs::Permissions::from_mode(0o000)).unwrap();
+        let files = detect(
+            &fake_credentials("{home}", "{home}"),
+            Platform::Linux,
+            Some(home.path()),
+            &no_env,
+        );
+        assert!(
+            files[0].found,
+            "an unreadable file is judged by its metadata alone"
+        );
+    }
+
+    #[cfg(unix)]
+    fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+
+    #[test]
+    fn a_network_device_or_climbing_override_counts_as_unset() {
+        let home = tempfile::tempdir().unwrap();
+        let declared = source("token.fake", Some("FAKE_VENDOR_DIR"), "{home}/.fake");
+        let climbing = home.path().join("..").join("elsewhere");
+        let refused: Vec<PathBuf> = vec![
+            PathBuf::from(r"\\server\share\fake"),
+            PathBuf::from(r"\\?\C:\fake"),
+            PathBuf::from(r"\\.\pipe\fake"),
+            PathBuf::from("//server/share/fake"),
+            climbing,
+        ];
+        for value in refused {
+            let env = env_of(&[("FAKE_VENDOR_DIR", value.as_path())]);
+            let located = resolve(&declared, Platform::Linux, Some(home.path()), &env).unwrap();
+            assert_eq!(
+                located.dir,
+                home.path().join(".fake"),
+                "{value:?} is ignored"
+            );
+            assert_eq!(located.env, None, "{value:?} is ignored");
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_declared_location_is_not_found_and_has_no_path() {
+        let mut credentials = fake_credentials("{home}", "{home}");
+        credentials.sources.clear();
+        let files = detect(&credentials, Platform::Linux, None, &no_env);
+        assert!(files.iter().all(|file| file.path.is_none() && !file.found));
+        let shown = candidate("fake", &files);
+        assert!(!shown.ready);
+        assert_eq!(shown.folder, None);
+    }
+}

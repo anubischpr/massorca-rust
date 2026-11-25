@@ -1042,7 +1042,13 @@ mod tests {
         account: &str,
         from: &Path,
     ) -> Result<CredentialsImported, AgentError> {
-        super::import_account(profile_dir, &BuiltInPackages, kind, account, from)
+        super::import_account(
+            profile_dir,
+            &BuiltInPackages,
+            kind,
+            account,
+            ImportFrom::Folder(from),
+        )
     }
 
     fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
@@ -1214,6 +1220,136 @@ mod tests {
         assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
         assert_eq!(error.data.unwrap()["files"][0]["reason"], "missing");
         assert!(!fixture.home().exists());
+    }
+
+    #[test]
+    fn a_missing_optional_file_is_skipped_and_a_missing_required_one_is_named_with_its_place() {
+        let fixture = Fixture::new(&[]);
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.json", "extra.json"],
+            "optional": ["extra.json"]
+        }));
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let imported = fixture.import(false).unwrap();
+        let names: Vec<&str> = imported
+            .files
+            .iter()
+            .map(|file| file.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["token.json"],
+            "the missing optional file is skipped"
+        );
+        assert!(!fixture.home().join("extra.json").exists());
+
+        let fixture = Fixture::new(&[]);
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.json", "extra.json"],
+            "optional": ["extra.json"]
+        }));
+        fixture.source_file("extra.json", b"{}");
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        let looked = fixture.source.path().join("token.json");
+        assert_eq!(
+            error.message,
+            format!(
+                "nothing was imported for agent kind fake; a required file is missing: token.json (looked for at {})",
+                looked.display()
+            )
+        );
+        let data = error.data.unwrap();
+        assert_eq!(data["files"].as_array().unwrap().len(), 1);
+        assert_eq!(data["files"][0]["name"], "token.json");
+        assert_eq!(data["files"][0]["reason"], "missing");
+        assert!(!fixture.home().exists());
+    }
+
+    #[test]
+    fn an_unusable_optional_file_is_skipped_but_an_unusable_required_one_refuses() {
+        /// A fixture with a required `token.json` and an optional `extra.json`.
+        fn with_optional() -> Fixture {
+            let fixture = Fixture::new(&[]);
+            fixture.declare(json!({
+                "home_env": "FAKE_AGENT_HOME",
+                "files": ["token.json", "extra.json"],
+                "optional": ["extra.json"]
+            }));
+            fixture
+        }
+        fn imports_the_token_only(fixture: &Fixture) {
+            let imported = fixture.import(false).unwrap();
+            let names: Vec<&str> = imported
+                .files
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect();
+            assert_eq!(names, ["token.json"]);
+            assert!(!fixture.home().join("extra.json").exists());
+        }
+
+        let directory = with_optional();
+        directory.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fs::create_dir(directory.source.path().join("extra.json")).unwrap();
+        imports_the_token_only(&directory);
+
+        let oversized = with_optional();
+        oversized.source_file("token.json", FAKE_TOKEN.as_bytes());
+        oversized.source_file("extra.json", &vec![b'x'; MAX_FILE_BYTES as usize + 1]);
+        imports_the_token_only(&oversized);
+
+        // The skip never applies to a required file.
+        let required = with_optional();
+        required.source_file("token.json", &vec![b'x'; MAX_FILE_BYTES as usize + 1]);
+        required.source_file("extra.json", b"{}");
+        let error = required.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert_eq!(
+            error.data.unwrap()["files"][0]["reason"],
+            "larger than 1 MiB"
+        );
+        assert!(!required.home().exists());
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::print_stderr,
+            reason = "a skipped test must name why it skipped"
+        )
+    )]
+    fn a_linked_optional_file_is_skipped_when_a_link_can_be_made() {
+        let fixture = Fixture::new(&[]);
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.json", "extra.json"],
+            "optional": ["extra.json"]
+        }));
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), b"{}").unwrap();
+        let link = fixture.source.path().join("extra.json");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(elsewhere.path().join("real.json"), &link).unwrap();
+        #[cfg(windows)]
+        if let Err(error) =
+            std::os::windows::fs::symlink_file(elsewhere.path().join("real.json"), &link)
+        {
+            eprintln!("skipped: symbolic links cannot be made here ({error})");
+            return;
+        }
+        let imported = fixture.import(false).unwrap();
+        let names: Vec<&str> = imported
+            .files
+            .iter()
+            .map(|file| file.name.as_str())
+            .collect();
+        assert_eq!(names, ["token.json"], "the linked optional file is skipped");
+        assert!(!fixture.home().join("extra.json").exists());
     }
 
     #[test]
