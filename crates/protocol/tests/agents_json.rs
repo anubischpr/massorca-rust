@@ -196,6 +196,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };
@@ -241,6 +242,7 @@ fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: Some(KindModel {
             choices: vec![
                 KindModelChoice {
@@ -323,6 +325,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
         model: None,
         effort: None,
     };

@@ -249,6 +249,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             problems: entry.problems.clone(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            chat: None,
             model: None,
             effort: None,
         };
@@ -276,6 +277,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
+        chat: None,
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
     }
