@@ -75,7 +75,7 @@ async fn a_hello_with_no_shared_version_is_refused_and_the_connection_closed() {
         .await;
 
     let refusal = raw
-        .recv()
+        .recv_step("the refusal")
         .await
         .expect("the service explains the refusal before closing");
     assert_eq!(
@@ -90,7 +90,7 @@ async fn a_hello_with_no_shared_version_is_refused_and_the_connection_closed() {
         })
     );
     assert!(
-        raw.recv().await.is_none(),
+        raw.recv_step("the close after the refusal").await.is_none(),
         "the connection closes after the refusal"
     );
     stop(running).await;
@@ -104,7 +104,7 @@ async fn a_first_frame_other_than_hello_is_refused() {
     raw.send(&request(1, service::INFO, Value::Null)).await;
 
     let refusal = raw
-        .recv()
+        .recv_step("the refusal")
         .await
         .expect("the service explains the refusal before closing");
     assert_eq!(
@@ -112,7 +112,7 @@ async fn a_first_frame_other_than_hello_is_refused() {
         Some(codes::PROTOCOL_HANDSHAKE)
     );
     assert!(
-        raw.recv().await.is_none(),
+        raw.recv_step("the close after the refusal").await.is_none(),
         "the connection closes after the refusal"
     );
     stop(running).await;
