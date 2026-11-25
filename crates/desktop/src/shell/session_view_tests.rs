@@ -55,7 +55,7 @@ pub(super) fn session_rig(
 }
 
 /// As `session_rig`, on a service that keeps these queues, or none when `queues` is `None`.
-fn queue_rig(
+pub(super) fn queue_rig(
     cx: &mut TestAppContext,
     kinds: Vec<AgentKind>,
     sessions: Vec<AgentSession>,

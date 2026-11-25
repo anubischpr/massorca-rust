@@ -898,17 +898,43 @@ impl Shell {
     ) {
     }
 
+    /// Whether `session` is a chat whose agent works or waits: its Stop ends the turn and keeps the session.
+    fn chat_turn_runs(&self, session: &str, cx: &App) -> bool {
+        let state = self.store.read(cx).state();
+        state
+            .agents
+            .iter()
+            .find(|record| record.id == session)
+            .is_some_and(|record| {
+                !is_terminal_arm(record)
+                    && matches!(
+                        session_state(record),
+                        AgentState::Running | AgentState::Waiting
+                    )
+            })
+    }
+
+    /// Stops what the session is doing. A chat that works gets its turn interrupted and keeps its run (decision 0101,
+    /// D8); any other Stop ends the run.
     fn stop_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let interrupt = self.chat_turn_runs(session, cx);
         let Some(service) = self.begin_session_call(session, SessionCall::Stopping, cx) else {
             return;
         };
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = service.agent_stop(&id).await;
-            let _ = shell.update(cx, |shell, cx| {
-                shell.finish_session_call(&id, "Could not stop the agent", answer, cx);
-            });
+            if interrupt {
+                let answer = service.agent_chat_interrupt(&id).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.finish_session_call(&id, "Could not stop the turn", answer, cx);
+                });
+            } else {
+                let answer = service.agent_stop(&id).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.finish_session_call(&id, "Could not stop the agent", answer, cx);
+                });
+            }
         })
         .detach();
     }
@@ -1092,11 +1118,11 @@ impl Shell {
     }
 
     /// The service's answer to a stop or resume: a refusal is kept above the composer with its reason.
-    fn finish_session_call(
+    fn finish_session_call<T>(
         &mut self,
         session: &str,
         what: &'static str,
-        answer: Result<AgentSession, Refusal>,
+        answer: Result<T, Refusal>,
         cx: &mut Context<Self>,
     ) {
         self.session_calls.remove(session);
