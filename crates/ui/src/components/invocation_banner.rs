@@ -3,6 +3,7 @@
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::terminal_surface::colors::mix;
 use crate::icon::{Icon, IconName, IconSize};
+use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     Color, Palette, RADIUS_2XL, RADIUS_FULL, SPACE_1, SPACE_2, SPACE_3, SPACE_5, SPACE_6,
@@ -123,16 +124,23 @@ struct Pill {
 }
 
 impl RenderOnce for Pill {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = *cx.theme();
         let p = &theme.palette;
         let id = ElementId::NamedInteger("invocation-pill".into(), self.index as u64);
+        let focus = window
+            .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone()
+            .tab_stop(true);
         let hover = p.fill.hover_raised;
         let mut pill = div()
             .id(id)
             .role(Role::Button)
             .aria_label(self.prompt.clone())
             .debug_selector(move || format!("invocation-pill-{}", self.index))
+            .track_focus(&focus)
+            .focus_ring(&theme)
             .w_full()
             .max_w(px(PILL_MAX_WIDTH))
             .flex()
@@ -577,5 +585,21 @@ mod tests {
             presses.borrow().as_slice(),
             ["@Claude explain the failing test in this project"]
         );
+    }
+
+    #[gpui::test]
+    fn marketplace_invocation_banner_pill_takes_keyboard_focus_in_tab_order(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|app| {
+            crate::init(crate::Appearance::Dark, app).expect("design system initialises")
+        });
+        let (_, cx) = cx.add_window_view(|_, _| Host {
+            presses: Rc::default(),
+        });
+        draw(cx);
+        cx.update(|window, cx| window.focus_next(cx));
+        let focused = cx.update(|window, cx| window.focused(cx).is_some());
+        assert!(focused, "Tab moves focus onto a pill");
     }
 }
