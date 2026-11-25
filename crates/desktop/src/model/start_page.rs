@@ -515,22 +515,25 @@ mod tests {
         assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
     }
 
-    const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
+    /// The Claude kind's declared level ids, which a start sends as its `effort`.
+    const LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
     #[test]
-    fn each_picker_effort_label_is_the_protocol_value_the_claude_kind_takes() {
-        let values: Vec<_> = LEVELS.iter().map(|label| effort_value(label)).collect();
+    fn the_declared_level_id_is_the_value_a_start_sends() {
+        let codex = ["minimal", "low", "xhigh"];
         assert_eq!(
-            values,
-            [
-                Some("low"),
-                Some("medium"),
-                Some("high"),
-                Some("xhigh"),
-                Some("max")
-            ]
+            start_options(true, "codex", "gpt-5", &codex, Some(0))
+                .effort
+                .as_deref(),
+            Some("minimal"),
+            "a kind's own level id is sent, whatever its label"
         );
-        assert_eq!(effort_value("Turbo"), None);
+        assert_eq!(
+            start_options(true, "claude", "opus", &LEVELS, Some(3))
+                .effort
+                .as_deref(),
+            Some("xhigh")
+        );
     }
 
     #[test]
@@ -569,7 +572,7 @@ mod tests {
             None
         );
         assert_eq!(
-            start_options(true, "claude", "opus", &["Turbo"], Some(0)).effort,
+            start_options(true, "claude", "opus", &["low"], Some(1)).effort,
             None
         );
         assert_eq!(
