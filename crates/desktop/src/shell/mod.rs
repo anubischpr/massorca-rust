@@ -20,6 +20,7 @@ mod rail;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
+mod session_grid;
 mod session_view;
 mod settings;
 mod settings_remove_dialog;
@@ -252,6 +253,8 @@ pub struct Shell {
     _marketplace_host_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The grid the session view last drew its terminal at (`session_grid`).
+    session_grid: Option<(u16, u16)>,
     /// The terminal whose closing waits for the stop question.
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
@@ -544,6 +547,7 @@ impl Shell {
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
+            session_grid: None,
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,

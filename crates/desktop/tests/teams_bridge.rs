@@ -43,6 +43,8 @@ fn temp_home() -> TempHome {
 }
 
 const WAIT: Duration = Duration::from_secs(30);
+/// Noticing a stopped service waits on the link's own loss detection, which a loaded runner slows down.
+const LINK_LOSS_WAIT: Duration = Duration::from_secs(120);
 
 fn profile(home: &Path) -> Profile {
     Profile::resolve_with(Some(home.to_path_buf()), Some("default".to_owned()), |_| {
@@ -97,7 +99,32 @@ async fn until(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
-    let folded = timeout(WAIT, async {
+    until_within(WAIT, updates, state, what, done).await;
+}
+
+/// Folds the bridge's updates until it reports the stopped service: the link is no longer connected.
+async fn until_the_link_stops(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+) {
+    until_within(
+        LINK_LOSS_WAIT,
+        updates,
+        state,
+        "the link to stop",
+        |state| !state.connection.is_connected(),
+    )
+    .await;
+}
+
+async fn until_within(
+    budget: Duration,
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    done: impl Fn(&StoreState) -> bool,
+) {
+    let folded = timeout(budget, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
             state.apply(update, Instant::now());
@@ -224,10 +251,7 @@ async fn the_teams_are_not_claimed_once_the_service_is_gone() {
     assert!(teams_view(&state).is_connected());
 
     stop_service(service).await;
-    until(&mut updates, &mut state, "the link to stop", |state| {
-        !state.connection.is_connected()
-    })
-    .await;
+    until_the_link_stops(&mut updates, &mut state).await;
     assert!(!teams_view(&state).is_connected());
 }
 
@@ -354,10 +378,7 @@ async fn a_write_is_refused_while_the_service_is_down() {
     })
     .await;
     stop_service(service).await;
-    until(&mut updates, &mut state, "the link to stop", |state| {
-        !state.connection.is_connected()
-    })
-    .await;
+    until_the_link_stops(&mut updates, &mut state).await;
     let refusal = handle
         .create_team(TeamCreateParams {
             name: "Ops".to_owned(),

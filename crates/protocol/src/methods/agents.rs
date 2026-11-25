@@ -512,6 +512,12 @@ pub struct AgentResumeParams {
     pub session: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// The terminal's columns, for the view that shows it; the default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
+    /// The terminal's rows, for the view that shows it; the default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u16>,
 }
 
 /// Params of `agent.set_mode`.
