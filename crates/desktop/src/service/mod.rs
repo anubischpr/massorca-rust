@@ -44,7 +44,9 @@ pub use connection::{
 };
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
-pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+pub use extensions::{
+    ExtensionHistory, ExtensionsRead, HostListing, HostLists, HostMarketplaceRead, RollbackAnswer,
+};
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
