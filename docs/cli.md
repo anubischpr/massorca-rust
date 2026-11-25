@@ -235,8 +235,12 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
-  within 120 s or the run ends first. The text of `--prompt` follows the same rules as
-  `agent prompt`, control characters included.
+  within 120 s or the run ends first. A prompt longer than 4 KiB, or one with a line break for a
+  kind that pastes bracketed, is typed at the first `idle` the same way when the kind reports one,
+  instead of riding the command line (decision 0168); for a `.cmd` or `.bat` program the limit is 2 KiB, since `cmd.exe`
+  holds 8,191 characters on a line, and a longer prompt the kind cannot type is refused with `agent.prompt_invalid`.
+  The text of `--prompt` follows the same
+  rules as `agent prompt`, control characters included.
 - `agent prompt SESSION TEXT` types TEXT into the session's terminal, then the kind's submit
   key (`\r` unless the kind declares another). A kind that declares bracketed paste gets the
   text between paste markers; a plain kind gets each line break as Enter. The text is at most

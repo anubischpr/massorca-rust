@@ -232,6 +232,7 @@ impl From<LaunchError> for AgentError {
     fn from(error: LaunchError) -> Self {
         let code = match error {
             LaunchError::PromptTooLong
+            | LaunchError::ShimPromptTooLong
             | LaunchError::PromptHasNul
             | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,

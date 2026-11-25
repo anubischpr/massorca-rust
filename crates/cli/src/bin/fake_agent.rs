@@ -126,6 +126,7 @@ fn main() -> ExitCode {
         say(&format!("No conversation found with session ID: {id}"));
         return ExitCode::from(1);
     }
+    read_keys_as_typed();
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
@@ -307,6 +308,10 @@ impl Agent {
         for name in listed_env(SHOW_ENV) {
             say(&format!("value {name} {}", env_value(&name)));
         }
+        // Whether the first prompt came on the command line, so a test can tell it from one typed after start.
+        if arguments.prompt.is_some() {
+            say("prompt at launch");
+        }
         for (name, foreign) in probed_foreign() {
             let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
             say(&format!(
@@ -320,7 +325,7 @@ impl Agent {
     /// Handles one prompt, reading the further lines it needs from `input`.
     fn handle_prompt(&self, text: &str, input: &mut Input) -> Flow {
         self.hook("prompt", None);
-        say(&format!("working on {text}"));
+        say(&format!("working on {}", shown(text)));
         if text.contains("hold") {
             say("holding");
             loop {
@@ -423,6 +428,19 @@ impl Agent {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// The longest prompt `working on` prints whole, lines and all, so a multi-line prompt shows its lines on the screen.
+const SHOWN_PROMPT_CHARS: usize = 1000;
+
+/// A prompt as `working on` prints it: whole when short, else its first characters and its byte length, so a long
+/// prompt keeps the screen readable.
+fn shown(text: &str) -> String {
+    if text.chars().count() <= SHOWN_PROMPT_CHARS {
+        return text.to_owned();
+    }
+    let start: String = text.chars().take(40).collect();
+    format!("{start}... ({} bytes)", text.len())
 }
 
 /// Prints one line with the agent prefix and flushes it.
@@ -657,10 +675,44 @@ fn is_file_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// The next input line, cleaned. `None` at the end of input, or when a line cannot be read.
+/// The next input line, cleaned. A bracketed paste over several lines is one input, its lines joined with ` / `, as a
+/// TUI composer takes a pasted text. `None` at the end of input, or when a line cannot be read.
 fn next_line(input: &mut Input) -> Option<String> {
-    input.next()?.ok().map(|line| clean(&line))
+    let first = input.next()?.ok()?;
+    if !first.contains(PASTE_START) || first.contains(PASTE_END) {
+        return Some(clean(&first));
+    }
+    let mut lines = vec![clean(&first)];
+    while let Some(Ok(line)) = input.next() {
+        let last = line.contains(PASTE_END);
+        lines.push(clean(&line));
+        if last {
+            break;
+        }
+    }
+    Some(lines.join(" / "))
 }
+
+/// Reads standard input as a TUI does: each line is handed over as its keys arrive. A Unix terminal in line mode holds a
+/// line until its end and drops what a line holds past its limit (4095 bytes on Linux), which cut off the end marker of a
+/// long bracketed paste (AG-05). Where standard input is not a terminal, or there is no `stty`, nothing changes.
+#[cfg(unix)]
+fn read_keys_as_typed() {
+    let _ = massorca_process::command("stty")
+        .args(["-icanon", "min", "1", "time", "0"])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// The Windows console keeps its line mode, which drops a pasted line feed; AG-05 accepts the lines joined either way.
+#[cfg(not(unix))]
+fn read_keys_as_typed() {}
+
+/// The markers of a bracketed paste (xterm mode 2004).
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
 
 /// Removes a trailing carriage return, the bracketed-paste markers and surrounding whitespace.
 fn clean(line: &str) -> String {

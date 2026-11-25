@@ -407,6 +407,15 @@ cannot wait for one, so `agent.start` refuses such a first prompt with `agent.pr
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
 
+A first prompt that does not fit a launch argument (decision 0168) is held and typed at the first `idle` the
+same way, when the kind can take it so: it is longer than 4 KiB (`ARGV_PROMPT_MAX_BYTES`) or holds a line break,
+the kind maps an event to `idle`, and, for a line break, the kind pastes bracketed, so the lines are not submitted
+one by one. This holds for the `argv`, `flag` and `startup-query` modes, on a first start and on a fork. Otherwise
+the prompt stays on the command line: the run is spawned without a shell, so line breaks reach the agent intact,
+and the 8 KiB prompt limit keeps a quoted prompt inside Windows's 32,767-unit command line. A `.cmd` or `.bat` program
+runs through `cmd.exe`, whose line holds 8,191 characters, so its argument limit is 2 KiB (`CMD_SHIM_ARGV_PROMPT_MAX_BYTES`):
+a longer prompt is typed at the first `idle` when the kind can take it, and otherwise refused with `agent.prompt_invalid`.
+
 A first prompt for a kind whose `prompt.mode` is `startup-query` is one launch argument, `<flag>=<text>`,
 after the kind's arguments and the caller's (0054). The agent takes it as its startup query and submits
 it itself once its own composer is ready, so MassOrca neither waits for `idle` nor types the text later:
