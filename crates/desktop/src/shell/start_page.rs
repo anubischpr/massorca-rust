@@ -35,6 +35,8 @@ use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
+use crate::model::marketplace::ItemKind;
+use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
@@ -483,56 +485,58 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
         let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
-        let entity = self
-            .start_composers
-            .entry(workspace_id.to_owned())
-            .or_insert_with(|| {
-                let workspace = workspace_id.to_owned();
-                let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
-                let picker = PickerState::new(
-                    Vec::new(),
-                    Choice {
-                        model: SharedString::default(),
-                        effort: None,
-                        fast: false,
-                    },
-                );
-                let entity = cx.new(|cx| {
-                    Composer::new(picker, Vec::new(), cx)
-                        .leading_control(switch)
-                        .voice_unavailable(VOICE_LATER)
-                        .sends_empty()
-                });
-                let events = cx.subscribe(
-                    &entity,
-                    move |shell, composer, event: &ComposerEvent, cx| match event {
-                        ComposerEvent::DraftChanged if log_drafts => {
-                            let draft = composer.read(cx).draft(cx);
-                            let _ = writeln!(
-                                std::io::stderr(),
-                                "massorca-desktop: debug composer draft={draft:?}"
-                            );
-                        }
-                        ComposerEvent::Send(prompt) => {
-                            // The start page clears the prompt as it sends and gives it back on a refusal.
-                            composer.update(cx, |composer, cx| composer.set_draft("", cx));
-                            if workspace == HOME_START {
-                                shell.start_from_home(prompt, composer.clone(), cx);
-                            } else {
-                                shell.start_session(&workspace, prompt, composer.clone(), cx);
+        let entity =
+            self.start_composers
+                .entry(workspace_id.to_owned())
+                .or_insert_with(|| {
+                    let workspace = workspace_id.to_owned();
+                    let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
+                    let picker = PickerState::new(
+                        Vec::new(),
+                        Choice {
+                            model: SharedString::default(),
+                            effort: None,
+                            fast: false,
+                        },
+                    );
+                    let entity = cx.new(|cx| {
+                        Composer::new(picker, Vec::new(), cx)
+                            .leading_control(switch)
+                            .voice_unavailable(VOICE_LATER)
+                            .sends_empty()
+                    });
+                    let events = cx.subscribe(
+                        &entity,
+                        move |shell, composer, event: &ComposerEvent, cx| match event {
+                            ComposerEvent::DraftChanged if log_drafts => {
+                                let draft = composer.read(cx).draft(cx);
+                                let _ = writeln!(
+                                    std::io::stderr(),
+                                    "massorca-desktop: debug composer draft={draft:?}"
+                                );
                             }
-                        }
-                        _ => {}
-                    },
-                );
-                StartComposer {
-                    entity,
-                    mode: StartMode::default(),
-                    _events: events,
-                }
-            })
-            .entity
-            .clone();
+                            ComposerEvent::Send(prompt) => {
+                                // The start page clears the prompt as it sends and gives it back on a refusal.
+                                composer.update(cx, |composer, cx| composer.set_draft("", cx));
+                                if workspace == HOME_START {
+                                    shell.start_from_home(prompt, composer.clone(), cx);
+                                } else {
+                                    shell.start_session(&workspace, prompt, composer.clone(), cx);
+                                }
+                            }
+                            ComposerEvent::OpenMarketplace => shell
+                                .open_marketplace(MarketplacePage::Category(ItemKind::Agent), cx),
+                            _ => {}
+                        },
+                    );
+                    StartComposer {
+                        entity,
+                        mode: StartMode::default(),
+                        _events: events,
+                    }
+                })
+                .entity
+                .clone();
         self.refresh_start_composer(&entity, workspace_id, cx);
         entity
     }
@@ -576,8 +580,9 @@ impl Shell {
         };
         composer.update(cx, |composer, cx| {
             composer.set_picker_agents(picker_agents(&choices), cx);
+            // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
+            composer.set_no_agents_installed(connected && choices.is_empty(), cx);
         });
-        // TODO(merge): ui empty state "No agents installed" with the Marketplace link goes here.
         let chosen = composer
             .read(cx)
             .picker()
