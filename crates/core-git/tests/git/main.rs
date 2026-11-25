@@ -13,6 +13,7 @@ mod log;
 mod merge;
 mod refs;
 mod remote;
+mod remote_identity;
 mod repository;
 mod status;
 mod submodule_diff;

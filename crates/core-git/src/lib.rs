@@ -19,6 +19,7 @@ mod merge;
 mod process;
 mod refs;
 mod remote;
+mod remote_identity;
 mod repository;
 mod status;
 mod submodule_pointer;
