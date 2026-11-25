@@ -464,6 +464,36 @@ fn a_started_run_with_a_linked_account_home_is_refused() {
     assert_eq!(error["code"], "agent.credentials_invalid", "{error}");
 }
 
+#[test]
+fn a_failed_start_without_a_project_leaves_no_conversation_behind() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let conversations = sandbox.home().join("Conversations");
+    let root = conversations.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "conversations.folder", root.as_str()],
+    );
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    // The account's home is gone, so the start fails after its conversation folder was made.
+    fs::remove_dir_all(account_home(&sandbox, &id)).expect("remove the account home");
+
+    let error = error_of(&sandbox, &["agent", "start", "fake"]);
+    assert_eq!(error["code"], "agent.credentials_invalid", "{error}");
+    let listed = sandbox.json_ok("default", &["workspace", "list"]);
+    assert_eq!(
+        listed["workspaces"].as_array().map(Vec::len),
+        Some(0),
+        "{listed}"
+    );
+    let left = fs::read_dir(&conversations).map_or(0, Iterator::count);
+    assert_eq!(left, 0, "no conversation folder is left");
+}
+
 #[cfg(windows)]
 fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)

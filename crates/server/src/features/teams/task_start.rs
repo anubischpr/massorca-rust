@@ -419,7 +419,7 @@ fn spawn(
 ) -> Result<String, ErrorBody> {
     let session = agents.start(
         AgentStartParams {
-            workspace: place.workspace.id.clone(),
+            workspace: Some(place.workspace.id.clone()),
             kind: bot.kind.clone(),
             prompt: Some(prompt),
             args: Vec::new(),
@@ -431,6 +431,8 @@ fn spawn(
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
             request_id: Some(request.to_owned()),
             permission_mode: team_mode(agents, team, bot),
+            model: None,
+            effort: None,
         },
         grant,
     )?;
