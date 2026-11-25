@@ -28,7 +28,7 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-use super::room_card::{card_lines, card_view};
+use super::room_card::{self, card_lines, card_view};
 use super::room_schedule::{Moment, scheduled_moment};
 use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
@@ -64,6 +64,14 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::TEAM_ROOM,
             Permission::Workspace,
             post,
+        )?,
+        // An answer makes the task a person's line would, so it needs the same right.
+        methods.register(
+            Owner::Core,
+            team_room::ROOM_ANSWER,
+            capabilities::TEAM_ROOM,
+            Permission::Workspace,
+            room_card::answer,
         )?,
     ])
 }

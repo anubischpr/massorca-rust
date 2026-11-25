@@ -1,14 +1,27 @@
 //! Choice cards of the Conference room (decision 0121): a person's line that names no bot, in a team of several bots
-//! with no lead and no receiver picked, gets a card asking where it goes: one of the team's bots, another team, or this
-//! team's Todo.
+//! with no lead and no receiver picked, gets a card asking where it goes. `team.room_answer` answers it once: one of the
+//! team's bots takes it as a line naming that bot would, another team's Board gets it in Todo, or this team's Board
+//! keeps it in Todo with no bot.
 
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRow};
-use massorca_protocol::methods::team_room::{RoomCard, RoomChoice, RoomChoiceKind};
+use massorca_protocol::methods::events::{
+    TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+};
+use massorca_protocol::methods::tasks::{TaskCreateParams, TaskOrigin};
+use massorca_protocol::methods::team_room::{
+    RoomCard, RoomChoice, RoomChoiceKind, TeamRoomAnswerParams, TeamRoomAnswered,
+};
 use massorca_protocol::{ErrorBody, codes};
 use serde::{Deserialize, Serialize};
 
-use super::room::{insert_line, new_line};
-use super::store_error;
+use crate::context::RequestCtx;
+use crate::features::agents::secret_grant;
+use crate::features::workspace_domain::{for_mutation, publish};
+
+use super::room::{Request, Room, Start, deliver, insert_line, new_line, task_title, views};
+use super::task::create_task;
+use super::task_start::{Changes, publish_changes};
+use super::{blocking, invalid, selectors, store_error};
 
 /// What a card says; an older client shows only this.
 const CARD_TEXT: &str = "No bot was named and the team has no lead. Who should take this? \
@@ -85,6 +98,241 @@ pub(super) fn card_view(row: &TeamRoomMessageRow) -> Option<RoomCard> {
         options: stored.options,
         answer: row.card_answer.clone(),
     })
+}
+
+/// `team.room_answer`.
+pub(super) async fn answer(
+    ctx: RequestCtx,
+    params: TeamRoomAnswerParams,
+) -> Result<TeamRoomAnswered, ErrorBody> {
+    let start = Start {
+        workspaces: for_mutation(&ctx).await?,
+        grant: secret_grant(&ctx),
+        at_once: true,
+    };
+    let (answered, changes, teams) = blocking(&ctx, move |store, agents| {
+        let mut changes = Changes::default();
+        let team = selectors::team(store, &params.team)?;
+        let (row, stored) = waiting_card(store, &team, &params.message)?;
+        let option = stored
+            .options
+            .iter()
+            .find(|option| option.choice == params.choice)
+            .cloned()
+            .ok_or_else(|| invalid(format!("the card offers no choice {:?}", params.choice)))?;
+        let request = store
+            .get_team_room_message(&stored.request)
+            .map_err(store_error)?
+            .ok_or_else(not_a_card)?;
+        if !store
+            .answer_team_room_card(&row.id, &option.choice)
+            .map_err(store_error)?
+        {
+            return Err(answered_already());
+        }
+        let answer = Answer {
+            team: &team,
+            option: &option,
+            text: request.text,
+            start: Start {
+                at_once: stored.start,
+                ..start
+            },
+        };
+        let made = match make(store, agents, answer, &mut changes) {
+            Ok(made) => made,
+            Err(error) => {
+                // What the answer was to make could not be made, so the card waits again.
+                store.release_team_room_card(&row.id).map_err(store_error)?;
+                return Err(error);
+            }
+        };
+        let card = store
+            .get_team_room_message(&row.id)
+            .map_err(store_error)?
+            .ok_or_else(not_a_card)?;
+        let mut teams = vec![team.id.clone()];
+        teams.extend(made.other_team);
+        let card = views(store, agents, &team, &[card])?.remove(0);
+        let messages = views(store, agents, &team, &made.lines)?;
+        Ok((TeamRoomAnswered { card, messages }, changes, teams))
+    })
+    .await?;
+    publish_changes(&ctx.state, &changes);
+    for task in answered
+        .messages
+        .iter()
+        .filter_map(|line| line.task.as_ref())
+    {
+        publish(&ctx, TOPIC_TASK_CHANGED, &task.id);
+    }
+    if answered.messages.iter().any(|line| line.routine.is_some()) {
+        publish(&ctx, TOPIC_TEAM_CHANGED, &teams[0]);
+    }
+    for team in &teams {
+        publish(&ctx, TOPIC_TEAM_ROOM_CHANGED, team);
+    }
+    Ok(answered)
+}
+
+/// The card `message` of `team`, refused when it is not a card of that team or was answered already.
+fn waiting_card(
+    store: &Store,
+    team: &TeamRow,
+    message: &str,
+) -> Result<(TeamRoomMessageRow, StoredCard), ErrorBody> {
+    let row = store
+        .get_team_room_message(message)
+        .map_err(store_error)?
+        .filter(|row| row.team_id == team.id)
+        .ok_or_else(not_a_card)?;
+    let stored: StoredCard = row
+        .card
+        .as_deref()
+        .and_then(|card| serde_json::from_str(card).ok())
+        .ok_or_else(not_a_card)?;
+    if row.card_answer.is_some() {
+        return Err(answered_already());
+    }
+    Ok((row, stored))
+}
+
+fn not_a_card() -> ErrorBody {
+    ErrorBody::new(
+        codes::TEAM_ROOM_CARD_NOT_FOUND,
+        "the room has no choice card with this id",
+    )
+}
+
+fn answered_already() -> ErrorBody {
+    ErrorBody::new(
+        codes::TEAM_ROOM_CARD_ANSWERED,
+        "this choice card was answered already",
+    )
+}
+
+/// One answer to make: the card's team, the option chosen, the request's text, and how a bot's task starts.
+struct Answer<'a> {
+    team: &'a TeamRow,
+    option: &'a RoomChoice,
+    text: String,
+    start: Start,
+}
+
+/// The lines an answer added to the card's room, and the other team whose Board got the task.
+struct Made {
+    lines: Vec<TeamRoomMessageRow>,
+    other_team: Option<String>,
+}
+
+/// Makes what the chosen option says: the bot's task or routine, another team's Todo task, or this team's.
+fn make(
+    store: &Store,
+    agents: &massorca_core_agents::Agents,
+    answer: Answer<'_>,
+    changes: &mut Changes,
+) -> Result<Made, ErrorBody> {
+    let Answer {
+        team,
+        option,
+        text,
+        start,
+    } = answer;
+    let bots = store.list_bots(&team.id).map_err(store_error)?;
+    let title = task_title(&text, &bots);
+    let (kind, target) = option
+        .choice
+        .split_once(':')
+        .unwrap_or((option.choice.as_str(), ""));
+    match (option.kind, kind) {
+        (RoomChoiceKind::Bot, "bot") => {
+            let bot = selectors::bot(store, team, target)?;
+            let room = Room {
+                store,
+                agents,
+                team,
+                bots: &bots,
+            };
+            let request = Request { text, posted: true };
+            Ok(Made {
+                lines: deliver(&room, start, &bot, request, changes)?,
+                other_team: None,
+            })
+        }
+        (RoomChoiceKind::Team, "team") => {
+            let other = selectors::team(store, target)?;
+            let other_bots = store.list_bots(&other.id).map_err(store_error)?;
+            // The other team's lead, else its only bot, takes it; it waits there for that team to start it.
+            let owner = other_bots
+                .iter()
+                .find(|bot| bot.lead)
+                .or(match other_bots.as_slice() {
+                    [only] => Some(only),
+                    _ => None,
+                });
+            let task = create_task(
+                store,
+                TaskCreateParams {
+                    team: other.id.clone(),
+                    title: title.clone(),
+                    body: Some(text),
+                    bot: owner.map(|bot| bot.id.clone()),
+                    project: None,
+                    origin: Some(TaskOrigin::Room),
+                },
+            )?;
+            let line = room_line(
+                store,
+                team,
+                format!("Sent to team {}, in its Todo: {title}", other.name),
+                task.id,
+            )?;
+            Ok(Made {
+                lines: vec![line],
+                other_team: Some(other.id),
+            })
+        }
+        (RoomChoiceKind::Todo, TODO_CHOICE) => {
+            let task = create_task(
+                store,
+                TaskCreateParams {
+                    team: team.id.clone(),
+                    title: title.clone(),
+                    body: Some(text),
+                    bot: None,
+                    project: None,
+                    origin: Some(TaskOrigin::Room),
+                },
+            )?;
+            let line = room_line(
+                store,
+                team,
+                format!("Kept in this team's Todo: {title}"),
+                task.id,
+            )?;
+            Ok(Made {
+                lines: vec![line],
+                other_team: None,
+            })
+        }
+        _ => Err(invalid(format!(
+            "this build cannot answer the choice {:?}",
+            option.choice
+        ))),
+    }
+}
+
+/// A room line of no bot about `task`, as a card's own answer.
+fn room_line(
+    store: &Store,
+    team: &TeamRow,
+    text: String,
+    task: String,
+) -> Result<TeamRoomMessageRow, ErrorBody> {
+    let mut row = new_line(team, None, text, Some(task));
+    row.author = "bot".to_owned();
+    store.insert_team_room_message(&row).map_err(store_error)?;
+    Ok(row)
 }
 
 #[cfg(test)]
@@ -177,5 +425,36 @@ mod tests {
             "nothing made yet"
         );
         assert!(card_view(person).is_none(), "a plain line is no card");
+    }
+
+    #[test]
+    fn a_card_answered_or_of_another_team_is_refused_with_its_code() {
+        let store = Store::open_in_memory().expect("store");
+        let alpha = team(&store, "alpha");
+        let beta = team(&store, "beta");
+        let bots = [bot(&store, &alpha, "Mara"), bot(&store, &alpha, "Bruno")];
+        let lines = card_lines(&store, &alpha, &bots, "Add sign-in".to_owned(), true).unwrap();
+        let card = &lines[1];
+
+        let refused = waiting_card(&store, &beta, &card.id)
+            .err()
+            .expect("another team's card");
+        assert_eq!(refused.code, codes::TEAM_ROOM_CARD_NOT_FOUND);
+        let refused = waiting_card(&store, &alpha, &lines[0].id)
+            .err()
+            .expect("not a card");
+        assert_eq!(refused.code, codes::TEAM_ROOM_CARD_NOT_FOUND);
+        assert!(waiting_card(&store, &alpha, &card.id).is_ok());
+
+        assert!(store.answer_team_room_card(&card.id, "todo").unwrap());
+        let refused = waiting_card(&store, &alpha, &card.id)
+            .err()
+            .expect("answered");
+        assert_eq!(refused.code, codes::TEAM_ROOM_CARD_ANSWERED);
+        let answered = store.get_team_room_message(&card.id).unwrap().unwrap();
+        assert_eq!(
+            card_view(&answered).unwrap().answer.as_deref(),
+            Some("todo")
+        );
     }
 }

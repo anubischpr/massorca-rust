@@ -191,6 +191,20 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "team.room.answer",
+            "Answer a Conference room choice card once: a bot, another team, or this team's Todo",
+            "team.room_answer",
+            json!({
+                "type": "object",
+                "required": ["team", "message", "choice"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "message": { "type": "string" },
+                    "choice": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "team.memory.list",
             "List a team's memory lines, or one bot's",
             "team.memory_list",
