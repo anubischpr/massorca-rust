@@ -67,6 +67,8 @@ fn bot(id: BotId, name: &str, role: &str, kind: &str) -> Bot {
         role: role.into(),
         agent: agent_of_kind(kind),
         kind: kind.into(),
+        model: None,
+        effort: None,
         kind_unavailable: None,
     }
 }

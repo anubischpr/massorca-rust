@@ -129,6 +129,15 @@ impl AddBotDialog {
                 .get(self.agent)
                 .map(|kind| kind.id.clone())
                 .unwrap_or_default(),
+            // The Advanced options are not on the form yet, so a bot keeps the model and effort it had.
+            model: self
+                .edit
+                .as_ref()
+                .and_then(|edit| edit.opened.model.clone()),
+            effort: self
+                .edit
+                .as_ref()
+                .and_then(|edit| edit.opened.effort.clone()),
         }
     }
 }
@@ -642,6 +651,8 @@ impl Shell {
                         name: form.name,
                         role: form.job,
                         kind: form.kind,
+                        model: form.model,
+                        effort: form.effort,
                     },
                 )
                 .map(|_| ()),
@@ -742,8 +753,8 @@ impl Shell {
             name: change.name,
             job: change.job,
             kind: change.kind,
-            model: None,
-            effort: None,
+            model: change.model,
+            effort: change.effort,
             lead: None,
         };
         cx.spawn(async move |this, cx| {

@@ -99,6 +99,10 @@ pub struct Bot {
     pub role: String,
     /// The service's id of the agent kind the bot runs on, such as `claude`.
     pub kind: String,
+    /// The model the bot runs on; `None` leaves it to the bot's job.
+    pub model: Option<String>,
+    /// The effort the bot runs at; `None` leaves it to the bot's job.
+    pub effort: Option<String>,
     /// The agent the bot runs as; `None` when the service does not say which one.
     pub agent: Option<Agent>,
     /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.
