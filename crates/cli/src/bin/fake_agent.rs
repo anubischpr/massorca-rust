@@ -33,6 +33,9 @@ const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
 /// extra.
 const PRINT_HOME_ENV: &str = "FAKE_AGENT_PRINT_HOME";
+/// Set to `<file>:<key>`, start prints `state <key> present` when `<home>/<file>` is a JSON object with that top-level
+/// key, else `state <key> absent` (decision 0099). Never the value.
+const PRINT_STATE_ENV: &str = "FAKE_AGENT_PRINT_STATE";
 /// Set to `1`, `login` exits 1 without writing the token (decision 0059).
 const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
 /// Set to `1`, `login` never finishes (decision 0059): the sign-in terminal stays open.
@@ -216,6 +219,20 @@ impl Agent {
         });
         if env::var_os(PRINT_HOME_ENV).is_some_and(|value| value == "1") {
             say(&format!("home {}", home_name()));
+        }
+        if let Some((file, key)) = env::var(PRINT_STATE_ENV)
+            .ok()
+            .as_deref()
+            .and_then(|value| value.split_once(':'))
+        {
+            let present = credential_home()
+                .and_then(|home| fs::read(home.join(file)).ok())
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|state| state.get(key).is_some());
+            say(&format!(
+                "state {key} {}",
+                if present { "present" } else { "absent" }
+            ));
         }
         for name in probed_env() {
             say(&format!("env {name} {}", env_state(&name)));
