@@ -611,6 +611,8 @@ pub(crate) mod fixtures {
             problems: Vec::new(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            model: None,
+            effort: None,
         }
     }
 

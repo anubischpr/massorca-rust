@@ -1,4 +1,4 @@
-//! Workspaces of conversations without a project (decision 0092). Each conversation is a folder of its own inside the
+//! Workspaces of conversations without a project (decision 0094). Each conversation is a folder of its own inside the
 //! conversations folder, a folder workspace of a hidden project that no project list shows.
 
 use std::path::Path;
