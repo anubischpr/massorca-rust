@@ -37,7 +37,7 @@ use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
-use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
+use crate::model::permission_modes::{DEFAULT_TAG, ModeChoice, remembered_mode, start_choices};
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
     StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason,
@@ -281,11 +281,7 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .iter()
         .map(|choice| AccessMode {
             name: choice.name.clone().into(),
-            icon: if choice.bypass {
-                IconName::TriangleAlert
-            } else {
-                IconName::Shield
-            },
+            icon: choice.icon,
             bypass: choice.bypass,
         })
         .collect()
@@ -296,6 +292,14 @@ pub(super) fn access_details(choices: &[ModeChoice]) -> Vec<Option<SharedString>
     choices
         .iter()
         .map(|choice| choice.detail.clone().map(SharedString::from))
+        .collect()
+}
+
+/// The tag of each of a kind's mode entries, in the same order as `access_modes`: the declared default's row only.
+pub(super) fn access_tags(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
+    choices
+        .iter()
+        .map(|choice| choice.default.then(|| SharedString::from(DEFAULT_TAG)))
         .collect()
 }
 
@@ -676,19 +680,25 @@ impl Shell {
         let chosen_kind = kinds
             .iter()
             .find(|kind| kind.id.as_str() == chosen.as_ref());
-        let (modes, details, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
-            let choices = start_choices(kind);
-            // The person's last explicit pick for this kind comes back, while the kind still declares it.
-            let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
-            // A bypass mode is never restored from memory: it is sent only when picked on this composer.
-            let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
-                let index = choices
-                    .iter()
-                    .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
-                Some((index, (kind.id.clone(), id.to_owned())))
+        let (modes, details, tags, remembered) =
+            chosen_kind.map_or_else(Default::default, |kind| {
+                let choices = start_choices(kind);
+                // The person's last explicit pick for this kind comes back, while the kind still offers it.
+                let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+                // A bypass mode is never restored from memory: it is sent only when picked on this composer.
+                let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
+                    let index = choices
+                        .iter()
+                        .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
+                    Some((index, (kind.id.clone(), id.to_owned())))
+                });
+                (
+                    access_modes(&choices),
+                    access_details(&choices),
+                    access_tags(&choices),
+                    remembered,
+                )
             });
-            (access_modes(&choices), access_details(&choices), remembered)
-        });
         let changed = composer.update(cx, |composer, cx| {
             let changed = composer.access_modes() != modes.as_slice();
             let keep = if changed {
@@ -698,6 +708,7 @@ impl Shell {
             };
             composer.set_access_modes(modes, keep, cx);
             composer.set_access_details(details, cx);
+            composer.set_access_tags(tags, cx);
             changed
         });
         // A restored chip is the person's pick, so the chip and the start agree; a reset chip sends no mode.

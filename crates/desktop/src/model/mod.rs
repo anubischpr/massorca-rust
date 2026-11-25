@@ -12,6 +12,7 @@ pub mod devices;
 pub mod home_start;
 pub mod hosts;
 pub mod marketplace;
+pub mod mode_presentation;
 pub mod morph;
 pub mod navigation;
 pub mod pairing;

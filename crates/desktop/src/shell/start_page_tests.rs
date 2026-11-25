@@ -1206,20 +1206,24 @@ fn a_terminal_start_opens_the_session_with_its_terminal_focused(cx: &mut TestApp
     assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
 }
 
+/// Claude's declaration as `claude.json` lists it: six modes, the declared default Auto, and Don't ask not selectable.
 fn claude_with_modes() -> AgentKind {
     use massorca_protocol::methods::agents::PermissionMode;
     let mode = |id: &str, label: &str, bypass: bool| PermissionMode {
         id: id.into(),
         label: label.into(),
-        description: None,
+        description: Some(format!("{label} description")),
         bypass,
         live_switch: false,
         may_fall_back: false,
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![
-        mode("auto", "Auto", false),
+        mode("default", "Manual", false),
+        mode("acceptEdits", "Edit automatically", false),
         mode("plan", "Plan", false),
+        mode("auto", "Auto", false),
+        mode("dontAsk", "Don't ask", false),
         mode("bypassPermissions", "Bypass permissions", true),
     ];
     kind.default_permission_mode = Some("auto".into());
@@ -1227,39 +1231,76 @@ fn claude_with_modes() -> AgentKind {
 }
 
 #[gpui::test]
-fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppContext) {
+fn the_mode_menu_lists_the_declared_default_first_and_sends_no_flag_for_it(
+    cx: &mut TestAppContext,
+) {
+    use massorca_ui::IconName;
     let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
     let composer = composer_of(&rig, cx);
-    let modes = composer.read_with(cx, |composer, _| {
+    // Name, icon, warning tone, Default tag and description of each row, in menu order.
+    let rows = composer.read_with(cx, |composer, _| {
         composer
             .access_modes()
             .iter()
-            .map(|mode| (mode.name.to_string(), mode.bypass))
+            .enumerate()
+            .map(|(index, mode)| {
+                (
+                    mode.name.to_string(),
+                    mode.icon,
+                    mode.bypass,
+                    composer.access_tag(index).map(|tag| tag.to_string()),
+                    composer.access_detail(index).map(|text| text.to_string()),
+                )
+            })
             .collect::<Vec<_>>()
     });
+    let tag = Some("Default".to_owned());
+    let desc = |label: &str| Some(format!("{label} description"));
     assert_eq!(
-        modes,
+        rows,
         [
-            ("Auto".to_owned(), false),
-            ("Auto".to_owned(), false),
-            ("Plan".to_owned(), false),
-            ("Bypass permissions".to_owned(), true),
-        ]
-    );
-    let details = composer.read_with(cx, |composer, _| {
-        (0..4)
-            .map(|index| composer.access_detail(index).map(|text| text.to_string()))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        details,
-        [Some("The CLI's default".to_owned()), None, None, None],
-        "the default entry says it is the CLI's default; the declared Auto does not"
+            (
+                "Auto".to_owned(),
+                IconName::WandSparkles,
+                false,
+                tag,
+                desc("Auto")
+            ),
+            (
+                "Manual".to_owned(),
+                IconName::User,
+                false,
+                None,
+                desc("Manual")
+            ),
+            (
+                "Accept edits".to_owned(),
+                IconName::Pencil,
+                false,
+                None,
+                desc("Edit automatically"),
+            ),
+            (
+                "Plan".to_owned(),
+                IconName::ListChecks,
+                false,
+                None,
+                desc("Plan")
+            ),
+            (
+                "Bypass permissions".to_owned(),
+                IconName::TriangleAlert,
+                true,
+                None,
+                desc("Bypass permissions"),
+            ),
+        ],
+        "one row per mode, the default first and tagged, Don't ask left out, bypass as the warning"
     );
     assert_eq!(
         composer.read_with(cx, |composer, _| composer.access_index()),
         0,
-        "the CLI's default is selected"
+        "the declared default is selected"
     );
     draw(cx);
     assert!(cx.debug_bounds("composer-access").is_some());
@@ -1284,8 +1325,8 @@ fn a_picked_mode_is_sent_and_remembered_per_kind_until_the_default_is_picked(
     cx.update(|_, cx| ui_state::install(cx, profile.clone(), ui_state::UiState::default()));
     let composer = composer_of(&rig, cx);
     composer.update(cx, |composer, cx| {
-        composer.set_access(2, cx);
-        cx.emit(ComposerEvent::AccessChanged(2));
+        composer.set_access(3, cx);
+        cx.emit(ComposerEvent::AccessChanged(3));
     });
     draw(cx);
     cx.run_until_parked();
@@ -1366,8 +1407,12 @@ fn a_start_sends_only_the_mode_the_chip_shows_from_the_same_list() {
         None,
         "the CLI's default sends no mode"
     );
-    assert_eq!(sent_mode(&choices, &shown, 1).as_deref(), Some("auto"));
-    assert_eq!(sent_mode(&choices, &shown, 2).as_deref(), Some("plan"));
+    assert_eq!(sent_mode(&choices, &shown, 1).as_deref(), Some("default"));
+    assert_eq!(
+        sent_mode(&choices, &shown, 2).as_deref(),
+        Some("acceptEdits")
+    );
+    assert_eq!(sent_mode(&choices, &shown, 3).as_deref(), Some("plan"));
     assert_eq!(
         sent_mode(&choices, &shown, 9),
         None,
@@ -1395,7 +1440,13 @@ fn a_chip_index_nobody_picked_sends_no_mode(cx: &mut TestAppContext) {
 fn the_shown_mode_and_the_sent_mode_agree_for_every_entry(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
     let composer = composer_of(&rig, cx);
-    let expected = [None, Some("auto"), Some("plan"), Some("bypassPermissions")];
+    let expected = [
+        None,
+        Some("default"),
+        Some("acceptEdits"),
+        Some("plan"),
+        Some("bypassPermissions"),
+    ];
     for (index, want) in expected.into_iter().enumerate() {
         composer.update(cx, |composer, cx| {
             composer.set_access(index, cx);
@@ -1444,7 +1495,7 @@ fn a_remembered_mode_on_a_fresh_composer_is_shown_and_sent(cx: &mut TestAppConte
     let composer = fresh_composer(&rig, cx);
     assert_eq!(
         composer.read_with(cx, |composer, _| composer.access_index()),
-        2,
+        3,
         "the chip shows the remembered Plan"
     );
     type_and_send(&rig, cx, "fix the login");
@@ -1482,7 +1533,7 @@ fn a_mode_list_change_without_a_remembered_pick_sends_no_mode(cx: &mut TestAppCo
     draw(cx);
     // The kind drops Plan; the chip resets and the earlier pick of Auto no longer counts.
     let mut changed = claude_with_modes();
-    changed.permission_modes.remove(1);
+    changed.permission_modes.remove(2);
     rig._updates
         .send(StoreUpdate::AgentKindsResync(vec![changed]))
         .expect("the store listens");
