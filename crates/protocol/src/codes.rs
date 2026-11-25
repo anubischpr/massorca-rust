@@ -195,6 +195,8 @@ pub const AGENT_BUSY: &str = "agent.busy";
 /// A prompt over the size limit or with a NUL.
 pub const AGENT_PROMPT_INVALID: &str = "agent.prompt_invalid";
 pub const AGENT_RESUME_UNAVAILABLE: &str = "agent.resume_unavailable";
+/// The kind keeps a saved conversation per agent ref, and none exists for the session's ref: a resume would fail.
+pub const AGENT_RESUME_NOT_FOUND: &str = "agent.resume_not_found";
 pub const AGENT_HOOK_REFUSED: &str = "agent.hook_refused";
 pub const AGENT_DELEGATE_NEEDS_GIT: &str = "agent.delegate_needs_git";
 pub const AGENT_DEPTH_EXCEEDED: &str = "agent.depth_exceeded";

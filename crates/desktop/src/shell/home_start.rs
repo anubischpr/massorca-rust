@@ -386,13 +386,14 @@ impl Shell {
             kind_name: kind.name,
         });
         let options = self.chosen_options(&composer, &kind.id, cx);
+        let grid = self.start_grid(cx);
         let prompt = prompt.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let answer = match choice {
                 ProjectChoice::NoProject => {
                     let params =
-                        no_project_start_params(&kind.id, &prompt, permission_mode, options);
+                        no_project_start_params(&kind.id, &prompt, permission_mode, options, grid);
                     service.agent_start(params).await
                 }
                 ProjectChoice::Project(project) => {
@@ -410,6 +411,7 @@ impl Shell {
                                 &prompt,
                                 permission_mode,
                                 options,
+                                grid,
                             );
                             service.agent_start(params).await
                         }

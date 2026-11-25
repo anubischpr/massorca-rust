@@ -566,3 +566,8 @@ before the stop reads it.
 ## Amendment 2026-11-24: desktop project and bot edits
 
 The desktop's New project form sends `team.project_add` (a name, a goal, and a code source when the team has Workspaces). The Edit team form changes a bot with `team.bot_update`, sending only the fields that changed, and removes it with `team.bot_rm` and `unassign` off, so a bot that owns open tasks is refused and the reason stays on the confirm.
+
+## Amendment 2026-11-24: Board moves and filters
+
+- A drop on the desktop Board makes the call its move asks for: Open to Running starts the task (`task.start`, the path `massorca task start` takes), Running to Waiting stops it (`task.stop`, graceful), a drop on Done finishes it (refused while its run goes on), and Done or Waiting back to Open reopens it. Other moves say why and send nothing. This replaces "Not in this change: a Stop control on the desktop Board" above.
+- The Board's Filter shows the cards of one project or those no project holds, as pv96's chips do; the CLI form is `massorca team board <team> --no-project`. pv96's "Show archived" has no service counterpart yet, so the Sidebar's Filters hides finished projects (a project whose cards are all Done) instead. Both are view state: the service stores nothing of them.

@@ -49,9 +49,13 @@ fn board_column(_: &mut Window, cx: &mut App) -> AnyElement {
     let default = div()
         .flex()
         .gap(px(SPACE_4))
-        .child(BoardColumn::new("column-open", "Open").card(
-            card(cx, "open-1", "Write release notes for oppm").status(AgentState::Idle, "Idle"),
-        ))
+        .child(
+            BoardColumn::new("column-open", "Open").card(
+                card(cx, "open-1", "Write release notes for oppm")
+                    .status(AgentState::Idle, "Idle")
+                    .unassigned(),
+            ),
+        )
         .child(BoardColumn::new("column-running", "Running").cards(running))
         .child(BoardColumn::new("column-waiting", "Waiting for you").card(waiting))
         .child(BoardColumn::new("column-done", "Done"));
