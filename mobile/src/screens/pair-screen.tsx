@@ -64,6 +64,7 @@ export function PairScreen({ navigation, route }: Props) {
       ) : (
         <View style={styles.section}>
           <TextField
+            testID="pairing-code"
             label={PAIRING_CODE_LABEL}
             value={code}
             onChangeText={changeCode}
