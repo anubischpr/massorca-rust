@@ -563,6 +563,14 @@ CREATE TABLE agent_chat_text_chunks (
 "#,
         foreign_keys_off: false,
     },
+    // Archive (hide) of an agent session (decision 0163): when it was archived; NULL when it is not. Archiving keeps the
+    // record, its terminal and its workspace; only lists leave it out.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN archived_at INTEGER;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
