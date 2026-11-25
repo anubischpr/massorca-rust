@@ -10,6 +10,7 @@ mod debug_focus;
 mod debug_page;
 mod delegate;
 mod diff_page;
+mod display_settings;
 mod home_start;
 mod marketplace;
 mod pairing;
@@ -47,6 +48,7 @@ use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
 use crate::model::close_confirm::CloseRisk;
 use crate::model::devices::RevokeFlow;
+use crate::model::display_settings::DisplaySettings;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
 };
@@ -100,6 +102,8 @@ mod debug_focus_tests;
 mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
+#[cfg(test)]
+mod display_settings_tests;
 #[cfg(test)]
 mod home_start_tests;
 #[cfg(test)]
@@ -308,6 +312,8 @@ pub struct Shell {
     delegate: Option<delegate::DelegateForm>,
     /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
     theme_notice: Option<String>,
+    /// The Status bar items the settings last showed; a change to them resets this window's own choice.
+    applied_status_items: Vec<crate::model::status_items::StatusItem>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
     /// The projects the Sidebar shows collapsed. Kept for the app run only.
@@ -390,6 +396,14 @@ impl Shell {
             }
             shell.service_connected = connected;
             shell.follow_app_theme(cx);
+            let settings = DisplaySettings::from_lookup(|key| {
+                store
+                    .read(cx)
+                    .state()
+                    .config_value(key)
+                    .map(|config| &config.value)
+            });
+            shell.follow_display_settings(settings, cx);
             shell.follow_service_folder(store.read(cx).state());
             if connected {
                 shell.settings.folder.forget_read_failure();
@@ -621,6 +635,7 @@ impl Shell {
             close_confirm: None,
             delegate: None,
             theme_notice: None,
+            applied_status_items: crate::model::status_items::StatusItem::ALL.to_vec(),
             _appearance_changes: appearance_changes,
             collapsed_projects: BTreeSet::new(),
         }

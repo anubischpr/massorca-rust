@@ -399,6 +399,11 @@ impl ShellModel {
         &self.status_items
     }
 
+    /// Shows exactly the Status bar items `shown` lists, as the settings do; this window's own toggles start over.
+    pub fn set_status_items_shown(&mut self, shown: &[StatusItem]) {
+        self.status_items = StatusItemVisibility::showing(shown);
+    }
+
     /// Shows a hidden Status bar item or hides a shown one, as the visibility menu does.
     pub fn toggle_status_item(&mut self, item: StatusItem) {
         self.status_items.toggle(item);

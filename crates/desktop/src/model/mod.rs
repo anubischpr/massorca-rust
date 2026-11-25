@@ -11,6 +11,7 @@ pub mod canvas;
 pub mod chat_transcript;
 pub mod close_confirm;
 pub mod devices;
+pub mod display_settings;
 pub mod home_start;
 pub mod hosts;
 pub mod marketplace;
