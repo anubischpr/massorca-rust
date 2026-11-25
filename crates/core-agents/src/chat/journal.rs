@@ -349,3 +349,290 @@ pub(crate) fn replay(
     }))
 }
 
+#[cfg(test)]
+mod tests {
+    use massorca_core_store::{AgentSessionRow, RunMode};
+    use massorca_protocol::methods::chat::{NoticeLevel, ResetReason};
+
+    use super::*;
+
+    /// A store with one chat session; returns the store and the session id.
+    fn chat_session() -> (Store, String) {
+        let store = Store::open_in_memory().unwrap();
+        let dir = std::env::temp_dir();
+        let project = massorca_core_store::ProjectRow {
+            id: massorca_core_store::new_id(),
+            kind: massorca_core_store::ProjectKind::Folder,
+            path: dir.display().to_string(),
+            path_key: "chat-journal-test".to_owned(),
+            name: "notes".to_owned(),
+            workspaces_root: dir.display().to_string(),
+            added_at: 1,
+            base_ref: None,
+            icon: None,
+        };
+        store.insert_project(&project).unwrap();
+        let workspace = massorca_core_store::WorkspaceRow {
+            id: massorca_core_store::new_id(),
+            project_id: project.id,
+            kind: massorca_core_store::WorkspaceKind::Folder,
+            name: "main".to_owned(),
+            path: dir.display().to_string(),
+            path_key: "chat-journal-test-main".to_owned(),
+            branch: None,
+            base_ref: None,
+            created_branch: false,
+            state: massorca_core_store::WorkspaceState::Ready,
+            request_id: None,
+            created_at: 1,
+            comment: None,
+        };
+        store.insert_workspace(&workspace).unwrap();
+        let row = AgentSessionRow {
+            id: massorca_core_store::new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace.id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: None,
+            request_id: None,
+            created_at: 1,
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+            retained: false,
+            released_at: None,
+        };
+        store.insert_chat_agent_session(&row, "run").unwrap();
+        (store, row.id)
+    }
+
+    fn text(key: &str, text: &str) -> JournalOp {
+        JournalOp::Add {
+            key: Some(key.to_owned()),
+            parent: None,
+            body: ChatItemBody::AssistantMessage {
+                text: text.to_owned(),
+                state: MessageState::Running,
+            },
+        }
+    }
+
+    #[test]
+    fn a_turn_opens_with_its_prompt_and_an_append_carries_its_byte_offset() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        let turn = writer.start_turn("hello").unwrap();
+        let batch = writer.finish().unwrap();
+        assert_eq!(batch.cursor.seq, 2);
+        let [
+            ChatUpdate::Item { item: turn_item },
+            ChatUpdate::Item { item: user },
+        ] = batch.updates.as_slice()
+        else {
+            panic!("{batch:?}");
+        };
+        assert_eq!(turn_item.id, turn);
+        assert_eq!((turn_item.position, user.position), (1, 2));
+        assert_eq!(user.turn.as_deref(), Some(turn.as_str()));
+        assert!(
+            matches!(&turn_item.body, ChatItemBody::Turn(open) if open.state == TurnState::Running && open.user_item.as_ref() == Some(&user.id))
+        );
+
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer.apply(text("m", "Hé")).unwrap();
+        writer
+            .apply(JournalOp::Append {
+                key: "m".to_owned(),
+                text: "llo".to_owned(),
+            })
+            .unwrap();
+        let batch = writer.finish().unwrap();
+        let [ChatUpdate::Item { item: message }, append] = batch.updates.as_slice() else {
+            panic!("{batch:?}");
+        };
+        assert_eq!(message.turn.as_deref(), Some(turn.as_str()));
+        assert_eq!(
+            append,
+            &ChatUpdate::Append {
+                id: message.id.clone(),
+                seq: 4,
+                offset: 3,
+                text: "llo".to_owned(),
+            }
+        );
+        assert_eq!(batch.cursor.seq, 4);
+
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer
+            .apply(JournalOp::EndTurn {
+                state: TurnState::Completed,
+                outcome: Some(Outcome::Success),
+            })
+            .unwrap();
+        let batch = writer.finish().unwrap();
+        let [
+            ChatUpdate::Item { item: completed },
+            ChatUpdate::Item { item: ended },
+        ] = batch.updates.as_slice()
+        else {
+            panic!("{batch:?}");
+        };
+        assert_eq!(
+            completed.body,
+            ChatItemBody::AssistantMessage {
+                text: "Héllo".to_owned(),
+                state: MessageState::Completed,
+            },
+            "the stored text and body read back as one item"
+        );
+        assert_eq!(completed.position, 3, "a change keeps the position");
+        assert!(
+            matches!(&ended.body, ChatItemBody::Turn(done) if done.state == TurnState::Completed && done.outcome == Some(Outcome::Success) && done.completed_at_ms.is_some())
+        );
+        assert_eq!(state.open_turn, None);
+    }
+
+    #[test]
+    fn ops_on_unknown_keys_change_nothing_and_an_empty_batch_is_none() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer
+            .apply(JournalOp::Append {
+                key: "x".to_owned(),
+                text: "y".to_owned(),
+            })
+            .unwrap();
+        writer
+            .apply(JournalOp::EndTurn {
+                state: TurnState::Completed,
+                outcome: None,
+            })
+            .unwrap();
+        assert_eq!(writer.finish(), None);
+    }
+
+    #[test]
+    fn a_replay_sends_whole_items_after_the_cursor_and_resets_a_stale_one() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let epoch = state.epoch.clone();
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer.apply(text("m", "a")).unwrap();
+        writer
+            .apply(JournalOp::Add {
+                key: None,
+                parent: None,
+                body: ChatItemBody::Notice {
+                    level: NoticeLevel::Info,
+                    text: "n".to_owned(),
+                },
+            })
+            .unwrap();
+        writer
+            .apply(JournalOp::Append {
+                key: "m".to_owned(),
+                text: "b".to_owned(),
+            })
+            .unwrap();
+        writer.finish();
+
+        let batch = replay(
+            &store,
+            &session,
+            &ChatCursor {
+                epoch: epoch.clone(),
+                seq: 2,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(batch.cursor.seq, 3);
+        let [ChatUpdate::Item { item }] = batch.updates.as_slice() else {
+            panic!("{batch:?}");
+        };
+        assert_eq!(
+            item.body,
+            ChatItemBody::AssistantMessage {
+                text: "ab".to_owned(),
+                state: MessageState::Running,
+            }
+        );
+        assert_eq!(
+            replay(
+                &store,
+                &session,
+                &ChatCursor {
+                    epoch: "another".to_owned(),
+                    seq: 1,
+                },
+            )
+            .unwrap(),
+            Err(ResetReason::EpochChanged)
+        );
+        assert_eq!(
+            replay(&store, &session, &ChatCursor { epoch, seq: 9 }).unwrap(),
+            Err(ResetReason::EpochChanged)
+        );
+    }
+
+    #[test]
+    fn a_cursor_older_than_a_dropped_change_is_too_old() {
+        let (store, session) = chat_session();
+        let state = JournalState::open(&store, &session).unwrap();
+        for id in ["1", "2", "3"] {
+            store
+                .add_chat_item(
+                    &session,
+                    &NewChatItem {
+                        id,
+                        turn: None,
+                        parent: None,
+                        at_ms: 1,
+                        item_type: "notice",
+                        body: r#"{"type":"notice","level":"info","text":"n"}"#,
+                        text: None,
+                    },
+                    2,
+                )
+                .unwrap();
+        }
+        let at = |seq| ChatCursor {
+            epoch: state.epoch.clone(),
+            seq,
+        };
+        assert_eq!(
+            replay(&store, &session, &at(0)).unwrap(),
+            Err(ResetReason::TooOld),
+            "item 1 was dropped after the cursor's change"
+        );
+        let batch = replay(&store, &session, &at(1)).unwrap().unwrap();
+        assert_eq!(batch.updates.len(), 2);
+    }
+
+    #[test]
+    fn a_reopened_journal_keeps_its_epoch_and_its_open_turn() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let turn = JournalWriter::new(&store, &session, &mut state)
+            .start_turn("hi")
+            .map(Some)
+            .unwrap();
+        let reopened = JournalState::open(&store, &session).unwrap();
+        assert_eq!(reopened.epoch, state.epoch);
+        assert_eq!(reopened.open_turn, turn);
+        let page = newest_page(&store, &session, &state.epoch, 1).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.has_older);
+        assert_eq!(page.latest_turn.map(|item| item.id), turn);
+        assert_eq!(page.cursor.seq, 2);
+    }
+}
