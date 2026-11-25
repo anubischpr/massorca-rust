@@ -323,6 +323,7 @@ pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
         created_at_ms: info.created_at_ms,
         exit: info.exit.map(exit_of),
         holds_secrets: info.holds_secrets,
+        git_credential_guard: info.git_credential_guard,
     }
 }
 
