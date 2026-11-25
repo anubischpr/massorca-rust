@@ -73,6 +73,8 @@ mod tests {
             retained: false,
             released: false,
             resume: None,
+            delegation: None,
+            notes: Vec::new(),
         }
     }
 

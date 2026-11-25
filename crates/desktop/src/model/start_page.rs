@@ -23,8 +23,8 @@ pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 
-/// Where a session started from the page opens: as a Conversation in the Canvas, or as the agent's
-/// own terminal in the Work panel (D-AG-01, pv96). Chat is the default.
+/// How a session started from the page runs: as a Conversation (chat), or as the agent's own terminal. Both open
+/// in the Canvas (D-AG-01, owner ruling 2026-11-25). Chat is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StartMode {
     #[default]
@@ -111,7 +111,8 @@ fn cannot_chat(name: &str, chat: Option<&KindChat>) -> String {
                 None => format!("{name} cannot run chat sessions."),
             }
         }
-        None => format!("{name} cannot run chat sessions."),
+        // A reason from a newer service reads as the plain one.
+        Some(ChatUnsupportedReason::Unknown) | None => format!("{name} cannot run chat sessions."),
     }
 }
 
@@ -122,7 +123,7 @@ fn version_and_range(chat: &KindChat) -> Option<(&str, &str)> {
 
 /// The note under the composer while Terminal is chosen (WS-40).
 pub const TERMINAL_NOTE: &str =
-    "The agent opens in a Work panel terminal. Some features are limited there.";
+    "The agent runs in its own terminal. Some features are limited there.";
 
 /// The key hints under the composer, each key with what it does (D-AG-01).
 pub const KEY_HINTS: [(&str, &str); 4] = [
@@ -231,15 +232,24 @@ pub fn start_options(
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, at the
-/// Work panel's terminal size. A `permission_mode` is sent only when the person picked one; without it the vendor CLI
-/// starts in its own default.
+/// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
+/// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
+pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
+    shown
+        .or(fitted)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
+}
+
+/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, its
+/// terminal at `grid` (see `start_grid`). A `permission_mode` is sent only when the person picked one; without it the
+/// vendor CLI starts in its own default.
 pub fn start_params(
     workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.map(str::to_owned),
@@ -249,12 +259,28 @@ pub fn start_params(
         env: BTreeMap::new(),
         read_only: false,
         title: None,
-        cols: Some(NEW_TERMINAL_COLS),
-        rows: Some(NEW_TERMINAL_ROWS),
+        cols: Some(grid.0),
+        rows: Some(grid.1),
         request_id: None,
         permission_mode,
         model: options.model,
         effort: options.effort,
+    }
+}
+
+/// The `agent.start` call that starts a session again in `workspace` with `kind`, its terminal at `grid`: no first
+/// prompt, and no saved conversation carried over from the session it replaces.
+pub fn start_again_params(workspace: &str, kind: &str, grid: (u16, u16)) -> AgentStartParams {
+    AgentStartParams {
+        prompt: None,
+        ..start_params(
+            Some(workspace),
+            kind,
+            "",
+            None,
+            StartOptions::default(),
+            grid,
+        )
     }
 }
 
@@ -477,6 +503,15 @@ mod tests {
     }
 
     #[test]
+    fn a_reason_from_a_newer_service_reads_as_the_plain_reason() {
+        let newer = agent_chat(false, Some(ChatUnsupportedReason::Unknown));
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&newer)))).reason(),
+            Some("Claude cannot run chat sessions.")
+        );
+    }
+
+    #[test]
     fn a_version_outside_the_range_names_the_range_and_the_version_found() {
         let outside = KindChat {
             supported: false,
@@ -507,12 +542,27 @@ mod tests {
             "fix the login",
             None,
             StartOptions::default(),
+            (150, 70),
         );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
-        assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+        assert_eq!((params.cols, params.rows), (Some(150), Some(70)));
+    }
+
+    #[test]
+    fn a_new_session_starts_at_the_shown_grid_else_the_fitted_one_else_the_work_panel_size() {
+        assert_eq!(
+            start_grid(Some((150, 70)), Some((100, 30))),
+            (150, 70),
+            "the grid the session view last drew wins"
+        );
+        assert_eq!(start_grid(None, Some((100, 30))), (100, 30));
+        assert_eq!(
+            start_grid(None, None),
+            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
+        );
     }
 
     /// The Claude kind's declared level ids, which a start sends as its `effort`.
@@ -540,7 +590,7 @@ mod tests {
     fn without_the_capability_neither_model_nor_effort_is_sent() {
         let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
         assert_eq!(options, StartOptions::default());
-        let params = start_params(Some("w1"), "claude", "hi", None, options);
+        let params = start_params(Some("w1"), "claude", "hi", None, options, (120, 40));
         assert_eq!((params.model, params.effort), (None, None));
     }
 

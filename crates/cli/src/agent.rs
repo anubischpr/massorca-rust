@@ -113,7 +113,8 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
-    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only.
+    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only or the parent
+    /// works in a plain folder, which the child then shares.
     Delegate(AgentDelegateArgs),
     /// Shows a session's delegation tree: its root and the root's children.
     Tree {
