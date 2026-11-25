@@ -369,7 +369,7 @@ fn start_call(script: &mut Script) -> Option<StartCall> {
 }
 
 #[gpui::test]
-fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
+fn the_start_page_offers_only_the_installed_and_enabled_kinds_and_starts_on_the_first(
     cx: &mut TestAppContext,
 ) {
     let mut cursor = agent_kind("cursor", "Cursor", PackageState::Enabled);
@@ -394,23 +394,27 @@ fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
             state.choice().model.to_string(),
         )
     });
-    assert_eq!(offered, ["claude", "codex", "cursor"]);
+    assert_eq!(offered, ["claude"]);
     assert_eq!(chosen, "claude");
 }
 
 #[gpui::test]
-fn a_kind_that_cannot_start_draws_no_notice_and_no_marketplace_action(cx: &mut TestAppContext) {
-    let (_rig, cx) = start_page_rig(
+fn a_kind_that_is_off_is_not_offered_and_draws_no_notice(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("codex", "Codex", PackageState::Disabled)],
     );
     draw(cx);
     assert!(cx.debug_bounds("start-kind-notice").is_none());
     assert!(cx.debug_bounds("button:start-kind-marketplace").is_none());
+    let offered = composer_of(&rig, cx).read_with(cx, |composer, cx| {
+        composer.picker().read(cx).state().agents().len()
+    });
+    assert_eq!(offered, 0);
 }
 
 #[gpui::test]
-fn send_with_a_kind_that_cannot_start_shows_why_and_sends_nothing(cx: &mut TestAppContext) {
+fn send_with_no_agent_installed_stays_off_and_sends_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("codex", "Codex", PackageState::Disabled)],
@@ -419,14 +423,20 @@ fn send_with_a_kind_that_cannot_start_shows_why_and_sends_nothing(cx: &mut TestA
     cx.run_until_parked();
     assert!(start_call(&mut rig._script).is_none(), "no agent.start");
     let composer = composer_of(&rig, cx);
-    let (error, draft) = composer.read_with(cx, |composer, cx| {
+    let (error, draft, primary) = composer.read_with(cx, |composer, cx| {
         (
             composer.error_reason().map(|reason| reason.to_string()),
             composer.draft(cx),
+            composer.primary_action(cx),
         )
     });
-    assert_eq!(error.as_deref(), Some("Codex cannot start: Disabled."));
+    assert_eq!(error, None, "nothing was refused: Send is simply off");
     assert_eq!(draft, "fix the login");
+    assert_eq!(
+        format!("{primary:?}"),
+        "Disabled",
+        "the primary button is off"
+    );
 }
 
 #[gpui::test]

@@ -31,14 +31,14 @@ use std::io::Write;
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
-use crate::model::agent_kinds::{KindChoice, start_kind_choices};
+use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
 use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER,
-    WorkspaceStart, send_reason, start_params,
+    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartingSession,
+    TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -76,11 +76,6 @@ pub(super) fn profile_banner() -> impl IntoElement {
             )
             .title("Secure the data folder"),
         )
-}
-
-/// The refusal Send shows for a kind that cannot start.
-fn cannot_start(name: &str, reason: &str) -> String {
-    format!("{name} cannot start: {reason}.")
 }
 
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
@@ -252,18 +247,14 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .collect()
 }
 
-/// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
-/// service declares no models yet. A kind that cannot start is listed as missing.
+/// The installed, enabled kinds as the picker's rail offers them: one agent each, with the kind as its only row,
+/// since the service declares no models yet.
 fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
     choices
         .iter()
         .map(|choice| AgentOption {
             kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
-            availability: if choice.unavailable.is_some() {
-                AgentAvailability::Missing
-            } else {
-                AgentAvailability::Ready
-            },
+            availability: AgentAvailability::Ready,
             list: ModelList::Loaded,
             models: vec![ModelOption {
                 id: choice.id.clone().into(),
@@ -556,7 +547,7 @@ impl Shell {
         let (choices, connected, kinds) = {
             let state = self.store.read(cx).state();
             (
-                start_kind_choices(&state.agent_kinds),
+                session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
             )
@@ -564,6 +555,7 @@ impl Shell {
         composer.update(cx, |composer, cx| {
             composer.set_picker_agents(picker_agents(&choices), cx);
         });
+        // TODO(merge): ui empty state "No agents installed" with the Marketplace link goes here.
         let chosen = composer
             .read(cx)
             .picker()
@@ -595,7 +587,7 @@ impl Shell {
             .filter(|pending| pending.workspace == workspace_id);
         let no_project =
             workspace_id == HOME_START && self.store.read(cx).state().projects.is_empty();
-        let reason = send_reason(connected, kind_chosen, starting)
+        let reason = send_reason(connected, !choices.is_empty(), kind_chosen, starting)
             .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
             .map(SharedString::from);
         composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
@@ -636,7 +628,7 @@ impl Shell {
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
-    /// shows when no kind is chosen or the chosen one cannot start.
+    /// shows when no agent is installed or none is chosen.
     pub(super) fn chosen_start(
         &self,
         composer: &Entity<Composer>,
@@ -651,13 +643,14 @@ impl Shell {
             .model
             .to_string();
         let kinds = &self.store.read(cx).state().agent_kinds;
-        let kind = start_kind_choices(kinds)
+        let installed = session_kind_choices(kinds);
+        if installed.is_empty() {
+            return Err(NO_AGENTS_INSTALLED.to_owned());
+        }
+        let kind = installed
             .into_iter()
             .find(|kind| kind.id == chosen)
             .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
-        if let Some(reason) = kind.unavailable {
-            return Err(cannot_start(&kind.name, reason));
-        }
         let permission_mode = kinds
             .iter()
             .find(|declared| declared.id == kind.id)

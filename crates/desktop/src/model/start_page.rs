@@ -17,6 +17,8 @@ pub const VOICE_LATER: &str = "Voice input comes later.";
 /// The Send button's reason while no agent is chosen, or the service is not connected.
 pub const CHOOSE_AN_AGENT: &str = "Choose an agent to start a session.";
 pub const NOT_CONNECTED: &str = "The service is not connected.";
+/// The Send button's reason while no agent is installed and turned on.
+pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
@@ -91,9 +93,11 @@ impl StartingSession {
     }
 }
 
-/// Why Send is off, or `None` when it is on: a start in flight, the service away, or no agent chosen.
+/// Why Send is off, or `None` when it is on: a start in flight, the service away, no agent installed, or no agent
+/// chosen.
 pub fn send_reason(
     connected: bool,
+    agents_installed: bool,
     kind_chosen: bool,
     starting: Option<&StartingSession>,
 ) -> Option<String> {
@@ -101,6 +105,8 @@ pub fn send_reason(
         Some(starting.status())
     } else if !connected {
         Some(NOT_CONNECTED.to_owned())
+    } else if !agents_installed {
+        Some(NO_AGENTS_INSTALLED.to_owned())
     } else if !kind_chosen {
         Some(CHOOSE_AN_AGENT.to_owned())
     } else {
@@ -247,13 +253,25 @@ mod tests {
 
     #[test]
     fn send_is_off_until_an_agent_is_chosen_and_the_service_is_connected() {
-        assert_eq!(send_reason(true, true, None), None);
+        assert_eq!(send_reason(true, true, true, None), None);
         assert_eq!(
-            send_reason(true, false, None).as_deref(),
+            send_reason(true, true, false, None).as_deref(),
             Some(CHOOSE_AN_AGENT)
         );
         assert_eq!(
-            send_reason(false, true, None).as_deref(),
+            send_reason(false, true, true, None).as_deref(),
+            Some(NOT_CONNECTED)
+        );
+    }
+
+    #[test]
+    fn send_is_off_with_no_agent_installed_whatever_the_choice() {
+        assert_eq!(
+            send_reason(true, false, false, None).as_deref(),
+            Some(NO_AGENTS_INSTALLED)
+        );
+        assert_eq!(
+            send_reason(false, false, false, None).as_deref(),
             Some(NOT_CONNECTED)
         );
     }
@@ -265,7 +283,7 @@ mod tests {
             kind_name: "Claude".into(),
         };
         assert_eq!(
-            send_reason(true, true, Some(&starting)).as_deref(),
+            send_reason(true, true, true, Some(&starting)).as_deref(),
             Some("Starting Claude on This PC")
         );
     }
