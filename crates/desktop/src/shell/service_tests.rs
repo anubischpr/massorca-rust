@@ -473,6 +473,31 @@ fn a_folder_already_added_is_not_warned_about_and_the_add_refuses_it(cx: &mut Te
 }
 
 #[gpui::test]
+fn a_plain_folder_project_shows_the_no_git_marker_in_the_sidebar(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-no-git-p1").is_none(),
+        "a repository has no marker"
+    );
+    let mut notes = project("p2", "notes");
+    notes.kind = ProjectKind::Folder;
+    rig.updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha"), notes],
+            workspaces: Vec::new(),
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-no-git-p2").is_some(),
+        "the plain folder shows No Git"
+    );
+    assert!(cx.debug_bounds("sidebar-no-git-p1").is_none());
+}
+
+#[gpui::test]
 fn removing_a_workspace_walks_dirty_then_ignored_files_each_with_one_more_flag(
     cx: &mut TestAppContext,
 ) {
