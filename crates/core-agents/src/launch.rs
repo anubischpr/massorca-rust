@@ -61,6 +61,11 @@ pub struct LaunchInput<'a> {
     /// parent. Its terminal carries the mark, and the caller's env may not add a dangerous name.
     pub holds_secrets: bool,
     pub caller_env: &'a BTreeMap<String, String>,
+    /// MassOrca's per-launch instructions (decision 0161), passed through the kind's `instructions` channel when it
+    /// declares one. `None` when the session may not delegate further.
+    pub instructions: Option<&'a str>,
+    /// The `PATH` the run's terminal inherits from the service, which the run's own `PATH` starts from.
+    pub inherited_path: Option<&'a str>,
 }
 
 /// What to run. Values in `env` may be secrets: never log them.
@@ -153,6 +158,9 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     args.extend(input.mode_args.iter().cloned());
     let mut files = Vec::new();
     install_hooks(input, &mut args, &mut files);
+    if let (Some(channel), Some(text)) = (&decl.instructions, input.instructions) {
+        args.extend(channel.args_with(text));
+    }
 
     let mut agent_ref = None;
     let mut pending_prompt = None;
@@ -351,8 +359,50 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<Stri
             remove_env.push(name.clone());
         }
     }
+    with_massorca_on_path(input, &mut env);
     (env, remove_env)
 }
+
+/// Puts the folder of the `massorca` executable first on the run's `PATH` (decision 0161), so the agent can run
+/// `massorca`: in front of the `PATH` the caller or the vault set, else the inherited one. The rest is kept as it is, and
+/// a folder that is already first is not added again.
+fn with_massorca_on_path(input: &LaunchInput<'_>, env: &mut BTreeMap<String, EnvValue>) {
+    let Some(folder) = input
+        .massorca_bin
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+    else {
+        return;
+    };
+    let folder = folder.to_string_lossy();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let current = env
+        .iter()
+        .find(|(name, _)| same_name(name, PATH_ENV))
+        .map(|(_, value)| value.as_str().to_owned())
+        .or_else(|| input.inherited_path.map(str::to_owned))
+        .unwrap_or_default();
+    let first = current.split(separator).next().unwrap_or_default();
+    let already_first = if cfg!(windows) {
+        first
+            .trim_end_matches(['\\', '/'])
+            .eq_ignore_ascii_case(folder.trim_end_matches(['\\', '/']))
+    } else {
+        first.trim_end_matches('/') == folder.trim_end_matches('/')
+    };
+    let path = if already_first {
+        current
+    } else if current.is_empty() {
+        folder.into_owned()
+    } else {
+        format!("{folder}{separator}{current}")
+    };
+    env.retain(|name, _| !same_name(name, PATH_ENV));
+    env.insert(PATH_ENV.to_owned(), EnvValue::new(path));
+}
+
+/// The search path variable a run's `PATH` is set under; Windows compares the name without case.
+const PATH_ENV: &str = "PATH";
 
 #[cfg(test)]
 mod tests {
@@ -372,6 +422,8 @@ mod tests {
         provided: ProvidedEnv,
         holds_secrets: bool,
         caller_env: BTreeMap<String, String>,
+        instructions: Option<String>,
+        inherited_path: Option<String>,
     }
 
     impl Fixture {
@@ -387,6 +439,8 @@ mod tests {
                 provided: ProvidedEnv::default(),
                 holds_secrets: false,
                 caller_env: BTreeMap::new(),
+                instructions: None,
+                inherited_path: None,
             }
         }
 
@@ -405,6 +459,8 @@ mod tests {
                 provided_env: &self.provided,
                 holds_secrets: self.holds_secrets,
                 caller_env: &self.caller_env,
+                instructions: self.instructions.as_deref(),
+                inherited_path: self.inherited_path.as_deref(),
             })
         }
 
@@ -622,6 +678,72 @@ mod tests {
         assert_eq!(plan.env[ENV_KIND].as_str(), "fake");
         assert_eq!(plan.env[ENV_BIN].as_str(), "/opt/mass orca/massorca");
         assert!(plan.remove_env.is_empty());
+    }
+
+    /// The `PATH` separator and the folder of the fixture's `massorca`.
+    const SEPARATOR: &str = if cfg!(windows) { ";" } else { ":" };
+    const BIN_FOLDER: &str = "/opt/mass orca";
+
+    #[test]
+    fn the_run_path_starts_with_the_massorca_folder_and_keeps_the_rest() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.inherited_path = Some(format!("/usr/bin{SEPARATOR}/bin"));
+        let plan = fixture.first(None);
+        assert_eq!(
+            plan.env[PATH_ENV].as_str(),
+            format!("{BIN_FOLDER}{SEPARATOR}/usr/bin{SEPARATOR}/bin")
+        );
+
+        // Already first: not added again.
+        fixture.inherited_path = Some(format!("{BIN_FOLDER}{SEPARATOR}/usr/bin"));
+        assert_eq!(
+            fixture.first(None).env[PATH_ENV].as_str(),
+            format!("{BIN_FOLDER}{SEPARATOR}/usr/bin")
+        );
+
+        // Nothing inherited: the folder alone.
+        fixture.inherited_path = None;
+        assert_eq!(fixture.first(None).env[PATH_ENV].as_str(), BIN_FOLDER);
+
+        // A caller's PATH is the one the folder goes in front of.
+        fixture.inherited_path = Some("/usr/bin".to_owned());
+        let caller_name = if cfg!(windows) { "Path" } else { "PATH" };
+        fixture
+            .caller_env
+            .insert(caller_name.to_owned(), "/caller/bin".to_owned());
+        let plan = fixture.first(None);
+        let paths: Vec<_> = plan
+            .env
+            .iter()
+            .filter(|(name, _)| same_name(name, PATH_ENV))
+            .map(|(_, value)| value.as_str().to_owned())
+            .collect();
+        assert_eq!(paths, [format!("{BIN_FOLDER}{SEPARATOR}/caller/bin")]);
+    }
+
+    #[test]
+    fn instructions_go_through_the_declared_channel_only_when_given() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.instructions = Some("be brief".to_owned());
+        let plan = fixture.first(Some("go"));
+        let at = plan
+            .args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .expect("the channel's flag");
+        assert_eq!(plan.args[at + 1], "be brief");
+        assert_eq!(plan.args.last().map(String::as_str), Some("go"));
+        let resumed = fixture.plan(Run::Resume { agent_ref: "abc" }).unwrap();
+        assert!(resumed.args.iter().any(|arg| arg == "be brief"));
+
+        fixture.instructions = None;
+        let plan = fixture.first(Some("go"));
+        assert!(!plan.args.iter().any(|arg| arg == "--append-system-prompt"));
+
+        // A kind without a channel gets no text.
+        let mut codex = Fixture::new(built_in("codex"));
+        codex.instructions = Some("be brief".to_owned());
+        assert!(!codex.first(None).args.iter().any(|arg| arg == "be brief"));
     }
 
     #[test]

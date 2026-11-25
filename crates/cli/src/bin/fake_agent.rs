@@ -5,7 +5,8 @@
 //! names that program. It prints whether a credential file exists, never its contents, and whether the
 //! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values. It prints the permission mode it was started in
 //! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it. It
-//! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160).
+//! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160). It
+//! can say whether it got MassOrca's instructions and whether `massorca`'s folder is first on its `PATH` (decision 0161).
 
 use std::env;
 use std::ffi::OsString;
@@ -37,6 +38,16 @@ const PROBE_FOREIGN_ENV: &str = "FAKE_AGENT_PROBE_FOREIGN";
 const RESUME_MISSING_ENV: &str = "FAKE_AGENT_RESUME_MISSING";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
+/// Set to `1`, start prints `path first massorca` when the first `PATH` entry is the folder of `MASSORCA_BIN`, else
+/// `path first other` (decision 0161). Never a path.
+const PRINT_PATH_ENV: &str = "FAKE_AGENT_PRINT_PATH";
+/// What start looks for in `--instructions`: it prints `instructions delegate` when the text names it, else
+/// `instructions other`. Never the text.
+const DELEGATE_COMMAND: &str = "massorca agent delegate";
+/// Set to `1`, `--help` leaves `--instructions` out, as a CLI too old for the instruction channel.
+const HELP_WITHOUT_INSTRUCTIONS_ENV: &str = "FAKE_AGENT_HELP_WITHOUT_INSTRUCTIONS";
+/// Names a file `--help` appends a line to on each run.
+const HELP_MARKER_ENV: &str = "FAKE_AGENT_HELP_MARKER";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
@@ -83,6 +94,7 @@ fn main() -> ExitCode {
         Some("logout") => return logout(),
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
+        Some("--help") => return help(),
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
@@ -136,6 +148,8 @@ struct Arguments {
     /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
     model: Option<String>,
     effort: Option<String>,
+    /// `--instructions <TEXT>`, the channel a test kind declares for MassOrca's per-launch instructions (decision 0161).
+    instructions: Option<String>,
     prompt: Option<String>,
 }
 
@@ -157,6 +171,7 @@ impl Arguments {
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
+                "--instructions" if words.is_empty() => parsed.instructions = args.next(),
                 // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
                 "-m" if words.is_empty() => parsed.model = args.next(),
                 "-c" if words.is_empty() => {
@@ -227,6 +242,20 @@ impl Agent {
         }
         if let Some(effort) = &arguments.effort {
             say(&format!("effort {effort}"));
+        }
+        if let Some(text) = &arguments.instructions {
+            say(if text.contains(DELEGATE_COMMAND) {
+                "instructions delegate"
+            } else {
+                "instructions other"
+            });
+        }
+        if env::var_os(PRINT_PATH_ENV).is_some_and(|value| value == "1") {
+            say(if massorca_first_on_path() {
+                "path first massorca"
+            } else {
+                "path first other"
+            });
         }
         say(if credentials_found() {
             "credentials found"
@@ -514,6 +543,49 @@ fn email_of(text: &str) -> Option<String> {
         .split('"')
         .next()
         .map(str::to_owned)
+}
+
+/// `--help`: prints the options, `--instructions` among them unless [`HELP_WITHOUT_INSTRUCTIONS_ENV`] is `1`, and
+/// appends a line to the file [`HELP_MARKER_ENV`] names, so a test can count the probes (decision 0161).
+fn help() -> ExitCode {
+    if let Some(marker) = env::var_os(HELP_MARKER_ENV).filter(|path| !path.is_empty())
+        && let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(marker)
+    {
+        let _ = writeln!(file, "help");
+    }
+    let mut text = String::from(
+        "Usage: massorca-fake-agent [OPTIONS] [PROMPT]
+  --session-id <ID>
+  --resume <ID>
+  --mode <ID>
+",
+    );
+    if env::var_os(HELP_WITHOUT_INSTRUCTIONS_ENV).is_none_or(|value| value != "1") {
+        text.push_str(
+            "  --instructions <TEXT>
+",
+        );
+    }
+    let mut stdout = io::stdout().lock();
+    let _ = stdout.write_all(text.as_bytes());
+    let _ = stdout.flush();
+    ExitCode::SUCCESS
+}
+
+/// Whether the first `PATH` entry is the folder of the program `MASSORCA_BIN` names (decision 0161).
+fn massorca_first_on_path() -> bool {
+    let Some(folder) = env::var_os(HOOK_PROGRAM_ENV)
+        .map(PathBuf::from)
+        .and_then(|bin| bin.parent().map(Path::to_path_buf))
+    else {
+        return false;
+    };
+    env::var_os("PATH")
+        .and_then(|path| env::split_paths(&path).next())
+        .is_some_and(|first| first == folder)
 }
 
 /// The names listed in the variable `variable`, separated by commas.
