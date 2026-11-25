@@ -727,6 +727,9 @@ impl Link {
         self.emit(StoreUpdate::AgentSeenOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_SEEN),
         ));
+        self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
+            massorca_protocol::capabilities::AGENT_NO_PROJECT,
+        )));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
