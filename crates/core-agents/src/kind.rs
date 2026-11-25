@@ -476,6 +476,14 @@ pub struct CheckDecl {
     /// A regular expression over the output when signed in; its first group (or the whole match) is the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_pattern: Option<String>,
+    /// For a check that prints a JSON object (decision 0098): the top-level string fields that make up the identity,
+    /// joined with ` / ` in this order, those present only. Declared instead of `identity_pattern`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_json: Option<Vec<String>>,
+    /// For a check that prints a JSON object (decision 0098): a top-level field that is `false` when the login is not
+    /// signed in, which then needs a sign-in whatever the exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in_json: Option<String>,
 }
 
 impl KindDecl {
@@ -892,6 +900,39 @@ fn accounts_problems(
                 problems.push(format!("accounts.check.{field} does not compile: {error}"));
             }
         }
+        check_json_problems(check, problems);
+    }
+}
+
+/// The problems of a check's JSON fields (decision 0098): `identity_json` lists at least one field, each a non-empty
+/// name once, and is not declared with `identity_pattern`; `signed_in_json` is a non-empty name.
+fn check_json_problems(check: &CheckDecl, problems: &mut Vec<String>) {
+    if let Some(fields) = &check.identity_json {
+        if fields.is_empty() {
+            problems.push("accounts.check.identity_json lists no field".to_owned());
+        }
+        for (index, field) in fields.iter().enumerate() {
+            if field.trim().is_empty() {
+                problems.push("accounts.check.identity_json has an empty field name".to_owned());
+            } else if fields[..index].contains(field) {
+                problems.push(format!(
+                    "accounts.check.identity_json names {field:?} twice"
+                ));
+            }
+        }
+        if check.identity_pattern.is_some() {
+            problems.push(
+                "accounts.check declares both identity_pattern and identity_json; declare one"
+                    .to_owned(),
+            );
+        }
+    }
+    if check
+        .signed_in_json
+        .as_deref()
+        .is_some_and(|field| field.trim().is_empty())
+    {
+        problems.push("accounts.check.signed_in_json is an empty field name".to_owned());
     }
 }
 
@@ -1392,6 +1433,41 @@ mod tests {
                 serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] });
             value["accounts"] = accounts.clone();
         })
+    }
+
+    #[test]
+    fn the_json_fields_of_a_check_are_validated() {
+        let check = |fields: serde_json::Value| {
+            with_accounts(serde_json::json!({ "login": ["login"], "check": fields }))
+        };
+        let fine = check(serde_json::json!({
+            "args": ["status"], "identity_json": ["email", "orgName"], "signed_in_json": "loggedIn"
+        }));
+        assert!(fine.is_empty(), "{fine:?}");
+        let empty = check(serde_json::json!({ "args": ["status"], "identity_json": [] }));
+        assert_eq!(empty, ["accounts.check.identity_json lists no field"]);
+        let twice = check(
+            serde_json::json!({ "args": ["status"], "identity_json": ["email", "", "email"] }),
+        );
+        assert_eq!(
+            twice,
+            [
+                "accounts.check.identity_json has an empty field name",
+                "accounts.check.identity_json names \"email\" twice"
+            ]
+        );
+        let both = check(serde_json::json!({
+            "args": ["status"], "identity_json": ["email"], "identity_pattern": "x"
+        }));
+        assert_eq!(
+            both,
+            ["accounts.check declares both identity_pattern and identity_json; declare one"]
+        );
+        let blank = check(serde_json::json!({ "args": ["status"], "signed_in_json": " " }));
+        assert_eq!(
+            blank,
+            ["accounts.check.signed_in_json is an empty field name"]
+        );
     }
 
     #[test]
