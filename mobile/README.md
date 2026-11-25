@@ -113,4 +113,6 @@ synchronous callback.
   id from its route, so nothing opens it until the binding exposes that id.
 - **Not checked on a device:** the terminal page runs in the WebView only under Jest (a double). Key sequences, the
   Ctrl key, resizing and the WebView's file URL need a run on a phone or an emulator.
-- Emulator flows (A11) and the phone validation (A12) are not started.
+- Emulator flow (A11): the `android-emulator` job in `.github/workflows/ci.yml` runs `.maestro/pairing-home-workspaces.yaml`
+  (screens 1, 2 and 4) against a massorca service on the runner, reached at `10.0.2.2`. Screen 6 waits for the terminal
+  entry point above. The phone validation (A12) is not started.
