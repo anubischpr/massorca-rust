@@ -21,6 +21,13 @@ pub struct SurfaceColors {
     pub overlay: Color,
 }
 
+/// Colour tokens named `slider.*`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SliderColors {
+    /// `slider.thumb`
+    pub thumb: Color,
+}
+
 /// Colour tokens named `progress.*`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProgressColors {
@@ -283,6 +290,29 @@ pub struct UsageColors {
     pub ring_limit: Color,
 }
 
+/// Colour tokens named `banner.*`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BannerColors {
+    /// `banner.palette.1`
+    pub palette_1: Color,
+    /// `banner.palette.2`
+    pub palette_2: Color,
+    /// `banner.palette.3`
+    pub palette_3: Color,
+    /// `banner.palette.4`
+    pub palette_4: Color,
+    /// `banner.palette.5`
+    pub palette_5: Color,
+    /// `banner.palette.6`
+    pub palette_6: Color,
+    /// `banner.palette.7`
+    pub palette_7: Color,
+    /// `banner.palette.8`
+    pub palette_8: Color,
+    /// `banner.end`
+    pub end: Color,
+}
+
 /// Colour tokens named `selection.*`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SelectionColors {
@@ -354,6 +384,7 @@ pub struct SwitchColors {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub surface: SurfaceColors,
+    pub slider: SliderColors,
     pub progress: ProgressColors,
     pub text: TextColors,
     pub border: BorderColors,
@@ -364,6 +395,7 @@ pub struct Palette {
     pub terminal: TerminalColors,
     pub syntax: SyntaxColors,
     pub usage: UsageColors,
+    pub banner: BannerColors,
     pub selection: SelectionColors,
     pub r#match: MatchColors,
     pub fill: FillColors,
@@ -381,6 +413,9 @@ impl Palette {
             sunken: Color::rgba8(16, 16, 18, 1.0),
             raised: Color::rgba8(30, 30, 33, 1.0),
             overlay: Color::rgba8(37, 37, 40, 1.0),
+        },
+        slider: SliderColors {
+            thumb: Color::rgba8(244, 244, 247, 1.0),
         },
         progress: ProgressColors {
             track: Color::rgba8(16, 16, 18, 1.0),
@@ -508,6 +543,17 @@ impl Palette {
             ring_warn: Color::rgba8(242, 189, 74, 1.0),
             ring_limit: Color::rgba8(255, 123, 123, 1.0),
         },
+        banner: BannerColors {
+            palette_1: Color::rgba8(69, 114, 85, 1.0),
+            palette_2: Color::rgba8(64, 112, 113, 1.0),
+            palette_3: Color::rgba8(76, 107, 151, 1.0),
+            palette_4: Color::rgba8(100, 98, 164, 1.0),
+            palette_5: Color::rgba8(125, 93, 149, 1.0),
+            palette_6: Color::rgba8(147, 88, 112, 1.0),
+            palette_7: Color::rgba8(125, 101, 61, 1.0),
+            palette_8: Color::rgba8(102, 108, 66, 1.0),
+            end: Color::rgba8(104, 106, 105, 1.0),
+        },
         selection: SelectionColors {
             bg: Color::rgba8(44, 74, 122, 1.0),
         },
@@ -548,6 +594,9 @@ impl Palette {
             sunken: Color::rgba8(244, 244, 247, 1.0),
             raised: Color::rgba8(255, 255, 255, 1.0),
             overlay: Color::rgba8(255, 255, 255, 1.0),
+        },
+        slider: SliderColors {
+            thumb: Color::rgba8(255, 255, 255, 1.0),
         },
         progress: ProgressColors {
             track: Color::rgba8(244, 244, 247, 1.0),
@@ -675,6 +724,17 @@ impl Palette {
             ring_warn: Color::rgba8(138, 87, 0, 1.0),
             ring_limit: Color::rgba8(180, 35, 35, 1.0),
         },
+        banner: BannerColors {
+            palette_1: Color::rgba8(207, 229, 214, 1.0),
+            palette_2: Color::rgba8(205, 228, 228, 1.0),
+            palette_3: Color::rgba8(211, 222, 239, 1.0),
+            palette_4: Color::rgba8(220, 219, 240, 1.0),
+            palette_5: Color::rgba8(229, 217, 238, 1.0),
+            palette_6: Color::rgba8(239, 216, 225, 1.0),
+            palette_7: Color::rgba8(236, 223, 200, 1.0),
+            palette_8: Color::rgba8(226, 229, 201, 1.0),
+            end: Color::rgba8(228, 229, 228, 1.0),
+        },
         selection: SelectionColors {
             bg: Color::rgba8(191, 212, 251, 1.0),
         },
@@ -717,6 +777,7 @@ impl Palette {
             "surface.sunken" => self.surface.sunken,
             "surface.raised" => self.surface.raised,
             "surface.overlay" => self.surface.overlay,
+            "slider.thumb" => self.slider.thumb,
             "progress.track" => self.progress.track,
             "text.primary" => self.text.primary,
             "text.secondary" => self.text.secondary,
@@ -823,6 +884,15 @@ impl Palette {
             "usage.ring.track" => self.usage.ring_track,
             "usage.ring.warn" => self.usage.ring_warn,
             "usage.ring.limit" => self.usage.ring_limit,
+            "banner.palette.1" => self.banner.palette_1,
+            "banner.palette.2" => self.banner.palette_2,
+            "banner.palette.3" => self.banner.palette_3,
+            "banner.palette.4" => self.banner.palette_4,
+            "banner.palette.5" => self.banner.palette_5,
+            "banner.palette.6" => self.banner.palette_6,
+            "banner.palette.7" => self.banner.palette_7,
+            "banner.palette.8" => self.banner.palette_8,
+            "banner.end" => self.banner.end,
             "selection.bg" => self.selection.bg,
             "match.bg" => self.r#match.bg,
             "match.active.bg" => self.r#match.active_bg,
@@ -855,6 +925,7 @@ pub const PALETTE_NAMES: &[&str] = &[
     "surface.frame",
     "surface.canvas",
     "surface.sunken",
+    "slider.thumb",
     "progress.track",
     "surface.raised",
     "surface.overlay",
@@ -959,6 +1030,15 @@ pub const PALETTE_NAMES: &[&str] = &[
     "usage.ring.track",
     "usage.ring.warn",
     "usage.ring.limit",
+    "banner.palette.1",
+    "banner.palette.2",
+    "banner.palette.3",
+    "banner.palette.4",
+    "banner.palette.5",
+    "banner.palette.6",
+    "banner.palette.7",
+    "banner.palette.8",
+    "banner.end",
     "selection.bg",
     "match.bg",
     "match.active.bg",
@@ -1124,6 +1204,10 @@ pub const SIZE_CONTROL_COMPACT: f32 = 24.0;
 pub const SIZE_CONTROL_DEFAULT: f32 = 28.0;
 /// `size.control.comfortable`
 pub const SIZE_CONTROL_COMFORTABLE: f32 = 32.0;
+/// `size.reasoning-slider.track`
+pub const SIZE_REASONING_SLIDER_TRACK: f32 = 28.0;
+/// `size.reasoning-slider.thumb`
+pub const SIZE_REASONING_SLIDER_THUMB: f32 = 22.0;
 /// `size.touch.default`
 pub const SIZE_TOUCH_DEFAULT: f32 = 44.0;
 /// `size.touch.large`
@@ -1368,6 +1452,10 @@ pub const DURATION_CARD_INSERT: Duration = Duration::from_millis(250);
 pub const DURATION_TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 /// `duration.spinner`
 pub const DURATION_SPINNER: Duration = Duration::from_millis(800);
+/// `duration.slider-shimmer`
+pub const DURATION_SLIDER_SHIMMER: Duration = Duration::from_millis(1600);
+/// `duration.slider-move`
+pub const DURATION_SLIDER_MOVE: Duration = Duration::from_millis(220);
 
 // easing
 /// `ease.standard`
