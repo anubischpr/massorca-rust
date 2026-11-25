@@ -212,7 +212,8 @@ Linux only. No automated run opens a visible window.
   `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). It
   reads when the page opens, when the picked host changes, and on Refresh with `refresh: true`. This computer reads
   through its own service; a paired host through its own connection (`service/skills.rs`). The store keeps the newest
-  answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first."
+  answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first." The
+  "Where MassOrca looked" report under the list shows each root with its agents, its kind and why it was skipped.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.

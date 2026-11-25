@@ -45,6 +45,7 @@ pub(super) enum SkillsPanel {
 pub(super) struct SkillsSection {
     pub(super) host: String,
     pub(super) panel: SkillsPanel,
+    pub(super) roots_open: bool,
 }
 
 impl Shell {
@@ -108,6 +109,7 @@ pub(super) fn section_of(shell: &Shell, cx: &App) -> SkillsSection {
         .filter(|read| read.request == shell.marketplace_skills_request)
         .map(|read| &read.listing);
     SkillsSection {
+        roots_open: shell.marketplace_roots_open,
         host: match &target {
             HostTarget::Local => "this computer".to_owned(),
             HostTarget::Paired(name) => name.clone(),
@@ -129,6 +131,12 @@ pub(super) fn skills_section(frame: &MarketplaceFrame, cx: &App) -> AnyElement {
             source_count_line(roots)
         ),
         _ => String::new(),
+    };
+    let report = match &section.panel {
+        SkillsPanel::Found { roots, .. } => {
+            Some(roots_report(frame, roots, section.roots_open, cx))
+        }
+        _ => None,
     };
     let body = match &section.panel {
         SkillsPanel::Scanning => div()
@@ -187,6 +195,7 @@ pub(super) fn skills_section(frame: &MarketplaceFrame, cx: &App) -> AnyElement {
                 .child(refresh_button(frame)),
         )
         .child(body)
+        .children(report)
         .into_any_element()
 }
 
@@ -274,10 +283,82 @@ fn refresh_skills(shell: &WeakEntity<Shell>, cx: &mut App) {
     });
 }
 
+/// The "Where MassOrca looked" report: each root the scan read or skipped, and why it was skipped (SKL-01).
+fn roots_report(frame: &MarketplaceFrame, roots: &[RootRow], open: bool, cx: &App) -> AnyElement {
+    let shell = frame.shell.clone();
+    let mut report = div().flex().flex_col().child(
+        ListRow::new("marketplace-skills-roots", "Where MassOrca looked")
+            .expanded(open)
+            .on_toggle(move |expanded, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.marketplace_roots_open = expanded;
+                    cx.notify();
+                });
+            }),
+    );
+    if open {
+        for (index, root) in roots.iter().enumerate() {
+            report = report.child(root_row(index, root, cx));
+        }
+    }
+    report.into_any_element()
+}
+
+/// One root of the report: its label, its agents and kind, and why it was skipped when it was.
+fn root_row(index: usize, root: &RootRow, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let mut row = ListRow::new(
+        SharedString::from(format!("marketplace-root-{index}")),
+        root.label.clone(),
+    );
+    if let Some(reason) = root.skip_reason {
+        row = row.secondary(reason);
+    }
+    row.trailing(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(theme.palette.text.tertiary)
+            .child(root_trailing(root)),
+    )
+    .into_any_element()
+}
+
+/// The agents of a root and its kind, such as "Claude · Home".
+fn root_trailing(root: &RootRow) -> String {
+    let mut parts = Vec::new();
+    if !root.agents.is_empty() {
+        parts.push(root.agents.join(", "));
+    }
+    if let Some(kind) = root.kind {
+        parts.push(kind.to_owned());
+    }
+    parts.join(" · ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::service::Refusal;
+
+    #[test]
+    fn a_root_names_its_agents_and_kind_and_leaves_out_what_it_lacks() {
+        let root = RootRow {
+            label: "Claude home".to_owned(),
+            agents: vec!["Claude"],
+            kind: Some("Home"),
+            exists: true,
+            skip_reason: None,
+        };
+        assert_eq!(root_trailing(&root), "Claude · Home");
+        let shared = RootRow {
+            label: "Shared folder".to_owned(),
+            agents: Vec::new(),
+            kind: None,
+            exists: true,
+            skip_reason: None,
+        };
+        assert_eq!(root_trailing(&shared), "");
+    }
     use massorca_protocol::methods::skills::SkillDiscovery;
 
     fn empty_discovery() -> SkillDiscovery {

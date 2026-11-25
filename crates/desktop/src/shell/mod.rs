@@ -242,6 +242,8 @@ pub struct Shell {
     _marketplace_host_changes: Subscription,
     /// The request number of the newest skills read; only its answer is shown.
     marketplace_skills_request: u64,
+    /// Whether the Skills section's "Where MassOrca looked" report is open.
+    marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -533,6 +535,7 @@ impl Shell {
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
+            marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
