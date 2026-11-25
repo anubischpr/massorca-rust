@@ -3,6 +3,7 @@
 //! refusals that pick a dialog.
 
 mod accounts;
+mod agent_chat;
 mod agent_queue;
 mod agents;
 mod bridge;
@@ -25,6 +26,7 @@ mod secrets_tests;
 
 #[cfg(test)]
 pub(crate) use accounts::AccountCommand;
+pub use agent_chat::{ChatUnsupportedReason, KindChat};
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]

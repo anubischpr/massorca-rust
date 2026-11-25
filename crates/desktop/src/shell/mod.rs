@@ -749,7 +749,7 @@ impl Render for Shell {
                 .as_ref()
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
-            let mode = self.start_mode(&page.id);
+            let mode = self.start_mode(&page.id, cx);
             start_page::StartFrame {
                 profile_unsafe: self.profile_unsafe,
                 page,

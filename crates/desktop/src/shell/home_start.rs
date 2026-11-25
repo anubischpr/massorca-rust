@@ -328,7 +328,7 @@ impl Shell {
             no_project,
             project_base,
             starting,
-            mode: self.start_mode(HOME_START),
+            mode: self.start_mode(HOME_START, cx),
             profile_unsafe: self.profile_unsafe,
             details: self.home_details.clone(),
             composer,
@@ -380,7 +380,7 @@ impl Shell {
         if let (ProjectChoice::Project(_), Some(reason)) = (&choice, details.send_block()) {
             return refuse_send(prompt, &composer, reason.to_owned(), cx);
         }
-        let mode = self.start_mode(HOME_START);
+        let mode = self.start_mode(HOME_START, cx);
         self.start_pending = Some(StartingSession {
             workspace: HOME_START.to_owned(),
             kind_name: kind.name,

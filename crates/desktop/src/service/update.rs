@@ -19,6 +19,7 @@ use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStat
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
+use super::agent_chat::KindChat;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
@@ -65,6 +66,10 @@ pub enum StoreUpdate {
     AgentNoProjectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
+    /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
+    AgentChatOffered(bool),
+    /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
+    AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -248,6 +253,10 @@ pub struct StoreState {
     pub agent_no_project: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
+    /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
+    pub agent_chat: bool,
+    /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
+    pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
@@ -283,6 +292,8 @@ impl Default for StoreState {
             agent_seen: false,
             agent_no_project: false,
             agent_options: false,
+            agent_chat: false,
+            agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
         }
@@ -387,6 +398,8 @@ impl StoreState {
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
+            StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
+            StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -641,6 +654,7 @@ pub(crate) mod fixtures {
             problems: Vec::new(),
             permission_modes: Vec::new(),
             default_permission_mode: None,
+            chat: None,
             model: None,
             effort: None,
         }
@@ -735,6 +749,17 @@ mod tests {
         );
         state.apply(StoreUpdate::AgentOptionsOffered(true), Instant::now());
         assert!(state.agent_options);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_offers_agent_chat() {
+        let mut state = StoreState::default();
+        assert!(
+            !state.agent_chat,
+            "no read yet: the start page opens on Terminal"
+        );
+        state.apply(StoreUpdate::AgentChatOffered(true), Instant::now());
+        assert!(state.agent_chat);
     }
 
     fn resynced() -> StoreState {
@@ -941,6 +966,31 @@ mod tests {
             ids,
             ["codex"],
             "a resync drops the kinds it no longer lists"
+        );
+    }
+
+    #[test]
+    fn each_kinds_chat_support_is_held_as_the_service_lists_it() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let claude = KindChat {
+            supported: true,
+            reason: None,
+            version: Some("2.2.0".to_owned()),
+            range: Some(">=2.1.0, <2.3.0".to_owned()),
+        };
+        state.apply(
+            StoreUpdate::AgentKindChatResync(BTreeMap::from([(
+                "claude".to_owned(),
+                claude.clone(),
+            )])),
+            now,
+        );
+        assert_eq!(state.agent_kind_chat.get("claude"), Some(&claude));
+        state.apply(StoreUpdate::AgentKindChatResync(BTreeMap::new()), now);
+        assert!(
+            state.agent_kind_chat.is_empty(),
+            "a resync drops the chat support of the kinds it no longer lists"
         );
     }
 
