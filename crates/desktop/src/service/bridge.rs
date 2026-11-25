@@ -24,10 +24,10 @@ use massorca_protocol::methods::devices::{
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
-    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
-    TOPIC_WORKSPACE_REMOVING,
+    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_CHANGED,
+    TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED,
+    TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -96,6 +96,10 @@ pub(crate) enum Command {
     },
     AddProject {
         params: ProjectAddParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    UpdateProject {
+        params: massorca_protocol::methods::projects::ProjectUpdateParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     ListConfig {
@@ -361,6 +365,20 @@ impl ServiceHandle {
     pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
         self.ask(|reply| Command::GitBranches { workspace, reply })
             .await
+    }
+
+    /// `project.update`. The icon changes through the `project.changed` event, not from this answer.
+    pub async fn update_project(
+        &self,
+        params: massorca_protocol::methods::projects::ProjectUpdateParams,
+    ) -> Result<Project, Refusal> {
+        let (reply, answer) = oneshot::channel();
+        self.commands
+            .send(Command::UpdateProject { params, reply })
+            .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
+        answer
+            .await
+            .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -1053,7 +1071,7 @@ impl Link {
                         StoreUpdate::WorkspaceGone(id.clone())
                     })
                 }),
-            TOPIC_PROJECT_ADDED => client
+            TOPIC_PROJECT_ADDED | TOPIC_PROJECT_CHANGED => client
                 .project_show(&ProjectRef {
                     project: id.clone(),
                 })
@@ -1208,6 +1226,15 @@ fn spawn_call(
             tokio::spawn(async move {
                 let result = client
                     .workspace_remove(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::UpdateProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<_, Project>(massorca_protocol::methods::projects::UPDATE, &params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1370,6 +1397,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AddProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::UpdateProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::ListConfig { reply } => {
