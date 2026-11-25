@@ -213,6 +213,9 @@ pub struct CliSpec {
     pub source: String,
     pub source_checked: Option<String>,
     pub install: Vec<CliStepView>,
+    /// The vendor's update steps of a host program (decision 0151); omitted when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub update: Vec<CliStepView>,
     pub uninstall: Vec<CliStepView>,
 }
 
@@ -239,6 +242,7 @@ impl CliSpec {
             source: cli.source.clone(),
             source_checked: cli.source_checked.clone(),
             install: steps(&cli.install),
+            update: steps(&cli.update),
             uninstall: steps(&cli.uninstall),
         }
     }

@@ -4,7 +4,8 @@
 use super::{InstallReview, UninstallConfirm};
 use crate::model::marketplace::{
     CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, SignInFlow, SignInStep,
-    offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
+    offers_cli_removal, program_update_details, program_update_outcome, remove_details,
+    remove_outcome, review_details, review_outcome,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -57,16 +58,28 @@ fn install_review(
     let theme = *cx.theme();
     let p = &theme.palette;
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
-    let outcome = review
-        .review
-        .as_ref()
-        .map(|answer| review_outcome(answer, &name));
+    // An update of a host program reuses this dialog (decision 0151): its review comes from the update call.
+    let updating = review.program.is_some();
+    let outcome = if updating {
+        review
+            .update
+            .as_ref()
+            .map(|_| program_update_outcome(&name))
+    } else {
+        review
+            .review
+            .as_ref()
+            .map(|answer| review_outcome(answer, &name))
+    };
     let runs_installer = review
         .review
         .as_ref()
         .is_some_and(|answer| answer.runs_installer);
-    let may_install =
-        review.review.is_some() && !review.sending && (!runs_installer || review.run_installer);
+    let may_install = if updating {
+        review.update.is_some() && !review.sending
+    } else {
+        review.review.is_some() && !review.sending && (!runs_installer || review.run_installer)
+    };
     let (title, action_label) = outcome.as_ref().map_or_else(
         || (format!("Install {name}"), "Add to MassOrca"),
         |outcome| (outcome.title().to_owned(), outcome.button()),
@@ -86,7 +99,8 @@ fn install_review(
                 .child("Reading what installing this package does."),
         ),
         None => body,
-        Some(ReviewOutcome::Add { body: text, .. }) => body.child(sentence(text)),
+        Some(ReviewOutcome::Add { body: text, .. })
+        | Some(ReviewOutcome::Update { sentence: text, .. }) => body.child(sentence(text)),
         Some(ReviewOutcome::Install {
             sentence: text,
             command,
@@ -109,12 +123,17 @@ fn install_review(
             body
         }
     };
-    if let Some(answer) = &review.review {
+    let lines = match (&review.update, &review.review) {
+        (Some(update), _) => Some(program_update_details(update)),
+        (None, Some(answer)) => Some(review_details(answer)),
+        (None, None) => None,
+    };
+    if let Some(lines) = lines {
         let (toggle, open) = (weak.clone(), review.details_open);
         body = body.child(details(
             "marketplace-install-details",
             open,
-            review_details(answer),
+            lines,
             move |cx| {
                 let _ = toggle.update(cx, |shell, cx| shell.set_install_details(!open, cx));
             },
@@ -129,7 +148,13 @@ fn install_review(
         .busy(review.sending)
         .action_disabled(!may_install)
         .on_action(move |_, cx| {
-            let _ = ok.update(cx, |shell, cx| shell.confirm_extension_install(cx));
+            let _ = ok.update(cx, |shell, cx| {
+                if updating {
+                    shell.confirm_program_update(cx);
+                } else {
+                    shell.confirm_extension_install(cx);
+                }
+            });
         })
         .on_dismiss(move |_, cx| {
             let _ = dismiss.update(cx, |shell, cx| shell.cancel_extension_review(cx));

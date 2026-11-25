@@ -71,6 +71,8 @@ pub enum StoreUpdate {
     AgentChatOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
+    /// Whether the service offers host program updates (`extensions-programs/1`, decision 0151).
+    ProgramUpdateOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
     AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
@@ -269,6 +271,8 @@ pub struct StoreState {
     pub agent_chat: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
+    /// Whether the service offers `extensions-programs/1`; without it no tool shows Update.
+    pub program_update: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The settings the service declares with their values, as the last read or change left them.
@@ -311,6 +315,7 @@ impl Default for StoreState {
             agent_options: false,
             agent_chat: false,
             agent_archive: false,
+            program_update: false,
             agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
@@ -418,6 +423,7 @@ impl StoreState {
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
+            StoreUpdate::ProgramUpdateOffered(offered) => self.program_update = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {

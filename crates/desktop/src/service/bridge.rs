@@ -777,6 +777,9 @@ impl Link {
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
+        self.emit(StoreUpdate::ProgramUpdateOffered(client.has_capability(
+            massorca_protocol::capabilities::EXTENSIONS_PROGRAMS,
+        )));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {

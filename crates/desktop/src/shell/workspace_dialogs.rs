@@ -97,6 +97,11 @@ pub(super) enum MenuTarget {
     StartProject(Vec<Option<ProjectMenuChoice>>),
     /// The project menu of the start page with no workspace: chosen to create the workspace in.
     HomeProject(Vec<Option<ProjectMenuChoice>>),
+    /// A Marketplace item card's More menu: the item and its rows.
+    MarketplaceItem {
+        item: crate::model::marketplace::MarketplaceItemId,
+        rows: Vec<crate::model::marketplace::ItemMenuId>,
+    },
 }
 
 #[derive(Debug)]
@@ -560,6 +565,11 @@ impl Shell {
                 // A row that is off, such as "No project" before the service offers it, stands for nothing.
                 None => {}
             },
+            MenuTarget::MarketplaceItem { item, rows } => {
+                if let Some(action) = rows.get(row).copied() {
+                    self.run_item_menu(item, action, cx);
+                }
+            }
         }
     }
 

@@ -12,6 +12,7 @@ mod install_review;
 mod item_images;
 mod item_page;
 mod package_problem;
+mod program_update;
 mod remove_review;
 mod sample;
 mod service_accounts;
@@ -40,6 +41,9 @@ pub use item_page::{
 };
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
+};
+pub use program_update::{
+    ItemMenuId, item_menu, program_update_details, program_update_outcome, updatable_program,
 };
 pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use sample::SampleMarketplaceSource;

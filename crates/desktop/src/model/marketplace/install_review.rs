@@ -14,6 +14,8 @@ pub enum ReviewOutcome {
         sentence: String,
         command: String,
     },
+    /// The update of a host program MassOrca installed: one sentence; the command is under Show details.
+    Update { title: String, sentence: String },
     /// Every install step needs administrator rights: the person runs one of these commands; MassOrca never does.
     Manual {
         title: String,
@@ -25,9 +27,10 @@ pub enum ReviewOutcome {
 impl ReviewOutcome {
     pub fn title(&self) -> &str {
         match self {
-            Self::Add { title, .. } | Self::Install { title, .. } | Self::Manual { title, .. } => {
-                title
-            }
+            Self::Add { title, .. }
+            | Self::Install { title, .. }
+            | Self::Update { title, .. }
+            | Self::Manual { title, .. } => title,
         }
     }
 
@@ -36,6 +39,7 @@ impl ReviewOutcome {
         match self {
             Self::Add { .. } | Self::Manual { .. } => "Add to MassOrca",
             Self::Install { .. } => "Install",
+            Self::Update { .. } => "Update",
         }
     }
 }
@@ -209,6 +213,10 @@ pub(super) mod tests {
                 "{title}
 {sentence}
 {command}"
+            ),
+            ReviewOutcome::Update { title, sentence } => format!(
+                "{title}
+{sentence}"
             ),
             ReviewOutcome::Manual {
                 title,

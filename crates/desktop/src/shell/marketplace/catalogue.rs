@@ -403,10 +403,11 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     for add in &item.adds {
         card = card.add(IconName::Plus, add.clone());
     }
-    card.on_action(move |action, _, cx| {
+    card.on_action(move |action, window, cx| {
         let _ = shell.update(cx, |shell, cx| match action {
             ExtensionAction::Toggle(enabled) => shell.set_marketplace_enabled(id, enabled, cx),
             ExtensionAction::Update => shell.update_package(id, cx),
+            ExtensionAction::More => shell.open_item_menu(id, window, cx),
             _ => shell.open_marketplace(MarketplacePage::Item(id), cx),
         });
     })

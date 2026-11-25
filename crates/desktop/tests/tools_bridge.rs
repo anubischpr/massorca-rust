@@ -1,6 +1,6 @@
 //! Tool packages (decision 0151) through the bridge against a real service in a temporary profile, driven headlessly.
-//! Nothing here accepts a vendor command: the install never sets `run_installer` and no update is consented, so no
-//! installer, update or uninstall runs whether or not this host has Git.
+//! Nothing here accepts a vendor command: the install never sets `run_installer`, and the update review is only read,
+//! never accepted, so no installer, update or uninstall runs on the real PATH whether or not this host has Git.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -69,7 +69,7 @@ fn bridge_for(home: &Path) -> (ServiceBridge, ServiceHandle, UnboundedReceiver<S
 async fn lists(updates: &mut UnboundedReceiver<StoreUpdate>) -> StoreState {
     let mut state = StoreState::default();
     let folded = timeout(WAIT, async {
-        while state.extensions.is_none() {
+        while state.extensions.is_none() || !state.program_update {
             let update = updates.recv().await.expect("the bridge is alive");
             state.apply(update, Instant::now());
         }
@@ -98,6 +98,17 @@ async fn git_is_listed_as_a_tool_and_only_a_git_massorca_installed_can_be_update
     assert_eq!(git.listing.category, "tools");
     assert_eq!(git.programs.len(), 1);
     assert_eq!(git.programs[0].id, "git");
+    assert!(
+        state.program_update,
+        "the service offers extensions-programs/1"
+    );
+    let update_steps = &git.programs[0].cli.as_ref().expect("a cli block").update;
+    assert!(
+        update_steps
+            .iter()
+            .any(|step| step.os == "windows" && step.command[1] == "upgrade"),
+        "the update steps reach the client: {update_steps:?}"
+    );
 
     let refusal = handle
         .review_program_update(GIT.to_owned(), "git".to_owned())

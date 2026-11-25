@@ -147,6 +147,15 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Any
     };
     if !item.state.is_installed() {
         header = header.action(install_action(frame, item));
+    } else if frame.updatable {
+        let id = item.id;
+        header = header.action(shell_button(
+            &frame.shell,
+            "marketplace-program-update",
+            "Update",
+            ButtonVariant::Primary,
+            move |shell, cx| shell.open_program_update(id, cx),
+        ));
     }
     div()
         .debug_selector(|| "marketplace-part-logo".to_owned())

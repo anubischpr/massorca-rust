@@ -465,6 +465,9 @@ pub struct CliSpec {
     pub source_checked: Option<String>,
     #[serde(default)]
     pub install: Vec<CliStep>,
+    /// The vendor's update steps of a host program (decision 0151). Absent from older hosts and when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub update: Vec<CliStep>,
     #[serde(default)]
     pub uninstall: Vec<CliStep>,
 }
