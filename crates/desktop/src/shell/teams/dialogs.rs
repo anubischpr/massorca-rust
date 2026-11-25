@@ -3,6 +3,7 @@
 //! with the reason, and nothing changes until the state accepts the change.
 
 use super::super::Shell;
+use super::bot_advanced::{AdvancedOptions, advanced_view};
 use super::new_project::{NewProjectDialog, new_project_view};
 use super::team_bots::bots_section;
 use crate::model::agent_kinds::{
@@ -12,7 +13,7 @@ use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
 use crate::model::teams::{
     Bot, BotChange, BotForm, BotId, CHARACTER_CHOICES, MemoryId, NewBot, NewTeam, ProjectId,
-    TeamChange, TeamError, TeamForm, TeamId, TeamPage, TeamsState, check_name,
+    TeamChange, TeamError, TeamForm, TeamId, TeamPage, TeamsState, check_name, kind_options,
     new_team_access_hint,
 };
 use crate::service::ServiceHandle;
@@ -107,6 +108,8 @@ pub(in crate::shell) struct AddBotDialog {
     host_select: Entity<SelectView>,
     /// The offered kinds this host cannot run, each with the Marketplace item its link opens.
     unavailable: Vec<UnavailableKind>,
+    /// The Model and Effort choices under Advanced options, for the kind the form has chosen.
+    pub(super) advanced: AdvancedOptions,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -121,6 +124,7 @@ struct BotEdit {
 impl AddBotDialog {
     /// The values the form holds now, as the service names them.
     fn form(&self, cx: &App) -> BotForm {
+        let (model, effort) = self.advanced.values(cx);
         BotForm {
             name: self.name.read(cx).text().to_owned(),
             job: self.role.read(cx).text().to_owned(),
@@ -129,15 +133,8 @@ impl AddBotDialog {
                 .get(self.agent)
                 .map(|kind| kind.id.clone())
                 .unwrap_or_default(),
-            // The Advanced options are not on the form yet, so a bot keeps the model and effort it had.
-            model: self
-                .edit
-                .as_ref()
-                .and_then(|edit| edit.opened.model.clone()),
-            effort: self
-                .edit
-                .as_ref()
-                .and_then(|edit| edit.opened.effort.clone()),
+            model,
+            effort,
         }
     }
 }
@@ -164,7 +161,8 @@ pub(in crate::shell) struct EditBriefDialog {
 pub(in crate::shell) enum TeamDialog {
     /// The New team form, or the Edit team form.
     Team(TeamFormDialog),
-    AddBot(AddBotDialog),
+    /// Boxed, as its Advanced options make it much larger than the other forms.
+    AddBot(Box<AddBotDialog>),
     EditBrief(EditBriefDialog),
     /// The New project form of a team.
     NewProject(NewProjectDialog),
@@ -395,11 +393,30 @@ impl Shell {
                 .disabled(true)
                 .layer(OverlayLayer::Dialog)
         });
+        // Advanced options are offered for a connected service's kinds only; sample data has none to offer.
+        let catalogue = match &self.service {
+            Some(_) => kind_options(&self.store.read(cx).state().agent_kinds),
+            None => Vec::new(),
+        };
+        let kind_id = kinds
+            .get(agent)
+            .map(|kind| kind.id.clone())
+            .unwrap_or_default();
+        let (stored_model, stored_effort) = bot.as_ref().map_or((None, None), |current| {
+            (current.model.clone(), current.effort.clone())
+        });
+        let advanced = AdvancedOptions::new(
+            catalogue,
+            &kind_id,
+            stored_model.as_deref(),
+            stored_effort.as_deref(),
+            cx,
+        );
         let edit = bot.map(|current| BotEdit {
             bot: current.id,
             opened: BotForm::of(&current),
         });
-        self.team_dialog = Some(TeamDialog::AddBot(AddBotDialog {
+        self.team_dialog = Some(TeamDialog::AddBot(Box::new(AddBotDialog {
             team,
             edit,
             name,
@@ -409,9 +426,10 @@ impl Shell {
             agent_select,
             host_select,
             unavailable,
+            advanced,
             error: None,
             _subscriptions: vec![name_events, role_events, agent_events],
-        }));
+        })));
         cx.notify();
     }
 
@@ -449,9 +467,11 @@ impl Shell {
     /// Chooses the kind at `index`. A kind this host cannot run is refused, so the form keeps its choice.
     pub(super) fn set_add_bot_agent(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(TeamDialog::AddBot(dialog)) = &mut self.team_dialog
-            && choice_at(&dialog.kinds, index).is_some()
+            && let Some(choice) = choice_at(&dialog.kinds, index)
         {
+            let kind = choice.id.clone();
             dialog.agent = index;
+            dialog.advanced.choose_kind(&kind, cx);
         }
         cx.notify();
     }
@@ -472,7 +492,7 @@ impl Shell {
                 };
             }
             (TeamDialog::AddBot(dialog), Some(service)) => {
-                return self.send_add_bot(service, dialog, cx);
+                return self.send_add_bot(service, *dialog, cx);
             }
             (TeamDialog::EditBrief(dialog), Some(service)) => {
                 return self.send_edit_brief(service, dialog, cx);
@@ -679,9 +699,10 @@ impl Shell {
         let name = dialog.name.read(cx).text().to_owned();
         let job = dialog.role.read(cx).text().trim().to_owned();
         let kind = choice_at(&dialog.kinds, dialog.agent).map(|kind| kind.id.clone());
+        let (model, effort) = dialog.advanced.values(cx);
         let no_kinds = dialog.kinds.is_empty();
         let team = self.team_key(dialog.team, cx);
-        let form = TeamDialog::AddBot(dialog);
+        let form = TeamDialog::AddBot(Box::new(dialog));
         let name = match check_name(&name) {
             Ok(name) => name,
             Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
@@ -704,8 +725,8 @@ impl Shell {
             name,
             job,
             kind,
-            model: None,
-            effort: None,
+            model,
+            effort,
             lead: false,
         };
         cx.spawn(async move |this, cx| {
@@ -733,7 +754,7 @@ impl Shell {
         };
         let team = dialog.team;
         let values = dialog.form(cx);
-        let form = TeamDialog::AddBot(dialog);
+        let form = TeamDialog::AddBot(Box::new(dialog));
         let change = match BotChange::between(&edit.opened, &values) {
             Ok(change) => change,
             Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
@@ -1245,7 +1266,8 @@ fn add_bot_view(form: &AddBotDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dia
             form.unavailable
                 .iter()
                 .map(|kind| unavailable_link(kind, shell)),
-        );
+        )
+        .child(advanced_view(&form.advanced, shell));
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
     let (id, title) = if form.edit.is_some() {
