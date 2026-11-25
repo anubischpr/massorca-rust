@@ -391,6 +391,10 @@ CSP. Nothing above changes.
   seconds. Read only, nothing is persisted, and host paths reach host
   administrators only. `massorca skills installed` lists the skills and
   `massorca skills roots` lists the roots.
+- **Capability `skills-place/1` (SKL-02).** `skills.place-preview` and `skills.managed` read; `skills.place` and
+  `skills.unplace` need host administration. They place a home skill that discovery lists into the folders of the chosen agent tools (global scope): one
+  canonical copy under `.agents/skills`, then an alias to it in each agent folder, or a verified copy where an alias is
+  refused. Removal takes away only what MassOrca placed and left unchanged. Decision 0150. `massorca skills preview|place|unplace|managed` lists them.
 - **Per extension.** Each enabled extension adds the capability
   `ext/<id>@<major>` and the methods `ext.<id>.*`, such as `view-data`,
   `view-action` and `command`.
