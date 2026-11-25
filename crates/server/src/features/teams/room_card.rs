@@ -3,6 +3,9 @@
 //! team's bots takes it as a line naming that bot would, another team's Board gets it in Todo, or this team's Board
 //! keeps it in Todo with no bot.
 
+use std::cell::Cell;
+
+use massorca_core_agents::{Agents, SecretGrant};
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRow};
 use massorca_protocol::methods::events::{
     TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
@@ -29,13 +32,18 @@ Choose one of the team's bots, another team, or keep it in this team's Todo.";
 /// The label of the option that keeps a request in this team's Todo.
 const TODO_LABEL: &str = "Keep in this team's Todo";
 const TODO_CHOICE: &str = "todo";
+/// Why a card's bot runs without vault variables when the person who posted it was not a host admin.
+const AUTHOR_NOT_ADMIN: &str =
+    "vault secrets go only to runs a host-admin caller asked for; this request's author is not one";
 
-/// A card as the store keeps it: the person's line it asks about, whether that line's task starts at once, and the
-/// options offered when it was posted.
+/// A card as the store keeps it: the person's line it asks about, whether that line's task starts at once, whether its
+/// author held host-admin scope, and the options offered when it was posted.
 #[derive(Serialize, Deserialize)]
 struct StoredCard {
     request: String,
     start: bool,
+    #[serde(default)]
+    admin: bool,
     options: Vec<RoomChoice>,
 }
 
@@ -46,11 +54,13 @@ pub(super) fn card_lines(
     bots: &[BotRow],
     text: String,
     at_once: bool,
+    admin: bool,
 ) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
     let person = insert_line(store, team, None, text, None)?;
     let stored = StoredCard {
         request: person.id.clone(),
         start: at_once,
+        admin,
         options: options(store, team, bots)?,
     };
     let mut card = new_line(team, None, CARD_TEXT.to_owned(), None);
@@ -105,11 +115,8 @@ pub(super) async fn answer(
     ctx: RequestCtx,
     params: TeamRoomAnswerParams,
 ) -> Result<TeamRoomAnswered, ErrorBody> {
-    let start = Start {
-        workspaces: for_mutation(&ctx).await?,
-        grant: secret_grant(&ctx),
-        at_once: true,
-    };
+    let workspaces = for_mutation(&ctx).await?;
+    let grant = secret_grant(&ctx);
     let (answered, changes, teams) = blocking(&ctx, move |store, agents| {
         let mut changes = Changes::default();
         let team = selectors::team(store, &params.team)?;
@@ -124,29 +131,20 @@ pub(super) async fn answer(
             .get_team_room_message(&stored.request)
             .map_err(store_error)?
             .ok_or_else(not_a_card)?;
-        if !store
-            .answer_team_room_card(&row.id, &option.choice)
-            .map_err(store_error)?
-        {
-            return Err(answered_already());
-        }
-        let answer = Answer {
-            team: &team,
-            option: &option,
-            text: request.text,
-            start: Start {
-                at_once: stored.start,
-                ..start
-            },
+        let start = Start {
+            workspaces,
+            grant: answer_grant(stored.admin, grant),
+            at_once: stored.start,
         };
-        let made = match make(store, agents, answer, &mut changes) {
-            Ok(made) => made,
-            Err(error) => {
-                // What the answer was to make could not be made, so the card waits again.
-                store.release_team_room_card(&row.id).map_err(store_error)?;
-                return Err(error);
-            }
-        };
+        let made = under_claim(store, &row.id, &option.choice, |saved| {
+            let answer = Answer {
+                team: &team,
+                option: &option,
+                text: request.text,
+                start,
+            };
+            make(store, agents, answer, &mut changes, saved)
+        })?;
         let card = store
             .get_team_room_message(&row.id)
             .map_err(store_error)?
@@ -173,6 +171,60 @@ pub(super) async fn answer(
         publish(&ctx, TOPIC_TEAM_ROOM_CHANGED, team);
     }
     Ok(answered)
+}
+
+/// The vault grant of a card's bot: the answerer's, but never more than the author's (decision 0071), so an admin
+/// answering a card does not lend a request its scope.
+fn answer_grant(author_admin: bool, answerer: SecretGrant) -> SecretGrant {
+    if author_admin {
+        answerer
+    } else {
+        SecretGrant::Withhold(AUTHOR_NOT_ADMIN)
+    }
+}
+
+/// Claims card `card` with `choice`, then runs `make`. When `make` fails or panics before it saved anything, the claim
+/// is released and the card waits again; once something is saved, the card stays answered so it never delivers twice.
+fn under_claim<T>(
+    store: &Store,
+    card: &str,
+    choice: &str,
+    make: impl FnOnce(&Cell<bool>) -> Result<T, ErrorBody>,
+) -> Result<T, ErrorBody> {
+    if !store
+        .answer_team_room_card(card, choice)
+        .map_err(store_error)?
+    {
+        return Err(answered_already());
+    }
+    let saved = Cell::new(false);
+    let mut claim = Claim {
+        store,
+        card,
+        saved: &saved,
+        kept: false,
+    };
+    let made = make(&saved)?;
+    claim.kept = true;
+    Ok(made)
+}
+
+/// A card's claim while its answer is made; dropped unkept (an error or a panic), it releases the card unless
+/// something was saved.
+struct Claim<'a> {
+    store: &'a Store,
+    card: &'a str,
+    saved: &'a Cell<bool>,
+    kept: bool,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        if !self.kept && !self.saved.get() {
+            // A failed release leaves the card answered, which delivers nothing twice.
+            let _ = self.store.release_team_room_card(self.card);
+        }
+    }
 }
 
 /// The card `message` of `team`, refused when it is not a card of that team or was answered already.
@@ -225,12 +277,14 @@ struct Made {
     other_team: Option<String>,
 }
 
-/// Makes what the chosen option says: the bot's task or routine, another team's Todo task, or this team's.
+/// Makes what the chosen option says: the bot's task or routine, another team's Todo task, or this team's. `saved`
+/// turns true once the task or routine is stored.
 fn make(
     store: &Store,
-    agents: &massorca_core_agents::Agents,
+    agents: &Agents,
     answer: Answer<'_>,
     changes: &mut Changes,
+    saved: &Cell<bool>,
 ) -> Result<Made, ErrorBody> {
     let Answer {
         team,
@@ -238,20 +292,16 @@ fn make(
         text,
         start,
     } = answer;
-    let bots = store.list_bots(&team.id).map_err(store_error)?;
-    let title = task_title(&text, &bots);
-    let (kind, target) = option
-        .choice
-        .split_once(':')
-        .unwrap_or((option.choice.as_str(), ""));
-    match (option.kind, kind) {
-        (RoomChoiceKind::Bot, "bot") => {
+    match option.choice.split_once(':') {
+        Some(("bot", target)) if option.kind == RoomChoiceKind::Bot => {
+            let bots = store.list_bots(&team.id).map_err(store_error)?;
             let bot = selectors::bot(store, team, target)?;
             let room = Room {
                 store,
                 agents,
                 team,
                 bots: &bots,
+                saved,
             };
             let request = Request { text, posted: true };
             Ok(Made {
@@ -259,6 +309,25 @@ fn make(
                 other_team: None,
             })
         }
+        _ => file_task(store, team, option, text, saved),
+    }
+}
+
+/// Files a card's request as a Todo task of another team or of the card's own team, and says so in the card's room.
+fn file_task(
+    store: &Store,
+    team: &TeamRow,
+    option: &RoomChoice,
+    text: String,
+    saved: &Cell<bool>,
+) -> Result<Made, ErrorBody> {
+    let bots = store.list_bots(&team.id).map_err(store_error)?;
+    let title = task_title(&text, &bots);
+    let (kind, target) = option
+        .choice
+        .split_once(':')
+        .unwrap_or((option.choice.as_str(), ""));
+    match (option.kind, kind) {
         (RoomChoiceKind::Team, "team") => {
             let other = selectors::team(store, target)?;
             let other_bots = store.list_bots(&other.id).map_err(store_error)?;
@@ -281,6 +350,7 @@ fn make(
                     origin: Some(TaskOrigin::Room),
                 },
             )?;
+            saved.set(true);
             let line = room_line(
                 store,
                 team,
@@ -304,6 +374,7 @@ fn make(
                     origin: Some(TaskOrigin::Room),
                 },
             )?;
+            saved.set(true);
             let line = room_line(
                 store,
                 team,
@@ -377,7 +448,15 @@ mod tests {
         let beta = team(&store, "beta");
         let bots = [bot(&store, &alpha, "Mara"), bot(&store, &alpha, "Bruno")];
 
-        let lines = card_lines(&store, &alpha, &bots, "Add sign-in".to_owned(), false).unwrap();
+        let lines = card_lines(
+            &store,
+            &alpha,
+            &bots,
+            "Add sign-in".to_owned(),
+            false,
+            false,
+        )
+        .unwrap();
         let [person, card] = lines.as_slice() else {
             panic!("the line and its card: {lines:?}");
         };
@@ -433,7 +512,8 @@ mod tests {
         let alpha = team(&store, "alpha");
         let beta = team(&store, "beta");
         let bots = [bot(&store, &alpha, "Mara"), bot(&store, &alpha, "Bruno")];
-        let lines = card_lines(&store, &alpha, &bots, "Add sign-in".to_owned(), true).unwrap();
+        let lines =
+            card_lines(&store, &alpha, &bots, "Add sign-in".to_owned(), true, true).unwrap();
         let card = &lines[1];
 
         let refused = waiting_card(&store, &beta, &card.id)
@@ -456,5 +536,115 @@ mod tests {
             card_view(&answered).unwrap().answer.as_deref(),
             Some("todo")
         );
+    }
+
+    /// Team alpha with a posted card, team beta, and a copy of alpha that the store no longer holds.
+    fn posted_card(store: &Store) -> (TeamRow, TeamRow, String) {
+        let alpha = team(store, "alpha");
+        let beta = team(store, "beta");
+        let bots = [bot(store, &alpha, "Mara"), bot(store, &alpha, "Bruno")];
+        let lines = card_lines(
+            store,
+            &alpha,
+            &bots,
+            "Review the copy".to_owned(),
+            true,
+            false,
+        )
+        .expect("a card");
+        (alpha, beta, lines[1].id.clone())
+    }
+
+    fn answer_of(store: &Store, card: &str) -> Option<String> {
+        store
+            .get_team_room_message(card)
+            .unwrap()
+            .and_then(|row| row.card_answer)
+    }
+
+    fn option(kind: RoomChoiceKind, choice: &str) -> RoomChoice {
+        RoomChoice {
+            choice: choice.to_owned(),
+            kind,
+            label: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_failure_after_the_task_is_saved_keeps_the_card_answered() {
+        let store = Store::open_in_memory().expect("store");
+        let (alpha, beta, card) = posted_card(&store);
+        let sent = option(RoomChoiceKind::Team, &format!("team:{}", beta.id));
+        // The card's room line cannot be stored once the card's team is gone, after beta's task is.
+        let mut gone = alpha.clone();
+        gone.id = new_id();
+        let failed = under_claim(&store, &card, &sent.choice, |saved| {
+            file_task(&store, &gone, &sent, "Review the copy".to_owned(), saved)
+        });
+        assert!(failed.is_err());
+        assert_eq!(store.list_tasks(Some(&beta.id)).unwrap().len(), 1);
+        assert_eq!(
+            answer_of(&store, &card),
+            Some(sent.choice.clone()),
+            "the saved task is not delivered again"
+        );
+        let again = under_claim(&store, &card, "todo", |_| Ok(()));
+        assert_eq!(
+            again.err().map(|error| error.code),
+            Some(codes::TEAM_ROOM_CARD_ANSWERED.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_failure_or_a_panic_before_anything_is_saved_lets_the_card_wait_again() {
+        let store = Store::open_in_memory().expect("store");
+        let (alpha, _, card) = posted_card(&store);
+        let mut gone = alpha.clone();
+        gone.id = new_id();
+        let todo = option(RoomChoiceKind::Todo, "todo");
+        let failed = under_claim(&store, &card, "todo", |saved| {
+            file_task(&store, &gone, &todo, "Review the copy".to_owned(), saved)
+        });
+        assert!(failed.is_err(), "a team that is gone takes no task");
+        assert_eq!(answer_of(&store, &card), None);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = under_claim(&store, &card, "todo", |_| -> Result<(), ErrorBody> {
+                panic!("the answer broke")
+            });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            answer_of(&store, &card),
+            None,
+            "a panic leaves no stuck claim"
+        );
+
+        under_claim(&store, &card, "todo", |saved| {
+            file_task(&store, &alpha, &todo, "Review the copy".to_owned(), saved)
+        })
+        .expect("the card is answered");
+        assert_eq!(answer_of(&store, &card).as_deref(), Some("todo"));
+        assert_eq!(store.list_tasks(Some(&alpha.id)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_card_bot_never_gets_more_vault_scope_than_the_request_author_had() {
+        let store = Store::open_in_memory().expect("store");
+        let (alpha, _, card) = posted_card(&store);
+        let (_, stored) = waiting_card(&store, &alpha, &card).expect("a waiting card");
+        assert!(!stored.admin, "posted by a caller below host admin");
+        assert!(matches!(
+            answer_grant(stored.admin, SecretGrant::Provide),
+            SecretGrant::Withhold(_)
+        ));
+        assert!(matches!(
+            answer_grant(true, SecretGrant::Provide),
+            SecretGrant::Provide
+        ));
+        assert!(matches!(
+            answer_grant(true, SecretGrant::Withhold("not admin")),
+            SecretGrant::Withhold(_)
+        ));
     }
 }

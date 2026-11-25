@@ -68,7 +68,7 @@ just to read a date.
   Todo." It offers, in this order, each bot of the team (`bot:<id>`), each other team (`team:<id>`), and this team's
   Todo (`todo`), as they are when the card is posted. A scheduled line (above) gets the card too; it is read again
   when a bot is chosen.
-- The card keeps the line's start setting. Answering it with `team.room_answer {team, message, choice}`:
+- The card keeps the line's start setting and whether its author held host-admin scope. Answering it with `team.room_answer {team, message, choice}`:
   - a bot: the request goes to that bot as a line naming it would, routine or task, started unless start was off,
     and that bot answers as above ("Added to the Board: …"). The person's line is not posted again;
   - another team: a task on that team's Board, in Todo, owned by its lead, else its only bot, else no bot. It is not
@@ -76,14 +76,19 @@ just to read a date.
   - Todo: a task on this team's Board with no bot, in Todo. The room says "Kept in this team's Todo: {title}".
   Each task's title and body follow the rules below, and its origin is the room.
 - A card takes one answer. The answer is recorded in one statement that only sets an unanswered card, so two answers
-  at once record one; a later answer is refused with `team.room_card_answered`. When what the answer was to make
-  cannot be made (the chosen bot or team was removed since), the answer is cleared and the card waits again. A line
+  at once record one; a later answer is refused with `team.room_card_answered`. When the answer fails before its
+  task or routine is stored (the chosen bot or team was removed since), or the call breaks off there, the answer is
+  cleared and the card waits again. Once the task or routine is stored, a later failure keeps the card answered, so
+  a request is never delivered twice. A line
   that is not a card of that team is `team.room_card_not_found`, and a choice the card does not offer is
   `request.invalid_params`.
 - `team.room_answer` needs the right `team.room_post` needs for a person's line (workspace), and takes no agent token:
-  an agent run answers nothing it could not already post. It publishes `team.room_changed` for the card's team and,
+  an agent run answers nothing it could not already post. The bot's run and routine get the lower scope of the card's
+  author and the answerer: a host admin answering the card of a caller below host admin lends it no vault variables
+  and no host-admin scope (decision 0071). It publishes `team.room_changed` for the card's team and,
   for another team, that team's too.
-- Storage is one migration step that adds `card` (the card's options, its request's line id and its start setting)
+- Storage is one migration step that adds `card` (the card's options, its request's line id, its start setting and
+  its author's scope)
   and `card_answer` to `team_room_messages`. `team.room_list` and `team.room_post` carry the optional field `card`
   (`request_id`, `options` with `choice`, `kind` and `label`, and `answer` once answered). A `kind` this build does
   not know decodes as `unknown`. Older clients ignore the field and show the card's text as a line of a removed bot.

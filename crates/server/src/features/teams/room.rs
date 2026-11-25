@@ -3,6 +3,8 @@
 //! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead, and a line
 //! no bot can be picked for gets a choice card (decision 0121, `room_card`).
 
+use std::cell::Cell;
+
 use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -246,6 +248,7 @@ fn person_line(
                 agents,
                 team,
                 bots: &bots,
+                saved: &Cell::new(false),
             },
             start,
             bot,
@@ -255,16 +258,18 @@ fn person_line(
             },
             changes,
         ),
-        None => card_lines(store, team, &bots, text, start.at_once),
+        None => card_lines(store, team, &bots, text, start.at_once, start.admin()),
     }
 }
 
-/// The room a request is delivered in: the store, the agents, the team and its bots.
+/// The room a request is delivered in: the store, the agents, the team and its bots. `saved` turns true once the
+/// request's task or routine is stored, so a failure after it is not undone as if nothing was made.
 pub(super) struct Room<'a> {
     pub(super) store: &'a Store,
     pub(super) agents: &'a Agents,
     pub(super) team: &'a TeamRow,
     pub(super) bots: &'a [BotRow],
+    pub(super) saved: &'a Cell<bool>,
 }
 
 /// A person's request: its text, and whether its line is in the room already (a choice card's answer).
@@ -287,6 +292,7 @@ pub(super) fn deliver(
         agents,
         team,
         bots,
+        saved,
     } = *room;
     let now = now_ms();
     if let Some(moment) = host_today(now).and_then(|today| scheduled_moment(&request.text, today))
@@ -300,6 +306,7 @@ pub(super) fn deliver(
                 moment,
                 admin: start.admin(),
                 now,
+                saved,
             },
         )?
     {
@@ -317,6 +324,7 @@ pub(super) fn deliver(
             origin: Some(TaskOrigin::Room),
         },
     )?;
+    saved.set(true);
     let mut lines = Vec::new();
     // Stored once the task is, so a refused task leaves no line without an answer.
     if !request.posted {
@@ -342,11 +350,13 @@ pub(super) fn deliver(
     Ok(lines)
 }
 
-/// The moment a line asks for, with the poster's host-admin scope and the time it was posted.
-struct Asked {
+/// The moment a line asks for, with the poster's host-admin scope, the time it was posted, and the flag set once the
+/// routine is stored.
+struct Asked<'a> {
     moment: Moment,
     admin: bool,
     now: i64,
+    saved: &'a Cell<bool>,
 }
 
 /// Schedules a person's line that names a day and a time as `bot`'s one-time routine through the path of
@@ -359,10 +369,15 @@ fn schedule_line(
     bots: &[BotRow],
     bot: &BotRow,
     request: &Request,
-    asked: Asked,
+    asked: Asked<'_>,
 ) -> Result<Option<Vec<TeamRoomMessageRow>>, ErrorBody> {
     let text = &request.text;
-    let Asked { moment, admin, now } = asked;
+    let Asked {
+        moment,
+        admin,
+        now,
+        saved,
+    } = asked;
     let title = task_title(text, bots);
     let (date, time) = (moment.run_date(), moment.clock());
     let added = add_routine(
@@ -386,6 +401,7 @@ fn schedule_line(
     let Ok(routine) = added else {
         return Ok(None);
     };
+    saved.set(true);
     let mut lines = Vec::new();
     if !request.posted {
         lines.push(insert_line(store, team, None, text.clone(), None)?);
@@ -780,6 +796,7 @@ mod tests {
             moment,
             admin: true,
             now: now_ms(),
+            saved: &Cell::new(false),
         };
         let request = Request {
             text: text.clone(),
@@ -832,6 +849,7 @@ mod tests {
             moment,
             admin: false,
             now: now_ms(),
+            saved: &Cell::new(false),
         };
         let request = Request {
             text,
