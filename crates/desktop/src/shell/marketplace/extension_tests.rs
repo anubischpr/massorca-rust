@@ -64,7 +64,7 @@ pub(super) fn catalogue_package() -> ExtensionItem {
 }
 
 /// What `extensions.inspect` answers for the package; a vendor installer is listed when `runs_installer`.
-fn review(runs_installer: bool) -> ExtensionReview {
+pub(super) fn review(runs_installer: bool) -> ExtensionReview {
     ExtensionReview {
         id: "acme.notes".to_owned(),
         name: "Notes".to_owned(),

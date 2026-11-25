@@ -3,6 +3,8 @@
 
 mod accounts;
 mod add_folder;
+#[cfg(test)]
+mod add_menu_tests;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]

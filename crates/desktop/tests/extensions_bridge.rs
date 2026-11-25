@@ -2,6 +2,7 @@
 //! headlessly: no window opens. The package is a folder fixture with no vendor command, so no installer runs.
 
 use std::fs;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -607,5 +608,64 @@ async fn installed_built_in_agent_is_an_enabled_row() {
         Some("Enabled"),
         "its row says Enabled"
     );
+    stop_service(service).await;
+}
+
+/// Writes the manifest of `package` into a zip archive at `path`, as the CLI's archive tests write theirs: one entry
+/// per file.
+fn write_zip_package(path: &Path, package: &Path) {
+    let manifest = fs::read(package.join("extension.json")).expect("the manifest is read");
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("extension.json", zip::write::SimpleFileOptions::default())
+        .expect("an archive entry");
+    writer.write_all(&manifest).expect("the manifest's bytes");
+    let bytes = writer.finish().expect("the archive").into_inner();
+    fs::write(path, bytes).expect("the archive file");
+}
+
+/// A zip package is inspected under its `file:` source and installs from that source: the path the Add extension
+/// menu's zip entry takes. The service reads a zip archive, as its archive tests show.
+#[tokio::test]
+async fn a_zip_package_goes_through_inspect_and_installs_from_its_file_source() {
+    let home = temp_home();
+    let folder = TempDir::new().expect("a folder for the package");
+    let package = folder.path().join("package");
+    write_package(&package, "1.0.0");
+    let archive = folder.path().join("notes.zip");
+    write_zip_package(&archive, &package);
+
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+
+    let source = format!("file:{}", archive.display());
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the archive is reviewed");
+    assert_eq!(
+        review.id, PACKAGE,
+        "the review names the package in the archive"
+    );
+    let refused = handle
+        .install_extension(install_params(source.clone(), Some(review.consent.clone())))
+        .await
+        .expect_err("an archive without the hash its review read is refused");
+    assert_eq!(refused.code(), Some("extension.hash_required"));
+    let mut params = install_params(source, Some(review.consent.clone()));
+    params.sha256 = Some(review.sha256.clone());
+    handle
+        .install_extension(params)
+        .await
+        .expect("the archive installs against the hash its review read");
+    until(&mut updates, &mut state, "the installed archive", |state| {
+        installed_state(state, PACKAGE) == Some(ExtensionState::Enabled)
+    })
+    .await;
     stop_service(service).await;
 }
