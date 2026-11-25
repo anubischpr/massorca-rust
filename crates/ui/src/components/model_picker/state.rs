@@ -77,6 +77,7 @@ pub struct PickerState {
     query: String,
     expanded: bool,
     highlight: usize,
+    no_agents_installed: bool,
 }
 
 impl PickerState {
@@ -97,6 +98,7 @@ impl PickerState {
             query: String::new(),
             expanded: false,
             highlight: 0,
+            no_agents_installed: false,
         }
     }
 
@@ -104,6 +106,15 @@ impl PickerState {
     pub fn with_favourites(mut self, ids: Vec<SharedString>) -> Self {
         self.favourites = ids;
         self
+    }
+
+    /// Whether no agent is installed: the picker shows its quiet empty state instead of the agents.
+    pub fn no_agents_installed(&self) -> bool {
+        self.no_agents_installed
+    }
+
+    pub fn set_no_agents_installed(&mut self, none_installed: bool) {
+        self.no_agents_installed = none_installed;
     }
 
     pub fn agents(&self) -> &[AgentOption] {
@@ -248,6 +259,12 @@ impl PickerState {
 
     pub fn expand(&mut self) {
         self.expanded = true;
+    }
+
+    /// Folds an agent's list back to its featured rows, keeping the highlight on a shown row.
+    pub fn collapse(&mut self) {
+        self.expanded = false;
+        self.highlight = self.highlight.min(Self::FEATURED_ROWS - 1);
     }
 
     /// Chooses a model. The reasoning level carries over when the model offers a level with
@@ -395,6 +412,16 @@ mod tests {
     }
 
     #[test]
+    fn show_fewer_folds_the_list_back_and_keeps_the_highlight_on_a_shown_row() {
+        let mut state = sample();
+        state.expand();
+        state.move_highlight(5);
+        state.collapse();
+        assert_eq!(names(&state).len(), PickerState::FEATURED_ROWS);
+        assert_eq!(state.highlight(), PickerState::FEATURED_ROWS - 1);
+    }
+
+    #[test]
     fn a_search_reads_every_agent_and_matches_names_and_agents_case_insensitively() {
         let mut state = sample();
         state.set_query("CODEX");
@@ -491,5 +518,13 @@ mod tests {
         state.set_query("zzz");
         assert!(state.rows().is_empty());
         assert_eq!(state.highlighted_row(), None);
+    }
+
+    #[test]
+    fn no_agent_is_installed_only_when_the_owner_says_so() {
+        let mut state = sample();
+        assert!(!state.no_agents_installed());
+        state.set_no_agents_installed(true);
+        assert!(state.no_agents_installed());
     }
 }

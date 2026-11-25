@@ -3,7 +3,9 @@ use std::path::Path;
 use massorca_core_git::{Git, GitError, MergeOutcome};
 use massorca_protocol::methods::git::status::GitOperation;
 
-use crate::fixture::{Fixture, commit_file, commit_on_branch, rev, run_git, text};
+use crate::fixture::{
+    Fixture, commit_file, commit_on_branch, rev, run_git, text, write_executable,
+};
 
 fn git() -> Git {
     Git::discover().expect("git on PATH")
@@ -117,13 +119,7 @@ fn refuse_merge_commits(repo: &Path) {
     let hooks = repo.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).expect("create hooks dir");
     let hook = hooks.join("pre-merge-commit");
-    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
-            .expect("make hook executable");
-    }
+    write_executable(&hook, "#!/bin/sh\nexit 1\n");
     run_git(repo, &["config", "core.hooksPath", text(&hooks)]);
 }
 
