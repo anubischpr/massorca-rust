@@ -173,6 +173,12 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Shows the git, forge CLI and shell tools on the service's host. Works with --host.
+    Tools {
+        /// Detects the tools again instead of answering from the service's last detection.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
     /// The local trace logs of the profile.
