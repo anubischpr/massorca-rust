@@ -196,22 +196,47 @@ async fn remove(
     ctx: RequestCtx,
     params: WorkspaceRemoveParams,
 ) -> Result<WorkspaceRemoved, ErrorBody> {
-    let domain = Arc::new(for_mutation(&ctx).await?);
     let waivers = RemovalWaivers {
         force: params.force,
         discard_ignored: params.discard_ignored,
         forget_orphan: params.forget_orphan,
     };
-    let selector = params.workspace;
+    remove_workspace(&ctx, params.workspace, waivers).await
+}
+
+/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, then the removal and
+/// `workspace.removed`. Nothing is stopped: the caller checked under the mutation lock that nothing runs in it, and a
+/// `removing` workspace takes no new start, resume or terminal (decision 0163).
+pub(crate) async fn finish_begun_removal(
+    ctx: &RequestCtx,
+    begun: String,
+    waivers: RemovalWaivers,
+) -> Result<WorkspaceRemoved, ErrorBody> {
+    let domain = for_mutation(ctx).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun);
+    let removed = blocking(move || domain.finish_remove(&begun, waivers)).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
+    Ok(removed)
+}
+
+/// Removes workspace `selector` with `waivers`: the refusals, `workspace.removing`, every run in it stopped, then the
+/// removal and `workspace.removed`. `agent.forget` with `remove_workspace` (decision 0163) begins its removal itself,
+/// under the start gate, and finishes it with [`finish_begun_removal`]; both meet the same removal guards and codes.
+pub(crate) async fn remove_workspace(
+    ctx: &RequestCtx,
+    selector: String,
+    waivers: RemovalWaivers,
+) -> Result<WorkspaceRemoved, ErrorBody> {
+    let domain = Arc::new(for_mutation(ctx).await?);
     let begun = {
         let domain = Arc::clone(&domain);
         blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
-    publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
-    stop_runs(&ctx, &begun.id).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
     let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
-    publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
+    publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
 }
 

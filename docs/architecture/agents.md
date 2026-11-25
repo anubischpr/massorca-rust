@@ -174,6 +174,12 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- A mode's presentation (decision 0163), each optional: `description` (one line), `icon` (a
+  lucide icon name: lowercase letters and digits in `-`-joined words, at most 64 characters),
+  `tone` (`normal` | `warning`; a bypass mode never has `normal`) and `selectable` (default
+  true). Declared order is picker order. A mode with `selectable: false` is not offered in
+  pickers but stays declared, so a session reporting it shows its name, and a caller naming it
+  is still served (the built-in `claude` `dontAsk`). Problems name a bad `tone` or `icon`.
 - `model` and `effort` (decisions 0094, 0096): optional. Each is `{ "flag": "--model" }` (the
   value follows the flag) or `{ "args": ["-m", "{value}"] }` (`{value}` is replaced by the value
   and appears exactly once in the arguments): exactly one of the two. A flag starts with `-` and
@@ -218,12 +224,15 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
 | `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
-| `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
+| `agent.list` | read | `workspace?`, `include_archived?` | `{ sessions }`, newest first; archived sessions only with `include_archived` (capability `agent-archive/1`) |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
-| `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
+| `agent.forget` | workspace | `session`, `remove_workspace?`, `force?`, `discard_ignored?`, `expect_dirty?` | `AgentSession` (must be exited) with `workspace_removed?` (a `workspace.remove` result) or `workspace_error?` (`{ code, message }`); the two options need capability `agent-archive/1` (decision 0163) |
+| `agent.forget_preview` | read | `session` | `{ session, can_forget, forget_blocker?, workspace: { id, kind, path?, branch?, removable, blocker?, blocker_code?, dirty, untracked, ignored_files?, other_sessions, other_teams?, other_tasks?, running_terminals? } }`; `path` and blocker messages only for `workspace` scope (others get `blocker_code` and a fixed message) (capability `agent-archive/1`) |
+| `agent.rename` | workspace | `session`, `title` | `AgentSession` with its new title: trimmed, 1 to 120 characters without control characters, else `request.invalid_params`; live or exited (capability `agent-archive/1`) |
+| `agent.archive_session` | workspace | `session`, `archived` | `AgentSession` with its `archived` flag (a live run is refused with `agent.busy`; capability `agent-archive/1`) |
 | `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
 | `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
@@ -624,6 +633,24 @@ and the result is kept per program path and modified time in the probe cache the
 `claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
+## Archive and delete (decision 0163)
+
+`agent.archive_session` hides an exited session (`archived`, a durable `archived_at`): `agent.list` leaves it out unless
+`include_archived`, and nothing else changes. Its record, its workspace and its terminal stay; the terminal is pinned as a
+retained one is, so `max_exited` eviction keeps its output, and clearing a retain leaves an archived session's terminal
+pinned. A live run is refused with `agent.busy`. A resume clears the archive. `agent.watch` and `agent.show` still carry
+archived sessions, with the flag.
+
+`agent.forget` with `remove_workspace` deletes the session and its workspace. Every check runs before anything changes: the
+forget's own (`agent.busy` for a live run); that no other session (live, exited or archived) uses the workspace
+(`agent.busy` naming them); that no team, task or running terminal does (`workspace.busy`); with `expect_dirty: false`,
+that the worktree is still clean; then `workspace.remove`'s refusals with `force` and `discard_ignored` as its waivers.
+The session is then forgotten; the removal begins under the start gate and the workspace's mutation lock, re-checking the
+other users before the workspace is marked `removing` (after which starts, resumes and terminals in it are refused), and
+finishes through `workspace.remove`'s own steps (its events, its branch rule). Nothing running is stopped on this path; a
+folder workspace is forgotten and its files stay. A refusal or failure after the forget is returned in `workspace_error`.
+`agent.forget_preview` reports the same checks without waivers, changing nothing.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
@@ -713,10 +740,12 @@ it was noticed.
 ```
 massorca agent kinds
 massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
-massorca agent list [--workspace <ws>]
+massorca agent list [--workspace <ws>] [--archived]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
-massorca agent forget <session>
+massorca agent forget <session> [--remove-workspace [--force] [--discard-ignored] | --preview]
+massorca agent hide <session> [--off]
+massorca agent rename <session> <title>
 massorca agent release <session>
 massorca agent retain <session> [--off]
 massorca agent archive <session>
