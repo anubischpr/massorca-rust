@@ -115,11 +115,11 @@ impl CreateForm {
         }
     }
 
-    /// What "No project" means while the service has no sessions: nothing to create here yet.
+    /// What "No project" means here: it is off until the service can start an agent without a
+    /// workspace, as the start page's menu says (A95).
     pub fn no_project_note(&self) -> Option<&'static str> {
-        matches!(self.project, Some(ProjectChoice::NoProject)).then_some(
-            "Conversations without a project arrive with sessions. A workspace needs a project.",
-        )
+        matches!(self.project, Some(ProjectChoice::NoProject))
+            .then_some("No project needs a newer service. Choose a project to create a workspace.")
     }
 
     /// Asked of a branch to reuse when none is named.
@@ -557,7 +557,10 @@ mod tests {
         form.project = Some(ProjectChoice::NoProject);
         assert!(!form.can_submit());
         assert_eq!(form.params(), None);
-        assert!(form.no_project_note().is_some());
+        assert_eq!(
+            form.no_project_note(),
+            Some("No project needs a newer service. Choose a project to create a workspace.")
+        );
         assert_eq!(form.project_label(&two_projects()), "No project");
     }
 

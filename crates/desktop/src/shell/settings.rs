@@ -20,7 +20,7 @@ use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{
     LAYOUT_PAGE_SETTINGS, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_BODY_SM,
 };
-use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use crate::model::app_theme::ThemeChoice;
@@ -139,7 +139,7 @@ pub(super) fn settings_page(
         .into_any_element()
 }
 
-/// One section of the navigation. Selecting it shows its rows; Extensions opens Marketplace.
+/// One section of the navigation. Selecting it shows its rows here.
 fn nav_item(
     section: SettingsSection,
     selected: SettingsSection,
@@ -152,25 +152,18 @@ fn nav_item(
         .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle())
         .read(cx)
         .clone();
-    let mut item = ListRow::new(id, section.label())
+    let item = ListRow::new(id, section.label())
         .leading(RowLeading::Icon(nav_icon(section)))
         .selected(section == selected)
         .focus_handle(focus)
         .tab_stop(true);
-    if section.opens_elsewhere() {
-        item = item.trailing(Icon::new(IconName::ChevronRight));
-    }
     let shell = shell.clone();
     div()
         .debug_selector(move || format!("settings-nav-{section:?}"))
         .child(item.on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                if section.opens_elsewhere() {
-                    shell.open_marketplace(MarketplacePage::Installed, cx);
-                } else {
-                    shell.settings.section = section;
-                    cx.notify();
-                }
+                shell.settings.section = section;
+                cx.notify();
             });
         }))
 }
@@ -186,7 +179,6 @@ fn nav_icon(section: SettingsSection) -> IconName {
         SettingsSection::Sources => IconName::Plug,
         SettingsSection::Hosts => IconName::Server,
         SettingsSection::Notifications => IconName::Bell,
-        SettingsSection::Extensions => IconName::Puzzle,
         SettingsSection::Vault => IconName::Lock,
         SettingsSection::Privacy => IconName::Shield,
         SettingsSection::Routing => IconName::Route,

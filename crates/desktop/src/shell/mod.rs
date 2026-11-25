@@ -10,6 +10,7 @@ mod debug_focus;
 mod debug_page;
 mod delegate;
 mod diff_page;
+mod home_start;
 mod marketplace;
 mod pairing;
 mod palette;
@@ -91,6 +92,8 @@ mod debug_focus_tests;
 mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
+#[cfg(test)]
+mod home_start_tests;
 #[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
@@ -184,6 +187,10 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
+    /// The project the start page with no workspace creates in; `None` stands for the first one.
+    home_project: Option<String>,
+    /// The last start-page call was refused because the data folder is not secured.
+    profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
     /// The call in flight for each session, if any: one at a time per session.
@@ -493,6 +500,8 @@ impl Shell {
             debug_page: None,
             start_composers: HashMap::new(),
             start_pending: None,
+            home_project: None,
+            profile_unsafe: false,
             session_composers: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
@@ -724,7 +733,10 @@ impl Render for Shell {
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
             let mode = self.start_mode(&page.id);
+            let kind_notice = self.kind_notice(&composer, cx);
             start_page::StartFrame {
+                profile_unsafe: self.profile_unsafe,
+                kind_notice,
                 page,
                 composer,
                 shell: shell.clone(),
@@ -733,6 +745,10 @@ impl Render for Shell {
                 mode,
             }
         });
+        let home = (self.model.canvas()
+            == crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces))
+        .then(|| self.home_frame(cx))
+        .flatten();
         let session = self.session_frame(cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
@@ -808,6 +824,7 @@ impl Render for Shell {
             canvas::PageFrames {
                 settings,
                 start,
+                home,
                 setup_rows,
                 work_panel,
                 project,
