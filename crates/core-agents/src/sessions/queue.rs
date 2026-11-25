@@ -343,6 +343,7 @@ impl Agents {
             .set_queued_prompt_state(&item.id, QueuedState::Sending, None, now_ms())?;
         self.notify(Change::Queue(item.session_id.clone()));
         run.typed_since_report = run.prompt.has_status;
+        run.finished = false;
         run.delivering = true;
         Ok(Delivery {
             session: item.session_id.clone(),
@@ -1108,6 +1109,7 @@ mod tests {
             typed_since_report,
             switching: false,
             delivering: true,
+            finished: false,
             account: None,
         }
     }

@@ -327,6 +327,10 @@ pub(crate) struct LiveRun {
     switching: bool,
     /// A queued prompt is being typed into the run (decision 0084): no other input waits for it, `force` or not.
     delivering: bool,
+    /// The run reported `done` since the last prompt typed into it or reported (decision 0170): its turn is over, and a
+    /// later `waiting` (an idle notification) does not reopen it. Set by a `done` report; cleared by a `working` report
+    /// and by every prompt typed. A kind that never reports `done` never sets it.
+    finished: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -696,6 +700,7 @@ impl Agents {
                     typed_since_report: false,
                     switching: false,
                     delivering: false,
+                    finished: false,
                     account: access.account.clone(),
                 },
             );
@@ -985,6 +990,7 @@ impl Agents {
                 typed_since_report: false,
                 switching: false,
                 delivering: false,
+                finished: false,
                 account: access.account.clone(),
             },
         );
@@ -1157,9 +1163,32 @@ impl Agents {
             row.agent_ref = learned;
         }
         // The report answers whatever was typed before it, so the run's typed-since-report flag clears (decision 0058).
+        // A `done` finishes the turn and a `working` opens one; only the first `done` of a turn is new (decision 0170).
+        let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            match row
+                .activity
+                .as_ref()
+                .map(|activity| activity.state.as_str())
+            {
+                Some("done") => {
+                    newly_finished = !run.finished;
+                    run.finished = true;
+                }
+                Some("working") => run.finished = false,
+                _ => {}
+            }
         }
+        // A delegated child's ended turn is told to its parent, through the parent's queue, once (decision 0170).
+        let parent = match row.activity.as_ref() {
+            Some(activity) if newly_finished && row.parent_id.is_some() => {
+                let outcome = delegation::turn_outcome(activity.outcome.as_deref());
+                let key = format!("done:{}", activity.at);
+                self.queue_child_notice(&live, &row, &outcome, &key)
+            }
+            _ => None,
+        };
         let session = self.view_with(&mut live, row)?;
         // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
         // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
@@ -1181,6 +1210,7 @@ impl Agents {
                 // Only a prompt counts as typed (decision 0058): a mode switch starts no turn for a report to answer.
                 if text.is_some() {
                     run.typed_since_report = true;
+                    run.finished = false;
                 }
                 let chunks: Vec<Vec<u8>> = switch.into_iter().chain(text).collect();
                 (!chunks.is_empty()).then_some((chunks, switching))
@@ -1196,6 +1226,10 @@ impl Agents {
         }
         if ready {
             self.drain_queue(&params.session);
+        }
+        // The child's notice may go now (decision 0170).
+        if let Some(parent) = parent {
+            self.drain_queue(&parent);
         }
         Ok(())
     }
@@ -1246,6 +1280,7 @@ impl Agents {
             // Accepted under the lock, so a second prompt on the same idle sees the flag. A kind with no status mechanism
             // never hears back, so it never sets the flag: it stays always ready (0054).
             run.typed_since_report = run.prompt.has_status;
+            run.finished = false;
             (session.id.clone(), terminal, bytes)
         };
         self.inner
@@ -2025,6 +2060,8 @@ impl Agents {
                 .set_agent_session_chat_exit(&row.id, run_id, &exit)?,
         };
         let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
+        // A turn that ended before the exit was told to the parent then (decision 0170).
+        let told = live.get(&row.id).is_some_and(|run| run.finished);
         if let Some(catalog) = &catalog {
             live.remove(&row.id);
             self.inner.found_transcripts.clear();
@@ -2047,14 +2084,23 @@ impl Agents {
                     RunRef::Chat(_) => self.chat_output(&row.id),
                 },
             );
-            if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+            let cut = status::on_exit(row.activity.as_ref(), exit.at);
+            if let Some(activity) = &cut {
                 self.store().set_agent_session_status(
                     &row.id,
-                    Some(&activity),
+                    Some(activity),
                     row.result.as_deref(),
                     None,
                 )?;
-                row.activity = Some(activity);
+                row.activity = cut.clone();
+            }
+            if !told && row.parent_id.is_some() {
+                let outcome = delegation::exit_outcome(&exit, cut.is_some());
+                let key = format!("exit:{}", exit.at);
+                // The caller holds the status lock, so the parent's queue is drained on a thread of its own.
+                if let Some(parent) = self.queue_child_notice(live, row, &outcome, &key) {
+                    self.drain_parent_later(parent);
+                }
             }
         }
         let execution = exited(&exit);
@@ -2566,6 +2612,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching,
             delivering: false,
+            finished: false,
             account: None,
         };
         let idle = Some(ActivityState::Idle);
@@ -2605,6 +2652,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching: false,
             delivering: false,
+            finished: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -2696,6 +2744,7 @@ pub(crate) mod tests {
                 typed_since_report: false,
                 switching: false,
                 delivering: false,
+                finished: false,
                 account: None,
             },
         );
