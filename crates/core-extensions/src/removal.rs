@@ -10,8 +10,11 @@ use serde::Serialize;
 use crate::error::{Error, HookError, codes};
 use crate::hooks::{HookHandle, HookKind, HookRun, RemovedPackage};
 use crate::host::INSTALLER_TIMEOUT;
+use crate::install_log_tail::last_log_lines_after;
 use crate::lockfile::{LockCli, LockEntry};
 use crate::review::uninstall_fingerprint;
+use crate::run_log::RunAction;
+use crate::run_log::log_len;
 use crate::service::{Extensions, describe};
 use massorca_ext_package::manifest::agent::CliOs;
 
@@ -178,11 +181,26 @@ impl Extensions {
             let busy = self.mark_busy(id, Vec::new())?;
             (entry, manifest, failures, busy)
         };
-        let cli = entry
+        let uninstall_log = self.layout.uninstall_log(id);
+        let offset = log_len(&uninstall_log);
+        let cli: Vec<CliRemoval> = entry
             .cli
             .iter()
             .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
             .collect();
+        let ok = failures.is_empty()
+            && cli
+                .iter()
+                .all(|removal| !matches!(removal.action, CliAction::Failed { .. }));
+        let output = last_log_lines_after(&uninstall_log, offset);
+        self.log_run(
+            id,
+            RunAction::Remove,
+            Some(entry.version.clone()),
+            None,
+            ok,
+            output,
+        );
         Ok(Removed {
             id: id.to_owned(),
             version: entry.version,
