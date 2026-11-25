@@ -21,6 +21,13 @@ pub struct SurfaceColors {
     pub overlay: Color,
 }
 
+/// Colour tokens named `slider.*`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SliderColors {
+    /// `slider.thumb`
+    pub thumb: Color,
+}
+
 /// Colour tokens named `progress.*`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProgressColors {
@@ -354,6 +361,7 @@ pub struct SwitchColors {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub surface: SurfaceColors,
+    pub slider: SliderColors,
     pub progress: ProgressColors,
     pub text: TextColors,
     pub border: BorderColors,
@@ -381,6 +389,9 @@ impl Palette {
             sunken: Color::rgba8(16, 16, 18, 1.0),
             raised: Color::rgba8(30, 30, 33, 1.0),
             overlay: Color::rgba8(37, 37, 40, 1.0),
+        },
+        slider: SliderColors {
+            thumb: Color::rgba8(244, 244, 247, 1.0),
         },
         progress: ProgressColors {
             track: Color::rgba8(16, 16, 18, 1.0),
@@ -548,6 +559,9 @@ impl Palette {
             sunken: Color::rgba8(244, 244, 247, 1.0),
             raised: Color::rgba8(255, 255, 255, 1.0),
             overlay: Color::rgba8(255, 255, 255, 1.0),
+        },
+        slider: SliderColors {
+            thumb: Color::rgba8(255, 255, 255, 1.0),
         },
         progress: ProgressColors {
             track: Color::rgba8(244, 244, 247, 1.0),
@@ -717,6 +731,7 @@ impl Palette {
             "surface.sunken" => self.surface.sunken,
             "surface.raised" => self.surface.raised,
             "surface.overlay" => self.surface.overlay,
+            "slider.thumb" => self.slider.thumb,
             "progress.track" => self.progress.track,
             "text.primary" => self.text.primary,
             "text.secondary" => self.text.secondary,
@@ -855,6 +870,7 @@ pub const PALETTE_NAMES: &[&str] = &[
     "surface.frame",
     "surface.canvas",
     "surface.sunken",
+    "slider.thumb",
     "progress.track",
     "surface.raised",
     "surface.overlay",
@@ -1124,6 +1140,10 @@ pub const SIZE_CONTROL_COMPACT: f32 = 24.0;
 pub const SIZE_CONTROL_DEFAULT: f32 = 28.0;
 /// `size.control.comfortable`
 pub const SIZE_CONTROL_COMFORTABLE: f32 = 32.0;
+/// `size.reasoning-slider.track`
+pub const SIZE_REASONING_SLIDER_TRACK: f32 = 28.0;
+/// `size.reasoning-slider.thumb`
+pub const SIZE_REASONING_SLIDER_THUMB: f32 = 22.0;
 /// `size.touch.default`
 pub const SIZE_TOUCH_DEFAULT: f32 = 44.0;
 /// `size.touch.large`
@@ -1366,6 +1386,8 @@ pub const DURATION_CARD_INSERT: Duration = Duration::from_millis(250);
 pub const DURATION_TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 /// `duration.spinner`
 pub const DURATION_SPINNER: Duration = Duration::from_millis(800);
+/// `duration.slider-shimmer`
+pub const DURATION_SLIDER_SHIMMER: Duration = Duration::from_millis(1600);
 
 // easing
 /// `ease.standard`
