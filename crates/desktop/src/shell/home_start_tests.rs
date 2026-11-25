@@ -111,6 +111,35 @@ fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_title_names_the_chosen_project_and_the_name_opens_its_menu(cx: &mut TestAppContext) {
+    let (rig, cx) = home_rig(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("home-start-project-link").is_some());
+    click(cx, "home-start-project-link");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.dialogs.menu.is_some())
+    );
+}
+
+#[gpui::test]
+fn the_title_is_the_plain_question_while_no_project_exists(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[]);
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![agent_kind(
+            "claude",
+            "Claude",
+            PackageState::Enabled,
+        )]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "button:sidebar-create");
+    draw(cx);
+    assert!(cx.debug_bounds("home-start-title").is_some());
+    assert!(cx.debug_bounds("home-start-project-link").is_none());
+}
+
+#[gpui::test]
 fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     cx: &mut TestAppContext,
 ) {

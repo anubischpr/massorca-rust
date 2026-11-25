@@ -18,7 +18,9 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
-use super::start_page::{key_hints, profile_banner, refuse_send, starting_line};
+use super::start_page::{
+    key_hints, profile_banner, project_title_link, refuse_send, starting_line,
+};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     CHOOSE_A_PROJECT, HOME_START, NEEDS_NEWER_SERVICE, NO_PROJECT_NEEDS_SERVICE, WorkspaceDetails,
@@ -130,6 +132,32 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
             let _ = shell.update(cx, |shell, cx| shell.open_home_project_menu(window, cx));
         })
     };
+    let title = {
+        let shell = frame.shell.clone();
+        let heading = div()
+            .debug_selector(|| "home-start-title".to_owned())
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .text_style(TYPE_HEADING)
+            .text_color(p.text.primary);
+        match frame.project.clone() {
+            Some(name) => heading
+                .child("What should we work on in ")
+                .child(project_title_link(
+                    "home-start-project-link",
+                    name,
+                    &theme,
+                    move |window, cx| {
+                        let _ =
+                            shell.update(cx, |shell, cx| shell.open_home_project_menu(window, cx));
+                    },
+                ))
+                .child("?"),
+            None => heading.child("What should we work on?"),
+        }
+    };
     let composer = div()
         .w_full()
         .flex()
@@ -156,14 +184,7 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
         .flex_col()
         .gap(px(SPACE_6))
         .child(div().flex().justify_center().child(rose_logo()))
-        .child(
-            div()
-                .flex()
-                .justify_center()
-                .text_style(TYPE_HEADING)
-                .text_color(p.text.primary)
-                .child("What should we work on?"),
-        )
+        .child(title)
         .child(div().flex().flex_row().justify_center().child(project))
         .when(frame.profile_unsafe, |column| {
             column.child(profile_banner())

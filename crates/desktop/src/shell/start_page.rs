@@ -95,15 +95,14 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
 
     let project_link = {
         let shell = frame.shell.clone();
-        div()
-            .id("start-project-link")
-            .debug_selector(|| "start-project-link".to_owned())
-            .cursor_pointer()
-            .underline()
-            .child(page.project.clone())
-            .on_click(move |_, window, cx| {
+        project_title_link(
+            "start-project-link",
+            page.project.clone(),
+            &theme,
+            move |window, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
-            })
+            },
+        )
     };
     let heading = div()
         .flex()
@@ -113,7 +112,8 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .text_style(TYPE_HEADING)
         .text_color(p.text.primary)
         .child("What should we work on in ")
-        .child(project_link);
+        .child(project_link)
+        .child("?");
 
     let placement = div()
         .flex()
@@ -220,6 +220,24 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .p(px(SPACE_8))
         .child(column)
         .into_any_element()
+}
+
+/// The project's name in a page heading: dotted underlined, and clickable to change the project (D-AG-01).
+pub(super) fn project_title_link(
+    id: &'static str,
+    name: String,
+    theme: &Theme,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .cursor_pointer()
+        .border_b_1()
+        .border_dashed()
+        .border_color(theme.palette.text.tertiary)
+        .child(name)
+        .on_click(move |_, window, cx| on_click(window, cx))
 }
 
 /// The start in flight, under the composer until the service answers (D-AG-01 States).
