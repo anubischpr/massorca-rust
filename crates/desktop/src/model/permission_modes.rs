@@ -65,9 +65,13 @@ pub fn start_choices(kind: &AgentKind) -> Vec<ModeChoice> {
     if kind.permission_modes.is_empty() {
         return Vec::new();
     }
-    std::iter::once(cli_default(kind))
-        .chain(declared(kind))
-        .collect()
+    // The start sends no mode for this entry, so the chip names no mode: the vendor default is not shown as one.
+    let default = ModeChoice {
+        id: None,
+        name: CLI_DEFAULT.to_owned(),
+        bypass: false,
+    };
+    std::iter::once(default).chain(declared(kind)).collect()
 }
 
 /// A session's chip, or `None` when its kind declares no modes. A session in the vendor's default selects the CLI's
@@ -164,7 +168,7 @@ mod tests {
         assert_eq!(
             names(&choices),
             [
-                "The CLI's default (Auto)",
+                "The CLI's default",
                 "Manual",
                 "Plan",
                 "Auto",

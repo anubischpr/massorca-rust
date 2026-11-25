@@ -725,7 +725,7 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
     assert_eq!(
         modes,
         [
-            ("The CLI's default (Plan)".to_owned(), false),
+            ("The CLI's default".to_owned(), false),
             ("Plan".to_owned(), false),
             ("Bypass permissions".to_owned(), true),
         ]
