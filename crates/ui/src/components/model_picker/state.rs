@@ -77,6 +77,7 @@ pub struct PickerState {
     query: String,
     expanded: bool,
     highlight: usize,
+    no_agents_installed: bool,
 }
 
 impl PickerState {
@@ -97,6 +98,7 @@ impl PickerState {
             query: String::new(),
             expanded: false,
             highlight: 0,
+            no_agents_installed: false,
         }
     }
 
@@ -104,6 +106,15 @@ impl PickerState {
     pub fn with_favourites(mut self, ids: Vec<SharedString>) -> Self {
         self.favourites = ids;
         self
+    }
+
+    /// Whether no agent is installed: the picker shows its quiet empty state instead of the agents.
+    pub fn no_agents_installed(&self) -> bool {
+        self.no_agents_installed
+    }
+
+    pub fn set_no_agents_installed(&mut self, none_installed: bool) {
+        self.no_agents_installed = none_installed;
     }
 
     pub fn agents(&self) -> &[AgentOption] {
@@ -507,5 +518,13 @@ mod tests {
         state.set_query("zzz");
         assert!(state.rows().is_empty());
         assert_eq!(state.highlighted_row(), None);
+    }
+
+    #[test]
+    fn no_agent_is_installed_only_when_the_owner_says_so() {
+        let mut state = sample();
+        assert!(!state.no_agents_installed());
+        state.set_no_agents_installed(true);
+        assert!(state.no_agents_installed());
     }
 }

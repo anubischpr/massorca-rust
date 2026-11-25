@@ -301,6 +301,10 @@ impl Composer {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = *cx.theme();
         let p = theme.palette;
+        let unavailable = self.send_unavailable.clone().or_else(|| {
+            self.no_agents_installed(cx)
+                .then(|| SharedString::from("No agents installed"))
+        });
         let (icon, label, enabled, fill, ink) = match action {
             PrimaryAction::Send => (
                 IconName::ArrowUp,
@@ -349,9 +353,7 @@ impl Composer {
             .bg(fill)
             .text_color(ink)
             .when_some(
-                self.send_unavailable
-                    .clone()
-                    .filter(|_| action == PrimaryAction::Disabled),
+                unavailable.filter(|_| action == PrimaryAction::Disabled),
                 |button, reason| button.tooltip(tooltip_view(Tooltip::new(reason))),
             )
             .when(action == PrimaryAction::Stop, |button| {

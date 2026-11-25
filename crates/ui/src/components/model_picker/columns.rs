@@ -4,8 +4,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
-    px,
+    KeyDownEvent, ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 
 use super::ModelPicker;
@@ -18,11 +18,13 @@ use crate::components::segmented_control::{
     Segment, SegmentedControl, SegmentedSize, SegmentedStyle,
 };
 use crate::icon::{Icon, IconName, IconSize};
+use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_MODEL_PICKER_MODEL_COLUMN, LAYOUT_MODEL_PICKER_PROVIDER_COLUMN,
     LAYOUT_MODEL_PICKER_REASONING_COLUMN, Palette, RADIUS_MD, SIZE_CONTROL_COMFORTABLE,
-    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_LABEL,
+    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_STRONG, TYPE_CAPTION,
+    TYPE_LABEL,
 };
 
 /// What one model row shows.
@@ -278,6 +280,50 @@ impl ModelPicker {
             .border_b_2()
             .border_color(p.border.focus)
             .child(self.search.clone())
+    }
+
+    /// The quiet empty state: no agent is installed, so the popover says so and links to the
+    /// Marketplace.
+    pub(super) fn no_agents(&self, cx: &mut Context<Self>) -> Div {
+        let p = cx.theme().palette;
+        div()
+            .debug_selector(|| "model-picker-empty".to_owned())
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .p(px(SPACE_3))
+            .text_style(TYPE_BODY)
+            .child(div().text_color(p.text.secondary).child(super::NO_AGENTS))
+            .child(self.marketplace_link(cx))
+    }
+
+    /// "Open Marketplace" as a link-style action; Enter and Space press it as a click does.
+    fn marketplace_link(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        div()
+            .id("model-picker-marketplace")
+            .debug_selector(|| "model-picker-marketplace".to_owned())
+            .role(Role::Link)
+            .aria_label("Open Marketplace")
+            .track_focus(&self.marketplace_focus)
+            .focus_ring(&theme)
+            .flex()
+            .items_center()
+            .h(px(SIZE_CONTROL_COMFORTABLE))
+            .rounded(px(RADIUS_MD))
+            .text_color(p.accent.fg)
+            .cursor_pointer()
+            .hover(move |s| s.bg(p.fill.hover_overlay))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.open_marketplace(window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_marketplace(window, cx);
+                }
+            }))
+            .child("Open Marketplace")
     }
 
     /// One model row: provider mark, name, a star on hover and the `Mod+n` badge.

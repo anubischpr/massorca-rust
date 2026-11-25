@@ -18,7 +18,7 @@ use gpui::{
 
 use crate::components::menu::MenuView;
 use crate::components::model_picker::{
-    AgentOption, Choice, ModelPicker, ModelPickerEvent, PickerState, RowRef,
+    AgentOption, Choice, ModelPicker, ModelPickerAction, ModelPickerEvent, PickerState, RowRef,
 };
 use crate::components::popover::TriggerBounds;
 use crate::components::text_editing::text_area::{TextArea, TextAreaEvent, TextAreaKey};
@@ -91,6 +91,8 @@ pub enum ComposerEvent {
     SignIn,
     /// The user pressed "Resume" on the composer of an ended session.
     Resume,
+    /// The user pressed "Open Marketplace" in a picker with no agent installed.
+    OpenMarketplace,
     /// Files dropped on the composer.
     DroppedFiles(Vec<PathBuf>),
 }
@@ -143,7 +145,7 @@ pub struct Composer {
     attach_menu: Option<(Entity<MenuView>, Subscription)>,
     _subscriptions: Vec<Subscription>,
     /// The picker's events, kept apart because the owner can rebuild the picker.
-    _picker_events: Subscription,
+    _picker_events: Vec<Subscription>,
 }
 
 impl std::fmt::Debug for Composer {
@@ -171,10 +173,7 @@ impl Composer {
         let text_events = cx.subscribe(&text, |this, _, event: &TextAreaEvent, cx| {
             this.on_text_event(*event, cx);
         });
-        let picker_events = cx.subscribe(&picker, |_, _, event: &ModelPickerEvent, cx| {
-            let ModelPickerEvent::Changed(choice) = event;
-            cx.emit(ComposerEvent::ModelChanged(choice.clone()));
-        });
+        let picker_events = Self::subscribe_picker(&picker, cx);
         Self {
             text,
             picker,
@@ -212,8 +211,39 @@ impl Composer {
         }
     }
 
+    /// The picker's events, as the composer's own: the model choice and the Marketplace link.
+    fn subscribe_picker(picker: &Entity<ModelPicker>, cx: &mut Context<Self>) -> Vec<Subscription> {
+        vec![
+            cx.subscribe(picker, |_, _, event: &ModelPickerEvent, cx| match event {
+                ModelPickerEvent::Changed(choice) => {
+                    cx.emit(ComposerEvent::ModelChanged(choice.clone()));
+                }
+            }),
+            cx.subscribe(
+                picker,
+                |_, _, action: &ModelPickerAction, cx| match action {
+                    ModelPickerAction::OpenMarketplace => cx.emit(ComposerEvent::OpenMarketplace),
+                },
+            ),
+        ]
+    }
+
     pub fn picker(&self) -> &Entity<ModelPicker> {
         &self.picker
+    }
+
+    /// Whether no agent is installed: the picker shows "No agents installed" with its Marketplace
+    /// link, and Send stays off.
+    pub fn set_no_agents_installed(&mut self, none_installed: bool, cx: &mut Context<Self>) {
+        self.picker.update(cx, |picker, cx| {
+            picker.set_no_agents_installed(none_installed, cx)
+        });
+        cx.notify();
+    }
+
+    /// Whether the picker reports that no agent is installed.
+    pub fn no_agents_installed(&self, cx: &App) -> bool {
+        self.picker.read(cx).state().no_agents_installed()
     }
 
     /// The draft text as typed.
@@ -321,14 +351,19 @@ impl Composer {
     /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
     /// otherwise the first model offered is chosen.
     pub fn set_picker_agents(&mut self, agents: Vec<AgentOption>, cx: &mut Context<Self>) {
-        let (choice, favourites) = {
+        let (choice, favourites, none_installed) = {
             let state = self.picker.read(cx).state();
             if state.agents() == agents.as_slice() {
                 return;
             }
-            (state.choice().clone(), state.favourites().to_vec())
+            (
+                state.choice().clone(),
+                state.favourites().to_vec(),
+                state.no_agents_installed(),
+            )
         };
         let mut state = PickerState::new(agents, choice.clone()).with_favourites(favourites);
+        state.set_no_agents_installed(none_installed);
         if state.locate(choice.model.as_ref()).is_none() {
             let first = state
                 .agents()
@@ -339,10 +374,7 @@ impl Composer {
             }
         }
         self.picker = cx.new(|cx| ModelPicker::new(state, cx));
-        self._picker_events = cx.subscribe(&self.picker, |_, _, event: &ModelPickerEvent, cx| {
-            let ModelPickerEvent::Changed(choice) = event;
-            cx.emit(ComposerEvent::ModelChanged(choice.clone()));
-        });
+        self._picker_events = Self::subscribe_picker(&self.picker, cx);
         cx.notify();
     }
 
@@ -351,7 +383,9 @@ impl Composer {
         Situation {
             agent_busy: self.agent_busy,
             host_confirmed: self.host_confirmed,
-            disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
+            disabled: self.disabled_reason.is_some()
+                || self.send_unavailable.is_some()
+                || self.no_agents_installed(cx),
             text_empty: area.text().is_empty() && !self.sends_empty,
             composing: area.is_composing(),
             queueing: self.queueing_offered,
@@ -839,6 +873,54 @@ mod tests {
         assert!(
             lefts.windows(2).all(|pair| pair[0] < pair[1]),
             "left to right: {order:?}, drawn at {lefts:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn without_an_installed_agent_send_stays_off_and_the_marketplace_link_reaches_the_owner(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_no_agents_installed(true, cx)
+        });
+        assert!(composer.read_with(cx, |composer, cx| composer.no_agents_installed(cx)));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hi");
+        cx.simulate_keystrokes("enter");
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .all(|event| !matches!(event, ComposerEvent::Send(_))),
+            "Send stays off"
+        );
+        assert_eq!(
+            draft_of(&composer, cx),
+            "hi",
+            "the draft stays in the composer"
+        );
+        assert_eq!(
+            composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+            PrimaryAction::Disabled
+        );
+        let picker = composer.read_with(cx, |composer, _| composer.picker().clone());
+        picker.update_in(cx, |picker, window, cx| picker.open(window, cx));
+        cx.run_until_parked();
+        let link = cx
+            .debug_bounds("model-picker-marketplace")
+            .expect("the link is drawn")
+            .center();
+        cx.simulate_click(link, gpui::Modifiers::none());
+        assert_eq!(*events.borrow(), vec![ComposerEvent::OpenMarketplace]);
+        composer.update(cx, |composer, cx| {
+            composer.set_no_agents_installed(false, cx)
+        });
+        assert_eq!(
+            composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+            PrimaryAction::Send,
+            "Send returns once an agent is installed"
         );
     }
 }
