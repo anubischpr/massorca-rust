@@ -1,14 +1,19 @@
 //! The picker's columns: the agent rail, the model list with its search, the reasoning levels and
 //! the Standard or Fast footer. Each draws the picker's state and reports the choice back.
 
+use std::rc::Rc;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClickEvent, Context, Div, ElementId, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Window, div, px, svg,
 };
 
 use super::ModelPicker;
+use super::reasoning_slider::{
+    ReasoningSlider, brand_colours, has_slider, is_top_level, name_colour,
+};
 use super::state::{AgentAvailability, PickerState, PickerView, RowRef};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind, NameTooltip};
 use crate::components::button::ButtonSize;
@@ -23,9 +28,15 @@ use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_MODEL_PICKER_MODEL_COLUMN, LAYOUT_MODEL_PICKER_PROVIDER_COLUMN,
     LAYOUT_MODEL_PICKER_REASONING_COLUMN, Palette, RADIUS_MD, SIZE_CONTROL_COMFORTABLE,
-    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_STRONG, TYPE_CAPTION,
-    TYPE_LABEL,
+    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, SPACE_HALF, TYPE_BODY, TYPE_BODY_STRONG,
+    TYPE_CAPTION, TYPE_LABEL, TYPE_TITLE,
 };
+
+/// The reasoning column's height: the popover does not grow for the slider (216 by 304 px).
+const REASONING_COLUMN_HEIGHT: f32 = 304.0;
+
+/// The sparkles glyph that marks the top level, in px.
+const SPARKLE_SIZE: f32 = 14.0;
 
 /// Why Fast is off for a model that offers none, when the service gave no reason of its own.
 const NO_FAST_MODEL: &str = "This model has no Fast mode.";
@@ -44,16 +55,12 @@ struct ModelRow {
 }
 
 impl ModelPicker {
-    pub(super) fn choose_effort(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Chooses a reasoning level. The popover stays open: only Escape or an outside click closes it.
+    pub(super) fn choose_effort(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.state.select_effort(index) {
             self.emit_change(cx);
         }
-        self.close(window, cx);
+        cx.notify();
     }
 
     pub(super) fn set_speed(&mut self, fast: bool, cx: &mut Context<Self>) {
@@ -411,7 +418,8 @@ impl ModelPicker {
             .when_some(shortcut, |row, shortcut| row.child(Kbd::new(shortcut)))
     }
 
-    /// The reasoning levels of the chosen model; the current one has a check.
+    /// The reasoning column: the level's name, the agent and model, and a vertical slider with one stop per
+    /// level the model declares. A model with fewer than two levels says it has none.
     pub(super) fn reasoning_column(&self, cx: &mut Context<Self>) -> Div {
         let theme = *cx.theme();
         let p = theme.palette;
@@ -420,20 +428,22 @@ impl ModelPicker {
             .as_ref()
             .map(|model| model.name.clone())
             .unwrap_or_default();
-        let selected = self.state.choice().effort;
-        let mut column = div()
+        let column = div()
             .flex()
             .flex_col()
             .flex_none()
             .w(px(LAYOUT_MODEL_PICKER_REASONING_COLUMN))
-            .p(px(SPACE_1))
+            .h(px(REASONING_COLUMN_HEIGHT))
+            .px(px(SPACE_3))
+            .pt(px(SPACE_2))
+            .pb(px(SPACE_2 + SPACE_HALF))
             .child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .justify_between()
                     .gap(px(SPACE_2))
-                    .px(px(SPACE_2))
                     .h(px(SIZE_CONTROL_DEFAULT))
                     .border_b_1()
                     .border_color(p.border.subtle)
@@ -449,56 +459,84 @@ impl ModelPicker {
                             .truncate()
                             .text_style(TYPE_CAPTION)
                             .text_color(p.text.tertiary)
-                            .child(model_name),
+                            .child(model_name.clone()),
                     ),
             );
-        match model {
-            Some(model) if model.efforts.is_empty() => {
-                column = column.child(
-                    div()
-                        .p(px(SPACE_2))
-                        .text_style(TYPE_BODY)
-                        .text_color(p.text.tertiary)
-                        .child("This model has no reasoning levels"),
-                );
-            }
-            Some(model) => {
-                for (index, level) in model.efforts.iter().enumerate() {
-                    let active = selected == Some(index);
-                    column = column.child(
-                        div()
-                            .id(("effort", index))
-                            .debug_selector(move || format!("effort-{index}"))
-                            .role(Role::RadioButton)
-                            .aria_label(level.clone())
-                            .aria_selected(active)
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .h(px(SIZE_CONTROL_COMFORTABLE))
-                            .px(px(SPACE_2))
-                            .rounded(px(RADIUS_MD))
-                            .cursor_pointer()
-                            .text_style(if active { TYPE_BODY_STRONG } else { TYPE_BODY })
-                            .text_color(p.text.primary)
-                            .hover(move |s| s.bg(p.fill.hover_overlay))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.choose_effort(index, window, cx);
-                            }))
-                            .child(level.clone())
-                            .when(active, |row| {
-                                row.child(
-                                    Icon::new(IconName::Check)
-                                        .size(IconSize::Small)
-                                        .color(p.text.primary),
-                                )
-                            }),
-                    );
-                }
-            }
-            None => {}
+        let Some(model) = model else {
+            return column;
+        };
+        if !has_slider(model.efforts.len()) {
+            return column.child(
+                div()
+                    .pt(px(SPACE_2))
+                    .text_style(TYPE_BODY)
+                    .text_color(p.text.tertiary)
+                    .child("This model has no reasoning levels"),
+            );
         }
+        let count = model.efforts.len();
+        let selected = self
+            .state
+            .choice()
+            .effort
+            .unwrap_or(model.default_effort)
+            .min(count - 1);
+        // The agent's listing colours feed the fill once the picker is given them; until then the accent fills.
+        let brand = brand_colours(None, (p.accent.default, p.accent.fg));
+        let name = name_colour(brand, p.surface.overlay);
+        let agent = self.state.current_kind().label();
+        let picker = cx.entity();
+        let slider = ReasoningSlider {
+            id: "model-picker-reasoning-slider".into(),
+            levels: model.efforts.clone(),
+            selected,
+            brand,
+            label: format!("Reasoning for {model_name}").into(),
+            focus: self.slider_focus.clone(),
+            track: self.slider_track.clone(),
+            on_change: Rc::new(move |index, _, cx| {
+                picker.update(cx, |picker, cx| picker.choose_effort(index, cx));
+            }),
+        };
+        let level = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .mt(px(SPACE_2))
+            .child(
+                div()
+                    .text_style(TYPE_TITLE)
+                    .text_color(name)
+                    .child(model.efforts[selected].clone()),
+            )
+            .when(is_top_level(selected, count), |row| {
+                row.child(
+                    svg()
+                        .path(IconName::Sparkles.path())
+                        .size(px(SPARKLE_SIZE))
+                        .flex_none()
+                        .text_color(name),
+                )
+            });
         column
+            .child(level)
+            .child(
+                div()
+                    .mt(px(SPACE_1))
+                    .min_w_0()
+                    .truncate()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.tertiary)
+                    .child(format!("{agent} · {model_name}")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .mt(px(SPACE_2 + SPACE_HALF))
+                    .child(slider),
+            )
     }
 
     /// Standard or Fast, as a borderless sunken switch; Fast is off for models without it.

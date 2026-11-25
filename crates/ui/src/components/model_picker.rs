@@ -6,6 +6,7 @@
 pub mod state;
 
 mod columns;
+mod reasoning_slider;
 
 pub use state::{
     AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState, PickerView, RowRef,
@@ -70,6 +71,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(three, Shortcut3, context),
         KeyBinding::new(four, Shortcut4, context),
     ]);
+    reasoning_slider::bind_keys(cx);
 }
 
 /// What the picker reports to its owner.
@@ -92,6 +94,8 @@ pub struct ModelPicker {
     open: bool,
     trigger_focus: FocusHandle,
     marketplace_focus: FocusHandle,
+    slider_focus: FocusHandle,
+    slider_track: TriggerBounds,
     trigger_bounds: TriggerBounds,
     search: Entity<TextField>,
     _search_events: Subscription,
@@ -127,7 +131,6 @@ impl ModelPicker {
                     if let Some(row) = this.state.highlighted_row() {
                         this.choose_row(row, cx);
                     }
-                    this.open = false;
                     cx.notify();
                 }
             });
@@ -136,6 +139,8 @@ impl ModelPicker {
             open: false,
             trigger_focus: cx.focus_handle().tab_stop(true),
             marketplace_focus: cx.focus_handle().tab_stop(true),
+            slider_focus: cx.focus_handle().tab_stop(true),
+            slider_track: TriggerBounds::default(),
             trigger_bounds: TriggerBounds::default(),
             search,
             _search_events: search_events,
@@ -467,7 +472,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn enter_in_the_search_chooses_the_highlighted_row_and_closes(cx: &mut TestAppContext) {
+    fn enter_in_the_search_chooses_the_highlighted_row_and_keeps_it_open(cx: &mut TestAppContext) {
         let (picker, cx) = picker_in(cx);
         let choices = record_choices(&picker, cx);
         open_and_draw(&picker, cx);
@@ -477,7 +482,10 @@ mod tests {
             choices.borrow().last().map(|c| c.model.to_string()),
             Some("gpt".into())
         );
-        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "only Escape or an outside click closes the popover"
+        );
     }
 
     #[gpui::test]
@@ -566,17 +574,133 @@ mod tests {
         assert!(!picker.read_with(cx, |picker, _| picker.state().is_favourite("sonnet")));
     }
 
+    /// Clicks a point of the window and lets the change settle.
+    fn click_at(cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn last_effort(choices: &Rc<RefCell<Vec<Choice>>>) -> Option<usize> {
+        choices.borrow().last().and_then(|choice| choice.effort)
+    }
+
     #[gpui::test]
-    fn an_effort_row_chooses_the_level_and_closes_the_popover(cx: &mut TestAppContext) {
+    fn a_reasoning_level_chooses_it_and_keeps_the_popover_open(cx: &mut TestAppContext) {
         let (picker, cx) = picker_in(cx);
         let choices = record_choices(&picker, cx);
         open_and_draw(&picker, cx);
-        click(cx, "effort-2");
-        assert_eq!(
-            choices.borrow().last().and_then(|choice| choice.effort),
-            Some(2)
+        click(cx, "reasoning-level-2");
+        assert_eq!(last_effort(&choices), Some(2));
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "only Escape or an outside click closes the popover"
         );
-        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    #[gpui::test]
+    fn the_stops_are_evenly_spaced_14_px_inside_the_bar(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        let bar = cx
+            .debug_bounds("reasoning-slider")
+            .expect("the slider is drawn");
+        assert!(cx.debug_bounds("reasoning-level-3").is_some());
+        assert!(
+            cx.debug_bounds("reasoning-level-4").is_none(),
+            "Opus declares four levels"
+        );
+        let centres: Vec<f32> = [
+            "reasoning-level-0",
+            "reasoning-level-1",
+            "reasoning-level-2",
+            "reasoning-level-3",
+        ]
+        .into_iter()
+        .map(|selector| {
+            let label = cx.debug_bounds(selector).expect("each level is labelled");
+            f32::from(label.center().y)
+        })
+        .collect();
+        let step = centres[0] - centres[1];
+        for pair in centres.windows(2) {
+            assert!(
+                (pair[0] - pair[1] - step).abs() < 0.5,
+                "the stops are evenly spaced: {centres:?}"
+            );
+        }
+        let bottom = f32::from(bar.bottom()) - centres[0];
+        let top = centres[3] - f32::from(bar.top());
+        assert!((bottom - 14.0).abs() < 0.5, "the bottom stop sits 14 px in: {bottom}");
+        assert!((top - 14.0).abs() < 0.5, "the top stop sits 14 px in: {top}");
+    }
+
+    #[gpui::test]
+    fn a_click_on_the_bar_picks_the_stop_at_that_height(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        let bar = cx
+            .debug_bounds("reasoning-slider")
+            .expect("the slider is drawn");
+        let x = bar.center().x;
+        click_at(cx, gpui::point(x, bar.bottom() - gpui::px(3.)));
+        assert_eq!(last_effort(&choices), Some(0), "the bottom of the bar is the lowest level");
+        click_at(cx, gpui::point(x, bar.top() + gpui::px(3.)));
+        assert_eq!(last_effort(&choices), Some(3), "the top of the bar is the top level");
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "a click on the bar keeps the popover open"
+        );
+    }
+
+    #[gpui::test]
+    fn the_slider_keys_move_its_level_and_leave_the_model_list_alone(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        picker.update_in(cx, |picker, window, cx| {
+            window.focus(&picker.slider_focus, cx)
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("up");
+        cx.run_until_parked();
+        assert_eq!(last_effort(&choices), Some(2), "Up raises one level");
+        assert_eq!(
+            picker.read_with(cx, |picker, _| picker.state().highlight()),
+            0,
+            "the model list keeps its highlight"
+        );
+        cx.simulate_keystrokes("end");
+        cx.run_until_parked();
+        assert_eq!(last_effort(&choices), Some(3), "End goes to the top level");
+        cx.simulate_keystrokes("home");
+        cx.run_until_parked();
+        assert_eq!(last_effort(&choices), Some(0), "Home goes to the bottom level");
+    }
+
+    #[gpui::test]
+    fn a_model_without_levels_draws_no_slider(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        picker.update(cx, |picker, cx| {
+            picker.choose_row(RowRef { agent: 0, model: 2 }, cx)
+        });
+        open_and_draw(&picker, cx);
+        assert!(
+            cx.debug_bounds("reasoning-slider").is_none(),
+            "Haiku declares no levels, so it draws the note instead"
+        );
+    }
+
+    #[gpui::test]
+    fn enter_in_search_keeps_the_popover_open(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "Enter on a row selects it and keeps the popover open"
+        );
     }
 
     #[gpui::test]
