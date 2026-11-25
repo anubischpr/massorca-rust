@@ -557,3 +557,239 @@ fn note(text: &str, theme: &Theme) -> gpui::Div {
         .text_color(theme.palette.text.tertiary)
         .child(text.to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::teams::TeamPage;
+    use crate::service::fixtures::team;
+    use crate::service::{Command, RoomCommand, StoreUpdate, TeamRoomRead, TeamsRead};
+    use crate::shell::service_tests::{click, draw, rig};
+    use gpui::{TestAppContext, VisualTestContext};
+    use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+    use massorca_protocol::methods::teams::Bot as WireBot;
+
+    fn bot(id: &str, name: &str, lead: bool) -> WireBot {
+        WireBot {
+            id: id.into(),
+            team_id: "t1".into(),
+            name: name.into(),
+            job: "Builds".into(),
+            kind: "claude".into(),
+            model: None,
+            effort: None,
+            lead,
+            created_at_ms: 1,
+        }
+    }
+
+    /// A connected shell showing team t1's Conference room, whose bots are Mara and Bruno, the lead.
+    fn open_room(
+        cx: &mut TestAppContext,
+    ) -> (crate::shell::service_tests::Rig, &mut VisualTestContext) {
+        let (mut rig, cx) = rig(cx, &[]);
+        let mut record = team("t1", "Desarrollo");
+        record.bots = vec![bot("b1", "Mara", false), bot("b2", "Bruno", true)];
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![record]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Conference(TeamId(1)));
+            cx.notify();
+        });
+        draw(cx);
+        let Some(Command::Room(RoomCommand::Read { team })) = rig.script.next() else {
+            panic!("opening the room reads it");
+        };
+        assert_eq!(team, "t1");
+        (rig, cx)
+    }
+
+    fn line(author: RoomAuthor, bot: Option<(&str, &str)>, text: &str) -> TeamRoomMessage {
+        TeamRoomMessage {
+            id: text.into(),
+            team_id: "t1".into(),
+            author,
+            bot_id: bot.map(|(id, _)| id.into()),
+            bot_name: bot.map(|(_, name)| name.into()),
+            text: text.into(),
+            task: None,
+            created_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    fn room_read(lines: Vec<TeamRoomMessage>) -> StoreUpdate {
+        StoreUpdate::TeamRoom(TeamRoomRead {
+            team: "t1".into(),
+            number: 1,
+            room: Ok(lines),
+        })
+    }
+
+    #[gpui::test]
+    fn an_empty_room_says_what_to_do_and_a_read_draws_its_lines(cx: &mut TestAppContext) {
+        let (rig, cx) = open_room(cx);
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            cx.debug_bounds("room-empty").is_some(),
+            "the empty room's line"
+        );
+
+        rig.updates
+            .send(StoreUpdate::TeamRoom(TeamRoomRead {
+                team: "t1".into(),
+                number: 2,
+                room: Ok(vec![
+                    line(RoomAuthor::Person, None, "We need sign-in"),
+                    line(
+                        RoomAuthor::Bot,
+                        Some(("b2", "Bruno")),
+                        "Added to the Board: sign-in",
+                    ),
+                ]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-person-line").is_some());
+        assert!(cx.debug_bounds("room-bot-line").is_some());
+        assert!(
+            cx.debug_bounds("badge-tag").is_some(),
+            "the lead's Lead tag"
+        );
+        assert!(cx.debug_bounds("room-empty").is_none());
+    }
+
+    #[gpui::test]
+    fn a_line_goes_to_the_lead_and_a_refused_one_comes_back_with_why(cx: &mut TestAppContext) {
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            field.update(cx, |field, cx| {
+                field.set_text("Add magic link sign-in", window, cx)
+            });
+        });
+        click(cx, "room-send");
+        let Some(Command::Room(RoomCommand::Post { params, reply })) = rig.script.next() else {
+            panic!("Send posts the line");
+        };
+        assert_eq!(params.team, "t1");
+        assert_eq!(params.text, "Add magic link sign-in");
+        assert_eq!(params.to.as_deref(), Some("b2"), "the lead receives it");
+        assert_eq!(params.bot, None);
+        let _ = reply.send(Err(Refusal::Failed {
+            code: "task.no_bot".into(),
+            message: "Add a bot to this team first.".into(),
+        }));
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            cx.debug_bounds("room-notice").is_some(),
+            "the refusal shows"
+        );
+        rig.shell.read_with(cx, |shell, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            assert_eq!(
+                field.read(cx).text(),
+                "Add magic link sign-in",
+                "the text comes back"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_service_without_a_room_says_so_and_sends_nothing(cx: &mut TestAppContext) {
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(StoreUpdate::TeamRoom(TeamRoomRead {
+                team: "t1".into(),
+                number: 1,
+                room: Err(Refusal::Failed {
+                    code: "service.capability_missing".into(),
+                    message: crate::service::NO_ROOM.into(),
+                }),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        click(cx, "room-send");
+        while let Some(command) = rig.script.next() {
+            assert!(
+                !matches!(command, Command::Room(RoomCommand::Post { .. })),
+                "a room the service cannot read sends nothing"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn the_receiver_picked_takes_lines_that_name_no_bot(cx: &mut TestAppContext) {
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_receiver_menu(TeamId(1), window, cx);
+        });
+        let menu = rig.shell.read_with(cx, |shell, _| {
+            shell
+                .room_page
+                .receiver_menu
+                .as_ref()
+                .map(|open| open.menu.clone())
+                .expect("the receiver menu opens")
+        });
+        menu.update(cx, |_, cx| {
+            cx.emit(MenuEvent::Chosen(
+                massorca_ui::components::menu::MenuChoice {
+                    row: 0,
+                    child: None,
+                },
+            ));
+        });
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            field.update(cx, |field, cx| field.set_text("Check the logs", window, cx));
+        });
+        click(cx, "room-send");
+        let Some(Command::Room(RoomCommand::Post { params, .. })) = rig.script.next() else {
+            panic!("Send posts the line");
+        };
+        assert_eq!(
+            params.to.as_deref(),
+            Some("b1"),
+            "Mara, picked in the composer"
+        );
+    }
+}
