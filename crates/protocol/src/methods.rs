@@ -16,6 +16,7 @@ pub mod secrets;
 pub mod service;
 pub mod skills;
 pub mod tasks;
+pub mod team_room;
 pub mod teams;
 pub mod terminals;
 pub mod workspaces;
