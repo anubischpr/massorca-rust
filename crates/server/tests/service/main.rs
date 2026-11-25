@@ -29,6 +29,7 @@ mod handshake;
 mod host_memory;
 mod host_ports;
 mod host_storage;
+mod hosted_services;
 mod lifecycle;
 mod network;
 mod network_account_masking;

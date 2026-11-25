@@ -160,6 +160,15 @@ impl Service {
         Self::start_inner(config, network, vault, discovery, None).await
     }
 
+    /// As `start_with_network`, with explicit vault options instead of the environment's.
+    pub async fn start_with_network_and_vault(
+        config: ServiceConfig,
+        network: NetworkConfig,
+        vault: VaultOptions,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_inner(config, network, vault, DiscoveryOptions::default(), None).await
+    }
+
     /// As `start`, and also listens on the network as `network` says (decision 0045).
     pub async fn start_with_network(
         config: ServiceConfig,
@@ -244,7 +253,7 @@ impl Service {
         let extensions = Arc::new(Extensions::new(
             &profile,
             host_programs.clone(),
-            host_programs,
+            host_programs.clone(),
         ));
         let agents = Agents::new(AgentsConfig {
             store: store.clone(),
@@ -316,6 +325,7 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
             _kind_cleanup: kind_cleanup,
