@@ -79,42 +79,55 @@
   },
   "permission_modes": [
     {
+      "id": "auto",
+      "label": "Auto",
+      "description": "Everything runs, with background safety checks. Where auto mode is not available, Claude Code starts in Manual.",
+      "args": ["--permission-mode", "auto"],
+      "may_fall_back": true,
+      "icon": "sparkles",
+      "tone": "normal"
+    },
+    {
       "id": "default",
       "label": "Manual",
       "description": "Asks before file edits and commands; reads in the working directories run without asking.",
-      "args": ["--permission-mode", "default"]
+      "args": ["--permission-mode", "default"],
+      "icon": "hand",
+      "tone": "normal"
     },
     {
       "id": "acceptEdits",
-      "label": "Edit automatically",
+      "label": "Accept edits",
       "description": "File edits and common filesystem commands run without asking.",
-      "args": ["--permission-mode", "acceptEdits"]
+      "args": ["--permission-mode", "acceptEdits"],
+      "icon": "file-pen",
+      "tone": "normal"
     },
     {
       "id": "plan",
       "label": "Plan",
       "description": "Reads and plans before changing anything.",
-      "args": ["--permission-mode", "plan"]
-    },
-    {
-      "id": "auto",
-      "label": "Auto",
-      "description": "Everything runs, with background safety checks. Where auto mode is not available, Claude Code starts in Manual.",
-      "args": ["--permission-mode", "auto"],
-      "may_fall_back": true
-    },
-    {
-      "id": "dontAsk",
-      "label": "Don't ask",
-      "description": "Only pre-approved tools run; anything that would ask is denied.",
-      "args": ["--permission-mode", "dontAsk"]
+      "args": ["--permission-mode", "plan"],
+      "icon": "map",
+      "tone": "normal"
     },
     {
       "id": "bypassPermissions",
       "label": "Bypass permissions",
       "description": "Everything runs without asking. The vendor says: isolated containers and VMs only.",
       "args": ["--permission-mode", "bypassPermissions"],
-      "bypass": true
+      "bypass": true,
+      "icon": "shield-alert",
+      "tone": "warning"
+    },
+    {
+      "id": "dontAsk",
+      "label": "Don't ask",
+      "description": "Only pre-approved tools run; anything that would ask is denied.",
+      "args": ["--permission-mode", "dontAsk"],
+      "icon": "ban",
+      "tone": "normal",
+      "selectable": false
     }
   ],
   "default_permission_mode": "auto",

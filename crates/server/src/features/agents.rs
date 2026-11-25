@@ -11,14 +11,15 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
     AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, ImportCandidate, ImportCandidates, ImportCandidatesParams, PromptReceipt,
-    QueuedPrompt,
+    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
+    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
+    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, ImportCandidate, ImportCandidates,
+    ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -67,6 +68,31 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_IMPORT_DETECT, Owner::Core)?,
+        // Archive and delete of a session, and the delete's preview (decision 0163).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_ARCHIVE, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            agents::ARCHIVE_SESSION,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Workspace,
+            archive_session,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RENAME,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Workspace,
+            rename,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::FORGET_PREVIEW,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Read,
+            forget_preview,
+        )?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -330,7 +356,10 @@ async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession
 }
 
 async fn list(ctx: RequestCtx, params: AgentListParams) -> Result<AgentSessionList, ErrorBody> {
-    let sessions = on_agents(&ctx, move |agents| agents.list(params.workspace.as_deref())).await?;
+    let sessions = on_agents(&ctx, move |agents| {
+        agents.list_visible(params.workspace.as_deref(), params.include_archived)
+    })
+    .await?;
     Ok(AgentSessionList {
         sessions: sessions
             .into_iter()
@@ -364,9 +393,105 @@ async fn mark_seen(
     Ok(for_caller(&ctx, session))
 }
 
-async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    let session = on_agents(&ctx, move |agents| agents.forget(&params.session)).await?;
+/// Forgets an exited session; with `remove_workspace`, also removes its workspace (decision 0163). Every check runs
+/// before anything changes: the forget's, that no other session uses the workspace, and the removal's own refusals. The
+/// session is then forgotten and the workspace removed through `workspace.remove`'s path; a removal that fails after
+/// the forget is reported in `workspace_error`, never dropped.
+async fn forget(ctx: RequestCtx, params: AgentForgetParams) -> Result<AgentForgotten, ErrorBody> {
+    let AgentForgetParams {
+        session,
+        remove_workspace,
+        force,
+        discard_ignored,
+        expect_dirty,
+    } = params;
+    let waivers = massorca_core_workspace::RemovalWaivers {
+        force,
+        discard_ignored,
+        ..massorca_core_workspace::RemovalWaivers::NONE
+    };
+    let expect_clean = expect_dirty == Some(false);
+    let workspace = if remove_workspace {
+        let selector = session.clone();
+        Some(
+            on_agents(&ctx, move |agents| {
+                agents.check_forget_with_workspace(&selector, waivers, expect_clean)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    let forgotten = on_agents(&ctx, move |agents| agents.forget(&session)).await?;
+    let mut result = AgentForgotten {
+        session: for_caller(&ctx, forgotten),
+        workspace_removed: None,
+        workspace_error: None,
+    };
+    if let Some(workspace) = workspace {
+        // Checked again where no start, resume or terminal can interleave; a refusal now lands in `workspace_error`.
+        let begun = on_agents(&ctx, move |agents| {
+            agents.begin_workspace_removal(&workspace, waivers, expect_clean)
+        })
+        .await;
+        let removed = match begun {
+            Ok(begun) => super::workspaces::finish_begun_removal(&ctx, begun.id, waivers).await,
+            Err(error) => Err(error),
+        };
+        match removed {
+            Ok(removed) => result.workspace_removed = Some(removed),
+            Err(error) => {
+                tracing::warn!(code = %error.code, "a forgotten session's workspace was not removed");
+                result.workspace_error = Some(WorkspaceRemovalError {
+                    code: error.code,
+                    message: error.message,
+                });
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Sets a live or exited session's title (decision 0163).
+async fn rename(ctx: RequestCtx, params: AgentRenameParams) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.rename(&params.session, &params.title)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
+}
+
+/// Archives (hides) an exited session, or clears that (decision 0163).
+async fn archive_session(
+    ctx: RequestCtx,
+    params: AgentArchiveSessionParams,
+) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.set_archived(&params.session, params.archived)
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// What `agent.forget` with `remove_workspace` would meet, read without changing anything (decision 0163). A caller
+/// below `workspace` scope gets no path, and a fixed blocker message with the blocker's code, since a refusal (a git
+/// error among them) can name paths.
+async fn forget_preview(
+    ctx: RequestCtx,
+    params: AgentSessionRef,
+) -> Result<AgentForgetPreview, ErrorBody> {
+    let mut preview = on_agents(&ctx, move |agents| agents.forget_preview(&params.session)).await?;
+    if authorize(&ctx.principal, Permission::Workspace).is_err() {
+        preview.workspace.path = None;
+        if preview.workspace.blocker.is_some() {
+            preview.workspace.blocker =
+                Some("the workspace cannot be removed now; blocker_code says why".to_owned());
+        }
+        if preview.forget_blocker.is_some() {
+            preview.forget_blocker = Some("the session cannot be forgotten now".to_owned());
+        }
+    }
+    Ok(preview)
 }
 
 /// Releases an exited session: its output is archived, its terminal freed, its record kept (decision 0090).

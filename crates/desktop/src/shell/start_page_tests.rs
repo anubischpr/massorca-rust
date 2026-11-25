@@ -1226,6 +1226,9 @@ fn claude_with_modes() -> AgentKind {
         bypass,
         live_switch: false,
         may_fall_back: false,
+        icon: None,
+        tone: None,
+        selectable: true,
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![

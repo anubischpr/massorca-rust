@@ -14,6 +14,8 @@ The owner's words, summarised:
 
 Inventory: Marketplace item page (D-MK item page, section 7.2 order), desktop and Android.
 
+Code: `crates/ui/src/components/invocation_banner.rs` (the component), `crates/desktop/src/shell/marketplace/item.rs` (`banner`, `banner_colours`, `start_chat_with_prompt`), `crates/desktop/src/model/marketplace/item_page.rs` (`banner_tag`, `banner_palette_slot`).
+
 ## Anatomy
 
 | Part | Spec | Tokens |
@@ -55,7 +57,7 @@ The gradient takes its colours from one of three sources, in this order:
 2. **Contrast.** The ring colours are bright, because they are drawn as 2 px strokes. Under a text line they fail: for example `usage.ring.1` (#5aa2ff) gives `text.primary` only 2.2:1 (`usage.ring.3`, 1.6:1). The build then mixes them toward the Canvas until the text passes, so every page loses its hue. The owner's approved green (#558d69) also gives `text.primary` only 3.3:1.
 3. **Coupling and count.** Six colours repeat sooner than eight. A change to the rings for legibility in the rail would also repaint every banner.
 
-**The new tokens.** They are not in `tokens.json` yet; the session that builds this adds them together with the generated code. Each hue is the owner's approved green turned around the colour wheel at the same saturation and lightness. Its lightness is then lowered just enough that `text.primary` reaches 4.5:1 or more in dark. The light values are pale tints that give `text.primary` 13:1 or more.
+**The new tokens.** They are in `tokens.json` (added by the banner build, PR #372). Each hue is the owner's approved green turned around the colour wheel at the same saturation and lightness. Its lightness is then lowered just enough that `text.primary` reaches 4.5:1 or more in dark. The light values are pale tints that give `text.primary` 13:1 or more.
 
 | Token | Dark | Light | Hue |
 |---|---|---|---|
@@ -90,7 +92,8 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 
 ## Behaviour
 
-- Pressing a pill (by click, Enter or Space) starts a chat with the pill's full prompt, including its `@Tag`.
+- Pressing a pill (by click, Enter or Space) opens a new chat in the Canvas: the selected workspace's start page or, with no workspace, the start page with none. The pill's full prompt, including its `@Tag`, goes into the composer and is not sent.
+- The footer names the item's mention from `listing.mention`, or else its name.
 - Each pill is a button and a tab stop, in order from top to bottom. The panel itself is not a tab stop.
 - Reduced motion has no effect, because nothing moves.
 
@@ -116,5 +119,5 @@ These colours carry no meaning. They only tell pages apart; the item is always n
 
 ## Token gaps and open points
 
-- New tokens: `banner.palette.1` to `banner.palette.8` and `banner.end` (Ruling R-IB1). They are added to `tokens.json` by the session that builds this.
+- Tokens: `banner.palette.1` to `banner.palette.8` and `banner.end` (Ruling R-IB1) are in `tokens.json`.
 - Sizes use existing tokens. The 44 px pill height is a fixed measure from the approved screenshot, not a new token.
