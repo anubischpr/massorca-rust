@@ -10,6 +10,7 @@ use massorca_protocol::methods::agents::{
     AgentKind, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueParams,
     AgentSession, AgentSetModeParams, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -83,10 +84,10 @@ const QUEUEING: &str = "Queueing…";
 const RESUMING: &str = "Resuming…";
 const STARTING: &str = "Starting…";
 
-/// Whether a session runs in its terminal alone, with no composer (owner request 2026-11-24). Every session does until
-/// `AgentSession` carries `run: terminal|chat`, which then decides here.
-pub(super) fn is_terminal_arm(_session: &AgentSession) -> bool {
-    true
+/// Whether a session runs in its terminal alone, with no composer (owner request 2026-11-24). A session whose `run` is
+/// `chat` opens the transcript view instead; an absent or unknown run is a terminal session (decision 0101, D2).
+pub(super) fn is_terminal_arm(session: &AgentSession) -> bool {
+    session.run != RunType::Chat
 }
 
 /// Whether a session's run is live: its terminal runs, or may still, so it can be stopped.
@@ -421,7 +422,13 @@ impl Shell {
                 .and_then(|queues| queues.get(&id).cloned());
             (session, state.agent_kinds.clone(), queue)
         };
-        let transcript = self.chat_transcripts.get(&id).map(transcript_rows);
+        // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
+        // terminal session draws one only where a test holds a transcript for it.
+        let transcript = match self.chat_transcripts.get(&id) {
+            Some(held) => Some(transcript_rows(held)),
+            None if !is_terminal_arm(&session) => Some(Vec::new()),
+            None => None,
+        };
         if let Some(terminal) = session.terminal_id.as_deref()
             && !self.terminal_views.contains_key(terminal)
             && transcript.is_none()
@@ -466,7 +473,6 @@ impl Shell {
                 }
             }
         });
-        // The chat arm turns on with AgentSession.run; until then only a transcript fixture gives a session one.
         let terminal_arm = is_terminal_arm(&session) && transcript.is_none();
         let (mode_chip, mode_note) = match (&modes, terminal_arm) {
             (Some(modes), true) => (

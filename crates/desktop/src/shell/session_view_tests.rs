@@ -1079,3 +1079,34 @@ fn a_chat_arm_session_draws_its_transcript_and_composer_and_no_terminal(cx: &mut
     assert!(cx.debug_bounds("composer-primary").is_some());
     assert!(cx.debug_bounds("session-terminal").is_none());
 }
+
+/// A session whose service record says it runs as a chat.
+fn chat_s1(ended: bool) -> AgentSession {
+    let mut session = s1(ended, None);
+    session.run = massorca_protocol::methods::chat::RunType::Chat;
+    session.terminal_id = None;
+    session
+}
+
+#[gpui::test]
+fn a_session_the_service_runs_as_a_chat_opens_the_transcript_view_with_no_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+
+    assert!(cx.debug_bounds("transcript-list").is_some());
+    assert!(cx.debug_bounds("composer-primary").is_some());
+    assert!(cx.debug_bounds("session-terminal").is_none());
+    assert!(cx.debug_bounds("session-arm").is_none());
+}
+
+#[gpui::test]
+fn a_session_without_a_run_is_a_terminal_session_and_keeps_its_terminal_arm(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(false, None)]);
+
+    assert!(cx.debug_bounds("transcript-list").is_none());
+    assert!(cx.debug_bounds("composer-primary").is_none());
+    assert!(cx.debug_bounds("session-arm").is_some());
+}
