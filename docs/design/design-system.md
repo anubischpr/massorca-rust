@@ -507,6 +507,7 @@ Rules: spacing inside a component is at most one step smaller than the gap aroun
 | `size.avatar.lg` | 40 | Agent and team icon, large. |
 | `size.indicator.dot` | 6 | Status, unread, connection and dirty dots; the Badge dot variant |
 | `size.badge.height` | 16 | Badge height on desktop (Android: 20 dp) |
+| `size.tag.height` | 20 | Badge tag variant height on desktop (Android: 24 dp); ruling B9, 2026-11-25 |
 | `size.kbd.height` | 16 | Kbd key cap height |
 | `size.toolbar` | 36 | Toolbar strip in a Work panel tab (Browser chrome, Diff view) |
 | `size.progress.height` | 4 | Progress bar height. |
