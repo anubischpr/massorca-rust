@@ -45,6 +45,9 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
         }
         VaultError::InvalidScope => (codes::SECRET_INVALID_SCOPE, None),
         VaultError::TooLarge => (codes::SECRET_TOO_LARGE, None),
+        VaultError::InvalidService | VaultError::InvalidServiceField(_) => {
+            (codes::REQUEST_INVALID_PARAMS, None)
+        }
         VaultError::InvalidReason => (codes::SECRET_INVALID_REASON, None),
         VaultError::InvalidSession => (codes::SECRET_INVALID_SESSION, None),
         VaultError::NameCaseClash {

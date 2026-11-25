@@ -11,6 +11,7 @@ pub(crate) mod extension_process;
 mod extensions;
 mod git;
 mod host;
+mod hosted_services;
 mod projects;
 mod secret_params;
 mod secret_refusals;
@@ -62,6 +63,7 @@ pub(crate) fn register_core(
     handles.extend(agents::register(registries)?);
     handles.extend(extensions::register(registries)?);
     handles.extend(skills::register(registries)?);
+    handles.extend(hosted_services::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);
