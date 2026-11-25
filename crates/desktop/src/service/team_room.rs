@@ -1,16 +1,18 @@
 //! A team's Conference room on the service (capability `team-room/1`, decision 0102): its lines, read when the room
-//! opens and again on `team.room_changed`, and a person's line posted to it.
+//! opens and again on `team.room_changed`, a person's line posted to it, and a choice card answered (decision 0121).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::team_room::{
-    TeamRoomListParams, TeamRoomMessage, TeamRoomPostParams, TeamRoomPosted,
+    TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomListParams, TeamRoomMessage,
+    TeamRoomPostParams, TeamRoomPosted,
 };
 use massorca_protocol::{capabilities, codes};
 use tokio::sync::{mpsc, oneshot};
 
+use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::teams::Sequence;
 use super::update::StoreUpdate;
@@ -61,6 +63,23 @@ pub(crate) enum RoomCommand {
         params: TeamRoomPostParams,
         reply: oneshot::Sender<Result<TeamRoomPosted, Refusal>>,
     },
+    /// Answers a choice card, then reads the room again.
+    Answer {
+        params: TeamRoomAnswerParams,
+        reply: oneshot::Sender<Result<TeamRoomAnswered, Refusal>>,
+    },
+}
+
+impl ServiceHandle {
+    /// `team.room_answer`: answers a choice card of a team's room once. The room is read again once the service
+    /// answers.
+    pub async fn answer_team_room_card(
+        &self,
+        params: TeamRoomAnswerParams,
+    ) -> Result<TeamRoomAnswered, Refusal> {
+        self.ask(|reply| Command::Room(RoomCommand::Answer { params, reply }))
+            .await
+    }
 }
 
 /// Reads one team's room. A service without the capability answers with `NO_ROOM`; a refusal is an answer; a lost
@@ -121,6 +140,19 @@ pub(super) fn spawn_call(
                 let _ = reply.send(answer);
                 team
             }
+            RoomCommand::Answer { params, reply } => {
+                let team = params.team.clone();
+                let answer = if client.has_capability(capabilities::TEAM_ROOM) {
+                    client
+                        .team_room_answer(&params)
+                        .await
+                        .map_err(|error| Refusal::from(&error))
+                } else {
+                    Err(no_room())
+                };
+                let _ = reply.send(answer);
+                team
+            }
         };
         if let Ok(read) = read(&client, &sequence, team).await {
             let _ = updates.send(StoreUpdate::TeamRoom(read));
@@ -130,8 +162,14 @@ pub(super) fn spawn_call(
 
 /// Refuses a room call while no service is connected.
 pub(super) fn refuse(command: RoomCommand, refusal: Refusal) {
-    if let RoomCommand::Post { reply, .. } = command {
-        let _ = reply.send(Err(refusal));
+    match command {
+        RoomCommand::Read { .. } => {}
+        RoomCommand::Post { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        RoomCommand::Answer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
     }
 }
 

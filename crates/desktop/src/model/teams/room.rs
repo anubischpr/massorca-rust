@@ -1,10 +1,11 @@
 //! The Conference room as the page draws it (bt-conference-room, screens 4.2, decision 0102): the lines of the team's
-//! room with who wrote them and the task or routine each is about, and the bot that receives a line naming no bot.
+//! room with who wrote them and the task, routine or choice card each is about, and the bot that receives a line naming
+//! no bot.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_protocol::methods::tasks::Column as WireColumn;
-use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, TeamRoomMessage};
 use massorca_protocol::methods::teams::{Routine, RoutineCadence};
 
 use super::types::{BotId, Team};
@@ -37,6 +38,8 @@ pub struct RoomLine {
     pub task: Option<RoomTask>,
     /// The one-time routine the line scheduled (decision 0121).
     pub routine: Option<RoomRoutine>,
+    /// The choice card the line is (decision 0121).
+    pub card: Option<RoomCard>,
 }
 
 /// The routine a line scheduled, as its "Routine created" card shows it.
@@ -56,6 +59,8 @@ pub enum Speaker {
         name: String,
         lead: bool,
     },
+    /// The room itself, which asks on a choice card who takes a request.
+    Room,
     /// A bot that was removed since, or an author this build does not know.
     Gone,
 }
@@ -89,6 +94,7 @@ pub fn room_view(
 fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZone) -> RoomLine {
     let speaker = match message.author {
         RoomAuthor::Person => Speaker::Person,
+        RoomAuthor::Bot if message.card.is_some() => Speaker::Room,
         RoomAuthor::Bot => match (&message.bot_name, message.bot_id.as_deref()) {
             (Some(name), Some(id)) => Speaker::Bot {
                 name: name.clone(),
@@ -111,6 +117,7 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
             name: routine.name.clone(),
             when: routine_when(routine),
         }),
+        card: message.card.clone(),
     }
 }
 
@@ -149,12 +156,15 @@ pub fn clock_text(at_ms: i64, zone: &TimeZone) -> String {
 }
 
 /// The bot that receives a line naming no bot: the one picked in the composer while it is still on the team, else
-/// the lead, else the first bot.
+/// the lead, else the only bot. `None` with several bots: the room then asks on a choice card.
 pub fn receiver(team: &Team, picked: Option<BotId>) -> Option<BotId> {
     picked
         .filter(|bot| team.bot(*bot).is_some())
         .or(team.lead)
-        .or_else(|| team.bots.first().map(|bot| bot.id))
+        .or(match team.bots.as_slice() {
+            [only] => Some(only.id),
+            _ => None,
+        })
 }
 
 #[cfg(test)]
@@ -305,7 +315,35 @@ mod tests {
     }
 
     #[test]
-    fn a_line_naming_no_bot_goes_to_the_pick_else_the_lead_else_the_first_bot() {
+    fn a_card_line_is_the_room_speaking_and_carries_its_options() {
+        use massorca_protocol::methods::team_room::{RoomChoice, RoomChoiceKind};
+        let card = RoomCard {
+            request_id: "m1".to_owned(),
+            options: vec![RoomChoice {
+                choice: "todo".to_owned(),
+                kind: RoomChoiceKind::Todo,
+                label: "Keep in this team's Todo".to_owned(),
+            }],
+            answer: None,
+        };
+        let mut line = message(RoomAuthor::Bot, None, "Who should take this?");
+        line.card = Some(card.clone());
+        let read = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            room: Ok(vec![line]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&read), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(lines[0].speaker, Speaker::Room);
+        assert_eq!(lines[0].card, Some(card));
+    }
+
+    #[test]
+    fn a_line_naming_no_bot_goes_to_the_pick_else_the_lead_else_the_only_bot() {
         let mut team = team();
         let first = team.bots[0].id;
         let second = team.bots[1].id;
@@ -318,7 +356,10 @@ mod tests {
             "a removed pick"
         );
         team.lead = None;
-        assert_eq!(receiver(&team, None), Some(first), "the first bot");
+        assert_eq!(receiver(&team, None), None, "several bots: a choice card");
+        assert_eq!(receiver(&team, Some(first)), Some(first), "the pick");
+        team.bots.truncate(1);
+        assert_eq!(receiver(&team, None), Some(first), "the only bot");
         team.bots.clear();
         assert_eq!(receiver(&team, None), None);
     }

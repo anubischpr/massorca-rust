@@ -1,5 +1,6 @@
 //! The Conference room of a team (bt-conference-room, screens 4.2, decision 0102): its header with the team pill and
-//! the bots, the thread of the room, and a composer whose receiver picks the bot a line naming none goes to.
+//! the bots, the thread of the room with its task, routine and choice cards, and a composer whose receiver picks the
+//! bot a line naming none goes to.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,7 +18,7 @@ use gpui::{
     Styled, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
 use jiff::tz::TimeZone;
-use massorca_protocol::methods::team_room::TeamRoomPostParams;
+use massorca_protocol::methods::team_room::{RoomCard, TeamRoomAnswerParams, TeamRoomPostParams};
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
@@ -35,6 +36,8 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// What the room says when the shell has no service behind it.
 const NO_SERVICE: &str = "The Conference room needs a connected MassOrca service.";
+/// The name a choice card is posted under.
+const ROOM_SPEAKER: &str = "Conference room";
 
 /// The room's state the shell keeps: the composer of the team on screen, each team's picked receiver, and why the
 /// last line was refused.
@@ -46,6 +49,8 @@ pub(in crate::shell) struct RoomPage {
     notice: Option<(TeamId, String)>,
     /// A refused line's text, put back in the field on the next draw.
     restore: Option<String>,
+    /// The choice card whose answer is on its way.
+    answering: Option<String>,
     /// Start at once is off: a person's next task waits in Todo.
     hold: bool,
     /// The room reads asked for, by the service's team id, so each team is read once per open page.
@@ -64,6 +69,7 @@ impl fmt::Debug for RoomPage {
             .field("sending", &self.sending)
             .field("notice", &self.notice)
             .field("hold", &self.hold)
+            .field("answering", &self.answering)
             .field("receiver_menu", &self.receiver_menu.is_some())
             .finish_non_exhaustive()
     }
@@ -93,6 +99,8 @@ pub(in crate::shell) struct RoomFrame {
     notice: Option<String>,
     /// Whether a person's task starts at once.
     at_once: bool,
+    /// The choice card whose answer is on its way.
+    answering: Option<String>,
     shell: WeakEntity<Shell>,
 }
 
@@ -148,6 +156,7 @@ impl Shell {
             sending: self.room_page.sending,
             notice,
             at_once: !self.room_page.hold,
+            answering: self.room_page.answering.clone(),
             shell: cx.entity().downgrade(),
         })
     }
@@ -251,6 +260,43 @@ impl Shell {
         .detach();
     }
 
+    /// Answers the choice card `message` of `team`'s room with `choice`. A refusal shows above the composer.
+    pub(in crate::shell) fn answer_room_card(
+        &mut self,
+        team: TeamId,
+        message: String,
+        choice: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.room_page.answering.is_some() {
+            return;
+        }
+        let (Some(service), Some(key)) = (self.service.clone(), self.team_key(team, cx)) else {
+            return;
+        };
+        self.room_page.answering = Some(message.clone());
+        self.room_page.notice = None;
+        cx.notify();
+        let params = TeamRoomAnswerParams {
+            team: key,
+            message,
+            choice,
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.answer_team_room_card(params).await;
+            this.update(cx, |shell, cx| {
+                shell.room_page.answering = None;
+                if let Err(refusal) = answer {
+                    shell.room_page.notice =
+                        Some((team, format!("Not answered: {}", refusal.sentence())));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Opens the menu of the bots a line naming none can go to, at the pointer.
     pub(in crate::shell) fn open_receiver_menu(
         &mut self,
@@ -344,11 +390,7 @@ pub(in crate::shell) fn conference_page(
             .flex()
             .flex_col()
             .gap(px(SPACE_4))
-            .children(
-                lines
-                    .iter()
-                    .map(|line| line_view(line, &frame.team, &frame.shell, &theme)),
-            )
+            .children(lines.iter().map(|line| line_view(line, &frame, &theme)))
             .into_any_element(),
     };
     let ready = matches!(frame.view, RoomView::Lines(_)) && !frame.team.bots.is_empty();
@@ -392,9 +434,10 @@ fn bots_row(team: &Team, theme: &Theme) -> impl IntoElement {
         )
 }
 
-/// One line: a person's bubble on the right, or a bot's row with its character, name, Lead tag, time, and its task or
-/// routine card.
-fn line_view(line: &RoomLine, team: &Team, shell: &WeakEntity<Shell>, theme: &Theme) -> AnyElement {
+/// One line: a person's bubble on the right, or a bot's row with its character, name, Lead tag, time, and its task,
+/// routine or choice card.
+fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
+    let (team, shell) = (&frame.team, &frame.shell);
     let palette = theme.palette;
     match &line.speaker {
         Speaker::Person => div()
@@ -416,6 +459,7 @@ fn line_view(line: &RoomLine, team: &Team, shell: &WeakEntity<Shell>, theme: &Th
         speaker => {
             let (name, lead) = match speaker {
                 Speaker::Bot { name, lead } => (name.clone(), *lead),
+                Speaker::Room => (ROOM_SPEAKER.to_owned(), false),
                 _ => ("A removed bot".to_owned(), false),
             };
             let meta = div()
@@ -460,6 +504,16 @@ fn line_view(line: &RoomLine, team: &Team, shell: &WeakEntity<Shell>, theme: &Th
                         &routine.when,
                         team.id,
                         &line.id,
+                        shell,
+                        theme,
+                    )
+                }))
+                .children(line.card.as_ref().map(|card| {
+                    choice_card(
+                        card,
+                        &line.id,
+                        frame.answering.is_some(),
+                        team.id,
                         shell,
                         theme,
                     )
@@ -546,6 +600,53 @@ fn routine_card(
     )
 }
 
+/// A choice card (decision 0121): a button per option while it waits, else the option it was answered with.
+fn choice_card(
+    card: &RoomCard,
+    line: &str,
+    busy: bool,
+    team: TeamId,
+    shell: &WeakEntity<Shell>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let body =
+        match card.answer.as_deref() {
+            Some(answer) => {
+                let label = card
+                    .options
+                    .iter()
+                    .find(|option| option.choice == answer)
+                    .map_or(answer, |option| option.label.as_str());
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.secondary)
+                    .debug_selector(|| "room-card-answer".to_owned())
+                    .child(format!("Answered: {label}"))
+            }
+            None => div().flex().flex_wrap().gap(px(SPACE_2)).children(
+                card.options.iter().enumerate().map(|(index, option)| {
+                    let (shell, message, choice) =
+                        (shell.clone(), line.to_owned(), option.choice.clone());
+                    Button::new(format!("room-card-{line}-{index}"), option.label.clone())
+                        .variant(ButtonVariant::Secondary)
+                        .size(ButtonSize::Compact)
+                        .disabled(busy)
+                        .on_click(move |_, cx| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.answer_room_card(team, message.clone(), choice.clone(), cx);
+                            });
+                        })
+                }),
+            ),
+        };
+    div().max_w(px(560.)).child(
+        Card::new(format!("room-card-{line}"))
+            .padding(CardPadding::Compact)
+            .title("Who should take this?")
+            .child(body),
+    )
+}
+
 /// The composer: the refusal of the last line, the field, the receiver, Start at once and Send.
 fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
     let team = frame.team.id;
@@ -562,6 +663,7 @@ fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
     let receiver = match &frame.receiver {
         Some((name, true)) => format!("Lead bot: {name}"),
         Some((name, false)) => format!("To: {name}"),
+        None if !frame.team.bots.is_empty() => "To: choose on a card".to_owned(),
         None => "No bot".to_owned(),
     };
     div()
@@ -938,5 +1040,111 @@ mod tests {
             Some("b1"),
             "Mara, picked in the composer"
         );
+    }
+
+    #[gpui::test]
+    fn a_choice_card_answers_with_its_option_and_shows_a_refusal(cx: &mut TestAppContext) {
+        use massorca_protocol::methods::team_room::{RoomChoice, RoomChoiceKind};
+
+        let (mut rig, cx) = open_room(cx);
+        let mut card = line(RoomAuthor::Bot, None, "asked");
+        card.card = Some(RoomCard {
+            request_id: "m1".into(),
+            options: vec![
+                RoomChoice {
+                    choice: "bot:b1".into(),
+                    kind: RoomChoiceKind::Bot,
+                    label: "Mara".into(),
+                },
+                RoomChoice {
+                    choice: "todo".into(),
+                    kind: RoomChoiceKind::Todo,
+                    label: "Keep in this team's Todo".into(),
+                },
+            ],
+            answer: None,
+        });
+        rig.updates
+            .send(room_read(vec![card.clone()]))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        click(cx, "button:room-card-asked-1");
+        let Some(Command::Room(RoomCommand::Answer { params, reply })) = rig.script.next() else {
+            panic!("an option answers the card");
+        };
+        assert_eq!(
+            (
+                params.team.as_str(),
+                params.message.as_str(),
+                params.choice.as_str()
+            ),
+            ("t1", "asked", "todo")
+        );
+        let _ = reply.send(Err(Refusal::Failed {
+            code: "team.room_card_answered".into(),
+            message: "this choice card was answered already".into(),
+        }));
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            cx.debug_bounds("room-notice").is_some(),
+            "the refusal shows"
+        );
+
+        let mut answered = card;
+        if let Some(card) = answered.card.as_mut() {
+            card.answer = Some("todo".into());
+        }
+        rig.updates
+            .send(StoreUpdate::TeamRoom(TeamRoomRead {
+                team: "t1".into(),
+                number: 2,
+                room: Ok(vec![answered]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-card-answer").is_some());
+        assert!(
+            cx.debug_bounds("button:room-card-asked-0").is_none(),
+            "an answered card offers nothing"
+        );
+    }
+
+    #[gpui::test]
+    fn without_a_lead_or_a_pick_a_line_of_several_bots_names_no_receiver(cx: &mut TestAppContext) {
+        let (mut rig, cx) = open_room(cx);
+        let mut record = team("t1", "Desarrollo");
+        record.bots = vec![bot("b1", "Mara", false), bot("b2", "Bruno", false)];
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 2,
+                teams: Ok(vec![record]),
+            }))
+            .expect("the store listens");
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            field.update(cx, |field, cx| field.set_text("Check the logs", window, cx));
+        });
+        click(cx, "room-send");
+        let params = loop {
+            match rig.script.next() {
+                Some(Command::Room(RoomCommand::Post { params, .. })) => break params,
+                Some(_) => {}
+                None => panic!("Send posts the line"),
+            }
+        };
+        assert_eq!(params.to, None, "the service answers with a choice card");
     }
 }
