@@ -9,12 +9,14 @@ use gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
 };
 use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::composer::{AccessMode, Composer, ComposerEvent};
+use massorca_ui::components::invocation_banner::hex_colour;
 use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::model_picker::{
-    AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
+    AgentAvailability, AgentBrand, AgentOption, Choice, ModelList, ModelOption, PickerState,
 };
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
@@ -26,6 +28,7 @@ use massorca_ui::tokens::{
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::Shell;
@@ -42,7 +45,7 @@ use crate::model::permission_modes::{DEFAULT_TAG, ModeChoice, remembered_mode, s
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
     StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, fast_reason,
-    send_reason, start_options, start_params,
+    send_reason, start_options, start_params, start_refusal_sentence,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -305,23 +308,26 @@ pub(super) fn access_tags(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
         .collect()
 }
 
-/// The installed kinds as the picker's rail offers them: each kind's declared models with the levels each accepts, or the
-/// kind itself as its one row when it declares no models. No declaration carries a Fast flag yet, so Fast is off.
-pub(super) fn picker_agents(kinds: &[AgentKind], installed: &[KindChoice]) -> Vec<AgentOption> {
+/// The installed kinds as the picker's rail offers them: each kind's declared models with the levels each accepts. A
+/// kind that declares no models is its own one row, with the levels the kind declares. Each agent carries the brand
+/// colours its Marketplace listing gives.
+pub(super) fn picker_agents(
+    kinds: &[AgentKind],
+    installed: &[KindChoice],
+    brands: &BTreeMap<String, AgentBrand>,
+) -> Vec<AgentOption> {
     installed
         .iter()
         .map(|choice| {
-            let declared = kinds
-                .iter()
-                .find(|kind| kind.id == choice.id)
-                .map(declared_models)
-                .unwrap_or_default();
+            let kind = kinds.iter().find(|kind| kind.id == choice.id);
+            let declared = kind.map(declared_models).unwrap_or_default();
             let models = if declared.is_empty() {
+                let (efforts, default_effort) = kind.map_or_else(|| (Vec::new(), 0), kind_levels);
                 vec![ModelOption {
                     id: choice.id.clone().into(),
                     name: choice.name.clone().into(),
-                    efforts: Vec::new(),
-                    default_effort: 0,
+                    efforts,
+                    default_effort,
                     fast: false,
                 }]
             } else {
@@ -345,9 +351,54 @@ pub(super) fn picker_agents(kinds: &[AgentKind], installed: &[KindChoice]) -> Ve
                 availability: AgentAvailability::Ready,
                 list: ModelList::Loaded,
                 models,
+                brand: brands.get(&choice.id).copied(),
             }
         })
         .collect()
+}
+
+/// A kind's own levels as its picker row lists them, in declared order, and the index of its declared default.
+fn kind_levels(kind: &AgentKind) -> (Vec<SharedString>, usize) {
+    let Some(effort) = &kind.effort else {
+        return (Vec::new(), 0);
+    };
+    let default = effort
+        .default
+        .as_deref()
+        .and_then(|id| effort.levels.iter().position(|level| level.id == id))
+        .unwrap_or(0);
+    let labels = effort
+        .levels
+        .iter()
+        .map(|level| SharedString::from(level.label.clone()))
+        .collect();
+    (labels, default)
+}
+
+/// The brand colours of each agent kind, from the Marketplace listing of the package that declares it, the installed
+/// package before the catalogue's. The first listed colour starts the fill and the second, when given, ends it.
+pub(super) fn agent_brands(
+    installed: &[ExtensionItem],
+    catalogue: &[ExtensionItem],
+) -> BTreeMap<String, AgentBrand> {
+    let mut brands = BTreeMap::new();
+    for entry in installed.iter().chain(catalogue) {
+        if entry.listing.category != "agents" {
+            continue;
+        }
+        let (Some(kind), Some(banner)) = (entry.agents.first(), entry.listing.banner.as_ref())
+        else {
+            continue;
+        };
+        let Some(first) = banner.colors.first().and_then(|text| hex_colour(text)) else {
+            continue;
+        };
+        let second = banner.colors.get(1).and_then(|text| hex_colour(text));
+        brands
+            .entry(kind.id.clone())
+            .or_insert(AgentBrand { first, second });
+    }
+    brands
 }
 
 /// The model and effort the picker chose, as `agent.start` takes them: the declared id of the chosen model and of the
@@ -357,15 +408,24 @@ pub(super) fn picked_options(
     offered: bool,
     kinds: &[AgentKind],
 ) -> StartOptions {
-    let Some((_, model)) = declared_model(kinds, &picker.choice().model) else {
+    let chosen = picker.choice().effort;
+    if let Some((_, model)) = declared_model(kinds, &picker.choice().model) {
+        let effort = chosen
+            .and_then(|index| model.efforts.get(index))
+            .map(|effort| effort.id.as_str());
+        return start_options(offered, Some(&model.id), effort);
+    }
+    // A kind that declares levels but no model offers them on its own row, and sends the level without a model.
+    let Some(kind) = kinds.iter().find(|kind| kind.id == picker.choice().model) else {
         return StartOptions::default();
     };
-    let effort = picker
-        .choice()
+    let effort = kind
         .effort
-        .and_then(|index| model.efforts.get(index))
-        .map(|effort| effort.id.as_str());
-    start_options(offered, Some(&model.id), effort)
+        .as_ref()
+        .zip(chosen)
+        .and_then(|(effort, index)| effort.levels.get(index))
+        .map(|level| level.id.as_str());
+    start_options(offered, None, effort)
 }
 
 /// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
@@ -685,13 +745,17 @@ impl Shell {
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let (choices, connected, kinds, agent_fast) = {
+        let (choices, connected, kinds, agent_fast, brands) = {
             let state = self.store.read(cx).state();
             (
                 session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
                 state.agent_fast,
+                {
+                    let (installed, catalogue) = state.extension_lists();
+                    agent_brands(installed, catalogue)
+                },
             )
         };
         let installed_kinds: Vec<AgentKind> = kinds
@@ -701,7 +765,7 @@ impl Shell {
             .collect();
         let preselect = preselected_model(&installed_kinds).map(SharedString::from);
         composer.update(cx, |composer, cx| {
-            composer.set_picker_agents(picker_agents(&kinds, &choices), preselect, cx);
+            composer.set_picker_agents(picker_agents(&kinds, &choices, &brands), preselect, cx);
             // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
             composer.set_no_agents_installed(connected && choices.is_empty(), cx);
             // Fast is off on every model until the service offers its speed (`AGENT_FAST_CAPABILITY`).
@@ -970,7 +1034,7 @@ impl Shell {
             }
             Err(refusal) => composer.update(cx, |composer, cx| {
                 composer.set_draft(prompt, cx);
-                composer.set_error(Some(refusal.sentence().into()), cx);
+                composer.set_error(Some(start_refusal_sentence(&refusal).into()), cx);
             }),
         }
         cx.notify();
