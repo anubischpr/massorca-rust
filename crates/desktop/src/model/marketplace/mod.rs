@@ -16,6 +16,7 @@ mod remove_review;
 mod sample;
 mod service_accounts;
 mod service_source;
+mod skill_placement;
 mod skills;
 mod source;
 mod types;
@@ -44,6 +45,10 @@ pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
+pub use skill_placement::{
+    ManagedRow, detected_agents, managed_rows, place_review_sentence, plan_detail_lines,
+    remove_review_sentence, result_sentence,
+};
 pub use skills::{RootRow, SkillRow, root_rows, search_skills, skill_count_line, skill_rows};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
