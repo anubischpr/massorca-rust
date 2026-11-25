@@ -1,14 +1,18 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
+use std::collections::BTreeMap;
+
 use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
+use super::bot_edit::BotChange;
+use super::filters::ProjectFilter;
 use super::live::agent_of_kind;
 use super::page::TeamPage;
 use super::team_edit::TeamChange;
 use super::types::{
-    AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
-    RoutineId, Task, Team, TeamId,
+    AddressId, BoardOwner, Bot, BotId, Column, HostChoice, MemoryId, MemoryTab, Pick, Project,
+    ProjectId, RoutineId, Task, Team, TeamId,
 };
 
 /// Names hold at most this many characters (screens 4.5, 4.7).
@@ -29,6 +33,10 @@ pub enum TeamError {
     NameTaken,
     /// A project the service reads keeps no Workspaces link, so none can be chosen for it.
     LinkNotSaved,
+    /// Another bot on the same team has this name.
+    BotNameTaken,
+    /// The bot owns open tasks, so it cannot be removed yet.
+    BotHasTasks,
 }
 
 /// The sentence under a project's link control when the service keeps no link for the project.
@@ -45,6 +53,8 @@ impl TeamError {
             TeamError::NameTooLong => "Use up to 40 characters.",
             TeamError::NameTaken => "Name is already used in this host.",
             TeamError::LinkNotSaved => LINK_NOT_SAVED,
+            TeamError::BotNameTaken => "Another bot on this team has this name.",
+            TeamError::BotHasTasks => "This bot owns open tasks, so it cannot be removed yet.",
         }
     }
 }
@@ -84,6 +94,10 @@ pub struct TeamsState {
     access_notice: Option<(TeamId, String)>,
     /// Why the last removal of a team was refused, and for which team.
     removal_notice: Option<(TeamId, String)>,
+    /// The project filter each team's Board shows; a team with none shows every card.
+    board_filters: BTreeMap<TeamId, ProjectFilter>,
+    /// Whether the Sidebar leaves out the projects whose cards are all Done.
+    hide_finished_projects: bool,
     next_id: u32,
 }
 
@@ -106,6 +120,8 @@ impl TeamsState {
             notice: None,
             access_notice: None,
             removal_notice: None,
+            board_filters: BTreeMap::new(),
+            hide_finished_projects: false,
             next_id,
         }
     }
@@ -151,7 +167,44 @@ impl TeamsState {
         fresh.memory_tab = self.memory_tab;
         fresh.notice = self.notice.clone();
         fresh.access_notice = self.access_notice.clone();
+        fresh.board_filters = self.board_filters.clone();
+        fresh.hide_finished_projects = self.hide_finished_projects;
         fresh
+    }
+
+    /// The project filter a team's Board shows. A project the team no longer holds shows every card.
+    pub fn board_filter(&self, team: TeamId) -> ProjectFilter {
+        match self.board_filters.get(&team).copied().unwrap_or_default() {
+            ProjectFilter::Project(project)
+                if self
+                    .team(team)
+                    .is_none_or(|team| team.project(project).is_none()) =>
+            {
+                ProjectFilter::All
+            }
+            filter => filter,
+        }
+    }
+
+    /// Chooses the project filter of a team's Board. A card picked up under the old filter is put back.
+    pub fn set_board_filter(
+        &mut self,
+        team: TeamId,
+        filter: ProjectFilter,
+    ) -> Result<(), TeamError> {
+        self.team(team).ok_or(TeamError::Missing)?;
+        self.board_filters.insert(team, filter);
+        self.pick = None;
+        Ok(())
+    }
+
+    /// Whether the Sidebar leaves out the projects whose cards are all Done.
+    pub fn hides_finished_projects(&self) -> bool {
+        self.hide_finished_projects
+    }
+
+    pub fn set_hide_finished_projects(&mut self, hidden: bool) {
+        self.hide_finished_projects = hidden;
     }
 
     pub fn pick(&self) -> Option<&Pick> {
@@ -218,6 +271,7 @@ impl TeamsState {
             name,
             role: new.role.trim().to_owned(),
             agent: agent_of_kind(&new.kind),
+            kind: new.kind,
             kind_unavailable: None,
         });
         if team.lead.is_none() {
@@ -446,6 +500,83 @@ impl TeamsState {
         self.teams.remove(index);
         if self.selected == Some(team) {
             self.selected = None;
+        }
+        Ok(())
+    }
+
+    /// Changes a bot on sample data; a connected service writes it itself. A name another bot of the team has is
+    /// refused, as the service refuses it.
+    pub fn change_bot(
+        &mut self,
+        team: TeamId,
+        bot: BotId,
+        change: &BotChange,
+    ) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let bots = &self.teams[index].bots;
+        let at = bots
+            .iter()
+            .position(|item| item.id == bot)
+            .ok_or(TeamError::Missing)?;
+        if let Some(name) = &change.name
+            && bots
+                .iter()
+                .any(|other| other.id != bot && other.name.eq_ignore_ascii_case(name))
+        {
+            return Err(TeamError::BotNameTaken);
+        }
+        let target = &mut self.teams[index].bots[at];
+        if let Some(name) = &change.name {
+            target.name = name.clone();
+        }
+        if let Some(job) = &change.job {
+            target.role = job.clone();
+        }
+        if let Some(kind) = &change.kind {
+            target.agent = agent_of_kind(kind);
+            target.kind = kind.clone();
+        }
+        Ok(())
+    }
+
+    /// Removes a bot on sample data, as the service does: a bot that owns an open task is refused, and its finished
+    /// tasks let go of it. A lead removed leaves the team without a lead.
+    pub fn remove_bot(&mut self, team: TeamId, bot: BotId) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let target = &mut self.teams[index];
+        let at = target
+            .bots
+            .iter()
+            .position(|item| item.id == bot)
+            .ok_or(TeamError::Missing)?;
+        let owns_open_task = target
+            .tasks
+            .iter()
+            .chain(
+                target
+                    .projects
+                    .iter()
+                    .flat_map(|project| project.tasks.iter()),
+            )
+            .any(|task| task.bot == Some(bot) && task.column != Column::Done);
+        if owns_open_task {
+            return Err(TeamError::BotHasTasks);
+        }
+        target.bots.remove(at);
+        if target.lead == Some(bot) {
+            target.lead = None;
+        }
+        for task in target.tasks.iter_mut().chain(
+            target
+                .projects
+                .iter_mut()
+                .flat_map(|project| project.tasks.iter_mut()),
+        ) {
+            if task.bot == Some(bot) {
+                task.bot = None;
+            }
         }
         Ok(())
     }
@@ -811,5 +942,63 @@ mod tests {
             Err(TeamError::Unavailable)
         );
         assert!(offline.teams().is_empty());
+    }
+
+    #[test]
+    fn a_bot_takes_a_new_name_and_job_and_refuses_a_name_another_bot_of_its_team_has() {
+        let mut state = SampleTeamsSource.teams();
+        let mara = BotId(1);
+        let taken = BotChange {
+            name: Some("Bruno".into()),
+            ..BotChange::default()
+        };
+        assert_eq!(
+            state.change_bot(TeamId(1), mara, &taken),
+            Err(TeamError::BotNameTaken)
+        );
+        let rename = BotChange {
+            name: Some("Marta".into()),
+            job: Some("Leads".into()),
+            kind: None,
+        };
+        state
+            .change_bot(TeamId(1), mara, &rename)
+            .expect("the bot is changed");
+        let bot = state
+            .team(TeamId(1))
+            .and_then(|team| team.bot(mara))
+            .expect("the bot is kept");
+        assert_eq!((bot.name.as_str(), bot.role.as_str()), ("Marta", "Leads"));
+    }
+
+    #[test]
+    fn a_bot_with_an_open_task_is_kept_and_one_with_only_finished_tasks_is_removed() {
+        let mut state = SampleTeamsSource.teams();
+        let bot = state
+            .add_bot(
+                TeamId(1),
+                NewBot {
+                    name: "Lucia".into(),
+                    role: "Reviews".into(),
+                    kind: "claude".into(),
+                },
+            )
+            .expect("the bot is added");
+        let board = BoardOwner::Team(TeamId(1));
+        state.tasks_mut(board).expect("the Board is there")[0].bot = Some(bot);
+        assert_eq!(
+            state.remove_bot(TeamId(1), bot),
+            Err(TeamError::BotHasTasks)
+        );
+        state.tasks_mut(board).expect("the Board is there")[0].column = Column::Done;
+        state
+            .remove_bot(TeamId(1), bot)
+            .expect("a bot with only finished tasks is removed");
+        assert!(
+            state
+                .team(TeamId(1))
+                .and_then(|team| team.bot(bot))
+                .is_none()
+        );
     }
 }

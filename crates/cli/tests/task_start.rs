@@ -163,14 +163,22 @@ fn a_task_starts_its_bot_in_the_team_folder_with_the_task_as_its_prompt() {
     assert_eq!(again["code"], "task.started");
 
     // A bot working on one task starts another in its own concurrent session, in the same team folder.
-    let second = create_task(&sandbox, "Write the docs", &["--bot", "mara"]);
+    // "hold" keeps this one Running too, so a loaded runner cannot let it finish its turn before the check.
+    let second = create_task(
+        &sandbox,
+        "Write the docs",
+        &["--bot", "mara", "--body", "Start with hold, then stop."],
+    );
     let concurrent = sandbox.json_ok("default", &["task", "start", second.as_str()]);
     let concurrent_session = concurrent["session_id"]
         .as_str()
         .expect("linked session")
         .to_owned();
     assert_ne!(concurrent_session, session);
-    assert_eq!(concurrent["column"], "running", "{concurrent}");
+    eventually("the concurrent task to be Running", || {
+        let shown = sandbox.json_ok("default", &["task", "show", second.as_str()]);
+        (shown["column"] == "running").then_some(())
+    });
     let concurrent_record =
         sandbox.json_ok("default", &["agent", "status", concurrent_session.as_str()]);
     assert_eq!(concurrent_record["workspace_id"], working["workspace_id"]);

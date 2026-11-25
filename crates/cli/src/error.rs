@@ -93,6 +93,7 @@ impl From<ClientError> for CliError {
             ClientError::HostUnreadable { .. } => "host.unreadable",
             ClientError::HostsBusy(_) => "host.busy",
             ClientError::InvalidHostName(_) => "host.invalid_name",
+            ClientError::CapabilityMissing { .. } => "service.capability_missing",
         };
         Self::new(code, message, exit_code)
     }

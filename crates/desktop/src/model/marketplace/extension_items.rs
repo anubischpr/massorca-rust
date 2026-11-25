@@ -149,7 +149,7 @@ pub(super) fn update_version(entry: &ExtensionItem, reviews: &[ExtensionReview])
 }
 
 /// The permissions as words, one per permission, or None when the package asks for none.
-fn permissions_text(permissions: &[Permission]) -> Option<String> {
+pub(super) fn permissions_text(permissions: &[Permission]) -> Option<String> {
     if permissions.is_empty() {
         return None;
     }
@@ -201,7 +201,7 @@ pub fn risk_word(level: RiskLevel) -> &'static str {
 }
 
 /// The banner's prompts: the caption of each mention example, which starts with the item's tag, such as "@claude".
-fn banner_prompts(entry: &ExtensionItem) -> Vec<String> {
+pub(super) fn banner_prompts(entry: &ExtensionItem) -> Vec<String> {
     entry
         .listing
         .banner
@@ -222,7 +222,7 @@ fn agent_kind_of(entry: &ExtensionItem) -> Option<String> {
 }
 
 /// Where the item comes from: an agent's vendor install page, else the developer's page; empty when neither is listed.
-fn source_of(entry: &ExtensionItem) -> String {
+pub(super) fn source_of(entry: &ExtensionItem) -> String {
     entry
         .agents
         .iter()
@@ -238,14 +238,18 @@ fn source_of(entry: &ExtensionItem) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use massorca_protocol::methods::extensions::{
         Banner, BannerExample, Listing, Risk, UninstallEffects,
     };
 
     use super::*;
 
-    fn package(id: &str, category: &str, state: ExtensionState) -> ExtensionItem {
+    pub(in crate::model::marketplace) fn package(
+        id: &str,
+        category: &str,
+        state: ExtensionState,
+    ) -> ExtensionItem {
         ExtensionItem {
             id: id.to_owned(),
             name: format!("Name of {id}"),
@@ -288,7 +292,7 @@ mod tests {
         }
     }
 
-    fn items(
+    pub(in crate::model::marketplace) fn items(
         installed: &[ExtensionItem],
         catalogue: &[ExtensionItem],
         kinds: &[&str],
@@ -428,7 +432,7 @@ mod tests {
         let body = crate::model::marketplace::uninstall_body(&found[0]);
         assert_eq!(
             body,
-            "Name of acme.notes is removed from this computer. Its package files are deleted. Its data is deleted. The claude CLI it installed stays on this computer."
+            "Name of acme.notes is removed from MassOrca. Its package files are deleted. Its data is deleted. The claude CLI it installed stays on this computer."
         );
     }
 
@@ -585,7 +589,10 @@ mod tests {
     }
 
     /// The catalogue package of a built-in agent, which names the agent kind it provides.
-    fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
+    pub(in crate::model::marketplace) fn agent_package(
+        kind: &str,
+        state: ExtensionState,
+    ) -> ExtensionItem {
         let mut entry = package(&format!("massorca.{kind}"), "agents", state);
         entry.publisher = FIRST_PARTY.to_owned();
         entry.agents = vec![massorca_protocol::methods::extensions::AgentItem {

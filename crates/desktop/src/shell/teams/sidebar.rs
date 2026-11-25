@@ -4,14 +4,14 @@
 use super::super::Shell;
 use super::super::change;
 use super::super::sidebar::row_focus;
-use super::waiting_icon;
+use super::filters::sidebar_filters_button;
+use super::new_project::new_project_button;
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
 use crate::model::teams::{
-    ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamPage, TeamRow, TeamsSidebar,
+    ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamId, TeamPage, TeamRow, TeamsSidebar,
 };
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
-use massorca_ui::components::button::ButtonSize;
 use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
 use massorca_ui::tokens::{
     SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
@@ -39,15 +39,18 @@ pub(in crate::shell) fn teams_list(
     }
     match &sidebar.projects {
         Some(section) => column
-            .child(teams_projects_header(&theme))
+            .child(teams_projects_header(section.team, shell, &theme))
             .child(projects_rows(section, shell, window, cx)),
         None => column,
     }
 }
 
-/// The PROJECTS header of the team in view: Filters and New project (4.1). Both wait for layers
-/// that do not exist yet, so they show disabled.
-fn teams_projects_header(theme: &Theme) -> impl IntoElement {
+/// The PROJECTS header of the team in view: Filters and New project (4.1).
+fn teams_projects_header(
+    team: TeamId,
+    shell: &WeakEntity<Shell>,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -68,14 +71,8 @@ fn teams_projects_header(theme: &Theme) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(px(SPACE_HALF))
-                .child(
-                    waiting_icon("teams-filters", IconName::ListFilter, "Filters")
-                        .size(ButtonSize::Compact),
-                )
-                .child(
-                    waiting_icon("teams-new-project", IconName::Plus, "New project")
-                        .size(ButtonSize::Compact),
-                ),
+                .child(sidebar_filters_button(shell))
+                .child(new_project_button(team, shell)),
         )
 }
 

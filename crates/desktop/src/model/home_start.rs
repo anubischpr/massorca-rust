@@ -5,13 +5,20 @@ use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 
-use super::start_page::start_params;
+use super::start_page::{StartOptions, start_params};
+use super::workspace_flow::ProjectChoice;
 
 /// The key of the page's composer among the workspace start composers; no workspace id is empty.
 pub const HOME_START: &str = "";
 
+/// Why a start-page control is off until the service can take it.
+pub const NEEDS_NEWER_SERVICE: &str = "Needs a newer service.";
+
 /// Why "No project" is off until the service can start an agent without a workspace (A95).
-pub const NO_PROJECT_NEEDS_SERVICE: &str = "Needs a newer service.";
+pub const NO_PROJECT_NEEDS_SERVICE: &str = NEEDS_NEWER_SERVICE;
+
+/// Send's reason while "Use an existing branch" has no branch name to reuse.
+pub const NAME_THE_BRANCH: &str = "Name the branch to reuse.";
 
 /// Send's reason while there is no project to create the workspace in.
 pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
@@ -52,19 +59,94 @@ pub fn home_project<'a>(projects: &'a [Project], chosen: Option<&str>) -> Option
         .or_else(|| projects.first())
 }
 
-/// The `workspace.create` that Send asks for: a new worktree in `project`, named from the prompt.
-pub fn create_params(project: &str, prompt: &str) -> WorkspaceCreateParams {
+/// What Send starts in: "No project" when the person chose it, else the project `home_project` picks, or `None` when
+/// there is none to create in.
+pub fn home_choice(projects: &[Project], chosen: Option<&ProjectChoice>) -> Option<ProjectChoice> {
+    if chosen == Some(&ProjectChoice::NoProject) {
+        return Some(ProjectChoice::NoProject);
+    }
+    let id = match chosen {
+        Some(ProjectChoice::Project(id)) => Some(id.as_str()),
+        _ => None,
+    };
+    home_project(projects, id).map(|project| ProjectChoice::Project(project.id.clone()))
+}
+
+/// The Advanced section's fields as Send reads them. Blank text sends nothing for its field.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceDetails {
+    /// Blank takes the prompt's first words, or the service's generated name.
+    pub name: String,
+    /// The new branch's name, or the existing branch's when `existing_branch` is set.
+    pub branch: String,
+    /// The base ref the new branch starts from.
+    pub base: String,
+    pub existing_branch: bool,
+}
+
+impl WorkspaceDetails {
+    /// Why Send is off: a branch to reuse must be named.
+    pub fn send_block(&self) -> Option<&'static str> {
+        (self.existing_branch && non_empty(&self.branch).is_none()).then_some(NAME_THE_BRANCH)
+    }
+}
+
+/// The branch pill's two labels: the branch Send creates or reuses, and where a new worktree starts (D-AG-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchPill {
+    pub label: String,
+    pub detail: String,
+}
+
+/// The branch pill's labels: a new worktree from the base the menu names, else the project's base, else the default
+/// branch; or the branch the menu reuses.
+pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> BranchPill {
+    if details.existing_branch {
+        return BranchPill {
+            label: non_empty(&details.branch).unwrap_or_else(|| "Existing branch".to_owned()),
+            detail: "existing branch".to_owned(),
+        };
+    }
+    let base = non_empty(&details.base)
+        .or_else(|| project_base.and_then(non_empty))
+        .unwrap_or_else(|| "the default branch".to_owned());
+    BranchPill {
+        label: "New worktree".to_owned(),
+        detail: format!("from {base}"),
+    }
+}
+
+/// The branch pill with "No project": Send starts the agent in the conversations folder, with no worktree.
+pub fn no_project_branch_pill() -> BranchPill {
+    BranchPill {
+        label: "No worktree".to_owned(),
+        detail: "conversations folder".to_owned(),
+    }
+}
+
+/// The `workspace.create` that Send asks for: a new worktree in `project`.
+pub fn create_params(
+    project: &str,
+    prompt: &str,
+    details: &WorkspaceDetails,
+) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
         project: project.to_owned(),
-        name: workspace_name_seed(prompt),
-        branch: None,
-        base: None,
-        existing_branch: false,
+        name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
+        branch: non_empty(&details.branch),
+        base: non_empty(&details.base),
+        existing_branch: details.existing_branch,
         refresh_base: false,
         path: None,
         request_id: None,
         no_setup: false,
     }
+}
+
+/// The text trimmed, or `None` when nothing is left of it.
+fn non_empty(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// The `agent.start` in the new workspace. A blank prompt starts the agent with none.
@@ -73,8 +155,31 @@ pub fn home_start_params(
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
+    options: StartOptions,
 ) -> AgentStartParams {
-    let mut params = start_params(workspace, kind, prompt, permission_mode);
+    start_in(Some(workspace), kind, prompt, permission_mode, options)
+}
+
+/// The `agent.start` with no workspace, which the service takes only with `agent-no-project/1`: the session runs in its
+/// own folder in the conversations folder, with no worktree or branch.
+pub fn no_project_start_params(
+    kind: &str,
+    prompt: &str,
+    permission_mode: Option<String>,
+    options: StartOptions,
+) -> AgentStartParams {
+    start_in(None, kind, prompt, permission_mode, options)
+}
+
+/// The `agent.start` in `workspace`, or with none. A blank prompt starts the agent with none.
+fn start_in(
+    workspace: Option<&str>,
+    kind: &str,
+    prompt: &str,
+    permission_mode: Option<String>,
+    options: StartOptions,
+) -> AgentStartParams {
+    let mut params = start_params(workspace, kind, prompt, permission_mode, options);
     if prompt.trim().is_empty() {
         params.prompt = None;
     }
@@ -134,19 +239,132 @@ mod tests {
 
     #[test]
     fn the_create_call_names_the_workspace_from_the_prompt() {
-        let params = create_params("p1", "fix the login");
+        let params = create_params("p1", "fix the login", &WorkspaceDetails::default());
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
         assert_eq!(params.branch, None);
+        assert_eq!(params.base, None);
         assert!(!params.existing_branch);
     }
 
     #[test]
+    fn typed_details_name_the_workspace_and_add_its_branch_and_base() {
+        let details = WorkspaceDetails {
+            name: "  login-fix ".into(),
+            branch: "feat/login".into(),
+            base: "main".into(),
+            existing_branch: false,
+        };
+        let params = create_params("p1", "fix the login", &details);
+        assert_eq!(params.name, "login-fix");
+        assert_eq!(params.branch.as_deref(), Some("feat/login"));
+        assert_eq!(params.base.as_deref(), Some("main"));
+        assert!(!params.existing_branch);
+    }
+
+    #[test]
+    fn a_blank_name_with_no_prompt_words_asks_the_service_for_one() {
+        let params = create_params("p1", "  ", &WorkspaceDetails::default());
+        assert_eq!(params.name, "");
+    }
+
+    #[test]
+    fn reusing_a_branch_needs_its_name_and_then_sends_it_as_existing() {
+        let mut details = WorkspaceDetails {
+            existing_branch: true,
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(details.send_block(), Some(NAME_THE_BRANCH));
+        details.branch = " feat/login ".into();
+        assert_eq!(details.send_block(), None);
+        let params = create_params("p1", "fix the login", &details);
+        assert_eq!(params.branch.as_deref(), Some("feat/login"));
+        assert!(params.existing_branch);
+    }
+
+    #[test]
+    fn a_new_worktree_starts_from_the_base_the_menu_names_then_the_project_base() {
+        let mut details = WorkspaceDetails::default();
+        assert_eq!(branch_pill(&details, None).label, "New worktree");
+        assert_eq!(
+            branch_pill(&details, None).detail,
+            "from the default branch"
+        );
+        assert_eq!(branch_pill(&details, Some("main")).detail, "from main");
+        details.base = " develop ".into();
+        assert_eq!(branch_pill(&details, Some("main")).detail, "from develop");
+    }
+
+    #[test]
+    fn reusing_a_branch_shows_the_name_typed_or_asks_for_one() {
+        let mut details = WorkspaceDetails {
+            existing_branch: true,
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(branch_pill(&details, Some("main")).label, "Existing branch");
+        details.branch = " feat/login ".into();
+        assert_eq!(
+            branch_pill(&details, Some("main")),
+            BranchPill {
+                label: "feat/login".into(),
+                detail: "existing branch".into(),
+            }
+        );
+    }
+
+    #[test]
     fn a_blank_prompt_starts_the_agent_with_no_prompt() {
-        assert_eq!(home_start_params("w9", "claude", "  ", None).prompt, None);
-        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()));
-        assert_eq!(params.workspace, "w9");
+        let none = StartOptions::default;
+        assert_eq!(
+            home_start_params("w9", "claude", "  ", None, none()).prompt,
+            None
+        );
+        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()), none());
+        assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn no_project_is_the_choice_when_chosen_and_otherwise_the_project_rule_stands() {
+        let projects = [project("p1", "alpha"), project("p2", "beta")];
+        assert_eq!(
+            home_choice(&projects, Some(&ProjectChoice::NoProject)),
+            Some(ProjectChoice::NoProject)
+        );
+        assert_eq!(
+            home_choice(&projects, None),
+            Some(ProjectChoice::Project("p1".to_owned()))
+        );
+        assert_eq!(home_choice(&[], None), None);
+    }
+
+    #[test]
+    fn a_no_project_start_carries_the_picked_model_and_effort() {
+        let options = StartOptions {
+            model: Some("opus".to_owned()),
+            effort: Some("xhigh".to_owned()),
+        };
+        let params = no_project_start_params("claude", "fix it", None, options);
+        assert_eq!(params.workspace, None);
+        assert_eq!(params.model.as_deref(), Some("opus"));
+        assert_eq!(params.effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn a_no_project_start_carries_no_workspace_and_a_blank_prompt_sends_none() {
+        let params = no_project_start_params(
+            "claude",
+            "fix it",
+            Some("plan".into()),
+            StartOptions::default(),
+        );
+        assert_eq!(params.workspace, None);
+        assert_eq!(params.prompt.as_deref(), Some("fix it"));
+        assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(
+            no_project_start_params("claude", "  ", None, StartOptions::default()).prompt,
+            None
+        );
     }
 }

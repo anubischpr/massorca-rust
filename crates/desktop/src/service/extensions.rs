@@ -78,7 +78,7 @@ fn listing_of(lists: Result<HostLists, ClientError>) -> HostListing {
 }
 
 /// Whether a host answered that it has no such method: a MassOrca that predates the Marketplace calls.
-fn predates(error: &ClientError) -> bool {
+pub(super) fn predates(error: &ClientError) -> bool {
     matches!(error, ClientError::Remote(body) if body.code == codes::METHOD_NOT_FOUND)
 }
 
@@ -108,12 +108,12 @@ async fn host_listing(client: &Client) -> HostListing {
 }
 
 /// Connects to a paired host on its own connection: a call to one host needs no connection to this computer's service.
-async fn connect_host(profile: &Profile, host: &str) -> Result<Client, ClientError> {
+pub(super) async fn connect_host(profile: &Profile, host: &str) -> Result<Client, ClientError> {
     Client::connect_host(&Hosts::of(profile), host, &super::hosts::peer()).await
 }
 
 /// What a host that cannot be connected to says about it: one that speaks another protocol version needs an update.
-fn connect_listing(error: &ClientError) -> HostListing {
+pub(super) fn connect_listing(error: &ClientError) -> HostListing {
     let refusal = Refusal::from(error);
     if refusal.code() == Some(codes::PROTOCOL_UNSUPPORTED_VERSION) {
         HostListing::UpdateNeeded

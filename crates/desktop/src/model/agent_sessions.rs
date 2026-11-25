@@ -8,14 +8,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{Activity, ActivityState, AgentSession, Outcome};
 use massorca_protocol::methods::terminals::TerminalState;
+use massorca_protocol::methods::workspaces::Workspace;
 
 use super::shell::{Agent, AgentState, SessionRow};
 use crate::service::{Refusal, StoreState};
 
-/// The title of a top session the service has no title for.
+/// The title of a session the service has no title for and whose workspace is not known.
 const UNTITLED: &str = "Untitled session";
-/// The title of a child session the service has no title for, such as a delegated one.
-const CHILD_UNTITLED: &str = "Child session";
 /// Where a child runs when it shares its parent's worktree.
 const CURRENT_WORKTREE: &str = "Current worktree";
 /// Where a child runs in its own worktree whose branch is not known.
@@ -25,10 +24,25 @@ const OWN_WORKTREE: &str = "Own worktree";
 /// child hangs under its parent's row. A session whose parent is not listed is a top session of its own
 /// workspace, and sessions that name each other as parents hang from nothing, so they are not listed.
 pub fn sessions_by_workspace(state: &StoreState) -> BTreeMap<String, Vec<SessionRow>> {
-    let listed: HashSet<&str> = state.agents.iter().map(|s| s.id.as_str()).collect();
+    let mut by_workspace: BTreeMap<String, Vec<SessionRow>> = BTreeMap::new();
+    for row in top_session_rows(state, |_| true) {
+        by_workspace
+            .entry(row.workspace_id.clone())
+            .or_default()
+            .push(row);
+    }
+    by_workspace
+}
+
+/// The top sessions of the workspaces `keep` accepts, oldest first, each with its children below it (A97).
+/// Sessions are listed by launch time, so a row never jumps while its agent works.
+pub fn top_session_rows(state: &StoreState, keep: impl Fn(&str) -> bool) -> Vec<SessionRow> {
+    let mut ordered: Vec<&AgentSession> = state.agents.iter().collect();
+    ordered.sort_by_key(|session| session.created_at_ms);
+    let listed: HashSet<&str> = ordered.iter().map(|s| s.id.as_str()).collect();
     let mut children: HashMap<&str, Vec<&AgentSession>> = HashMap::new();
     let mut tops: Vec<&AgentSession> = Vec::new();
-    for session in &state.agents {
+    for session in ordered {
         match session.parent_id.as_deref() {
             Some(parent) if listed.contains(parent) => {
                 children.entry(parent).or_default().push(session);
@@ -36,14 +50,10 @@ pub fn sessions_by_workspace(state: &StoreState) -> BTreeMap<String, Vec<Session
             _ => tops.push(session),
         }
     }
-    let mut by_workspace: BTreeMap<String, Vec<SessionRow>> = BTreeMap::new();
-    for session in tops {
-        by_workspace
-            .entry(session.workspace_id.clone())
-            .or_default()
-            .push(session_row(session, None, &children, state));
-    }
-    by_workspace
+    tops.into_iter()
+        .filter(|session| keep(&session.workspace_id))
+        .map(|session| session_row(session, None, &children, state))
+        .collect()
 }
 
 /// A session as a row, with its place when `parent` is given and its children below it, oldest first. Each
@@ -55,11 +65,15 @@ fn session_row(
     state: &StoreState,
 ) -> SessionRow {
     let status = session_state(session);
+    let workspace = state.workspace(&session.workspace_id);
     SessionRow {
         id: session.id.clone(),
-        title: title_of(session),
+        title: title_of(session, workspace),
         agent: agent_of_kind(&session.kind),
         state: status,
+        workspace_id: session.workspace_id.clone(),
+        branch: workspace.and_then(|workspace| workspace.branch.clone()),
+        path: workspace.map(|workspace| workspace.path.clone()),
         place: parent.map(|parent| place_of(session, parent, state)),
         own_worktree: parent.is_some_and(|parent| parent.workspace_id != session.workspace_id),
         // Only a finished child under a parent it can merge into, and only until it is brought back.
@@ -87,13 +101,20 @@ pub fn is_unread(session: &AgentSession, seen_offered: bool) -> bool {
         })
 }
 
-/// The title a row shows: the service's, or a name that says what kind of session it is.
-fn title_of(session: &AgentSession) -> String {
-    match (&session.title, session.parent_id.is_some()) {
-        (Some(title), _) => title.clone(),
-        (None, true) => CHILD_UNTITLED.to_owned(),
-        (None, false) => UNTITLED.to_owned(),
-    }
+/// The title a row shows: the service's, else the branch of its worktree, else the folder's name (A97).
+fn title_of(session: &AgentSession, workspace: Option<&Workspace>) -> String {
+    session
+        .title
+        .clone()
+        .or_else(|| {
+            workspace.map(|workspace| {
+                workspace
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| workspace.name.clone())
+            })
+        })
+        .unwrap_or_else(|| UNTITLED.to_owned())
 }
 
 /// Where a child runs: its parent's worktree, or its own worktree by the branch it is on (DelegationTree).
@@ -456,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grandchild_nests_one_level_deeper_and_an_untitled_child_says_what_it_is() {
+    fn a_grandchild_nests_one_level_deeper_and_an_untitled_child_takes_its_branch() {
         let mut parent = agent("p", "w1", 10);
         parent.title = Some("Plan".into());
         let state = store_with(vec![
@@ -466,10 +487,10 @@ mod tests {
         ]);
         let by_workspace = sessions_by_workspace(&state);
         let child = &by_workspace["w1"][0].children[0];
-        assert_eq!(child.title, "Child session");
+        assert_eq!(child.title, "feat/two");
         let grandchild = &child.children[0];
         assert_eq!(grandchild.id, "g");
-        assert_eq!(grandchild.title, "Child session");
+        assert_eq!(grandchild.title, "feat/two");
         assert_eq!(
             grandchild.place.as_deref(),
             Some("Current worktree"),
@@ -485,7 +506,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "c");
         assert_eq!(rows[0].place, None);
-        assert_eq!(rows[0].title, "Child session");
+        assert_eq!(rows[0].title, "feat/two");
     }
 
     #[test]

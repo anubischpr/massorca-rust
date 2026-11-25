@@ -242,3 +242,65 @@ async fn a_device_below_workspace_sees_no_credential_home_in_an_answer_or_an_err
     );
     stop(running).await;
 }
+
+/// Declares kind `fake` whose one file is looked for in `<home>/fake-vendor`, an absolute folder of the test, so the
+/// detection never looks at the real home. The service runs in this process, so no override variable is set: masking
+/// of `env` is covered by the server's unit test of `candidate_for_caller`.
+fn declare_detectable(home: &Path) -> std::path::PathBuf {
+    let dir = profile(home, "server").dir().join("agents").join("kinds");
+    fs::create_dir_all(&dir).unwrap();
+    let vendor = home.join("fake-vendor");
+    fs::create_dir_all(&vendor).unwrap();
+    fs::write(vendor.join("token.fake"), "fake").unwrap();
+    let kind = json!({
+        "id": KIND,
+        "name": "Fake agent",
+        "program": ["fake-agent"],
+        "prompt": { "mode": "argv" },
+        "credentials": {
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["token.fake"],
+            "sources": [{ "file": "token.fake", "dir": vendor.to_str().unwrap() }]
+        }
+    });
+    fs::write(dir.join("fake.json"), kind.to_string()).unwrap();
+    vendor
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_import_candidates_below_workspace_omit_the_folder_and_paths() {
+    let home = temp_home();
+    let vendor = declare_detectable(home.path());
+    let running = start_listening(home.path()).await;
+    let (_reader_home, reader) = paired_device(home.path(), "reader", true).await;
+    let owner = connect(home.path(), "server").await;
+
+    let params = json!({ "kind": KIND });
+    let full: Value = owner
+        .call(agents::ACCOUNTS_IMPORT_CANDIDATES, &params)
+        .await
+        .unwrap();
+    let full = full["candidates"][0].clone();
+    assert_eq!(full["ready"], true, "{full}");
+    assert_eq!(full["folder"], vendor.display().to_string(), "{full}");
+    assert_eq!(
+        full["files"][0]["path"],
+        vendor.join("token.fake").display().to_string()
+    );
+
+    let masked: Value = reader
+        .call(agents::ACCOUNTS_IMPORT_CANDIDATES, &params)
+        .await
+        .unwrap();
+    let masked = masked["candidates"][0].clone();
+    assert_eq!(
+        masked,
+        json!({
+            "kind": KIND,
+            "ready": true,
+            "files": [{ "name": "token.fake", "required": true, "found": true }]
+        }),
+        "a read-only device sees no host path and no override variable"
+    );
+    stop(running).await;
+}

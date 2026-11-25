@@ -7,6 +7,7 @@
 
 mod branch_prefix;
 mod check;
+mod conversations;
 mod create;
 mod error;
 mod generated_names;

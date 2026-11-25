@@ -1,8 +1,9 @@
 //! Element tests of the Connection part on a connected service: the rows follow the service's lists, a change goes
 //! to the service and is answered by hand, and a busy refusal marks the row busy. No window opens.
 
+use super::path_field::{PickKind, answering};
 use super::service_tests::{Rig, click, draw, rig};
-use crate::model::marketplace::MarketplaceItemId;
+use crate::model::marketplace::{HostTarget, MarketplaceItemId};
 use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
 use crate::service::{
@@ -253,14 +254,15 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
         panic!("an agent.accounts.import call was expected");
     };
     assert_eq!(
-        (params.kind.as_str(), params.from.as_str(), params.label),
-        ("claude", "placeholder-folder", None)
+        (params.kind.as_str(), params.from.as_deref(), params.label),
+        ("claude", Some("placeholder-folder"), None)
     );
     reply
         .send(Ok(AccountsImported {
             result: ImportResult::NotFound,
             account: None,
             reason: Some("none of the declared files is in the source".to_owned()),
+            updated: None,
         }))
         .expect("the shell waits");
     cx.run_until_parked();
@@ -280,6 +282,7 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
             result: ImportResult::Imported,
             account: Some(summary("acct-i", "Account", AccountState::SignedIn, true)),
             reason: None,
+            updated: None,
         }))
         .expect("the shell waits");
     cx.run_until_parked();
@@ -287,5 +290,41 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
         import_error(&rig, cx),
         None,
         "an import that worked closes the dialog"
+    );
+}
+
+#[gpui::test]
+fn browse_on_account_import_fills_the_folder_and_a_folder_on_another_host_has_none(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = on_claude(cx, Vec::new());
+    let (asked, picker) = answering(Some("C:/Users/me/claude-logins"));
+    rig.shell
+        .update(cx, |shell, _| shell.set_path_picker(picker));
+    click(cx, "button:marketplace-import-account");
+    click(cx, "button:account-import-browse");
+    assert_eq!(*asked.borrow(), [PickKind::Folder]);
+    let folder = rig.shell.read_with(cx, |shell, cx| {
+        shell
+            .marketplace_accounts
+            .import
+            .as_ref()
+            .expect("the dialog is open")
+            .field()
+            .read(cx)
+            .text()
+            .to_owned()
+    });
+    assert_eq!(folder, "C:/Users/me/claude-logins");
+
+    rig.shell.update(cx, |shell, _| {
+        shell
+            .marketplace_pick
+            .aim(HostTarget::Paired("vps".to_owned()))
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("button:account-import-browse").is_none(),
+        "a folder on another host has no Browse"
     );
 }

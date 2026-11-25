@@ -11,7 +11,8 @@ use massorca_core_store::{BotRow, Store, TaskRow, TeamProjectRow, TeamRow, new_i
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_TASK_CHANGED, TOPIC_WORKSPACE_CREATED,
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_TASK_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+    TOPIC_WORKSPACE_CREATED,
 };
 use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::tasks::{self, Task, TaskRef};
@@ -63,6 +64,8 @@ pub(super) struct Changes {
     pub(super) project: Option<String>,
     pub(super) workspace: Option<String>,
     pub(super) task: Option<String>,
+    /// The team whose Conference room heard a task's outcome.
+    pub(super) room: Option<String>,
 }
 
 /// Publishes what a start or a routine run changed. Called only after the change is committed.
@@ -71,6 +74,7 @@ pub(super) fn publish_changes(state: &AppState, changes: &Changes) {
         (TOPIC_PROJECT_ADDED, &changes.project),
         (TOPIC_WORKSPACE_CREATED, &changes.workspace),
         (TOPIC_TASK_CHANGED, &changes.task),
+        (TOPIC_TEAM_ROOM_CHANGED, &changes.room),
     ];
     for (topic, id) in changed {
         if let Some(id) = id {
@@ -196,7 +200,9 @@ pub(super) fn start_task(
     let mut current = selectors::task(store, &row.id)?;
     let shown = task_state::load(agents, &current)?;
     // The agent may have finished before the link, when the listener could not find the task yet.
-    if latch_at_link(store, &current.id, &shown).map_err(store_error)? {
+    let (latched, room) = latch_at_link(store, &current, &shown).map_err(store_error)?;
+    if latched {
+        changes.room = room;
         current = selectors::task(store, &current.id)?;
     }
     Ok(view_of(&current, &shown))
@@ -419,7 +425,7 @@ fn spawn(
 ) -> Result<String, ErrorBody> {
     let session = agents.start(
         AgentStartParams {
-            workspace: place.workspace.id.clone(),
+            workspace: Some(place.workspace.id.clone()),
             kind: bot.kind.clone(),
             prompt: Some(prompt),
             args: Vec::new(),
@@ -431,6 +437,8 @@ fn spawn(
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
             request_id: Some(request.to_owned()),
             permission_mode: team_mode(agents, team, bot),
+            model: None,
+            effort: None,
         },
         grant,
     )?;

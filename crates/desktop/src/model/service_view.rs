@@ -4,15 +4,17 @@
 
 use std::time::{Duration, Instant};
 
-use super::agent_sessions::{session_state, sessions_by_workspace};
+use super::agent_sessions::{session_state, top_session_rows};
 use super::hosts::{HostTone, host_state};
 use super::shell::{
     AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
     ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
 use super::teams::{TeamsState, live_teams};
+use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::service::{ConnectionState, StoreState};
 use massorca_protocol::methods::projects::ProjectIcon;
+use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
 pub const LOCAL_HOST: &str = "This PC";
@@ -23,35 +25,56 @@ const USAGE_SLOTS: usize = 6;
 /// agent sessions it runs, and the service's own status. Usage and prototypes do not exist in the service yet.
 pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     let reach = reach_of(state, now);
-    let sessions = sessions_by_workspace(state);
-    let projects = state
+    let listed = |workspace: &Workspace| {
+        state
+            .projects
+            .iter()
+            .any(|project| project.id == workspace.project_id)
+    };
+    let mut projects: Vec<ProjectGroup> = state
         .projects
         .iter()
-        .map(|project| {
-            let workspaces = state
-                .workspaces
-                .iter()
-                .filter(|workspace| workspace.project_id == project.id)
-                .enumerate()
-                .map(|(index, workspace)| WorkspaceRow {
-                    id: workspace.id.clone(),
-                    name: workspace.name.clone(),
-                    branch: workspace.branch.clone(),
-                    usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
-                    sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
-                })
-                .collect();
-            ProjectGroup {
-                name: project.name.clone(),
-                emoji: project.icon.as_ref().and_then(emoji_of),
-                hosts: vec![HostGroup {
-                    name: LOCAL_HOST.to_owned(),
-                    reach,
-                    workspaces,
-                }],
-            }
+        .map(|project| ProjectGroup {
+            id: project.id.clone(),
+            name: project.name.clone(),
+            emoji: project.icon.as_ref().and_then(emoji_of),
+            hosts: vec![HostGroup {
+                name: LOCAL_HOST.to_owned(),
+                reach,
+                workspaces: workspace_rows(
+                    state
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| workspace.project_id == project.id),
+                ),
+                sessions: top_session_rows(state, |id| {
+                    state
+                        .workspace(id)
+                        .is_some_and(|workspace| workspace.project_id == project.id)
+                }),
+            }],
         })
         .collect();
+    // A conversation's folder belongs to the hidden project of the conversations folder, which the service never
+    // lists (decision 0092). Any workspace whose project is not listed is one of those: it goes under No project, last.
+    let conversations = top_session_rows(state, |id| {
+        state
+            .workspace(id)
+            .is_some_and(|workspace| !listed(workspace))
+    });
+    if !conversations.is_empty() || state.workspaces.iter().any(|w| !listed(w)) {
+        projects.push(ProjectGroup {
+            id: NO_PROJECT_LABEL.to_owned(),
+            name: NO_PROJECT_LABEL.to_owned(),
+            emoji: None,
+            hosts: vec![HostGroup {
+                name: LOCAL_HOST.to_owned(),
+                reach,
+                workspaces: workspace_rows(state.workspaces.iter().filter(|w| !listed(w))),
+                sessions: conversations,
+            }],
+        });
+    }
     ShellSnapshot {
         projects,
         usage: Vec::new(),
@@ -71,6 +94,19 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
     }
+}
+
+/// The rows of `workspaces` for the palette; usage colours cycle over them in order.
+fn workspace_rows<'a>(workspaces: impl Iterator<Item = &'a Workspace>) -> Vec<WorkspaceRow> {
+    workspaces
+        .enumerate()
+        .map(|(index, workspace)| WorkspaceRow {
+            id: workspace.id.clone(),
+            name: workspace.name.clone(),
+            branch: workspace.branch.clone(),
+            usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
+        })
+        .collect()
 }
 
 /// How many agent sessions show `wanted`, for the Status bar's agents item.
@@ -280,22 +316,35 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_tree_keeps_its_shape_and_carries_workspace_ids() {
+    fn the_sidebar_tree_has_project_and_host_rows_and_no_workspace_rows() {
         let snapshot = service_snapshot(&loaded(Instant::now()), Instant::now());
         let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
         else {
             panic!("workspaces content expected");
         };
-        // 2 projects, 2 hosts, 3 workspaces.
-        assert_eq!(tree.len(), 7);
-        let ids: Vec<&str> = tree
+        // 2 projects and their 2 hosts; the workspaces are not rows of the tree (A97).
+        assert_eq!(tree.len(), 4);
+        assert!(
+            tree.iter()
+                .all(|row| matches!(row, TreeRow::Project { .. } | TreeRow::Host { .. }))
+        );
+    }
+
+    #[test]
+    fn a_hosts_sessions_list_oldest_first_across_its_workspaces() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::AgentsResync(vec![agent("late", "w2", 30), agent("early", "w1", 10)]),
+            now,
+        );
+        let snapshot = service_snapshot(&state, now);
+        let ids: Vec<&str> = snapshot.projects[0].hosts[0]
+            .sessions
             .iter()
-            .filter_map(|row| match row {
-                TreeRow::Workspace { id, .. } => Some(id.as_str()),
-                _ => None,
-            })
+            .map(|row| row.id.as_str())
             .collect();
-        assert_eq!(ids, vec!["w1", "w2", "w3"]);
+        assert_eq!(ids, vec!["early", "late"]);
     }
 
     #[test]
@@ -322,20 +371,35 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_whose_project_is_unknown_is_not_drawn() {
+    fn a_workspace_whose_project_is_not_listed_is_a_conversation_under_no_project() {
         let now = Instant::now();
         let mut state = loaded(now);
         state.apply(
-            StoreUpdate::WorkspaceChanged(workspace("w9", "gone", "stray", 9)),
+            StoreUpdate::WorkspaceChanged(workspace("w9", "hidden", "conversation", 9)),
             now,
         );
         let snapshot = service_snapshot(&state, now);
+        let last = snapshot.projects.last().expect("the No project group");
+        assert_eq!(last.name, NO_PROJECT_LABEL);
+        let ids: Vec<&str> = last.hosts[0]
+            .workspaces
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(ids, ["w9"]);
         let total: usize = snapshot
             .projects
             .iter()
             .map(|p| p.hosts[0].workspaces.len())
             .sum();
-        assert_eq!(total, 3);
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn no_project_group_is_absent_without_a_conversation() {
+        let now = Instant::now();
+        let snapshot = service_snapshot(&loaded(now), now);
+        assert!(snapshot.projects.iter().all(|p| p.name != NO_PROJECT_LABEL));
     }
 
     #[test]
@@ -487,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn live_sessions_sit_under_their_workspace_and_count_in_the_status_bar() {
+    fn live_sessions_sit_under_their_host_and_count_in_the_status_bar() {
         let now = Instant::now();
         let mut state = loaded(now);
         let report = |state, outcome| Activity {
@@ -506,25 +570,24 @@ mod tests {
         state.apply(StoreUpdate::AgentsResync(vec![working, waiting, done]), now);
 
         let snapshot = service_snapshot(&state, now);
-        let listed = |project: usize, workspace: usize| {
-            snapshot.projects[project].hosts[0].workspaces[workspace]
+        let listed = |project: usize| {
+            snapshot.projects[project].hosts[0]
                 .sessions
                 .iter()
                 .map(|row| (row.id.as_str(), row.state))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            listed(0, 0),
+            listed(0),
             vec![("s1", AgentState::Running), ("s2", AgentState::Waiting)]
         );
-        assert!(listed(0, 1).is_empty(), "a workspace with no session");
-        assert_eq!(listed(1, 0), vec![("s3", AgentState::Done)]);
+        assert_eq!(listed(1), vec![("s3", AgentState::Done)]);
         assert_eq!(snapshot.status.running, 1);
         assert_eq!(snapshot.status.waiting, 1);
     }
 
     #[test]
-    fn the_sidebar_indents_children_under_their_parent_and_names_where_they_run() {
+    fn the_sidebar_indents_children_and_titles_untitled_ones_by_their_branch() {
         let now = Instant::now();
         let mut state = loaded(now);
         let mut plan = agent("p", "w1", 10);
@@ -541,38 +604,19 @@ mod tests {
         else {
             panic!("workspaces content expected");
         };
-        let sessions: Vec<(&str, usize, Option<&str>, bool)> = tree
+        let sessions: Vec<(&str, usize)> = tree
             .iter()
             .filter_map(|row| match row {
-                TreeRow::Session {
-                    title,
-                    depth,
-                    place,
-                    own_worktree,
-                    ..
-                } => Some((title.as_str(), *depth, place.as_deref(), *own_worktree)),
+                TreeRow::Session { title, depth, .. } => Some((title.as_str(), *depth)),
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            sessions,
-            vec![
-                ("Plan", 0, None, false),
-                ("Child session", 1, Some("feat/two"), true),
-                ("Check", 2, Some("Current worktree"), false),
-            ]
-        );
-        let workspaces: Vec<&str> = tree
-            .iter()
-            .filter_map(|row| match row {
-                TreeRow::Workspace { id, .. } => Some(id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            workspaces.contains(&"w2"),
-            "the child's own worktree row stays listed"
-        );
+        assert_eq!(sessions, vec![("Plan", 0), ("feat/two", 1), ("Check", 2)]);
+        let child_tooltip = tree.iter().find_map(|row| match row {
+            TreeRow::Session { id, tooltip, .. } if id == "c" => tooltip.clone(),
+            _ => None,
+        });
+        assert_eq!(child_tooltip.as_deref(), Some("feat/two · /repos/two"));
     }
 
     #[test]

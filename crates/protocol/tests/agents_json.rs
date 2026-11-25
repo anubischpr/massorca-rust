@@ -9,8 +9,9 @@ use massorca_protocol::methods::agents::{
     AgentBringBackParams, AgentDelegateParams, AgentHookParams, AgentKind, AgentKinds,
     AgentModeSet, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
     AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
-    Execution, KindCredentials, KindPackage, ModeApplied, ModeSource, Outcome, PackageState,
-    PermissionMode, PromptReceipt, ReceiptKind, StatusMechanism,
+    Execution, KindCredentials, KindEffort, KindEffortLevel, KindModel, KindModelChoice,
+    KindPackage, ModeApplied, ModeSource, Outcome, PackageState, PermissionMode, PromptReceipt,
+    ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -79,6 +80,10 @@ fn method_names_match_the_wire_table() {
         (agents::ACCOUNTS_ADD, "agent.accounts.add"),
         (agents::ACCOUNTS_SIGN_IN, "agent.accounts.sign_in"),
         (agents::ACCOUNTS_IMPORT, "agent.accounts.import"),
+        (
+            agents::ACCOUNTS_IMPORT_CANDIDATES,
+            "agent.accounts.import_candidates",
+        ),
         (agents::ACCOUNTS_ACTIVATE, "agent.accounts.activate"),
         (agents::ACCOUNTS_REMOVE, "agent.accounts.remove"),
         (agents::ACCOUNTS_CHECK, "agent.accounts.check"),
@@ -191,6 +196,9 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
+        model: None,
+        effort: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -208,6 +216,89 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
             "credentials": { "supported": false, "imported": false }
         }]}),
     );
+}
+
+#[test]
+fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither() {
+    let kind = AgentKind {
+        id: "claude".to_owned(),
+        name: "Claude".to_owned(),
+        icon: "claude".to_owned(),
+        owner: "core".to_owned(),
+        installed: true,
+        detected: true,
+        program_path: None,
+        package: KindPackage {
+            state: PackageState::Enabled,
+            id: None,
+            version: None,
+        },
+        resumable: true,
+        status_mechanism: StatusMechanism::ClaudeSettings,
+        credentials: KindCredentials {
+            supported: true,
+            imported: false,
+        },
+        problems: Vec::new(),
+        permission_modes: Vec::new(),
+        default_permission_mode: None,
+        chat: None,
+        model: Some(KindModel {
+            choices: vec![
+                KindModelChoice {
+                    id: "sonnet".to_owned(),
+                    label: "Sonnet".to_owned(),
+                    default: true,
+                    efforts: None,
+                },
+                KindModelChoice {
+                    id: "haiku".to_owned(),
+                    label: "Haiku".to_owned(),
+                    default: false,
+                    efforts: Some(Vec::new()),
+                },
+            ],
+        }),
+        effort: Some(KindEffort {
+            levels: vec![KindEffortLevel {
+                id: "high".to_owned(),
+                label: "High".to_owned(),
+            }],
+            default: Some("high".to_owned()),
+        }),
+    };
+    assert_wire(
+        &AgentKinds { kinds: vec![kind] },
+        &json!({ "kinds": [{
+            "id": "claude",
+            "name": "Claude",
+            "icon": "claude",
+            "owner": "core",
+            "installed": true,
+            "detected": true,
+            "package": { "state": "enabled" },
+            "resumable": true,
+            "status_mechanism": "claude-settings",
+            "credentials": { "supported": true, "imported": false },
+            "model": { "choices": [
+                { "id": "sonnet", "label": "Sonnet", "default": true },
+                { "id": "haiku", "label": "Haiku", "efforts": [] }
+            ] },
+            "effort": { "levels": [{ "id": "high", "label": "High" }], "default": "high" }
+        }]}),
+    );
+    let older: AgentKinds = serde_json::from_value(json!({ "kinds": [{
+        "id": "codex",
+        "name": "Codex",
+        "icon": "codex",
+        "owner": "core",
+        "installed": false,
+        "resumable": true,
+        "status_mechanism": "codex-notify",
+        "credentials": { "supported": true, "imported": false }
+    }]}))
+    .expect("a kind from before the choices decodes");
+    assert!(older.kinds[0].model.is_none() && older.kinds[0].effort.is_none());
 }
 
 #[test]
@@ -234,6 +325,9 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         problems: Vec::new(),
         permission_modes: Vec::new(),
         default_permission_mode: None,
+        chat: None,
+        model: None,
+        effort: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -298,7 +392,7 @@ fn start_params_default_every_optional_field() {
     assert_eq!(
         decoded,
         AgentStartParams {
-            workspace: "main".to_owned(),
+            workspace: Some("main".to_owned()),
             kind: "fake".to_owned(),
             prompt: None,
             args: Vec::new(),
@@ -309,7 +403,58 @@ fn start_params_default_every_optional_field() {
             rows: None,
             request_id: None,
             permission_mode: None,
+            model: None,
+            effort: None,
         }
+    );
+}
+
+/// A start with no workspace (decision 0094) sends no `workspace` key, so an older peer never sees a null it would
+/// misread; a start that names one keeps the key.
+#[test]
+fn a_start_without_a_workspace_omits_the_key() {
+    let no_project = AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+    };
+    assert_wire(&no_project, &json!({ "kind": "fake", "read_only": false }));
+    let decoded: AgentStartParams =
+        serde_json::from_value(json!({ "kind": "fake" })).expect("decodes");
+    assert_eq!(decoded.workspace, None);
+}
+
+/// `model` and `effort` (decision 0094) are sent only when set, and decode from their keys.
+#[test]
+fn a_start_with_a_model_and_an_effort_carries_both_keys() {
+    let chosen = AgentStartParams {
+        workspace: Some("main".to_owned()),
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: Some("fast-model".to_owned()),
+        effort: Some("high".to_owned()),
+    };
+    assert_wire(
+        &chosen,
+        &json!({ "workspace": "main", "kind": "fake", "read_only": false, "model": "fast-model", "effort": "high" }),
     );
 }
 
@@ -745,5 +890,81 @@ fn release_and_retain_flags_are_absent_until_set_and_an_archive_reads_back() {
     assert_wire(
         &withheld,
         &json!({ "session": "s1", "released": true, "truncated": false, "withheld": true }),
+    );
+}
+
+#[test]
+fn import_candidates_and_an_import_without_a_folder_omit_absent_fields() {
+    use agents::{AccountsImportParams, CandidateFile, ImportCandidate, ImportCandidates};
+
+    assert_wire(
+        &AccountsImportParams {
+            kind: "claude".to_owned(),
+            from: None,
+            label: None,
+        },
+        &json!({ "kind": "claude" }),
+    );
+    assert_wire(&agents::ImportCandidatesParams::default(), &json!({}));
+    let candidates = ImportCandidates {
+        candidates: vec![ImportCandidate {
+            kind: "claude".to_owned(),
+            ready: true,
+            folder: Some("<home>/.claude".to_owned()),
+            files: vec![
+                CandidateFile {
+                    name: ".credentials.json".to_owned(),
+                    required: true,
+                    found: true,
+                    path: Some("<home>/.claude/.credentials.json".to_owned()),
+                    env: Some("CLAUDE_CONFIG_DIR".to_owned()),
+                    reason: None,
+                },
+                CandidateFile {
+                    name: ".claude.json".to_owned(),
+                    required: false,
+                    found: false,
+                    path: None,
+                    env: None,
+                    reason: Some("a link".to_owned()),
+                },
+            ],
+        }],
+    };
+    assert_wire(
+        &candidates,
+        &json!({ "candidates": [{
+            "kind": "claude",
+            "ready": true,
+            "folder": "<home>/.claude",
+            "files": [
+                {
+                    "name": ".credentials.json", "required": true, "found": true,
+                    "path": "<home>/.claude/.credentials.json", "env": "CLAUDE_CONFIG_DIR"
+                },
+                { "name": ".claude.json", "required": false, "found": false, "reason": "a link" }
+            ]
+        }] }),
+    );
+}
+
+#[test]
+fn an_import_that_updated_an_account_names_it_and_a_new_one_omits_the_field() {
+    let updated: agents::AccountsImported = serde_json::from_value(json!({
+        "result": "imported",
+        "updated": "0195c0de-0000-7000-8000-000000000002"
+    }))
+    .expect("an updated import decodes");
+    assert_eq!(
+        updated.updated.as_deref(),
+        Some("0195c0de-0000-7000-8000-000000000002")
+    );
+    let older: agents::AccountsImported =
+        serde_json::from_value(json!({ "result": "imported" })).expect("an older result decodes");
+    assert_eq!(older.updated, None);
+    assert_eq!(
+        serde_json::to_value(&older).expect("encodes"),
+        json!({ "result": "imported" }),
+        "a new account's result has no `updated`"
     );
 }

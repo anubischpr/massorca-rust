@@ -1,24 +1,32 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
-use super::start_page::split_last_segment;
+use std::collections::BTreeMap;
+
+use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::regions::Region;
-use crate::model::start_page::StartMode;
+use crate::model::start_page::{
+    CHAT_NEEDS_NEWER_SERVICE, ChatAvailability, StartMode, StartOptions,
+};
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
-    Command, ConnectionState, Refusal, Script, StoreUpdate, TerminalCommand, TerminalStreamItem,
+    ChatUnsupportedReason, Command, ConnectionState, KindChat, Refusal, Script, StoreUpdate,
+    TerminalCommand, TerminalStreamItem,
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
+use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::methods::workspaces::Workspace;
-use massorca_ui::components::composer::Composer;
-use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
+use massorca_ui::components::composer::{Composer, ComposerEvent};
+use massorca_ui::tokens::{
+    DURATION_TOOLTIP_DELAY, LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4,
+};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -148,6 +156,147 @@ fn the_start_page_microphone_is_disabled_and_says_why(cx: &mut TestAppContext) {
             .voice_unavailable_reason()
             .cloned()),
         Some("Voice input comes later.".into())
+    );
+}
+
+#[gpui::test]
+fn the_key_hints_start_at_the_composer_left_edge_not_centred(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    let column = cx
+        .debug_bounds("start-column")
+        .expect("the page column is drawn");
+    let enter = cx
+        .debug_bounds("start-key-hint-Enter")
+        .expect("the Enter hint is drawn");
+    let column_left = f32::from(column.origin.x);
+    let enter_left = f32::from(enter.origin.x);
+    assert!(
+        enter_left - column_left <= EDGE_TOLERANCE,
+        "the Enter hint starts at {enter_left} px, away from the column's left edge at {column_left} px"
+    );
+}
+
+#[gpui::test]
+fn the_start_page_places_its_host_project_and_branch_in_one_card(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    for selector in [
+        "start-placement",
+        "start-host",
+        "start-project",
+        "start-branch",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is drawn");
+    }
+}
+
+#[gpui::test]
+fn the_placement_card_sits_on_the_composer_inset_twelve_px_from_each_side(cx: &mut TestAppContext) {
+    let (_rig, cx) = start_page_rig(cx, Vec::new());
+    draw(cx);
+    let card = cx
+        .debug_bounds("start-placement")
+        .expect("the placement card is drawn");
+    let column = cx
+        .debug_bounds("composer-column")
+        .expect("the composer column is drawn");
+    let inset_left = f32::from(card.origin.x) - f32::from(column.origin.x);
+    let inset_right =
+        f32::from(column.origin.x + column.size.width) - f32::from(card.origin.x + card.size.width);
+    let gap_above = f32::from(column.origin.y) - f32::from(card.origin.y + card.size.height);
+    assert!(
+        (inset_left - 12.0).abs() <= EDGE_TOLERANCE,
+        "the card starts {inset_left} px inside the composer's left edge, not 12 px"
+    );
+    assert!(
+        (inset_right - 12.0).abs() <= EDGE_TOLERANCE,
+        "the card ends {inset_right} px inside the composer's right edge, not 12 px"
+    );
+    assert!(
+        gap_above.abs() <= EDGE_TOLERANCE,
+        "the card sits {gap_above} px above the composer, not on its top edge"
+    );
+}
+
+#[gpui::test]
+fn the_placement_pills_are_tab_stops_and_enter_opens_the_project_menu(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+    // A click focuses the off host pill and does nothing else; Tab then reaches the project pill.
+    click(cx, "start-host");
+    cx.update(|window, cx| window.focus_next(cx));
+    // Enter is a keyboard click only when its press and release both reach the focused pill.
+    let keystroke = gpui::Keystroke::parse("enter").expect("enter is a keystroke");
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("menu-panel").is_some(),
+        "Enter on the focused project pill opens the project menu"
+    );
+}
+
+#[gpui::test]
+fn an_off_pill_names_its_reason_when_keyboard_focus_reaches_it(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+    click(cx, "start-host");
+    // Focus events reach the tip only in an active window; a key press makes the next focus a keyboard focus.
+    cx.update(|window, _| window.activate_window());
+    let keystroke = gpui::Keystroke::parse("f1").expect("f1 is a keystroke");
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.update(|window, cx| window.focus_next(cx));
+    cx.update(|window, cx| window.focus_prev(cx));
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the host pill's reason shows when keyboard focus reaches it"
+    );
+}
+
+#[gpui::test]
+fn the_chosen_agent_stays_chosen_when_the_installed_kinds_are_listed_again(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    let (offered, chosen) = composer.read_with(cx, |composer, cx| {
+        let state = composer.picker().read(cx).state();
+        (state.agents().len(), state.choice().model.to_string())
+    });
+    assert_eq!(offered, 2);
+    assert_eq!(
+        chosen, "claude",
+        "the chosen agent is kept across the refresh"
     );
 }
 
@@ -338,6 +487,81 @@ fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut 
     (rig, cx)
 }
 
+/// The service offers chat sessions and Claude can run one, as a newer service reports on connect (`agent-chat/1`).
+fn offer_chat(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    report_kind_chats(rig, cx, vec![("claude", supported_chat())]);
+}
+
+/// Replaces the chat support the service reports for each kind, as `agent.kinds` lists it (decision 0101, D10).
+fn report_kind_chats(rig: &Rig, cx: &mut VisualTestContext, chats: Vec<(&str, KindChat)>) {
+    let chats: BTreeMap<String, KindChat> = chats
+        .into_iter()
+        .map(|(id, chat)| (id.to_owned(), chat))
+        .collect();
+    rig._updates
+        .send(StoreUpdate::AgentKindChatResync(chats))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+fn supported_chat() -> KindChat {
+    KindChat {
+        supported: true,
+        reason: None,
+        version: Some("2.2.0".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    }
+}
+
+fn unsupported_chat(reason: Option<ChatUnsupportedReason>) -> KindChat {
+    KindChat {
+        supported: false,
+        reason,
+        version: None,
+        range: None,
+    }
+}
+
+/// The Chat availability the page holds for `w1`, as its switch draws it.
+fn chat_availability(rig: &Rig, cx: &mut VisualTestContext) -> ChatAvailability {
+    rig.shell
+        .read_with(cx, |shell, app| shell.chat_availability("w1", app))
+}
+
+fn mode_of(rig: &Rig, cx: &mut VisualTestContext) -> StartMode {
+    rig.shell
+        .read_with(cx, |shell, app| shell.start_mode("w1", app))
+}
+
+/// Moves the pointer onto `selector` and waits out the tooltip delay, so its tooltip draws.
+fn hover(cx: &mut VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element with selector {selector}"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+}
+
+/// Opens the model picker, clears its search (it keeps the text of the last pick), types `agent` and chooses the
+/// highlighted row with Enter.
+fn pick_agent(cx: &mut VisualTestContext, agent: &str) {
+    click(cx, "model-picker-trigger");
+    for _ in 0..8 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input(agent);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw(cx);
+}
+
 fn composer_of(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
     rig.shell
         .update(cx, |shell, cx| shell.start_composer("w1", cx))
@@ -369,7 +593,7 @@ fn start_call(script: &mut Script) -> Option<StartCall> {
 }
 
 #[gpui::test]
-fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
+fn the_start_page_offers_only_the_installed_and_enabled_kinds_and_starts_on_the_first(
     cx: &mut TestAppContext,
 ) {
     let mut cursor = agent_kind("cursor", "Cursor", PackageState::Enabled);
@@ -394,42 +618,27 @@ fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
             state.choice().model.to_string(),
         )
     });
-    assert_eq!(offered, ["claude", "codex", "cursor"]);
+    assert_eq!(offered, ["claude"]);
     assert_eq!(chosen, "claude");
 }
 
 #[gpui::test]
-fn a_kind_that_cannot_start_is_listed_missing_and_says_why_with_a_marketplace_action(
-    cx: &mut TestAppContext,
-) {
+fn a_kind_that_is_off_is_not_offered_and_draws_no_notice(cx: &mut TestAppContext) {
     let (rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("codex", "Codex", PackageState::Disabled)],
     );
-    let composer = composer_of(&rig, cx);
-    let availability = composer.read_with(cx, |composer, cx| {
-        composer.picker().read(cx).state().agents()[0].availability
-    });
-    assert_eq!(
-        availability,
-        massorca_ui::components::model_picker::AgentAvailability::Missing
-    );
     draw(cx);
-    assert!(cx.debug_bounds("start-kind-notice").is_some());
-    let notice = rig
-        .shell
-        .update(cx, |shell, cx| shell.kind_notice(&composer, cx))
-        .map(|notice| notice.text);
-    assert_eq!(notice.as_deref(), Some("Codex cannot start: Disabled."));
-    click_selector(cx, "button:start-kind-marketplace");
-    assert!(matches!(
-        rig.shell.read_with(cx, |shell, _| shell.model.canvas()),
-        Canvas::Page(crate::model::navigation::Page::Marketplace(_))
-    ));
+    assert!(cx.debug_bounds("start-kind-notice").is_none());
+    assert!(cx.debug_bounds("button:start-kind-marketplace").is_none());
+    let offered = composer_of(&rig, cx).read_with(cx, |composer, cx| {
+        composer.picker().read(cx).state().agents().len()
+    });
+    assert_eq!(offered, 0);
 }
 
 #[gpui::test]
-fn send_with_a_kind_that_cannot_start_shows_why_and_sends_nothing(cx: &mut TestAppContext) {
+fn send_with_no_agent_installed_stays_off_and_sends_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("codex", "Codex", PackageState::Disabled)],
@@ -438,23 +647,20 @@ fn send_with_a_kind_that_cannot_start_shows_why_and_sends_nothing(cx: &mut TestA
     cx.run_until_parked();
     assert!(start_call(&mut rig._script).is_none(), "no agent.start");
     let composer = composer_of(&rig, cx);
-    let (error, draft) = composer.read_with(cx, |composer, cx| {
+    let (error, draft, primary) = composer.read_with(cx, |composer, cx| {
         (
             composer.error_reason().map(|reason| reason.to_string()),
             composer.draft(cx),
+            composer.primary_action(cx),
         )
     });
-    assert_eq!(error.as_deref(), Some("Codex cannot start: Disabled."));
+    assert_eq!(error, None, "nothing was refused: Send is simply off");
     assert_eq!(draft, "fix the login");
-}
-
-fn click_selector(cx: &mut VisualTestContext, selector: &'static str) {
-    draw(cx);
-    let bounds = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("no element with selector {selector}"));
-    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
+    assert_eq!(
+        format!("{primary:?}"),
+        "Disabled",
+        "the primary button is off"
+    );
 }
 
 #[gpui::test]
@@ -468,7 +674,7 @@ fn sending_the_prompt_asks_the_service_to_start_the_chosen_kind_in_the_workspace
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!(params.workspace, "w1");
+    assert_eq!(params.workspace.as_deref(), Some("w1"));
     assert_eq!(params.kind, "claude");
     assert_eq!(params.prompt.as_deref(), Some("fix the login"));
 }
@@ -527,6 +733,7 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -571,6 +778,7 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
@@ -628,15 +836,15 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
-fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
-    cx: &mut TestAppContext,
-) {
+fn with_the_chat_capability_chat_is_the_default_and_both_segments_switch(cx: &mut TestAppContext) {
     let (rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     let mode = |rig: &Rig, cx: &mut VisualTestContext| {
-        rig.shell.read_with(cx, |shell, _| shell.start_mode("w1"))
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
     };
     assert_eq!(mode(&rig, cx), StartMode::Chat);
     assert!(cx.debug_bounds("start-terminal-note").is_none());
@@ -654,6 +862,220 @@ fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
 }
 
 #[gpui::test]
+fn without_the_chat_capability_the_switch_starts_on_terminal_and_chat_is_off(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    click(cx, "segment-0");
+    assert_eq!(
+        mode(&rig, cx),
+        StartMode::Terminal,
+        "a click on the off Chat segment changes nothing"
+    );
+    assert!(cx.debug_bounds("start-terminal-note").is_some());
+
+    let chat = cx
+        .debug_bounds("segment-0")
+        .expect("the Chat segment is drawn")
+        .center();
+    cx.simulate_mouse_move(chat, None, gpui::Modifiers::none());
+    cx.executor().advance_clock(DURATION_TOOLTIP_DELAY);
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the off Chat segment shows why it is off"
+    );
+}
+
+#[gpui::test]
+fn chat_turns_on_by_itself_when_the_service_starts_offering_it(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell
+            .read_with(cx, |shell, app| shell.start_mode("w1", app))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    offer_chat(&rig, cx);
+    assert_eq!(mode(&rig, cx), StartMode::Chat, "Chat is the default again");
+    assert!(cx.debug_bounds("start-terminal-note").is_none());
+}
+
+#[gpui::test]
+fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, work_panel) = rig.shell.read_with(cx, |shell, _| {
+        (
+            shell.model.canvas(),
+            shell.model.region_visible(Region::WorkPanel),
+        )
+    });
+    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
+    assert!(work_panel, "the Work panel shows the agent's terminal");
+    let (attach, _attach_reply) =
+        attach_call(&mut rig._script).expect("the agent's terminal is attached");
+    assert_eq!(attach.terminal, terminal);
+}
+
+#[gpui::test]
+fn a_kind_that_cannot_chat_turns_chat_off_with_its_reason_and_starts_on_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let outside_range = KindChat {
+        supported: false,
+        reason: Some(ChatUnsupportedReason::VersionOutsideRange),
+        version: Some("2.4.1".to_owned()),
+        range: Some(">=2.1.0, <2.3.0".to_owned()),
+    };
+    let cases = [
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            "Claude was not found on this computer.",
+        ),
+        (
+            unsupported_chat(Some(ChatUnsupportedReason::VersionUnknown)),
+            "Claude's version could not be read.",
+        ),
+        (
+            outside_range,
+            "Chat needs Claude >=2.1.0, <2.3.0; this computer has 2.4.1.",
+        ),
+        (unsupported_chat(None), "Claude cannot run chat sessions."),
+    ];
+    for (chat, reason) in cases {
+        report_kind_chats(&rig, cx, vec![("claude", chat)]);
+        assert_eq!(mode_of(&rig, cx), StartMode::Terminal, "{reason}");
+        assert_eq!(chat_availability(&rig, cx).reason(), Some(reason));
+        assert!(cx.debug_bounds("start-terminal-note").is_some());
+        hover(cx, "segment-0");
+        assert!(
+            cx.debug_bounds("tooltip-panel").is_some(),
+            "the off Chat segment shows why it is off: {reason}"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_pick_change_between_two_agents_turns_chat_on_and_off(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ],
+    );
+    report_kind_chats(
+        &rig,
+        cx,
+        vec![
+            ("claude", supported_chat()),
+            (
+                "codex",
+                unsupported_chat(Some(ChatUnsupportedReason::NotDetected)),
+            ),
+        ],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Claude is the picked agent and can chat"
+    );
+
+    pick_agent(cx, "Codex");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Terminal,
+        "Codex cannot chat, so Terminal is selected"
+    );
+    assert_eq!(
+        chat_availability(&rig, cx).reason(),
+        Some("Codex was not found on this computer.")
+    );
+    hover(cx, "segment-0");
+    assert!(
+        cx.debug_bounds("tooltip-panel").is_some(),
+        "the drawn Chat segment turns off with the pick, and says why"
+    );
+
+    pick_agent(cx, "Claude");
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "Chat comes back with an agent that can chat"
+    );
+}
+
+#[test]
+fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
+    let off = mode_segments(&ChatAvailability::new(false, None));
+    assert!(off[0].is_disabled());
+    assert_eq!(
+        off[0].tooltip_text().map(|text| text.as_ref()),
+        Some(CHAT_NEEDS_NEWER_SERVICE)
+    );
+    assert!(!off[1].is_disabled(), "Terminal is always on");
+    let not_detected = unsupported_chat(Some(ChatUnsupportedReason::NotDetected));
+    let for_agent = mode_segments(&ChatAvailability::new(
+        true,
+        Some(("Claude", Some(&not_detected))),
+    ));
+    assert!(for_agent[0].is_disabled());
+    assert_eq!(
+        for_agent[0].tooltip_text().map(|text| text.as_ref()),
+        Some("Claude was not found on this computer.")
+    );
+    let on = mode_segments(&ChatAvailability::new(true, None));
+    assert!(!on[0].is_disabled());
+    assert_eq!(on[0].tooltip_text(), None);
+}
+
+#[gpui::test]
 fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
     cx: &mut TestAppContext,
 ) {
@@ -661,6 +1083,7 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
     );
+    offer_chat(&rig, cx);
     click(cx, "segment-1");
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
@@ -708,10 +1131,11 @@ fn claude_with_modes() -> AgentKind {
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![
+        mode("auto", "Auto", false),
         mode("plan", "Plan", false),
         mode("bypassPermissions", "Bypass permissions", true),
     ];
-    kind.default_permission_mode = Some("plan".into());
+    kind.default_permission_mode = Some("auto".into());
     kind
 }
 
@@ -729,10 +1153,26 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
     assert_eq!(
         modes,
         [
-            ("The CLI's default (Plan)".to_owned(), false),
+            ("Auto".to_owned(), false),
+            ("Auto".to_owned(), false),
             ("Plan".to_owned(), false),
             ("Bypass permissions".to_owned(), true),
         ]
+    );
+    let details = composer.read_with(cx, |composer, _| {
+        (0..4)
+            .map(|index| composer.access_detail(index).map(|text| text.to_string()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        details,
+        [Some("The CLI's default".to_owned()), None, None, None],
+        "the default entry says it is the CLI's default; the declared Auto does not"
+    );
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0,
+        "the CLI's default is selected"
     );
     draw(cx);
     assert!(cx.debug_bounds("composer-access").is_some());
@@ -743,19 +1183,48 @@ fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn a_picked_mode_is_sent_with_the_start_and_stays_across_redraws(cx: &mut TestAppContext) {
+fn a_picked_mode_is_sent_and_remembered_per_kind_until_the_default_is_picked(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
     let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile.clone(), ui_state::UiState::default()));
     let composer = composer_of(&rig, cx);
-    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    composer.update(cx, |composer, cx| {
+        composer.set_access(2, cx);
+        cx.emit(ComposerEvent::AccessChanged(2));
+    });
     draw(cx);
+    cx.run_until_parked();
     assert_eq!(
-        composer.read_with(cx, |composer, _| composer.access_index()),
-        2
+        ui_state::load(&profile)
+            .start_permission_modes
+            .get("claude"),
+        Some(&"plan".to_owned()),
+        "the pick is remembered for its kind"
     );
     type_and_send(&rig, cx, "fix the login");
     cx.run_until_parked();
     let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    assert_eq!(params.permission_mode.as_deref(), Some("bypassPermissions"));
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+
+    composer.update(cx, |composer, cx| {
+        composer.set_access(0, cx);
+        cx.emit(ComposerEvent::AccessChanged(0));
+    });
+    cx.run_until_parked();
+    assert!(
+        !ui_state::load(&profile)
+            .start_permission_modes
+            .contains_key("claude"),
+        "picking the CLI's default clears the remembered pick"
+    );
 }
 
 #[gpui::test]
@@ -767,4 +1236,274 @@ fn a_kind_without_modes_shows_no_mode_chip(cx: &mut TestAppContext) {
     let composer = composer_of(&rig, cx);
     assert!(composer.read_with(cx, |composer, _| composer.access_modes().is_empty()));
     assert!(cx.debug_bounds("composer-access").is_none());
+}
+
+#[gpui::test]
+fn a_remembered_pick_comes_back_on_the_start_chip_and_is_sent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
+    let mut saved = ui_state::UiState::default();
+    saved
+        .start_permission_modes
+        .insert("claude".to_owned(), "plan".to_owned());
+    // The kind first lists no modes, so the chip is built only once the remembered pick is there.
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    cx.update(|_, cx| ui_state::install(cx, profile.clone(), saved));
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![claude_with_modes()]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+}
+
+#[test]
+fn a_start_sends_only_the_mode_the_chip_shows_from_the_same_list() {
+    use super::start_page::{access_modes, sent_mode};
+    use crate::model::permission_modes::start_choices;
+    let choices = start_choices(&claude_with_modes());
+    let shown = access_modes(&choices);
+    assert_eq!(
+        sent_mode(&choices, &shown, 0),
+        None,
+        "the CLI's default sends no mode"
+    );
+    assert_eq!(sent_mode(&choices, &shown, 1).as_deref(), Some("auto"));
+    assert_eq!(sent_mode(&choices, &shown, 2).as_deref(), Some("plan"));
+    assert_eq!(
+        sent_mode(&choices, &shown, 9),
+        None,
+        "past the end sends no mode"
+    );
+    // A chip built from another list never lends its index to this one.
+    let other = access_modes(&choices[..1]);
+    assert_eq!(sent_mode(&choices, &other, 2), None);
+}
+
+#[gpui::test]
+fn a_chip_index_nobody_picked_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    // The index moves without the person choosing the entry: nothing is sent.
+    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn the_shown_mode_and_the_sent_mode_agree_for_every_entry(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    let expected = [None, Some("auto"), Some("plan"), Some("bypassPermissions")];
+    for (index, want) in expected.into_iter().enumerate() {
+        composer.update(cx, |composer, cx| {
+            composer.set_access(index, cx);
+            cx.emit(ComposerEvent::AccessChanged(index));
+        });
+        draw(cx);
+        type_and_send(&rig, cx, "fix the login");
+        cx.run_until_parked();
+        let (params, _reply) =
+            start_call(&mut rig._script).expect("the start is sent to the service");
+        assert_eq!(params.permission_mode.as_deref(), want, "entry {index}");
+        rig.shell.update(cx, |shell, _| shell.start_pending = None);
+    }
+}
+
+/// A profile whose ui state remembers `mode` as the start pick of Claude.
+fn profile_remembering(temp: &tempfile::TempDir, mode: &str) -> (Profile, ui_state::UiState) {
+    let profile = Profile::resolve_with(
+        Some(temp.path().to_path_buf()),
+        Some("main".to_owned()),
+        |_| None,
+    )
+    .expect("a profile");
+    let mut saved = ui_state::UiState::default();
+    saved
+        .start_permission_modes
+        .insert("claude".to_owned(), mode.to_owned());
+    (profile, saved)
+}
+
+/// Drops the start page's composer so the next draw builds a fresh one.
+fn fresh_composer(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
+    rig.shell.update(cx, |shell, _| {
+        shell.start_composers.remove("w1");
+    });
+    draw(cx);
+    composer_of(rig, cx)
+}
+
+#[gpui::test]
+fn a_remembered_mode_on_a_fresh_composer_is_shown_and_sent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let (profile, saved) = profile_remembering(&temp, "plan");
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile, saved));
+    let composer = fresh_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        2,
+        "the chip shows the remembered Plan"
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode.as_deref(), Some("plan"));
+}
+
+#[gpui::test]
+fn a_remembered_bypass_mode_is_not_restored_and_sends_no_mode(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let (profile, saved) = profile_remembering(&temp, "bypassPermissions");
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    cx.update(|_, cx| ui_state::install(cx, profile, saved));
+    let composer = fresh_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0,
+        "a bypass is never restored from memory"
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn a_mode_list_change_without_a_remembered_pick_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    composer.update(cx, |composer, cx| {
+        composer.set_access(1, cx);
+        cx.emit(ComposerEvent::AccessChanged(1));
+    });
+    draw(cx);
+    // The kind drops Plan; the chip resets and the earlier pick of Auto no longer counts.
+    let mut changed = claude_with_modes();
+    changed.permission_modes.remove(1);
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(vec![changed]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        0
+    );
+    // The chip lands on Auto again without the person picking it: nothing is sent.
+    composer.update(cx, |composer, cx| composer.set_access(1, cx));
+    draw(cx);
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+/// Claude's picker rows with real models, Opus with five levels and Haiku with none, the row `model` chosen at `effort`.
+fn picker_of_claude(
+    model: &str,
+    effort: Option<usize>,
+) -> massorca_ui::components::model_picker::PickerState {
+    use massorca_ui::components::agent_icon::AgentKind as PickerKind;
+    use massorca_ui::components::model_picker::{
+        AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
+    };
+    let levels = ["Low", "Medium", "High", "Extra High", "Max"]
+        .map(gpui::SharedString::from)
+        .to_vec();
+    let row = |id: &str, name: &str, efforts: Vec<gpui::SharedString>| ModelOption {
+        id: id.to_owned().into(),
+        name: name.to_owned().into(),
+        efforts,
+        default_effort: 0,
+        fast: false,
+    };
+    let agent = AgentOption {
+        kind: PickerKind::Claude,
+        availability: AgentAvailability::Ready,
+        list: ModelList::Loaded,
+        models: vec![
+            row("opus", "Opus", levels),
+            row("haiku", "Haiku", Vec::new()),
+        ],
+    };
+    PickerState::new(
+        vec![agent],
+        Choice {
+            model: model.to_owned().into(),
+            effort,
+            fast: false,
+        },
+    )
+}
+
+#[gpui::test]
+fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
+}
+
+#[gpui::test]
+fn with_the_capability_a_kind_with_no_models_still_sends_neither(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentOptionsOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!((params.model, params.effort), (None, None));
+}
+
+#[test]
+fn a_picked_real_model_sends_its_model_and_effort_only_when_offered() {
+    let picker = picker_of_claude("opus", Some(3));
+    assert_eq!(
+        picked_options(&picker, true, "claude"),
+        StartOptions {
+            model: Some("opus".to_owned()),
+            effort: Some("xhigh".to_owned()),
+        }
+    );
+    assert_eq!(
+        picked_options(&picker, false, "claude"),
+        StartOptions::default()
+    );
+}
+
+#[test]
+fn a_real_model_without_levels_sends_the_model_and_no_effort() {
+    let picker = picker_of_claude("haiku", Some(3));
+    assert_eq!(
+        picked_options(&picker, true, "claude"),
+        StartOptions {
+            model: Some("haiku".to_owned()),
+            effort: None,
+        }
+    );
 }

@@ -8,13 +8,16 @@ mod extension_items;
 mod extension_refusals;
 mod host_target;
 mod hosted_services;
+mod install_details;
 mod install_review;
 mod item_images;
 mod item_page;
 mod package_problem;
+mod remove_review;
 mod sample;
 mod service_accounts;
 mod service_source;
+mod skills;
 mod source;
 mod types;
 
@@ -31,9 +34,8 @@ pub use hosted_services::{
     ConnectFields, HostedServicesView, ServiceAction, ServiceRow, ServicesState, connect_fields,
     service_row,
 };
-pub use install_review::{
-    install_button_label, installer_runs, review_details, review_lines, shown_risk,
-};
+pub use install_details::review_details;
+pub use install_review::{ReviewOutcome, installer_runs, review_outcome};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_tag, information,
@@ -43,9 +45,11 @@ pub use item_page::{
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
 };
+pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
+pub use skills::{RootRow, SkillRow, root_rows, search_skills, skill_count_line, skill_rows};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
     AccountId, AccountState, AgentAccount, DEFAULT_AGENT_KEY, Host, HostId, HostState, ItemKind,

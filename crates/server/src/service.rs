@@ -253,6 +253,7 @@ impl Service {
             workspaces: Arc::clone(&workspaces),
             profile_dir: profile.dir().to_path_buf(),
             massorca_bin: std::env::current_exe()?,
+            conversations_default: PathBuf::from(crate::features::default_conversations_root()?),
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
         });
@@ -261,6 +262,13 @@ impl Service {
         let kind_guard = extensions.register_remove_guard("agents", move |package| {
             guarded
                 .refuse_removing_package(package)
+                .map_err(|error| HookError::new(error.code, error.message))
+        });
+        // A package removed with its agent homes takes its kinds' accounts with it; nothing is signed out (decision 0098).
+        let cleaned = agents.clone();
+        let kind_cleanup = extensions.register_remove_cleanup("agents", move |removed| {
+            cleaned
+                .remove_package_accounts(&removed.id, &removed.agent_kinds)
                 .map_err(|error| HookError::new(error.code, error.message))
         });
         // No run survives the previous service (0051); nothing has started one yet in this service.
@@ -304,6 +312,7 @@ impl Service {
             host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
+            _kind_cleanup: kind_cleanup,
             network: network_state,
             server: PeerInfo {
                 name: server_name,

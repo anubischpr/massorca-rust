@@ -20,6 +20,7 @@ mod services;
 #[cfg(test)]
 mod services_tests;
 mod sign_in;
+mod skills;
 #[cfg(test)]
 mod tests;
 
@@ -59,6 +60,8 @@ pub(super) struct UninstallConfirm {
     pub sending: bool,
     /// The person's tick for removing the CLI the package installed too; only offered when the package installed one.
     pub remove_cli: bool,
+    /// Whether Show details is open; it starts closed.
+    pub details_open: bool,
 }
 
 /// The install review on screen for one package, from the catalogue or a folder. What the service reported is shown
@@ -74,7 +77,7 @@ pub(super) struct InstallReview {
     pub review: Option<ExtensionReview>,
     /// The person's tick for running the vendor installer the review lists.
     pub run_installer: bool,
-    /// Whether the review's Details (its fingerprints) are shown.
+    /// Whether Show details is open; it starts closed.
     pub details_open: bool,
     pub sending: bool,
     pub error: Option<String>,
@@ -111,6 +114,8 @@ pub(super) struct MarketplaceFrame {
     services: crate::model::marketplace::HostedServicesView,
     /// A refused disconnect, with the service it concerns.
     service_error: Option<(String, String)>,
+    /// The Skills section's host and what it shows for that host (SKL-01).
+    skills: skills::SkillsSection,
     shell: WeakEntity<Shell>,
 }
 
@@ -143,6 +148,7 @@ pub(super) fn frame(
         host_status: shell.picker_status(cx),
         services: shell.marketplace_services.clone(),
         service_error: shell.marketplace_service_error.clone(),
+        skills: skills::section_of(shell, cx),
         shell: weak,
     }
 }
@@ -198,6 +204,10 @@ impl Shell {
     /// Opens a Marketplace view or an item's page from anywhere in the shell.
     pub(super) fn open_marketplace(&mut self, page: MarketplacePage, cx: &mut Context<Self>) {
         self.marketplace_error = None;
+        if page == MarketplacePage::Category(ItemKind::Skill) {
+            let target = self.shown_target();
+            self.read_skills(&target, false);
+        }
         self.model.open_page(Page::Marketplace(page));
         if page == MarketplacePage::Category(ItemKind::Service) {
             self.read_hosted_services(cx);
@@ -343,7 +353,15 @@ impl Shell {
             error: None,
             sending: false,
             remove_cli: false,
+            details_open: false,
         });
+        cx.notify();
+    }
+
+    pub(super) fn set_uninstall_details(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.details_open = open;
+        }
         cx.notify();
     }
 

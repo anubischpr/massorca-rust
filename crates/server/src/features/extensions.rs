@@ -19,8 +19,9 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::extensions::{
     self, CliPlanState, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled,
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
-    ExtensionList, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionList, ExtensionLog, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved,
+    ExtensionReview, ExtensionRollbackParams, ExtensionRun, ExtensionSetEnabledParams,
+    ExtensionUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -56,6 +57,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             inspect,
         )?,
         methods.register(Owner::Core, extensions::ASSET, cap, Permission::Read, asset)?,
+        // Its own capability. The runs are readable, but their output is for a host administrator only.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_LOG, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::LOG,
+            capabilities::EXTENSIONS_LOG,
+            Permission::Read,
+            log,
+        )?,
         // These can run a program on the host, so they need host administration.
         methods.register(
             Owner::Core,
@@ -71,6 +83,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             cap,
             Permission::HostAdmin,
             update,
+        )?,
+        // Its own capability, so a client that was not offered it never sends the rollback.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_ROLLBACK, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::ROLLBACK,
+            capabilities::EXTENSIONS_ROLLBACK,
+            Permission::HostAdmin,
+            rollback,
         )?,
         methods.register(
             Owner::Core,
@@ -189,6 +212,41 @@ async fn update(
             params.consent.as_deref(),
             params.sha256.as_deref(),
         )
+    })
+    .await?;
+    publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
+    wire(&entry)
+}
+
+/// The runs of a package, oldest first. Their output is hidden from a caller without host administration.
+async fn log(ctx: RequestCtx, params: ExtensionRef) -> Result<ExtensionLog, ErrorBody> {
+    let id = params.id.clone();
+    let records = on_extensions(&ctx, move |extensions| extensions.runs(&params.id)).await?;
+    let mut runs = wire_all(&records)?;
+    hide_run_output(&mut runs, may_see_host_paths(&ctx));
+    Ok(ExtensionLog { id, runs })
+}
+
+/// A run's output names the service host's commands and files, so only a host administrator gets it.
+fn hide_run_output(runs: &mut [ExtensionRun], may_see_output: bool) {
+    if !may_see_output {
+        for run in runs {
+            run.output.clear();
+        }
+    }
+}
+
+/// Restores the version an update replaced. It publishes `extension.installed`, so readers reload the package.
+async fn rollback(
+    ctx: RequestCtx,
+    params: ExtensionRollbackParams,
+) -> Result<ExtensionInstalled, ErrorBody> {
+    refuse_agent_run(
+        params.agent_token.as_deref(),
+        "an agent cannot roll back an extension; ask the person to run the command",
+    )?;
+    let entry = on_extensions(&ctx, move |extensions| {
+        extensions.rollback(&params.id, params.consent.as_deref())
     })
     .await?;
     publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
@@ -405,6 +463,45 @@ mod failure_tests {
         let data = body.data.expect("the data");
         assert_eq!(data["searched"], serde_json::json!(["C:\\Tools"]));
     }
+
+    /// A verify that fails after the vendor command ran: a caller without host administration learns the command that
+    /// ran, not the folders searched or the output.
+    #[test]
+    fn a_failed_verify_without_host_administration_keeps_the_command_and_drops_the_paths() {
+        let failed_verify = Error::VerifyFailed {
+            agent: "codex".to_owned(),
+            message: "`codex` does not resolve".to_owned(),
+            installer: Some(vec![
+                "npm".to_owned(),
+                "install".to_owned(),
+                "-g".to_owned(),
+                "codex".to_owned(),
+            ]),
+            diagnosis: Box::new(Diagnosis {
+                programs: vec!["codex".to_owned()],
+                search: ProgramSearch {
+                    source: "registry".to_owned(),
+                    dirs: vec!["C:\\Tools".to_owned()],
+                },
+                output_tail: vec!["added 1 package".to_owned()],
+            }),
+        };
+
+        let body = refusal_body(failed_verify, false);
+
+        assert!(
+            !body.message.contains("C:\\Tools") && !body.message.contains("added 1 package"),
+            "{}",
+            body.message
+        );
+        let data = body.data.expect("the data says what ran");
+        assert_eq!(
+            data["command"],
+            serde_json::json!(["npm", "install", "-g", "codex"])
+        );
+        assert!(data.get("searched").is_none(), "{data}");
+        assert!(data.get("output_tail").is_none(), "{data}");
+    }
 }
 
 #[cfg(test)]
@@ -419,6 +516,10 @@ mod tests {
     fn the_protocol_codes_match_the_codes_the_crates_raise() {
         let pairs = [
             (core_codes::INVALID_SOURCE, codes::EXTENSION_INVALID_SOURCE),
+            (
+                core_codes::NO_PREVIOUS_VERSION,
+                codes::EXTENSION_NO_PREVIOUS_VERSION,
+            ),
             (core_codes::NOT_FOUND, codes::EXTENSION_NOT_FOUND),
             (core_codes::NOT_INSTALLED, codes::EXTENSION_NOT_INSTALLED),
             (
@@ -502,5 +603,42 @@ mod tests {
 
         assert_eq!(body.code, codes::AGENT_BUSY);
         assert!(body.message.contains("a session is live"));
+    }
+}
+
+#[cfg(test)]
+mod run_log_tests {
+    use massorca_protocol::methods::extensions::{
+        ExtensionRun, ExtensionRunAction, ExtensionRunOutcome,
+    };
+
+    use super::hide_run_output;
+
+    fn failed_install() -> ExtensionRun {
+        ExtensionRun {
+            at_ms: 1,
+            action: ExtensionRunAction::Install,
+            from_version: None,
+            to_version: Some("1.2.0".to_owned()),
+            outcome: ExtensionRunOutcome::Failed,
+            output: vec!["ran npm install -> 3".to_owned()],
+        }
+    }
+
+    /// Output lines name the service host's commands, so a caller without host administration sees the runs without them.
+    #[test]
+    fn a_caller_without_host_administration_gets_the_runs_without_output() {
+        let mut runs = vec![failed_install()];
+        hide_run_output(&mut runs, false);
+        assert!(runs[0].output.is_empty());
+        assert_eq!(runs[0].outcome, ExtensionRunOutcome::Failed);
+        assert_eq!(runs[0].to_version.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn a_host_administrator_gets_the_output_of_each_run() {
+        let mut runs = vec![failed_install()];
+        hide_run_output(&mut runs, true);
+        assert_eq!(runs[0].output, ["ran npm install -> 3"]);
     }
 }
