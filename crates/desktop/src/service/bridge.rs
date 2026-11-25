@@ -32,7 +32,7 @@ use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectInspection, ProjectInspectParams, ProjectRef,
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};

@@ -428,8 +428,10 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             match handle.inspect_project(params.path.clone()).await {
                 Ok(found) if found.kind == ProjectKind::Folder && found.registered.is_none() => {
-                    this.update(cx, |shell, cx| shell.warn_about_plain_folder(params.path, cx))
-                        .ok();
+                    this.update(cx, |shell, cx| {
+                        shell.warn_about_plain_folder(params.path, cx)
+                    })
+                    .ok();
                 }
                 // A repository, a folder already added, or an answer this build cannot read: `project.add` decides.
                 _ => {

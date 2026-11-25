@@ -699,13 +699,20 @@ mod tests {
         let tree = flatten(&[folder], None);
         assert!(matches!(
             &tree[0],
-            TreeRow::Project { plain_folder: true, .. }
+            TreeRow::Project {
+                plain_folder: true,
+                ..
+            }
         ));
         let collapsed = BTreeSet::from(["notes".to_owned()]);
         let folded = collapse_projects(tree, &collapsed);
         assert!(matches!(
             &folded[0],
-            TreeRow::Project { plain_folder: true, expanded: false, .. }
+            TreeRow::Project {
+                plain_folder: true,
+                expanded: false,
+                ..
+            }
         ));
     }
 

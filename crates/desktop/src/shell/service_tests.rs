@@ -349,7 +349,10 @@ fn a_git_folder_is_added_without_a_warning(cx: &mut TestAppContext) {
     let Some(Command::AddProject { params, reply }) = rig.script.next() else {
         panic!("a project.add call was expected");
     };
-    assert_eq!(params.kind, None, "the service picks the kind of a repository");
+    assert_eq!(
+        params.kind, None,
+        "the service picks the kind of a repository"
+    );
     reply
         .send(Ok(project("p9", "gamma")))
         .expect("the shell waits");
@@ -378,7 +381,11 @@ fn a_plain_folder_is_held_for_the_warning_and_nothing_is_added_yet(cx: &mut Test
         "no project.add before the person decides"
     );
     rig.shell.read_with(cx, |shell, _| {
-        let dialog = shell.dialogs.add_project.as_ref().expect("the dialog stays open");
+        let dialog = shell
+            .dialogs
+            .add_project
+            .as_ref()
+            .expect("the dialog stays open");
         assert_eq!(dialog.form.plain_folder.as_deref(), Some("/repos/notes"));
         assert!(!dialog.form.busy);
     });
@@ -449,7 +456,11 @@ fn a_folder_already_added_is_not_warned_about_and_the_add_refuses_it(cx: &mut Te
     send_path(&rig, cx, "/repos/alpha");
     let (_, reply) = next_inspect(&mut rig.script);
     reply
-        .send(Ok(inspection(ProjectKind::Folder, "/repos/alpha", Some("p1"))))
+        .send(Ok(inspection(
+            ProjectKind::Folder,
+            "/repos/alpha",
+            Some("p1"),
+        )))
         .expect("the shell waits");
     cx.run_until_parked();
     let Some(Command::AddProject { params, reply }) = rig.script.next() else {
