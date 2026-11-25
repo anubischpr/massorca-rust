@@ -104,6 +104,8 @@ pub struct ProjectGroup {
     pub name: String,
     /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
     pub emoji: Option<String>,
+    /// The owner or org of the project's remote, drawn after its name (A10); None until the protocol carries one.
+    pub owner: Option<String>,
     pub hosts: Vec<HostGroup>,
 }
 

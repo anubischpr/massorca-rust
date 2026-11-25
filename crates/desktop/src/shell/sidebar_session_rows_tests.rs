@@ -2,7 +2,11 @@
 //! workspace row between them, and a child session sits under its parent. A scripted handle answers
 //! nothing, so no window opens.
 
-use super::service_tests::{Rig, click, draw, rig};
+use super::Shell;
+use super::service_tests::{Rig, click, draw, rig, setup};
+use crate::data::{DataSource, SampleDataSource};
+use crate::model::shell::ShellSnapshot;
+use crate::model::teams::SampleTeamsSource;
 use crate::service::StoreUpdate;
 use crate::service::fixtures::{agent, workspace};
 use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext};
@@ -70,6 +74,34 @@ fn a_workspace_whose_sessions_are_all_gone_has_no_row(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("sidebar-placeholder-w2").is_none(),
         "an archived or deleted session leaves no placeholder behind"
+    );
+}
+
+/// The sample data with an owner on its first project, as a remote project carries one (A10).
+struct WithOwner;
+
+impl DataSource for WithOwner {
+    fn snapshot(&self) -> ShellSnapshot {
+        let mut snapshot = SampleDataSource.snapshot();
+        snapshot.projects[0].owner = Some("acme".into());
+        snapshot
+    }
+}
+
+#[gpui::test]
+fn a_project_with_an_owner_draws_its_owner_line_and_one_without_does_not(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_shell, cx) =
+        cx.add_window_view(|window, cx| Shell::new(&WithOwner, &SampleTeamsSource, window, cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-project-owner-massorca-rust")
+            .is_some(),
+        "the project with an owner draws the owner line"
+    );
+    assert!(
+        cx.debug_bounds("sidebar-project-owner-datalake").is_none(),
+        "a project without an owner draws no owner line"
     );
 }
 

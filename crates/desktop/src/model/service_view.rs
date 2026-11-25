@@ -14,7 +14,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::ProjectIcon;
+use massorca_protocol::methods::projects::{Project, ProjectIcon};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -39,6 +39,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             id: project.id.clone(),
             name: project.name.clone(),
             emoji: project.icon.as_ref().and_then(emoji_of),
+            owner: remote_owner_of(project),
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
@@ -71,6 +72,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
+            owner: None,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
@@ -255,6 +257,12 @@ pub fn teams_view(state: &StoreState) -> TeamsState {
     }
 }
 
+/// The owner or org a project's remote shows after its name (A10). Nothing supplies one yet.
+fn remote_owner_of(_project: &Project) -> Option<String> {
+    // Project.remote_owner (core PR #332) is not in the protocol yet; None until it lands.
+    None
+}
+
 /// The emoji an icon is; the other icon kinds are not drawn yet.
 fn emoji_of(icon: &ProjectIcon) -> Option<String> {
     match icon {
@@ -299,6 +307,18 @@ mod tests {
             now,
         );
         state
+    }
+
+    #[test]
+    fn no_project_shows_an_owner_line_until_the_protocol_carries_one() {
+        let now = Instant::now();
+        let snapshot = service_snapshot(&loaded(now), now);
+        assert!(
+            snapshot
+                .projects
+                .iter()
+                .all(|project| project.owner.is_none())
+        );
     }
 
     fn setting(key: &str, value: &str) -> ConfigValue {

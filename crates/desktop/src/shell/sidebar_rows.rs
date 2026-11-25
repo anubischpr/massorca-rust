@@ -53,6 +53,7 @@ pub(super) fn tree_row(
             id: project_id,
             name,
             emoji,
+            owner,
             expanded,
         } => {
             // The "No project" group wears the struck folder, as its project menu row does (A95).
@@ -64,7 +65,7 @@ pub(super) fn tree_row(
             let (click_shell, click_id) = (shell.clone(), project_id.clone());
             let (key_shell, key_id) = (shell.clone(), project_id.clone());
             // A click on the row, or Left and Right on the keyboard, folds the project's rows (A10).
-            SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
+            let row = SidebarRow::project(id, icon, project_label(name, emoji.as_deref()))
                 .expanded(*expanded)
                 .on_click(move |_, _, cx| {
                     let id = click_id.clone();
@@ -73,7 +74,12 @@ pub(super) fn tree_row(
                 .on_toggle(move |_, _, cx| {
                     let id = key_id.clone();
                     change(&key_shell, cx, move |shell| shell.toggle_project(&id));
-                })
+                });
+            // The owner or org reads after the name, in the secondary text (A10).
+            match owner {
+                Some(owner) => row.secondary(owner.clone()),
+                None => row,
+            }
         }
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
         TreeRow::RemoteHost { name, state } => remote_host_row(id, name, state),
@@ -164,6 +170,14 @@ pub(super) fn tree_item(
 ) -> AnyElement {
     let item = tree_row(row, index, focus, shell);
     let wrapper = div().pl(px(indent_padding(row)));
+    // A project with an owner draws its owner line inside a selector of its own, so a rig can see the line.
+    let item = match owner_selector(row) {
+        Some(selector) => div()
+            .debug_selector(move || selector)
+            .child(item)
+            .into_any_element(),
+        None => item.into_any_element(),
+    };
     match row_selector(row) {
         Some(selector) => wrapper
             .debug_selector(move || selector)
@@ -183,6 +197,16 @@ fn indent_padding(row: &TreeRow) -> f32 {
         TreeRow::Placeholder { .. } => (session_indent(0), SESSION_LEVEL),
     };
     indent - SPACE_2 - level as f32 * TREE_INDENT
+}
+
+/// The debug selector of a project's owner line, which only a project with an owner has.
+fn owner_selector(row: &TreeRow) -> Option<String> {
+    match row {
+        TreeRow::Project {
+            id, owner: Some(_), ..
+        } => Some(format!("sidebar-project-owner-{id}")),
+        _ => None,
+    }
 }
 
 /// The debug selector of a row a test clicks: a session by its id.

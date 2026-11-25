@@ -38,6 +38,8 @@ pub enum TreeRow {
         name: String,
         /// The project's emoji icon, drawn before its name.
         emoji: Option<String>,
+        /// The owner or org shown after the name, when the project has one (A10).
+        owner: Option<String>,
         /// Whether its rows are listed below it (A10).
         expanded: bool,
     },
@@ -189,6 +191,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             id: project.id.clone(),
             name: project.name.clone(),
             emoji: project.emoji.clone(),
+            owner: project.owner.clone(),
             expanded: true,
         });
         for host in &project.hosts {
@@ -225,7 +228,11 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
     for row in tree {
         match row {
             TreeRow::Project {
-                id, name, emoji, ..
+                id,
+                name,
+                emoji,
+                owner,
+                ..
             } => {
                 let expanded = !collapsed.contains(&id);
                 hidden = !expanded;
@@ -233,6 +240,7 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
                     id,
                     name,
                     emoji,
+                    owner,
                     expanded,
                 });
             }
@@ -384,6 +392,7 @@ mod tests {
                 id: "massorca-rust".into(),
                 name: "massorca-rust".into(),
                 emoji: None,
+                owner: None,
                 expanded: true,
             }
         );
@@ -514,6 +523,7 @@ mod tests {
             id: "massorca".into(),
             name: "massorca".into(),
             emoji: Some("🚀".into()),
+            owner: None,
             hosts: Vec::new(),
         }];
         assert_eq!(
@@ -522,6 +532,7 @@ mod tests {
                 id: "massorca".into(),
                 name: "massorca".into(),
                 emoji: Some("🚀".into()),
+                owner: None,
                 expanded: true,
             }
         );
@@ -535,6 +546,7 @@ mod tests {
             id: NO_PROJECT_LABEL.into(),
             name: NO_PROJECT_LABEL.into(),
             emoji: None,
+            owner: None,
             hosts: vec![host_with(Vec::new(), HostReach::Connected)],
         };
         assert!(tree_of(&snapshot_of(vec![empty.clone()])).is_empty());
@@ -556,6 +568,7 @@ mod tests {
             id: "p".into(),
             name: "p".into(),
             emoji: None,
+            owner: None,
             hosts: vec![host],
         }]));
         assert_eq!(rows.len(), 4, "project, host, the session, the placeholder");
@@ -579,6 +592,7 @@ mod tests {
             id: "p".into(),
             name: "p".into(),
             emoji: None,
+            owner: None,
             hosts: vec![host],
         }]));
         assert!(matches!(
@@ -595,10 +609,33 @@ mod tests {
             id: NO_PROJECT_LABEL.into(),
             name: NO_PROJECT_LABEL.into(),
             emoji: None,
+            owner: None,
             hosts: vec![host],
         };
         let rows = tree_of(&snapshot_of(vec![group]));
         assert_eq!(rows.len(), 3, "project, host and the placeholder");
+    }
+
+    #[test]
+    fn a_project_owner_reaches_its_row_and_survives_collapsing() {
+        let groups = vec![ProjectGroup {
+            id: "oppm".into(),
+            name: "oppm".into(),
+            emoji: None,
+            owner: Some("acme".into()),
+            hosts: Vec::new(),
+        }];
+        let tree = flatten(&groups, None);
+        assert!(matches!(
+            &tree[0],
+            TreeRow::Project { owner: Some(owner), .. } if owner == "acme"
+        ));
+        let collapsed = BTreeSet::from(["oppm".to_owned()]);
+        let folded = collapse_projects(tree, &collapsed);
+        assert!(matches!(
+            &folded[0],
+            TreeRow::Project { owner: Some(owner), expanded: false, .. } if owner == "acme"
+        ));
     }
 
     #[test]
@@ -608,6 +645,7 @@ mod tests {
             id: "p".into(),
             name: "p".into(),
             emoji: None,
+            owner: None,
             hosts: vec![host_with(sessions, HostReach::Connected)],
         }]);
         let listed = tree_of(&snapshot)
