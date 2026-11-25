@@ -1,5 +1,6 @@
 //! What a project's icon draws (decision 0091): the folder glyph, or the icon its owner chose.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use base64::Engine as _;
@@ -27,6 +28,22 @@ pub struct ProjectImage {
     pub format: ProjectImageFormat,
     pub bytes: Arc<[u8]>,
     pub label: Option<String>,
+    /// The hash of the format and the bytes: the key a renderer caches the built image under.
+    pub key: u64,
+}
+
+impl ProjectImage {
+    pub fn new(format: ProjectImageFormat, bytes: Vec<u8>, label: Option<String>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        (format == ProjectImageFormat::Webp).hash(&mut hasher);
+        bytes.hash(&mut hasher);
+        Self {
+            format,
+            bytes: bytes.into(),
+            label,
+            key: hasher.finish(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,11 +75,11 @@ fn image_glyph(src: &str, label: Option<&str>) -> Option<ProjectGlyph> {
     .into_iter()
     .find_map(|(format, prefix)| src.strip_prefix(prefix).map(|payload| (format, payload)))?;
     let bytes = STANDARD.decode(payload).ok()?;
-    Some(ProjectGlyph::Image(ProjectImage {
+    Some(ProjectGlyph::Image(ProjectImage::new(
         format,
-        bytes: bytes.into(),
-        label: label.map(str::to_owned),
-    }))
+        bytes,
+        label.map(str::to_owned),
+    )))
 }
 
 /// The `project.update` params that set `icon` on `project`; `None` clears it, so the folder glyph returns.
@@ -136,11 +153,11 @@ mod tests {
         };
         assert_eq!(
             ProjectGlyph::of(Some(&icon)),
-            ProjectGlyph::Image(ProjectImage {
-                format: ProjectImageFormat::Png,
-                bytes: bytes.to_vec().into(),
-                label: Some("logo".into()),
-            })
+            ProjectGlyph::Image(ProjectImage::new(
+                ProjectImageFormat::Png,
+                bytes.to_vec(),
+                Some("logo".into()),
+            ))
         );
     }
 
@@ -230,5 +247,23 @@ mod canvas_tests {
             Some(popover.clone())
         );
         assert_eq!(popover.while_shown(&Canvas::Session("Feed".into())), None);
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn the_same_bytes_share_a_key_and_other_bytes_do_not() {
+        let first = ProjectImage::new(ProjectImageFormat::Png, b"one".to_vec(), None);
+        let same = ProjectImage::new(
+            ProjectImageFormat::Png,
+            b"one".to_vec(),
+            Some("label".into()),
+        );
+        let other = ProjectImage::new(ProjectImageFormat::Png, b"two".to_vec(), None);
+        assert_eq!(first.key, same.key);
+        assert_ne!(first.key, other.key);
     }
 }
