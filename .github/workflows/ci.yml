@@ -25,8 +25,22 @@ env:
 # Linux programs and the desktop bundles, which need both halves.
 # `check workspace` is not filtered: every pull request compiles every crate and
 # target on both systems, so a change to a shared crate cannot break one the
-# filter skipped.
+# filter skipped. `guards` is not filtered either: it runs the tests that scan
+# every crate (one spawn path, the test-hooks gate), so a change to any crate,
+# the desktop included, is held to them. Add any new workspace-wide scan there.
 jobs:
+  guards:
+    name: workspace guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: guards
+      - run: cargo test --locked -p massorca-process --test one_spawn_path
+      - run: cargo test --locked -p massorca-core-agents --test test_hooks_gate
+
   check:
     name: check workspace (${{ matrix.os }})
     strategy:
