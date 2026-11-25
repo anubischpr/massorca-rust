@@ -458,7 +458,7 @@ async fn an_agent_session_that_exits_is_ended_and_starts_again_in_its_workspace(
 
     // The ended state's other action: the same workspace and agent, started again without the saved conversation.
     let again = handle
-        .agent_start(start_again_params(&workspace.id, "fake"))
+        .agent_start(start_again_params(&workspace.id, "fake", (120, 40)))
         .await
         .expect("the session starts again");
     assert_eq!(again.kind, "fake");

@@ -162,15 +162,24 @@ pub fn start_options(
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, at the
-/// Work panel's terminal size. A `permission_mode` is sent only when the person picked one; without it the vendor CLI
-/// starts in its own default.
+/// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
+/// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
+pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
+    shown
+        .or(fitted)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
+}
+
+/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, its
+/// terminal at `grid` (see `start_grid`). A `permission_mode` is sent only when the person picked one; without it the
+/// vendor CLI starts in its own default.
 pub fn start_params(
     workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.map(str::to_owned),
@@ -180,8 +189,8 @@ pub fn start_params(
         env: BTreeMap::new(),
         read_only: false,
         title: None,
-        cols: Some(NEW_TERMINAL_COLS),
-        rows: Some(NEW_TERMINAL_ROWS),
+        cols: Some(grid.0),
+        rows: Some(grid.1),
         request_id: None,
         permission_mode,
         model: options.model,
@@ -189,12 +198,19 @@ pub fn start_params(
     }
 }
 
-/// The `agent.start` call that starts a session again in `workspace` with `kind`: no first prompt, and no saved
-/// conversation carried over from the session it replaces.
-pub fn start_again_params(workspace: &str, kind: &str) -> AgentStartParams {
+/// The `agent.start` call that starts a session again in `workspace` with `kind`, its terminal at `grid`: no first
+/// prompt, and no saved conversation carried over from the session it replaces.
+pub fn start_again_params(workspace: &str, kind: &str, grid: (u16, u16)) -> AgentStartParams {
     AgentStartParams {
         prompt: None,
-        ..start_params(Some(workspace), kind, "", None, StartOptions::default())
+        ..start_params(
+            Some(workspace),
+            kind,
+            "",
+            None,
+            StartOptions::default(),
+            grid,
+        )
     }
 }
 
@@ -365,12 +381,27 @@ mod tests {
             "fix the login",
             None,
             StartOptions::default(),
+            (150, 70),
         );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
-        assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+        assert_eq!((params.cols, params.rows), (Some(150), Some(70)));
+    }
+
+    #[test]
+    fn a_new_session_starts_at_the_shown_grid_else_the_fitted_one_else_the_work_panel_size() {
+        assert_eq!(
+            start_grid(Some((150, 70)), Some((100, 30))),
+            (150, 70),
+            "the grid the session view last drew wins"
+        );
+        assert_eq!(start_grid(None, Some((100, 30))), (100, 30));
+        assert_eq!(
+            start_grid(None, None),
+            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
+        );
     }
 
     const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
@@ -395,7 +426,7 @@ mod tests {
     fn without_the_capability_neither_model_nor_effort_is_sent() {
         let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
         assert_eq!(options, StartOptions::default());
-        let params = start_params(Some("w1"), "claude", "hi", None, options);
+        let params = start_params(Some("w1"), "claude", "hi", None, options, (120, 40));
         assert_eq!((params.model, params.effort), (None, None));
     }
 

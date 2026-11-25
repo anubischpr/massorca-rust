@@ -415,7 +415,9 @@ fn a_resume_starts_the_terminal_at_the_grid_the_session_view_last_drew(cx: &mut 
 }
 
 #[gpui::test]
-fn a_resume_before_any_drawn_grid_leaves_the_size_to_the_service(cx: &mut TestAppContext) {
+fn a_resume_before_any_drawn_grid_starts_at_the_grid_the_conversation_fits(
+    cx: &mut TestAppContext,
+) {
     let (mut rig, cx) = session_rig(
         cx,
         vec![kind(true)],
@@ -423,7 +425,15 @@ fn a_resume_before_any_drawn_grid_leaves_the_size_to_the_service(cx: &mut TestAp
     );
     click(cx, "button:session-resume");
     let params = resume_params(&mut rig.script).expect("the resume is sent to the service");
-    assert_eq!((params.cols, params.rows), (None, None));
+    let (width, height) = rig
+        .shell
+        .read_with(cx, |shell, _| shell.conversation_size.get())
+        .expect("the canvas measured the Conversation as it drew");
+    let cell = cx
+        .update(|_, cx| massorca_ui::components::terminal_surface::grid_paint::cell_metrics(cx))
+        .expect("the terminal font has cell metrics");
+    let fitted = crate::shell::session_grid::session_pane_grid(width, height, cell);
+    assert_eq!((params.cols, params.rows), (Some(fitted.0), Some(fitted.1)));
 }
 
 #[gpui::test]

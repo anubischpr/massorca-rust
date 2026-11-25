@@ -77,7 +77,9 @@ use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
 use source_control::SourceControl;
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -258,6 +260,8 @@ pub struct Shell {
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
+    /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
+    conversation_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The terminal whose closing waits for the stop question.
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
@@ -553,6 +557,7 @@ impl Shell {
             _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
             session_grid: None,
+            conversation_size: Rc::default(),
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,
@@ -853,6 +858,7 @@ impl Render for Shell {
                 pairing,
                 session,
             },
+            self.conversation_size.clone(),
             window,
             cx,
         );

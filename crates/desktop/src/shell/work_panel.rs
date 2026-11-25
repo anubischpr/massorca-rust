@@ -432,9 +432,16 @@ fn new_surface(
         let surface = TerminalSurface::new(NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS, cx)
             .on_input(move |bytes, _, _| typing.send_terminal_input(&typed_into, bytes.to_vec()))
             .on_resize(move |cols, rows, _, cx| {
-                let _ = noting.update(cx, |shell, cx| {
-                    shell.note_terminal_grid(&sized, cols, rows, cx);
-                });
+                let known = noting
+                    .update(cx, |shell, cx| {
+                        shell.note_terminal_grid(&sized, cols, rows, cx);
+                        // A pane that fits to the grid the service already reports needs no resize request.
+                        shell.terminal_has_grid(&sized, cols, rows, cx)
+                    })
+                    .unwrap_or(false);
+                if known {
+                    return;
+                }
                 let (service, terminal) = (sizing.clone(), sized.clone());
                 cx.spawn(async move |_| {
                     let _ = service.resize_terminal(&terminal, cols, rows).await;

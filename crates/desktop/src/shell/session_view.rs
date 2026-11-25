@@ -179,6 +179,9 @@ pub(super) struct SessionFrame {
     pub can_delegate: bool,
 }
 
+/// The height of the session view's header, the band above the terminal's pane (`start_grid` fits the pane below it).
+pub(super) const SESSION_HEADER_HEIGHT: f32 = SIZE_TOOLBAR;
+
 /// The session view: its header, then the terminal's pane, or the refusal of its attach with Retry, then the notice of
 /// a refused stop or resume, and the composer.
 pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
@@ -242,7 +245,7 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
         .flex_row()
         .items_center()
         .gap(px(SPACE_2))
-        .h(px(SIZE_TOOLBAR))
+        .h(px(SESSION_HEADER_HEIGHT))
         .px(px(SPACE_4))
         .child(AgentStatus::new(frame.status).size(AgentStatusSize::XSmall))
         .child(
@@ -769,7 +772,7 @@ impl Shell {
             return;
         };
         let mode = self.pending_bypass(session, cx);
-        let grid = self.session_grid();
+        let grid = Some(self.start_grid(cx));
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -811,13 +814,14 @@ impl Shell {
         let Some(service) = self.begin_session_call(session, SessionCall::Starting, cx) else {
             return;
         };
+        let grid = self.start_grid(cx);
         let params = {
             let state = self.store.read(cx).state();
             state
                 .agents
                 .iter()
                 .find(|record| record.id == session)
-                .map(|record| start_again_params(&record.workspace_id, &record.kind))
+                .map(|record| start_again_params(&record.workspace_id, &record.kind, grid))
         };
         let Some(params) = params else {
             self.session_calls.remove(session);
