@@ -3,6 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::host::ProgramSearch;
+
 /// Stable codes under the reserved `extension.` prefix. Package-format errors keep their codes from
 /// `massorca_ext_package::codes`.
 pub mod codes {
@@ -42,6 +44,27 @@ impl HookError {
             message: message.into(),
         }
     }
+}
+
+/// What a failed vendor command was looked for and where, and the last lines of its log (decision 0092).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Diagnosis {
+    /// The program names the command looked for, the first word of each command.
+    pub programs: Vec<String>,
+    pub search: ProgramSearch,
+    pub output_tail: Vec<String>,
+}
+
+/// The `data` of a failed vendor command. `searched` and `output_tail` name host paths, so the server strips them from
+/// a caller without host administration.
+fn diagnosis_data(agent: &str, diagnosis: &Diagnosis) -> serde_json::Value {
+    serde_json::json!({
+        "agent": agent,
+        "programs": diagnosis.programs,
+        "path_source": diagnosis.search.source,
+        "searched": diagnosis.search.dirs,
+        "output_tail": diagnosis.output_tail,
+    })
 }
 
 /// Everything the extension service refuses or fails at.
@@ -85,13 +108,18 @@ pub enum Error {
     #[error("the install runs a vendor installer, which needs its own consent")]
     InstallerConsentRequired,
     #[error("the installer for {agent} failed: {message}")]
-    InstallerFailed { agent: String, message: String },
+    InstallerFailed {
+        agent: String,
+        message: String,
+        diagnosis: Box<Diagnosis>,
+    },
     #[error("the {agent} CLI did not verify after its installer: {message}{}", if .installer.is_some() { "; the installer ran, so the CLI it installed may remain" } else { "" })]
     VerifyFailed {
         agent: String,
         message: String,
         /// The vendor command that ran and succeeded before verify failed, when one did.
         installer: Option<Vec<String>>,
+        diagnosis: Box<Diagnosis>,
     },
     #[error("removal refused by {owner}: {}", .error.message)]
     Refused { owner: String, error: HookError },
@@ -146,6 +174,16 @@ impl Error {
         }
     }
 
+    /// What a failed vendor command was looked for and where, when this failure is one.
+    pub fn diagnosis(&self) -> Option<&Diagnosis> {
+        match self {
+            Self::InstallerFailed { diagnosis, .. } | Self::VerifyFailed { diagnosis, .. } => {
+                Some(diagnosis.as_ref())
+            }
+            _ => None,
+        }
+    }
+
     /// Structured detail for the protocol error's `data`: after a vendor installer ran and verify failed, the command
     /// that ran and that its CLI may remain on the host.
     pub fn data(&self) -> Option<serde_json::Value> {
@@ -154,16 +192,23 @@ impl Error {
                 commands,
                 fingerprint,
             } => Some(serde_json::json!({ "uninstall": commands, "fingerprint": fingerprint })),
+            Self::InstallerFailed {
+                agent, diagnosis, ..
+            } => Some(diagnosis_data(agent, diagnosis)),
             Self::VerifyFailed {
                 agent,
-                installer: Some(command),
+                installer,
+                diagnosis,
                 ..
-            } => Some(serde_json::json!({
-                "agent": agent,
-                "installer_ran": true,
-                "cli_may_remain": true,
-                "command": command,
-            })),
+            } => {
+                let mut data = diagnosis_data(agent, diagnosis);
+                if let Some(command) = installer {
+                    data["installer_ran"] = serde_json::json!(true);
+                    data["cli_may_remain"] = serde_json::json!(true);
+                    data["command"] = serde_json::json!(command);
+                }
+                Some(data)
+            }
             _ => None,
         }
     }

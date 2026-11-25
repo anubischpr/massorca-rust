@@ -328,6 +328,9 @@ pub struct AgentItem {
     pub detected: bool,
     #[serde(default)]
     pub program_path: Option<String>,
+    /// The search path the CLI was looked for on: `process` or `registry` (decision 0092). Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_source: Option<String>,
     pub cli_installed_by_package: bool,
     #[serde(default)]
     pub cli: Option<CliSpec>,

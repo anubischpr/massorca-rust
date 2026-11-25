@@ -368,7 +368,8 @@ CSP. Nothing above changes.
 ## 8. Protocol
 
 - **Capability `extensions/1`.** The host offers it from M6. Its methods:
-  - `extensions.list`, `extensions.get`;
+  - `extensions.list`, `extensions.get` (each agent reports `path_source`, `process` or `registry`, the search path its
+    CLI was looked for on; `massorca extension doctor <id>` shows it);
   - `extensions.asset(id, path)`: a logo or banner image the listing names, base64,
     at most 1 MiB;
   - `extensions.inspect(source)`: verify and return the review data, install
