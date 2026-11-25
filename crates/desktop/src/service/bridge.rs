@@ -19,7 +19,8 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
-    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
+    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCancelParams,
+    PairingCancelled, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
@@ -252,6 +253,10 @@ pub(crate) enum Command {
         params: PairingCreateParams,
         reply: oneshot::Sender<Result<PairingCreated, Refusal>>,
     },
+    CancelOffer {
+        params: PairingCancelParams,
+        reply: oneshot::Sender<Result<PairingCancelled, Refusal>>,
+    },
     NetworkStatus {
         reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
     },
@@ -468,6 +473,15 @@ impl ServiceHandle {
         params: PairingCreateParams,
     ) -> Result<PairingCreated, Refusal> {
         self.ask(|reply| Command::CreateOffer { params, reply })
+            .await
+    }
+
+    /// `pairing.cancel`: retires a pending offer before it expires.
+    pub async fn cancel_offer(
+        &self,
+        params: PairingCancelParams,
+    ) -> Result<PairingCancelled, Refusal> {
+        self.ask(|reply| Command::CancelOffer { params, reply })
             .await
     }
 
@@ -1224,6 +1238,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::CancelOffer { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .pairing_cancel(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::NetworkStatus { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1320,6 +1343,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::CreateOffer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::CancelOffer { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {

@@ -7,7 +7,7 @@ use crate::model::navigation::Page;
 use crate::model::pairing::{AcceptState, OfferState};
 use crate::service::{Command, Refusal, StoreUpdate};
 use gpui::{TestAppContext, VisualTestContext};
-use massorca_protocol::methods::devices::{DeviceInfo, PairingCreated, Secret};
+use massorca_protocol::methods::devices::{DeviceInfo, PairingCancelled, PairingCreated, Secret};
 
 fn open_pairing(rig: &Rig, cx: &mut VisualTestContext) {
     rig.shell
@@ -22,7 +22,41 @@ fn created(offer: &str) -> PairingCreated {
         scopes: vec!["read".into()],
         addresses: vec!["100.64.0.10:7347".into()],
         server_pin: "sha256:test".into(),
-        offer_id: None,
+        offer_id: Some(format!("id-{offer}")),
+    }
+}
+
+/// Clicks "Make offer" and answers it with `offer`.
+fn make(rig: &mut Rig, cx: &mut VisualTestContext, offer: &str) {
+    click(cx, "pairing-make-offer");
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::CreateOffer { reply, .. }) => break reply,
+            Some(_) => continue,
+            None => panic!("the offer was not asked for"),
+        }
+    };
+    reply.send(Ok(created(offer))).expect("the page listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+/// The next retire the page sends: the offer id it names, and its reply.
+fn next_retire(
+    rig: &mut Rig,
+) -> (
+    Option<String>,
+    tokio::sync::oneshot::Sender<Result<PairingCancelled, Refusal>>,
+) {
+    loop {
+        match rig.script.next() {
+            Some(Command::CancelOffer { params, reply }) => {
+                assert!(!params.all, "only the shown offer is retired");
+                break (params.offer_id, reply);
+            }
+            Some(_) => continue,
+            None => panic!("no retire was sent"),
+        }
     }
 }
 
@@ -226,5 +260,65 @@ fn a_device_is_revoked_only_after_the_service_says_so(cx: &mut TestAppContext) {
     assert!(
         rig.shell.read_with(cx, |shell, _| shell.revoke.is_none()),
         "a revoke that worked closes the confirm"
+    );
+}
+
+#[gpui::test]
+fn retire_offer_names_the_shown_offer_and_clears_it_once_the_service_agrees(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_pairing(&rig, cx);
+    make(&mut rig, cx, "offer-one");
+    assert!(cx.debug_bounds("pairing-retire-offer").is_some());
+
+    click(cx, "pairing-retire-offer");
+    let (id, reply) = next_retire(&mut rig);
+    assert_eq!(id.as_deref(), Some("id-offer-one"));
+    let refused = Refusal::unavailable("the service is not running");
+    let sentence = refused.sentence();
+    reply.send(Err(refused)).expect("the page listens");
+    cx.run_until_parked();
+    let (state, error) = rig.shell.read_with(cx, |shell, _| {
+        (
+            shell.pairing.offer.clone(),
+            shell.offer_retire.error.clone(),
+        )
+    });
+    assert!(
+        matches!(state, OfferState::Made(_)),
+        "a refused retire keeps the offer"
+    );
+    assert_eq!(error, Some(sentence));
+
+    rig.shell.update(cx, |shell, cx| shell.retire_offer(cx));
+    cx.run_until_parked();
+    let (_, reply) = next_retire(&mut rig);
+    reply
+        .send(Ok(PairingCancelled { cancelled: 1 }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert_eq!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.pairing.offer.clone()),
+        OfferState::Idle
+    );
+}
+
+#[gpui::test]
+fn a_new_offer_retires_the_one_shown_first(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_pairing(&rig, cx);
+    make(&mut rig, cx, "offer-one");
+    click(cx, "pairing-make-offer");
+    let (id, reply) = next_retire(&mut rig);
+    assert_eq!(id.as_deref(), Some("id-offer-one"));
+    reply
+        .send(Ok(PairingCancelled { cancelled: 1 }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(
+        matches!(rig.script.next(), Some(Command::CreateOffer { .. })),
+        "the new offer is asked for after the old one is retired"
     );
 }

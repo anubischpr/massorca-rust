@@ -171,6 +171,8 @@ pub struct Shell {
     pairing_name: Entity<TextField>,
     /// "Custom address" of the offer this computer makes; empty lists the bound addresses (SRV-07).
     pairing_address: Entity<TextField>,
+    /// The shown offer's id, its retire under way, and why the service refused to retire it (SRV-06).
+    offer_retire: pairing::OfferRetire,
     _pairing_changes: Subscription,
     /// Whether the paired devices were asked for since the Pairing page was last shown.
     devices_asked: bool,
@@ -549,6 +551,7 @@ impl Shell {
             pairing_offer,
             pairing_name,
             pairing_address,
+            offer_retire: pairing::OfferRetire::default(),
             _pairing_changes: pairing_changes,
             devices_asked: false,
             revoke: None,
@@ -880,6 +883,7 @@ impl Render for Shell {
             offer_field: self.pairing_offer.clone(),
             name_field: self.pairing_name.clone(),
             address_field: self.pairing_address.clone(),
+            retire: self.offer_retire.clone(),
             devices: crate::model::devices::devices_view(
                 self.store.read(cx).state().devices.as_ref(),
                 crate::model::pairing::now_ms(),
