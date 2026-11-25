@@ -201,7 +201,7 @@ async fn an_import_answers_not_found_without_login_files_and_the_list_follows_a_
     let imported = handle
         .accounts_import(AccountsImportParams {
             kind: KIND.to_owned(),
-            from: source_with(&home, "empty", &[]),
+            from: Some(source_with(&home, "empty", &[])),
             label: None,
         })
         .await
@@ -217,7 +217,7 @@ async fn an_import_answers_not_found_without_login_files_and_the_list_follows_a_
     let imported = handle
         .accounts_import(AccountsImportParams {
             kind: KIND.to_owned(),
-            from: source_with(&home, "login", &[("token.json", FAKE_TOKEN)]),
+            from: Some(source_with(&home, "login", &[("token.json", FAKE_TOKEN)])),
             label: Some("work".to_owned()),
         })
         .await

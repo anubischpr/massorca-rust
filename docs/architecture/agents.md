@@ -204,7 +204,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
-| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.import` | workspace | `kind`, `from?`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }`. An absent `from` copies each file from where the kind's CLI keeps it and needs capability `agent-import-detect/1`; the client refuses it before sending when the service does not offer it (decision 0097). |
+| `agent.accounts.import_candidates` | read | `kind?` | `{ candidates: [{ kind, ready, folder?, files: [{ name, required, found, path?, env? }] }] }`. Capability `agent-import-detect/1` (decision 0097). Below `workspace` scope `folder` and `path` are omitted. |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
@@ -535,7 +536,8 @@ massorca agent credentials remove <kind>
 massorca agent accounts list <kind>
 massorca agent accounts add <kind> [--label <l>] [--no-attach]
 massorca agent accounts sign-in <kind> <account> [--no-attach]
-massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts import <kind> [--from <dir>] [--label <l>]
+massorca agent accounts candidates [<kind>]
 massorca agent accounts activate <kind> <account> [--project <p>]
 massorca agent accounts remove <kind> <account>
 massorca agent accounts check <kind> [<account>]
@@ -574,6 +576,33 @@ service refuses `import --replace` and `remove` with `agent.busy` while any sess
 kind has a run that has not exited. Declared file names must also not be Windows device
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
+
+## Import sources (decision 0097)
+
+`core-agents::sources`. A kind's `credentials` may declare, per file, where its CLI keeps it:
+
+```json
+"optional": [".claude.json"],
+"sources": [
+  { "file": ".credentials.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude" },
+  { "file": ".claude.json", "env": "CLAUDE_CONFIG_DIR", "dir": "{home}" }
+]
+```
+
+`dir` is the default folder template; `windows`, `macos` and `linux` replace it on that platform. The only
+placeholder is `{home}`, read from `USERPROFILE` on Windows and `HOME` elsewhere (what the vendor CLIs use), and from
+the platform when that variable is unset or not absolute. When `env` names a variable set to an absolute path in the
+service's environment, the file is looked for in that folder instead. A file not in `optional` is required; without
+`optional` every declared file is. The kind's problems list a source or optional entry that is not a declared file,
+a file named twice, an `env` that is not a variable name, and a template that neither starts with `{home}` nor is an
+absolute path. The built-in `claude` declares `.credentials.json` (required) in `{home}/.claude` and `.claude.json`
+(optional) in `{home}`, both moved by `CLAUDE_CONFIG_DIR`; `codex` declares `auth.json` (required) and `config.toml`
+(optional) in `{home}/.codex`, moved by `CODEX_HOME`.
+
+`agent.accounts.import_candidates` reports, per kind, each file's path and whether the import would accept it: a
+regular file, not a link, at most 1 MiB, judged from `symlink_metadata` alone. It never opens a file. `ready` means
+every required file was found. `agent.accounts.import` without `from` reads each file from its own path, with every
+check of Credential import; a folder import applies the same optional rule.
 
 ## Accounts (decision 0059)
 
@@ -665,8 +694,9 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Import** copies the declared files into a new account (origin `import`), which stays undecided
   until its check decides it: a check that reports the login is not signed in deletes the new
   account without a sign-out, and the result is `failed`; any other result keeps it, and only then
-  does it count as the kind's history. `not_found` means none of the declared files is in the
-  source. An import a crash left undecided is decided at the next start, the same way.
+  does it count as the kind's history. `not_found` means a required file is missing; the reason
+  names each one and where it was looked for. A missing optional file (`credentials.optional`) is
+  skipped. Without `from`, each file is read from where the kind's CLI keeps it (see Import sources). An import a crash left undecided is decided at the next start, the same way.
 - **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
   already running) is refused, and the account is marked removing. Outside the gate, the kind's
   `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
