@@ -405,6 +405,45 @@ mod failure_tests {
         let data = body.data.expect("the data");
         assert_eq!(data["searched"], serde_json::json!(["C:\\Tools"]));
     }
+
+    /// A verify that fails after the vendor command ran: a caller without host administration learns the command that
+    /// ran, not the folders searched or the output.
+    #[test]
+    fn a_failed_verify_without_host_administration_keeps_the_command_and_drops_the_paths() {
+        let failed_verify = Error::VerifyFailed {
+            agent: "codex".to_owned(),
+            message: "`codex` does not resolve".to_owned(),
+            installer: Some(vec![
+                "npm".to_owned(),
+                "install".to_owned(),
+                "-g".to_owned(),
+                "codex".to_owned(),
+            ]),
+            diagnosis: Box::new(Diagnosis {
+                programs: vec!["codex".to_owned()],
+                search: ProgramSearch {
+                    source: "registry".to_owned(),
+                    dirs: vec!["C:\\Tools".to_owned()],
+                },
+                output_tail: vec!["added 1 package".to_owned()],
+            }),
+        };
+
+        let body = refusal_body(failed_verify, false);
+
+        assert!(
+            !body.message.contains("C:\\Tools") && !body.message.contains("added 1 package"),
+            "{}",
+            body.message
+        );
+        let data = body.data.expect("the data says what ran");
+        assert_eq!(
+            data["command"],
+            serde_json::json!(["npm", "install", "-g", "codex"])
+        );
+        assert!(data.get("searched").is_none(), "{data}");
+        assert!(data.get("output_tail").is_none(), "{data}");
+    }
 }
 
 #[cfg(test)]

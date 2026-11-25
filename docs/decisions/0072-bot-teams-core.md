@@ -562,3 +562,7 @@ before the stop reads it.
 - Older hosts answer `method.not_found`; the method is additive, so no
   capability was added.
 - Not in this change: a Stop control on the desktop Board.
+
+## Amendment 2026-11-24: desktop project and bot edits
+
+The desktop's New project form sends `team.project_add` (a name, a goal, and a code source when the team has Workspaces). The Edit team form changes a bot with `team.bot_update`, sending only the fields that changed, and removes it with `team.bot_rm` and `unassign` off, so a bot that owns open tasks is refused and the reason stays on the confirm.
