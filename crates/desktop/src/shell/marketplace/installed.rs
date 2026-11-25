@@ -68,6 +68,10 @@ fn manager_row(
     let id = item.id;
     let shell = frame.shell.clone();
     let menu = menu.clone();
+    let (previous, rollback_offered) = (
+        item.previous_version.clone(),
+        frame.snapshot.rollback_offered,
+    );
     let mut row = ExtensionManagerRow::new(
         SharedString::from(format!("marketplace-row-{}", item.id.0)),
         item.name.clone(),
@@ -88,14 +92,25 @@ fn manager_row(
             });
         }
         ExtensionAction::More => {
-            // Remove is the only entry, so any choice asks for it.
-            let remove = shell.clone();
+            let (entries, actions): (Vec<MenuEntry>, Vec<Option<RowAction>>) =
+                row_menu(previous.as_deref(), rollback_offered)
+                    .into_iter()
+                    .unzip();
+            let chosen = shell.clone();
             more_menu::open(
                 &menu,
                 shell.clone(),
-                row_menu_entries(),
-                move |_, _, cx| {
-                    let _ = remove.update(cx, |shell, cx| shell.ask_marketplace_uninstall(id, cx));
+                entries,
+                move |row, _, cx| match actions.get(row).copied().flatten() {
+                    Some(RowAction::Rollback) => {
+                        let _ =
+                            chosen.update(cx, |shell, cx| shell.ask_marketplace_rollback(id, cx));
+                    }
+                    Some(RowAction::Remove) => {
+                        let _ =
+                            chosen.update(cx, |shell, cx| shell.ask_marketplace_uninstall(id, cx));
+                    }
+                    None => {}
                 },
                 window,
                 cx,
@@ -109,28 +124,56 @@ fn manager_row(
     })
 }
 
-/// The entries of an installed row's menu: Remove only. Roll back and View log join it when extensions.rollback and
-/// extensions.log exist, so the menu never lists an action that does not work.
-fn row_menu_entries() -> Vec<MenuEntry> {
-    vec![
-        MenuItem::new("Remove")
-            .icon(IconName::Trash2)
-            .destructive()
-            .into(),
-    ]
+/// What choosing an installed row's menu entry does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowAction {
+    Rollback,
+    Remove,
+}
+
+/// The entries of an installed row's menu in the artboard's order, each with what choosing it does; a separator has
+/// none. Roll back to the version an update replaced comes first, when the service offers it and a version is kept, so
+/// the menu never lists an action that does not work.
+fn row_menu(previous: Option<&str>, rollback_offered: bool) -> Vec<(MenuEntry, Option<RowAction>)> {
+    let mut menu: Vec<(MenuEntry, Option<RowAction>)> = Vec::new();
+    if let (true, Some(version)) = (rollback_offered, previous) {
+        let roll_back = MenuItem::new(format!("Roll back to {version}")).icon(IconName::History);
+        menu.push((roll_back.into(), Some(RowAction::Rollback)));
+        menu.push((MenuEntry::Separator, None));
+    }
+    let remove = MenuItem::new("Remove").icon(IconName::Trash2).destructive();
+    menu.push((remove.into(), Some(RowAction::Remove)));
+    menu
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn labels(menu: &[(MenuEntry, Option<RowAction>)]) -> Vec<String> {
+        menu.iter()
+            .filter_map(|(entry, _)| match entry {
+                MenuEntry::Item(item) => Some(item.label().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
-    fn the_row_menu_lists_only_remove() {
-        let entries = row_menu_entries();
-        let [MenuEntry::Item(remove)] = entries.as_slice() else {
-            panic!("the row menu lists exactly one entry, Remove");
-        };
-        assert_eq!(remove.label().to_string(), "Remove");
-        assert!(!remove.is_disabled(), "Remove works, so it is not disabled");
+    fn roll_back_to_the_kept_version_comes_first_above_remove_when_offered() {
+        let menu = row_menu(Some("0.9.0"), true);
+        assert_eq!(labels(&menu), ["Roll back to 0.9.0", "Remove"]);
+        assert!(matches!(menu[0].1, Some(RowAction::Rollback)));
+        assert!(matches!(menu[1].0, MenuEntry::Separator));
+        assert!(matches!(menu[2].1, Some(RowAction::Remove)));
+    }
+
+    #[test]
+    fn the_row_menu_lists_only_remove_without_an_offer_or_a_kept_version() {
+        for (previous, offered) in [(Some("0.9.0"), false), (None, true)] {
+            let menu = row_menu(previous, offered);
+            assert_eq!(labels(&menu), ["Remove"], "{previous:?} {offered}");
+            assert_eq!(menu.len(), 1, "no separator above Remove alone");
+        }
     }
 }

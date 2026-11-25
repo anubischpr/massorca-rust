@@ -13,6 +13,7 @@ mod item_images;
 mod item_page;
 mod package_problem;
 mod remove_review;
+mod rollback_review;
 mod run_log;
 mod sample;
 mod service_accounts;
@@ -41,6 +42,7 @@ pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
 };
 pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
+pub use rollback_review::{RollbackOutcome, rollback_details, rollback_outcome};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};

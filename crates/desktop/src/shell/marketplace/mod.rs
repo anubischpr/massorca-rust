@@ -20,6 +20,7 @@ mod item_images_tests;
 mod more_menu;
 mod package;
 mod review;
+mod rollback;
 mod sign_in;
 #[cfg(test)]
 mod tests;
@@ -32,6 +33,7 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use rollback::RollbackConfirm;
 use std::collections::BTreeSet;
 
 use gpui::{

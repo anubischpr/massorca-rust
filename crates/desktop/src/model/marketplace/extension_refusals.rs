@@ -27,6 +27,9 @@ pub fn extension_refusal_text(code: Option<&str>, service_sentence: &str) -> Str
         }
         Some("extension.reserved_publisher") => "This package uses a name reserved for MassOrca.",
         Some("extension.not_found") => "This package is not in the catalogue.",
+        Some("extension.no_previous_version") => {
+            "There is no earlier version of this package to roll back to."
+        }
         Some("extension.already_installed") => "This package is already installed.",
         Some("extension.kind_conflict") => "Another package already provides this agent.",
         _ => return service_sentence.to_owned(),
@@ -49,5 +52,9 @@ mod tests {
             "The CLI did not verify."
         );
         assert_eq!(extension_refusal_text(None, "Plain."), "Plain.");
+        assert_eq!(
+            extension_refusal_text(Some("extension.no_previous_version"), "service words"),
+            "There is no earlier version of this package to roll back to."
+        );
     }
 }

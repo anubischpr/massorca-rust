@@ -1,10 +1,11 @@
 //! The dialogs the Marketplace draws over its page: the sign-in of an agent account (D-AC-02) and
 //! the confirm before an item is uninstalled (teams-extensions-settings.md 7.4, decision 0059).
 
-use super::{InstallReview, UninstallConfirm};
+use super::{InstallReview, RollbackConfirm, UninstallConfirm};
 use crate::model::marketplace::{
     CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, SignInFlow, SignInStep,
     offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
+    rollback_details, rollback_outcome,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -40,6 +41,9 @@ pub(in crate::shell) fn dialog(
     }
     if let Some(review) = &shell.marketplace_review {
         return install_review(review, snapshot, weak, cx);
+    }
+    if let Some(confirm) = &shell.marketplace_rollback {
+        return Some(rollback(confirm, weak, cx));
     }
     let confirm = shell.marketplace_uninstall.as_ref()?;
     uninstall(confirm, snapshot, weak, cx)
@@ -240,6 +244,47 @@ fn stage(step: &SignInStep) -> SignInStage {
             reason: reason.clone().into(),
         },
     }
+}
+
+/// The confirm before a rollback: one sentence on what it puts back, and the versions and consent under Show details.
+fn rollback(confirm: &RollbackConfirm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let outcome = rollback_outcome(&confirm.name, &confirm.version);
+    let (ok, dismiss, toggle) = (weak.clone(), weak.clone(), weak.clone());
+    let (open, lines) = (
+        confirm.details_open,
+        rollback_details(&confirm.from, &confirm.version, &confirm.consent),
+    );
+    let mut dialog = Dialog::new("marketplace-rollback", outcome.title)
+        .open(true)
+        .busy(confirm.sending)
+        .child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(outcome.sentence),
+        )
+        .child(details(
+            "marketplace-rollback-details",
+            open,
+            lines,
+            move |cx| {
+                let _ = toggle.update(cx, |shell, cx| shell.set_rollback_details(!open, cx));
+            },
+            cx,
+        ))
+        .action(outcome.button)
+        .cancel_label("Cancel")
+        .on_action(move |_, cx| {
+            let _ = ok.update(cx, |shell, cx| shell.confirm_marketplace_rollback(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.cancel_marketplace_rollback(cx));
+        });
+    if let Some(error) = &confirm.error {
+        dialog = dialog.error(error.clone());
+    }
+    dialog.into_any_element()
 }
 
 /// The confirm before an uninstall: it names the item and what is removed, and keeps the refusal.

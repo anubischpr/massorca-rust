@@ -254,6 +254,11 @@ Linux only. No automated run opens a visible window.
   that run was an update or a rollback; an install or a removal since leaves nothing kept. `extensions.rollback` without
   consent answers with the restored version and its consent (`RollbackAnswer`), and the call is sent again with that
   consent. Paired hosts' packages get neither yet.
+- The Installed row's More menu lists "Roll back to <version>" first, above Remove, when the service offers
+  `extensions-rollback/1` and a version is kept (`shell/marketplace/installed.rs`). Its confirm
+  (`model/marketplace/rollback_review.rs`) reads "Roll back <name>?" with one sentence that names the version it puts
+  back; Show details holds the versions and the consent. The first call names no consent, so the confirm shows the
+  consent the service gives (`shell/marketplace/rollback.rs`). Nothing kept opens the item page with its sentence.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 
