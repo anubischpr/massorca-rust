@@ -163,7 +163,7 @@ project) at the time the project is added.
   included, refuses with `workspace.has_children`; the message names them. The workspace's own
   refusals above are checked first and come before it. `--with-children` removes them first, deepest first, each with the same checks and the other flags given. A
   refused child stops the removal: the children already removed stay removed, the message names
-  them, and the workspace is kept (decision 0102).
+  them, and the workspace is kept (decision 0110).
 
 ### Terminals
 

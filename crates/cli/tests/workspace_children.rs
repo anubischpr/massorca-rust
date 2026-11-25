@@ -1,4 +1,4 @@
-//! `workspace rm` of a workspace whose delegated children run in workspaces of their own (decision 0102): refused with
+//! `workspace rm` of a workspace whose delegated children run in workspaces of their own (decision 0110): refused with
 //! exit 1 and a message naming the children and `--with-children`, which removes them first. No agent is started: the
 //! sessions are written to the store while the service is stopped.
 

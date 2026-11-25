@@ -120,7 +120,7 @@ pub struct WorkspaceRemoveParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_orphan: bool,
     /// Removes the workspaces of delegated children first, deepest first, each with the same checks and waivers
-    /// (decision 0102). Without it a workspace with child workspaces is refused with `workspace.has_children`.
+    /// (decision 0110). Without it a workspace with child workspaces is refused with `workspace.has_children`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub with_children: bool,
 }

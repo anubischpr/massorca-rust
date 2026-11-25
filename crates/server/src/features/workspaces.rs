@@ -1,7 +1,7 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
-//! With `with_children`, the workspaces of delegated children are removed first the same way (decision 0102).
+//! With `with_children`, the workspaces of delegated children are removed first the same way (decision 0110).
 //! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;

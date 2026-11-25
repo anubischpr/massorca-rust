@@ -1,4 +1,4 @@
-//! Removing a workspace whose delegated children run in workspaces of their own (decision 0102): refused with
+//! Removing a workspace whose delegated children run in workspaces of their own (decision 0110): refused with
 //! `workspace.has_children` unless `with_children`, which removes the children first, deepest first, through the same
 //! checks. No agent is started: the sessions are written to the store directly, as ended runs.
 
