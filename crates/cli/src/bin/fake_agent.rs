@@ -70,6 +70,7 @@ fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("login") => return login(),
         Some("whoami") => return whoami(),
+        Some("whoami-json") => return whoami_json(),
         Some("logout") => return logout(),
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
@@ -434,6 +435,34 @@ fn whoami() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// A JSON check, as `claude auth status --json` prints one (decision 0098): `{"loggedIn", "email", "orgName"}`. The email
+/// is the token's (or the default identity), the organisation its `"org"` field (or `null`); a token containing
+/// `"loggedOut":true` prints `{"loggedIn": false}` and still exits 0. No token prints `{"loggedIn": false}` and exits 1.
+fn whoami_json() -> ExitCode {
+    let token =
+        credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
+    let (status, code) = match token {
+        Some(text) if text.contains(r#""loggedOut":true"#) => {
+            (serde_json::json!({ "loggedIn": false }), ExitCode::SUCCESS)
+        }
+        Some(text) => {
+            let email = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
+            let org = text
+                .split("\"org\":\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned);
+            (
+                serde_json::json!({ "loggedIn": true, "email": email, "orgName": org }),
+                ExitCode::SUCCESS,
+            )
+        }
+        None => (serde_json::json!({ "loggedIn": false }), ExitCode::from(1)),
+    };
+    let _ = writeln!(io::stdout().lock(), "{status:#}");
+    code
 }
 
 /// The credential home, when the variable names one.
