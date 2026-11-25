@@ -7,7 +7,6 @@ use super::start_page::{mode_segments, picked_options, split_last_segment};
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
-use crate::model::regions::Region;
 use crate::model::start_page::{
     CHAT_NEEDS_NEWER_SERVICE, ChatAvailability, StartMode, StartOptions,
 };
@@ -627,20 +626,6 @@ fn live_terminal(id: &str, cols: u16, rows: u16) -> Terminal {
     }
 }
 
-/// The (cols, rows) the terminal's surface applies to its pane, as its feed holds them.
-fn applied_grid(rig: &Rig, cx: &mut VisualTestContext, terminal: &str) -> (u16, u16) {
-    rig.shell.read_with(cx, |shell, app| {
-        let feed = shell
-            .terminal_views
-            .get(terminal)
-            .expect("the terminal has a view")
-            .surface
-            .read(app)
-            .feed();
-        (feed.columns() as u16, feed.lines() as u16)
-    })
-}
-
 #[gpui::test]
 fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
@@ -694,70 +679,6 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
         "the first draw sends no resize request"
     );
     drop(stream_tx);
-}
-
-#[gpui::test]
-fn a_terminal_start_opens_the_agents_terminal_at_the_grid_the_work_panel_pane_applies(
-    cx: &mut TestAppContext,
-) {
-    let (mut rig, cx) = start_page_rig(
-        cx,
-        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
-    );
-    // A terminal shown in the Work panel paints its pane, so the panel knows the grid that pane fits.
-    let shown = "0196a6f0-0000-7000-8000-0000000000bb";
-    rig._updates
-        .send(StoreUpdate::TerminalChanged(live_terminal(shown, 120, 40)))
-        .expect("the store listens");
-    cx.run_until_parked();
-    rig.shell.update(cx, |shell, cx| {
-        shell.model.show_region(Region::WorkPanel);
-        shell.reveal_terminal("w1", shown, cx);
-    });
-    cx.run_until_parked();
-    draw(cx);
-    let pane = applied_grid(&rig, cx, shown);
-    while rig._script.next().is_some() {}
-
-    // Chat is off without the capability, so the start opens the agent's terminal in the Work panel.
-    type_and_send(&rig, cx, "fix the login");
-    cx.run_until_parked();
-    let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
-    let (cols, rows) = (
-        params.cols.expect("the start sends its columns"),
-        params.rows.expect("the start sends its rows"),
-    );
-    assert_eq!(
-        (cols, rows),
-        pane,
-        "the agent's terminal opens at the grid the Work panel pane applies"
-    );
-    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
-    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
-    session.terminal_id = Some(terminal.to_owned());
-    rig._updates
-        .send(StoreUpdate::TerminalChanged(live_terminal(
-            terminal, cols, rows,
-        )))
-        .expect("the store listens");
-    reply
-        .send(Ok(session.clone()))
-        .expect("the shell is waiting for the answer");
-    rig._updates
-        .send(StoreUpdate::AgentChanged(session))
-        .expect("the store listens");
-    cx.run_until_parked();
-    draw(cx);
-    cx.run_until_parked();
-    assert_eq!(
-        applied_grid(&rig, cx, terminal),
-        (cols, rows),
-        "the Work panel pane applies the start grid"
-    );
-    assert!(
-        resize_calls(&mut rig._script).is_empty(),
-        "the first draw sends no resize request"
-    );
 }
 
 #[gpui::test]
@@ -1083,7 +1004,7 @@ fn chat_turns_on_by_itself_when_the_service_starts_offering_it(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
+fn send_without_the_chat_capability_opens_the_session_with_its_terminal_focused(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = start_page_rig(
@@ -1104,17 +1025,41 @@ fn send_without_the_chat_capability_opens_the_agents_terminal_in_the_work_panel(
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    let (canvas, work_panel) = rig.shell.read_with(cx, |shell, _| {
-        (
-            shell.model.canvas(),
-            shell.model.region_visible(Region::WorkPanel),
-        )
-    });
-    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
-    assert!(work_panel, "the Work panel shows the agent's terminal");
-    let (attach, _attach_reply) =
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
+}
+
+/// After a Terminal start the Canvas shows the started session, its terminal is attached and holds the keyboard,
+/// and the start composer no longer does (owner ruling 2026-11-25).
+fn assert_started_session_has_the_keyboard(
+    rig: &mut Rig,
+    cx: &mut VisualTestContext,
+    terminal: &str,
+) {
+    let canvas = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert!(
+        matches!(canvas, Canvas::Session(_)),
+        "the Canvas shows the started session: {canvas:?}"
+    );
+    let (attach, attach_reply) =
         attach_call(&mut rig._script).expect("the agent's terminal is attached");
     assert_eq!(attach.terminal, terminal);
+    let (_stream_tx, stream_rx) = unbounded_channel();
+    attach_reply
+        .send(Ok(stream_rx))
+        .expect("the shell is waiting for the attach");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    // One element holds the keyboard, so the terminal holding it means the start composer does not.
+    let terminal_focused = cx.update(|window, cx| {
+        let shell = rig.shell.read(cx);
+        let surface = &shell.terminal_views[terminal].surface;
+        surface.read(cx).focus_handle().is_focused(window)
+    });
+    assert!(
+        terminal_focused,
+        "the started session's terminal has the keyboard"
+    );
 }
 
 #[gpui::test]
@@ -1244,9 +1189,7 @@ fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
 }
 
 #[gpui::test]
-fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
-    cx: &mut TestAppContext,
-) {
+fn a_terminal_start_opens_the_session_with_its_terminal_focused(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
         cx,
         vec![agent_kind("claude", "Claude", PackageState::Enabled)],
@@ -1268,23 +1211,7 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    let (canvas, work_panel, selected) = rig.shell.read_with(cx, |shell, _| {
-        (
-            shell.model.canvas(),
-            shell.model.region_visible(Region::WorkPanel),
-            shell
-                .model
-                .terminal_selection()
-                .selected("w1")
-                .map(str::to_owned),
-        )
-    });
-    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
-    assert!(work_panel, "the Work panel shows the agent's terminal");
-    assert_eq!(selected.as_deref(), Some(terminal));
-    let (attach, _attach_reply) =
-        attach_call(&mut rig._script).expect("the agent's terminal is attached");
-    assert_eq!(attach.terminal, terminal);
+    assert_started_session_has_the_keyboard(&mut rig, cx, terminal);
 }
 
 fn claude_with_modes() -> AgentKind {

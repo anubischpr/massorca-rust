@@ -38,7 +38,6 @@ use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
-use crate::model::regions::Region;
 use crate::model::start_page::{
     CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
     StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason,
@@ -917,9 +916,9 @@ impl Shell {
         }
     }
 
-    /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
-    /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
-    /// back to the composer with its sentence.
+    /// The service's answer to a start. The session opens in the Canvas once the Sidebar lists it, and in
+    /// Terminal its terminal then takes the keyboard. A refusal gives the prompt back to the composer with its
+    /// sentence.
     pub(super) fn finish_start(
         &mut self,
         prompt: &str,
@@ -933,15 +932,12 @@ impl Shell {
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
-                match mode {
-                    StartMode::Chat => self.model.open_started_session(session.id),
-                    StartMode::Terminal => {
-                        self.model.show_region(Region::WorkPanel);
-                        if let Some(terminal) = &session.terminal_id {
-                            self.reveal_terminal(&session.workspace_id, terminal, cx);
-                        }
-                    }
+                // Both arms open the started session in the Canvas (owner ruling 2026-11-25): the session the person
+                // started is what they see. A terminal session's terminal takes the keyboard once drawn.
+                if mode == StartMode::Terminal {
+                    self.focus_started_terminal = session.terminal_id.clone();
                 }
+                self.model.open_started_session(session.id);
             }
             Err(refusal) => composer.update(cx, |composer, cx| {
                 composer.set_draft(prompt, cx);

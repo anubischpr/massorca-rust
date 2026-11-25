@@ -11,9 +11,10 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::team_room::{TeamRoomListParams, TeamRoomPostParams};
 use massorca_protocol::methods::teams::{
-    BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
+    Board, BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
     TeamCreateParams, TeamProjectAddParams, TeamRef, TeamRemoveParams,
 };
+use std::collections::HashSet;
 
 use crate::connect::connect;
 use crate::error::CliError;
@@ -69,13 +70,17 @@ pub enum TeamCommand {
         #[command(subcommand)]
         command: RoutineCommand,
     },
-    /// Shows a team's Board: its tasks in four columns, or only one project's.
+    /// Shows a team's Board: its tasks in four columns, or only one project's, or only the tasks
+    /// no project holds.
     Board {
         /// Team id or name.
         team: String,
         /// Only this project's tasks (id or name within the team).
-        #[arg(long, value_name = "PROJECT")]
+        #[arg(long, value_name = "PROJECT", conflicts_with = "no_project")]
         project: Option<String>,
+        /// Only the tasks no project of the team holds.
+        #[arg(long, conflicts_with = "project")]
+        no_project: bool,
     },
 }
 
@@ -417,12 +422,54 @@ pub async fn execute(
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
         TeamCommand::Room { command } => run_room(&client, command, output).await?,
         TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
-        TeamCommand::Board { team, project } => {
-            let board = client.team_board(&BoardParams { team, project }).await?;
+        TeamCommand::Board {
+            team,
+            project,
+            no_project,
+        } => {
+            let board = if no_project {
+                board_without_projects(&client, team).await?
+            } else {
+                client.team_board(&BoardParams { team, project }).await?
+            };
             output.success(&board, &text::board_lines(&board));
         }
     }
     Ok(())
+}
+
+/// The team's Board without the cards that any of its projects holds: the tasks no project holds (`--no-project`).
+async fn board_without_projects(client: &Client, team: String) -> Result<Board, CliError> {
+    let mut board = client
+        .team_board(&BoardParams {
+            team: team.clone(),
+            project: None,
+        })
+        .await?;
+    let mut held = HashSet::new();
+    for project in client
+        .team_project_list(&TeamRef { team: team.clone() })
+        .await?
+        .projects
+    {
+        let project_board = client
+            .team_board(&BoardParams {
+                team: team.clone(),
+                project: Some(project.id),
+            })
+            .await?;
+        held.extend(
+            project_board
+                .columns
+                .into_iter()
+                .flat_map(|column| column.cards)
+                .map(|card| card.id),
+        );
+    }
+    for column in &mut board.columns {
+        column.cards.retain(|card| !held.contains(&card.id));
+    }
+    Ok(board)
 }
 
 async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result<(), CliError> {
