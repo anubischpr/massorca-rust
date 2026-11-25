@@ -43,7 +43,7 @@ pub struct RoomLine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomRoutine {
     pub name: String,
-    /// "Once on 2026-11-30 at 09:00".
+    /// "Once on 2026-11-30 at 09:00, Europe/Madrid": the zone it runs on, its own or the host's.
     pub when: String,
 }
 
@@ -114,11 +114,15 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
     }
 }
 
-/// When a routine runs, in words; the room schedules only one-time routines.
+/// When a routine runs, in words, with its zone; the room schedules only one-time routines.
 fn routine_when(routine: &Routine) -> String {
-    match (routine.cadence, routine.run_date.as_deref()) {
+    let when = match (routine.cadence, routine.run_date.as_deref()) {
         (RoutineCadence::Once, Some(date)) => format!("Once on {date} at {}", routine.time),
         _ => format!("At {}", routine.time),
+    };
+    match routine.zone.as_deref().or(routine.zone_used.as_deref()) {
+        Some(zone) => format!("{when}, {zone}"),
+        None => when,
     }
 }
 
@@ -192,7 +196,7 @@ mod tests {
             month_day: None,
             run_date: Some("2099-01-02".to_owned()),
             zone: None,
-            zone_used: None,
+            zone_used: Some("Europe/Madrid".to_owned()),
             paused: false,
             starts_as_admin: false,
             next_run_at_ms: Some(1),
@@ -214,7 +218,7 @@ mod tests {
             lines[0].routine,
             Some(RoomRoutine {
                 name: "Back up the docs".to_owned(),
-                when: "Once on 2099-01-02 at 09:00".to_owned(),
+                when: "Once on 2099-01-02 at 09:00, Europe/Madrid".to_owned(),
             })
         );
         assert_eq!(lines[0].task, None);
