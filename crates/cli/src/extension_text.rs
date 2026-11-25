@@ -34,6 +34,28 @@ pub fn item_rows(items: &[ExtensionItem], none: &str) -> Vec<String> {
     lines
 }
 
+/// What detection sees for each agent CLI: the path found, or that none was found, and the PATH it searched.
+pub fn doctor_lines(item: &ExtensionItem) -> Vec<String> {
+    let mut lines = vec![format!("{} ({})", item.name, item.id)];
+    for agent in &item.agents {
+        let Some(cli) = &agent.cli else {
+            lines.push(format!("agent {}: no CLI declared", agent.id));
+            continue;
+        };
+        let found = match (agent.detected, &agent.program_path) {
+            (true, Some(path)) => format!("found at {path}"),
+            (true, None) => "found (the path is shown to a host administrator only)".to_owned(),
+            (false, _) => "not found".to_owned(),
+        };
+        let source = agent.path_source.as_deref().unwrap_or("unknown");
+        lines.push(format!(
+            "agent {}: {} {found}; PATH source: {source}",
+            agent.id, cli.binary
+        ));
+    }
+    lines
+}
+
 /// One item in detail.
 pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
     let mut lines = vec![

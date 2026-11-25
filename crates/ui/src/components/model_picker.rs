@@ -16,20 +16,21 @@ use std::fmt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, App, AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Subscription, Window, actions, anchored, deferred, div,
-    point, px,
+    FontWeight, InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, ParentElement, Render,
+    Role, StatefulInteractiveElement, Styled, Subscription, Window, actions, anchored, deferred,
+    div, point, px,
 };
 
-use crate::components::agent_icon::{AgentIcon, AgentIconSize};
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::popover::{OverlayLayer, TriggerBounds, fade_in, overlay_surface};
 use crate::components::text_field::{TextField, TextFieldEvent};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
-    LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH, LAYOUT_MODEL_PICKER_MAX_HEIGHT, LAYOUT_MODEL_PICKER_WIDTH,
-    RADIUS_FULL, RADIUS_XL, SIZE_CONTROL_COMPACT, SPACE_1, SPACE_2, TYPE_LABEL,
+    LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH, LAYOUT_MODEL_PICKER_MAX_HEIGHT,
+    LAYOUT_MODEL_PICKER_MODEL_COLUMN, LAYOUT_MODEL_PICKER_WIDTH, RADIUS_FULL, RADIUS_XL,
+    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_LABEL,
 };
 
 actions!(
@@ -47,6 +48,8 @@ actions!(
 );
 
 const KEY_CONTEXT: &str = "ModelPicker";
+/// Shown in the chip and the popover while no agent is installed.
+const NO_AGENTS: &str = "No agents installed";
 
 /// Binds the picker's keys under its key context; apps call this once at startup.
 pub fn bind_keys(cx: &mut App) {
@@ -76,11 +79,19 @@ pub enum ModelPickerEvent {
     Changed(Choice),
 }
 
+/// What the picker asks its owner to do beyond the choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelPickerAction {
+    /// The user pressed "Open Marketplace" while no agent is installed.
+    OpenMarketplace,
+}
+
 /// The model picker: a trigger chip and its popover. The owner subscribes to its events.
 pub struct ModelPicker {
     state: PickerState,
     open: bool,
     trigger_focus: FocusHandle,
+    marketplace_focus: FocusHandle,
     trigger_bounds: TriggerBounds,
     search: Entity<TextField>,
     _search_events: Subscription,
@@ -96,6 +107,7 @@ impl fmt::Debug for ModelPicker {
 }
 
 impl EventEmitter<ModelPickerEvent> for ModelPicker {}
+impl EventEmitter<ModelPickerAction> for ModelPicker {}
 impl ModelPicker {
     pub fn new(state: PickerState, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| {
@@ -123,6 +135,7 @@ impl ModelPicker {
             state,
             open: false,
             trigger_focus: cx.focus_handle().tab_stop(true),
+            marketplace_focus: cx.focus_handle().tab_stop(true),
             trigger_bounds: TriggerBounds::default(),
             search,
             _search_events: search_events,
@@ -137,14 +150,19 @@ impl ModelPicker {
         self.open
     }
 
-    /// Opens the popover and moves focus into its search field.
+    /// Opens the popover and moves focus into its search field, or onto the Marketplace link while
+    /// no agent is installed.
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
             return;
         }
         self.open = true;
-        self.search
-            .update(cx, |search, cx| search.focus(window, cx));
+        if self.state.no_agents_installed() {
+            window.focus(&self.marketplace_focus, cx);
+        } else {
+            self.search
+                .update(cx, |search, cx| search.focus(window, cx));
+        }
         cx.notify();
     }
 
@@ -176,14 +194,42 @@ impl ModelPicker {
         }
         cx.notify();
     }
+
+    /// Shows the quiet empty state, with its Marketplace link, while no agent is installed.
+    pub fn set_no_agents_installed(&mut self, none_installed: bool, cx: &mut Context<Self>) {
+        if self.state.no_agents_installed() != none_installed {
+            self.state.set_no_agents_installed(none_installed);
+            cx.notify();
+        }
+    }
+
+    /// Closes the popover and asks the owner to open the Marketplace.
+    fn open_marketplace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close(window, cx);
+        cx.emit(ModelPickerAction::OpenMarketplace);
+    }
 }
 
 impl Render for ModelPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let p = theme.palette;
-        let (name, effort) = self.state.chip_labels();
-        let kind = self.state.current_kind();
+        let none = self.state.no_agents_installed();
+        let (name, effort) = if none {
+            (NO_AGENTS.into(), None)
+        } else {
+            self.state.chip_labels()
+        };
+        let kind = if none {
+            AgentKind::Unknown
+        } else {
+            self.state.current_kind()
+        };
+        let label = if none {
+            p.text.tertiary
+        } else {
+            p.text.primary
+        };
         let open = self.open;
         let aria = match &effort {
             Some(effort) => format!("Model: {name}, {effort}"),
@@ -191,6 +237,7 @@ impl Render for ModelPicker {
         };
         let chip = div()
             .id("model-picker-trigger")
+            .debug_selector(|| "model-picker-trigger".to_owned())
             .role(Role::Button)
             .aria_label(aria)
             .aria_expanded(open)
@@ -200,11 +247,11 @@ impl Render for ModelPicker {
             .flex_none()
             .items_center()
             .gap(px(SPACE_1))
-            .h(px(SIZE_CONTROL_COMPACT))
+            .h(px(SIZE_CONTROL_DEFAULT))
             .px(px(SPACE_2))
             .rounded(px(RADIUS_FULL))
             .text_style(TYPE_LABEL)
-            .text_color(p.text.primary)
+            .text_color(label)
             .cursor_pointer()
             .hover(move |s| s.bg(p.fill.hover_raised))
             .when(open, |chip| chip.bg(p.fill.selected_raised))
@@ -220,10 +267,17 @@ impl Render for ModelPicker {
                     .min_w_0()
                     .truncate()
                     .max_w(px(LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(name),
             )
             .when_some(effort, |chip, effort| {
-                chip.child(div().flex_none().text_color(p.text.secondary).child(effort))
+                chip.child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(p.text.secondary)
+                        .child(effort),
+                )
             })
             .child(
                 Icon::new(if open {
@@ -273,19 +327,29 @@ impl ModelPicker {
     fn panel(&self, cx: &mut Context<Self>) -> Div {
         let theme = *cx.theme();
         let p = theme.palette;
-        let body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .child(self.rail(cx))
-            .child(self.model_column(cx))
-            .child(self.reasoning_column(cx));
-        let footer = self.footer(cx);
+        let none = self.state.no_agents_installed();
+        let body = if none {
+            self.no_agents(cx)
+        } else {
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(self.rail(cx))
+                .child(self.model_column(cx))
+                .child(self.reasoning_column(cx))
+        };
+        let footer = (!none).then(|| self.footer(cx));
         let trigger = self.trigger_bounds.clone();
+        let width = if none {
+            LAYOUT_MODEL_PICKER_MODEL_COLUMN
+        } else {
+            LAYOUT_MODEL_PICKER_WIDTH
+        };
         overlay_surface(&theme, RADIUS_XL, theme.shadows.e2)
             .key_context(KEY_CONTEXT)
             .occlude()
-            .w(px(LAYOUT_MODEL_PICKER_WIDTH))
+            .w(px(width))
             .max_h(px(LAYOUT_MODEL_PICKER_MAX_HEIGHT))
             .flex()
             .flex_col()
@@ -323,7 +387,7 @@ impl ModelPicker {
             .on_action(cx.listener(|this, _: &Shortcut3, _, cx| this.shortcut(3, cx)))
             .on_action(cx.listener(|this, _: &Shortcut4, _, cx| this.shortcut(4, cx)))
             .child(body)
-            .child(footer)
+            .when_some(footer, |panel, footer| panel.child(footer))
     }
 }
 
@@ -364,6 +428,16 @@ mod tests {
     fn open_and_draw(picker: &Entity<ModelPicker>, cx: &mut VisualTestContext) {
         picker.update_in(cx, |picker, window, cx| picker.open(window, cx));
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_chip_is_as_tall_as_the_composer_row(cx: &mut TestAppContext) {
+        let (_picker, cx) = picker_in(cx);
+        cx.run_until_parked();
+        let chip = cx
+            .debug_bounds("model-picker-trigger")
+            .expect("the chip is drawn");
+        assert_eq!(chip.size.height, px(SIZE_CONTROL_DEFAULT));
     }
 
     #[gpui::test]
@@ -409,5 +483,147 @@ mod tests {
             Some("sonnet".into())
         );
         assert!(picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    /// Redraws the window so the popover's bounds reflect the last change.
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    /// Clicks the centre of a drawn element and lets the change settle.
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let at = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn rows_of(picker: &Entity<ModelPicker>, cx: &VisualTestContext) -> usize {
+        picker.read_with(cx, |picker, _| picker.state().rows().len())
+    }
+
+    #[gpui::test]
+    fn the_rail_switches_the_list_to_its_agent(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        click(cx, "rail-codex");
+        assert_eq!(
+            picker.read_with(cx, |picker, _| picker.state().view()),
+            PickerView::Agent(1)
+        );
+        assert_eq!(rows_of(&picker, cx), 1, "Codex offers one model");
+    }
+
+    #[gpui::test]
+    fn the_favourites_rail_lists_the_starred_models(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        picker.update(cx, |picker, _| picker.state.toggle_favourite("gpt"));
+        open_and_draw(&picker, cx);
+        click(cx, "rail-favourites");
+        assert_eq!(rows_of(&picker, cx), 1);
+    }
+
+    #[gpui::test]
+    fn show_more_reveals_the_rest_and_show_fewer_folds_them_again(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        assert_eq!(rows_of(&picker, cx), PickerState::FEATURED_ROWS);
+        click(cx, "model-picker-show-more");
+        draw(cx);
+        assert_eq!(rows_of(&picker, cx), 6);
+        click(cx, "model-picker-show-more");
+        draw(cx);
+        assert_eq!(rows_of(&picker, cx), PickerState::FEATURED_ROWS);
+    }
+
+    #[gpui::test]
+    fn a_star_toggles_a_favourite_without_choosing_its_row(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        picker.update(cx, |picker, _| picker.state.move_highlight(1));
+        draw(cx);
+        click(cx, "model-star-1");
+        assert!(picker.read_with(cx, |picker, _| picker.state().is_favourite("sonnet")));
+        assert_eq!(
+            picker.read_with(cx, |picker, _| picker.state().choice().model.to_string()),
+            "opus",
+            "starring does not choose the row"
+        );
+        draw(cx);
+        click(cx, "model-star-1");
+        assert!(!picker.read_with(cx, |picker, _| picker.state().is_favourite("sonnet")));
+    }
+
+    #[gpui::test]
+    fn an_effort_row_chooses_the_level_and_closes_the_popover(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        click(cx, "effort-2");
+        assert_eq!(
+            choices.borrow().last().and_then(|choice| choice.effort),
+            Some(2)
+        );
+        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    #[gpui::test]
+    fn the_speed_segments_choose_standard_or_fast(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        click(cx, "segment-1");
+        assert!(choices.borrow().last().is_some_and(|choice| choice.fast));
+        draw(cx);
+        click(cx, "segment-0");
+        assert!(choices.borrow().last().is_some_and(|choice| !choice.fast));
+        assert!(
+            picker.read_with(cx, |picker, _| picker.is_open()),
+            "speed keeps the popover open"
+        );
+    }
+
+    /// Subscribes to a picker and collects the actions it asks its owner for.
+    fn record_actions(
+        picker: &Entity<ModelPicker>,
+        cx: &mut VisualTestContext,
+    ) -> Rc<RefCell<Vec<ModelPickerAction>>> {
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let sink = actions.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(picker, move |_, action: &ModelPickerAction, _| {
+                sink.borrow_mut().push(*action);
+            })
+            .detach();
+        });
+        actions
+    }
+
+    #[gpui::test]
+    fn without_an_installed_agent_the_popover_says_so_and_links_to_the_marketplace(
+        cx: &mut TestAppContext,
+    ) {
+        let (picker, cx) = picker_in(cx);
+        picker.update(cx, |picker, cx| picker.set_no_agents_installed(true, cx));
+        let actions = record_actions(&picker, cx);
+        open_and_draw(&picker, cx);
+        assert!(
+            cx.debug_bounds("model-picker-empty").is_some(),
+            "the quiet state is drawn"
+        );
+        assert!(
+            cx.debug_bounds("rail-claude").is_none(),
+            "no agent rail without agents"
+        );
+        click(cx, "model-picker-marketplace");
+        assert_eq!(*actions.borrow(), vec![ModelPickerAction::OpenMarketplace]);
+        assert!(
+            !picker.read_with(cx, |picker, _| picker.is_open()),
+            "the link closes the popover"
+        );
     }
 }

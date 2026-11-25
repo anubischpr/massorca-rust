@@ -138,7 +138,7 @@ fn create_button(shell: &gpui::WeakEntity<Shell>) -> impl IntoElement {
         .size(ButtonSize::Default)
         .leading_icon(IconName::Plus)
         .on_click(move |window, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.open_create(window, cx));
+            let _ = shell.update(cx, |shell, cx| shell.open_create_start(window, cx));
         })
 }
 

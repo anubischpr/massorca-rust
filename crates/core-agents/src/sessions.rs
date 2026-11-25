@@ -64,6 +64,34 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
 pub const FIRST_PROMPT_WAIT: Duration = Duration::from_secs(120);
 
+/// The setting that names the folder conversations without a project are saved in (decision 0094), and its owner.
+const CONVERSATIONS_SETTING: &str = "conversations.folder";
+const CONVERSATIONS_OWNER: &str = "core";
+
+/// The workspace and folder a no-project start made (decision 0094), removed again unless the start succeeds, so a
+/// failed start leaves no empty conversation behind. The folder is removed only while it is still empty.
+struct MadeConversation<'a> {
+    agents: &'a Agents,
+    workspace_id: String,
+    folder: PathBuf,
+}
+
+impl MadeConversation<'_> {
+    fn keep(&mut self) {
+        self.workspace_id.clear();
+    }
+}
+
+impl Drop for MadeConversation<'_> {
+    fn drop(&mut self) {
+        if self.workspace_id.is_empty() {
+            return;
+        }
+        let _ = self.agents.store().delete_workspace(&self.workspace_id);
+        let _ = std::fs::remove_dir(&self.folder);
+    }
+}
+
 /// One applied status change, in the order the store applied it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
@@ -212,6 +240,8 @@ pub struct AgentsConfig {
     pub profile_dir: PathBuf,
     /// The `massorca` executable that runs the service; agents and their hooks call it.
     pub massorca_bin: PathBuf,
+    /// The conversations folder when `conversations.folder` is unset (decision 0094), `<home>/MassOrca/Conversations`.
+    pub conversations_default: PathBuf,
     /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
     pub env_provider: Option<EnvProvider>,
     /// The packages that provide kinds and their state (decision 0059); [`crate::BuiltInPackages`] until the extension
@@ -429,6 +459,60 @@ impl Agents {
         self.start_session(params, None, grant)
     }
 
+    /// The workspace a start that names one runs in, once the start may use it: not being removed, not merged into, and
+    /// its folder present.
+    fn started_workspace(&self, selector: &str) -> Result<Workspace, AgentError> {
+        let workspace = self.inner.config.workspaces.show_workspace(selector)?;
+        refuse_removing(&workspace)?;
+        self.refuse_while_merging(&workspace.id)?;
+        if workspace.missing {
+            return Err(AgentError::new(
+                codes::PATH_NOT_FOUND,
+                format!("the workspace directory is missing: {}", workspace.path),
+            ));
+        }
+        Ok(workspace)
+    }
+
+    /// The folder workspace of a session without a project (decision 0094): its own folder, named after the session, in
+    /// the conversations folder.
+    fn conversation_workspace(&self, session_id: &str) -> Result<Workspace, AgentError> {
+        let root = self.conversations_root()?;
+        Ok(self
+            .inner
+            .config
+            .workspaces
+            .conversation_workspace(&root, session_id)?)
+    }
+
+    /// The conversations folder: the stored `conversations.folder`, else the default. It must be an absolute path.
+    fn conversations_root(&self) -> Result<PathBuf, AgentError> {
+        let stored = self
+            .store()
+            .get_setting(CONVERSATIONS_OWNER, CONVERSATIONS_SETTING)?;
+        let root = match stored {
+            Some(text) => serde_json::from_str::<String>(&text)
+                .map(PathBuf::from)
+                .map_err(|_| {
+                    AgentError::new(
+                        codes::CONFIG_INVALID_VALUE,
+                        "conversations.folder is not a path",
+                    )
+                })?,
+            None => self.inner.config.conversations_default.clone(),
+        };
+        if !root.is_absolute() {
+            return Err(AgentError::new(
+                codes::CONFIG_INVALID_VALUE,
+                format!(
+                    "conversations.folder must be an absolute path: {}",
+                    root.display()
+                ),
+            ));
+        }
+        Ok(root)
+    }
+
     /// Starts a session, delegated from `parent` when one is given (0055); a child of a run holding secrets is marked
     /// as holding them too.
     pub(crate) fn start_session(
@@ -445,22 +529,19 @@ impl Agents {
         {
             return self.view(row);
         }
-        let workspace = self
-            .inner
-            .config
-            .workspaces
-            .show_workspace(&params.workspace)?;
-        refuse_removing(&workspace)?;
-        self.refuse_while_merging(&workspace.id)?;
-        if workspace.missing {
-            return Err(AgentError::new(
-                codes::PATH_NOT_FOUND,
-                format!("the workspace directory is missing: {}", workspace.path),
-            ));
-        }
+        let chosen = match params.workspace.as_deref() {
+            Some(selector) => Some(self.started_workspace(selector)?),
+            None => None,
+        };
         let (decl, program) = self.startable_kind(&params.kind)?;
         let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
             .with_caller_args(&params.args);
+        // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
+        let mode_args = [
+            mode.args.clone(),
+            decl.option_args(params.model.as_deref(), params.effort.as_deref())?,
+        ]
+        .concat();
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
@@ -474,6 +555,20 @@ impl Agents {
                 ));
             }
         }
+        let session_id = new_id();
+        // A session without a project gets its own folder once the start is valid (decision 0094).
+        let (workspace, mut made) = match chosen {
+            Some(workspace) => (workspace, None),
+            None => {
+                let workspace = self.conversation_workspace(&session_id)?;
+                let made = MadeConversation {
+                    agents: self,
+                    workspace_id: workspace.id.clone(),
+                    folder: PathBuf::from(&workspace.path),
+                };
+                (workspace, Some(made))
+            }
+        };
         if !params.read_only
             && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
@@ -489,12 +584,11 @@ impl Agents {
         // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
         let provided = self.provided_env(&workspace.project_id, grant)?;
         let holds_secrets = !provided.is_empty() || parent_holds;
-        let session_id = new_id();
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
         // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -507,7 +601,7 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
-            mode_args: &mode.args,
+            mode_args: &mode_args,
             caller_args: &params.args,
             provided_env: &provided,
             holds_secrets,
@@ -579,6 +673,10 @@ impl Agents {
             return Err(error.into());
         }
         clear_starting(&run_dir);
+        // The session row now owns its conversation folder.
+        if let Some(made) = made.as_mut() {
+            made.keep();
+        }
         let mut session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         session.secrets_withheld = withheld(grant);
@@ -599,6 +697,18 @@ impl Agents {
         selector: &str,
         permission_mode: Option<&str>,
         grant: SecretGrant,
+    ) -> Result<AgentSession, AgentError> {
+        self.resume_at(selector, permission_mode, grant, None, None)
+    }
+
+    /// `resume` with the terminal at `cols` x `rows`, each the default when absent: the size of the view that shows it.
+    pub fn resume_at(
+        &self,
+        selector: &str,
+        permission_mode: Option<&str>,
+        grant: SecretGrant,
+        cols: Option<u16>,
+        rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
@@ -666,7 +776,7 @@ impl Agents {
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
-        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
+        let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -709,8 +819,8 @@ impl Agents {
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
+            cols: cols.unwrap_or(DEFAULT_COLS),
+            rows: rows.unwrap_or(DEFAULT_ROWS),
         };
         let terminal_id = self
             .spawn_run(plan, &workspace.id, &workspace.path, title, size)
@@ -1887,8 +1997,8 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
-/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state;
-/// a state that cannot be read is reported with the read failure.
+/// Refuses an entry whose package is not enabled (decision 0059), saying in plain words which agent it is and why; the
+/// code and data still name the kind, its package and the state. A state that cannot be read is reported as that.
 fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
     if entry.enabled() {
         return Ok(());
@@ -1898,6 +2008,10 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let package = entry.package.id.clone().unwrap_or_default();
+    let name = entry
+        .decl
+        .as_ref()
+        .map_or(entry.id.as_str(), |decl| decl.name.as_str());
     // A state that cannot be read (an unreadable lockfile) is that failure, which installing or enabling cannot fix.
     let message = if state == "unknown" && !entry.problems.is_empty() {
         format!(
@@ -1906,10 +2020,12 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
             entry.problems.join("; ")
         )
     } else {
-        format!(
-            "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
-            entry.id
-        )
+        let reason = match state.as_str() {
+            "available" => format!("{name} is not installed yet"),
+            "disabled" => format!("{name} is turned off"),
+            _ => format!("{name} is not ready to use"),
+        };
+        format!("{reason}; install or enable it in the Marketplace.")
     };
     let mut error = AgentError::new(codes::AGENT_KIND_NOT_ENABLED, message);
     error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
@@ -2004,6 +2120,7 @@ pub(crate) mod tests {
             )),
             profile_dir: profile.path().to_path_buf(),
             massorca_bin: PathBuf::from("massorca"),
+            conversations_default: std::env::temp_dir().join("MassOrca").join("Conversations"),
             env_provider: None,
             kind_packages: packages,
         });
@@ -2373,5 +2490,58 @@ mod release_tests {
         // Four bytes would start inside the two-byte é: the cut moves forward to the next character.
         assert_eq!(keep_archive_tail(&text, 4), ("yyy".to_owned(), true));
         assert_eq!(ARCHIVE_MAX_BYTES, 262_144);
+    }
+}
+
+#[cfg(test)]
+mod not_enabled_tests {
+    use massorca_protocol::methods::agents::{KindPackage, PackageState};
+    use serde_json::json;
+
+    use super::*;
+    use crate::CatalogEntry;
+
+    fn entry(state: PackageState) -> CatalogEntry {
+        CatalogEntry {
+            id: "antigravity".to_owned(),
+            owner: "massorca".to_owned(),
+            decl: KindDecl::from_json(
+                r#"{"id":"antigravity","name":"Antigravity","program":["agy"]}"#,
+            )
+            .ok(),
+            source: None,
+            problems: Vec::new(),
+            package: KindPackage {
+                state,
+                id: Some("massorca.antigravity".to_owned()),
+                version: None,
+            },
+        }
+    }
+
+    /// The refusal names the agent by its display name; its code and data are unchanged.
+    #[test]
+    fn a_kind_whose_package_is_not_installed_is_refused_by_name() {
+        let error = require_enabled(&entry(PackageState::Available)).expect_err("refused");
+        assert_eq!(error.code, codes::AGENT_KIND_NOT_ENABLED);
+        assert_eq!(
+            error.message,
+            "Antigravity is not installed yet; install or enable it in the Marketplace."
+        );
+        assert_eq!(
+            error.data,
+            Some(
+                json!({ "kind": "antigravity", "package": "massorca.antigravity", "state": "available" })
+            )
+        );
+    }
+
+    #[test]
+    fn a_kind_whose_package_is_off_is_refused_by_name() {
+        let error = require_enabled(&entry(PackageState::Disabled)).expect_err("refused");
+        assert_eq!(
+            error.message,
+            "Antigravity is turned off; install or enable it in the Marketplace."
+        );
     }
 }

@@ -20,9 +20,10 @@ use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{
     LAYOUT_PAGE_SETTINGS, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_BODY_SM,
 };
-use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
+use super::path_field::{PickKind, path_field};
 use crate::model::app_theme::ThemeChoice;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
@@ -139,7 +140,7 @@ pub(super) fn settings_page(
         .into_any_element()
 }
 
-/// One section of the navigation. Selecting it shows its rows; Extensions opens Marketplace.
+/// One section of the navigation. Selecting it shows its rows here.
 fn nav_item(
     section: SettingsSection,
     selected: SettingsSection,
@@ -152,25 +153,18 @@ fn nav_item(
         .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle())
         .read(cx)
         .clone();
-    let mut item = ListRow::new(id, section.label())
+    let item = ListRow::new(id, section.label())
         .leading(RowLeading::Icon(nav_icon(section)))
         .selected(section == selected)
         .focus_handle(focus)
         .tab_stop(true);
-    if section.opens_elsewhere() {
-        item = item.trailing(Icon::new(IconName::ChevronRight));
-    }
     let shell = shell.clone();
     div()
         .debug_selector(move || format!("settings-nav-{section:?}"))
         .child(item.on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                if section.opens_elsewhere() {
-                    shell.open_marketplace(MarketplacePage::Installed, cx);
-                } else {
-                    shell.settings.section = section;
-                    cx.notify();
-                }
+                shell.settings.section = section;
+                cx.notify();
             });
         }))
 }
@@ -186,7 +180,6 @@ fn nav_icon(section: SettingsSection) -> IconName {
         SettingsSection::Sources => IconName::Plug,
         SettingsSection::Hosts => IconName::Server,
         SettingsSection::Notifications => IconName::Bell,
-        SettingsSection::Extensions => IconName::Puzzle,
         SettingsSection::Vault => IconName::Lock,
         SettingsSection::Privacy => IconName::Shield,
         SettingsSection::Routing => IconName::Route,
@@ -441,7 +434,9 @@ pub(super) fn host_word(connection: &ConnectionState) -> &'static str {
 /// The workspace folder: the field the service's value fills, with the row's reason, status and reset.
 fn folder_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyElement) {
     let mut row = row;
-    if let Some(reason) = folder_reason(frame.connection.is_connected(), frame.folder) {
+    let reason = folder_reason(frame.connection.is_connected(), frame.folder);
+    let enabled = reason.is_none();
+    if let Some(reason) = reason {
         row = row.disabled_reason(reason);
     }
     if let Some(status) = folder_status(frame.folder) {
@@ -456,14 +451,21 @@ fn folder_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyE
     // Escape puts the typed text back to the stored folder; the key reaches here from the field.
     let shell = frame.shell.clone();
     let control = div()
-        .debug_selector(|| "settings-folder".to_owned())
         .w_full()
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
             if event.keystroke.key == "escape" {
                 let _ = shell.update(cx, |shell, cx| shell.revert_folder(window, cx));
             }
         })
-        .child(frame.folder_field.clone())
+        .child(path_field(
+            "settings-folder-browse",
+            "settings-folder",
+            frame.shell.clone(),
+            frame.folder_field,
+            PickKind::Folder,
+            true,
+            enabled,
+        ))
         .into_any_element();
     (row, control)
 }

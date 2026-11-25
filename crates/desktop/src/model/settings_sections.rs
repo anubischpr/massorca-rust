@@ -1,4 +1,4 @@
-//! The Settings navigation and its rows, as data (D-ST-01 to D-ST-12, section 6): the twelve
+//! The Settings navigation and its rows, as data (D-ST-01 to D-ST-12, section 6): the eleven
 //! sections in nav order, the rows each one lists and what backs them, and search over them.
 //! Free of GPUI, so the rules test without a window.
 
@@ -11,7 +11,8 @@ pub const CONVERSATIONS_FOLDER: &str = "~/MassOrca/Conversations";
 /// The status of a row whose layer is not built yet.
 pub const NOT_AVAILABLE: &str = "Not available yet";
 
-/// The twelve sections of the Settings navigation, in the order of the spec (section 6.1).
+/// The eleven sections of the Settings navigation, in the order of the spec (section 6.1). Every
+/// one is a page here: nothing in Settings opens another page (owner, 2026-11-24, supersedes A68).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     #[default]
@@ -23,14 +24,13 @@ pub enum SettingsSection {
     Sources,
     Hosts,
     Notifications,
-    Extensions,
     Vault,
     Privacy,
     Routing,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 11] = [
         Self::General,
         Self::Agents,
         Self::Appearance,
@@ -39,7 +39,6 @@ impl SettingsSection {
         Self::Sources,
         Self::Hosts,
         Self::Notifications,
-        Self::Extensions,
         Self::Vault,
         Self::Privacy,
         Self::Routing,
@@ -56,16 +55,10 @@ impl SettingsSection {
             Self::Sources => "Sources and integrations",
             Self::Hosts => "Hosts and phones",
             Self::Notifications => "Notifications and voice",
-            Self::Extensions => "Extensions",
             Self::Vault => "Secret vault",
             Self::Privacy => "Privacy and advanced",
             Self::Routing => "Routing decisions",
         }
-    }
-
-    /// Extensions ends with an arrow: it opens Marketplace > Installed (A68), not a page here.
-    pub fn opens_elsewhere(self) -> bool {
-        self == Self::Extensions
     }
 
     /// The line under the section's title, where the section's rows depend on a grant.
@@ -490,12 +483,6 @@ const NOTIFICATIONS: &[RowSpec] = &[
     },
 ];
 
-const EXTENSIONS: &[RowSpec] = &[RowSpec {
-    label: "Extensions",
-    helper: "Managed in Marketplace, under Installed.",
-    body: RowBody::Planned(Planned::Link),
-}];
-
 const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Crash reports",
@@ -573,7 +560,6 @@ pub fn rows(section: SettingsSection) -> &'static [RowSpec] {
         SettingsSection::Sources => SOURCES,
         SettingsSection::Hosts => HOSTS,
         SettingsSection::Notifications => NOTIFICATIONS,
-        SettingsSection::Extensions => EXTENSIONS,
         SettingsSection::Vault => &[],
         SettingsSection::Privacy => PRIVACY,
         SettingsSection::Routing => ROUTING,
@@ -647,13 +633,17 @@ mod tests {
     }
 
     #[test]
-    fn the_twelve_sections_keep_the_spec_order_and_names() {
-        assert_eq!(SettingsSection::ALL.len(), 12);
+    fn the_eleven_sections_keep_the_spec_order_and_names() {
+        assert_eq!(SettingsSection::ALL.len(), 11);
         assert_eq!(SettingsSection::ALL[0].label(), "General and account");
-        assert_eq!(SettingsSection::ALL[8].label(), "Extensions");
-        assert_eq!(SettingsSection::ALL[11].label(), "Routing decisions");
-        assert!(SettingsSection::Extensions.opens_elsewhere());
-        assert!(!SettingsSection::General.opens_elsewhere());
+        assert_eq!(SettingsSection::ALL[8].label(), "Secret vault");
+        assert_eq!(SettingsSection::ALL[10].label(), "Routing decisions");
+        assert!(
+            SettingsSection::ALL
+                .iter()
+                .all(|section| section.label() != "Extensions"),
+            "extensions live in the Marketplace only"
+        );
     }
 
     #[test]
@@ -725,14 +715,6 @@ mod tests {
         assert_eq!(hosts[0].body, RowBody::ThisPc);
         assert_eq!(hosts[1].body, RowBody::PairedHosts);
         assert_eq!(hosts[2].label, "Add host");
-    }
-
-    #[test]
-    fn the_extensions_row_links_to_marketplace_installed() {
-        assert_eq!(
-            bodies(SettingsSection::Extensions),
-            vec![RowBody::Planned(Planned::Link)]
-        );
     }
 
     #[test]

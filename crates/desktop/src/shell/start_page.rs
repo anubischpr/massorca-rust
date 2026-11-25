@@ -18,30 +18,37 @@ use massorca_ui::components::model_picker::{
 };
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
-use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
+use massorca_ui::components::segmented_control::{Segment, SegmentedControl, SegmentedStyle};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_4, SPACE_6, SPACE_8, TYPE_CAPTION,
+    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_CAPTION,
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use std::io::Write;
 
 use super::Shell;
+use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
-use crate::model::permission_modes::{ModeChoice, start_choices};
+use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
+use crate::model::marketplace::ItemKind;
+use crate::model::navigation::MarketplacePage;
+use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart,
-    send_reason, start_params,
+    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartOptions,
+    StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_options,
+    start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::Refusal;
+use crate::ui_state;
+use massorca_protocol::codes;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
@@ -54,6 +61,26 @@ pub(super) struct StartFrame {
     pub starting: Option<String>,
     /// Where the session the composer starts opens.
     pub mode: StartMode,
+    /// The service refused because the data folder is not secured.
+    pub profile_unsafe: bool,
+}
+
+/// The banner a data folder that is not secured gets: the service refuses every call until the
+/// owner runs the CLI, since no protocol method secures it (`profile.unsafe_location`).
+pub(super) const PROFILE_UNSAFE_TEXT: &str = "This data folder is not secured, so the service refuses every call. Run `massorca profile secure --yes` in a terminal, then try again.";
+
+/// The banner on both start pages while the last refusal was `profile.unsafe_location`.
+pub(super) fn profile_banner() -> impl IntoElement {
+    div()
+        .debug_selector(|| "start-profile-banner".to_owned())
+        .child(
+            Banner::new(
+                "start-profile-banner",
+                BannerVariant::Warning,
+                PROFILE_UNSAFE_TEXT,
+            )
+            .title("Secure the data folder"),
+        )
 }
 
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
@@ -62,26 +89,27 @@ pub(super) struct StartFrame {
 pub(super) struct StartComposer {
     pub entity: Entity<Composer>,
     pub mode: StartMode,
+    /// The (kind, mode) the person last picked on the chip; the only mode a start can send.
+    pub picked: Option<(String, String)>,
     _events: Subscription,
 }
 
 /// The start page for one workspace, centred in the Canvas.
-pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
+pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
     let page = &frame.page;
 
     let project_link = {
         let shell = frame.shell.clone();
-        div()
-            .id("start-project-link")
-            .debug_selector(|| "start-project-link".to_owned())
-            .cursor_pointer()
-            .underline()
-            .child(page.project.clone())
-            .on_click(move |_, window, cx| {
+        project_title_link(
+            "start-project-link",
+            page.project.clone(),
+            &theme,
+            move |window, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
-            })
+            },
+        )
     };
     let heading = div()
         .flex()
@@ -91,48 +119,55 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .text_style(TYPE_HEADING)
         .text_color(p.text.primary)
         .child("What should we work on in ")
-        .child(project_link);
+        .child(project_link)
+        .child("?");
 
-    let placement = div()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_2))
-        .child(
-            Button::new("start-host", page.host)
-                .variant(ButtonVariant::Ghost)
-                .leading_icon(IconName::Server)
-                .disabled(true)
-                .tooltip("Hosts other than This PC come later."),
+    let host = host_pill(
+        "start-host",
+        page.host,
+        &theme,
+        pill_focus("start-host", window, cx),
+    );
+    let project = {
+        let shell = frame.shell.clone();
+        pill(
+            "start-project",
+            IconName::Folder,
+            page.project.clone(),
+            None,
+            true,
+            &theme,
+            pill_focus("start-project", window, cx),
         )
-        .child(
-            Button::new("start-project", page.project.clone())
-                .variant(ButtonVariant::Ghost)
-                .trailing_icon(IconName::ChevronDown)
-                .disabled(true)
-                .tooltip("Change the project from the heading."),
-        )
-        .child(
-            Button::new(
-                "start-branch",
-                page.branch
-                    .clone()
-                    .unwrap_or_else(|| "No branch".to_owned()),
-            )
-            .variant(ButtonVariant::Ghost)
-            .leading_icon(IconName::GitBranch)
-            .disabled(true)
-            .tooltip(GIT_LATER),
-        );
-
-    // The real composer: the Chat / Terminal switch sits in its bottom row (A32).
+        .on_click(move |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_start_project_menu(window, cx));
+        })
+    };
+    let branch = off_pill(
+        "start-branch",
+        IconName::GitBranch,
+        page.branch
+            .clone()
+            .unwrap_or_else(|| "No branch".to_owned()),
+        GIT_LATER,
+        &theme,
+        pill_focus("start-branch", window, cx),
+    );
+    let placement = placement_card(host, project, branch, &theme);
+    // The real composer: the Chat / Terminal switch sits in its bottom row (A32). The placement card joins its top edge.
     let composer = div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_2))
-        .child(frame.composer.clone())
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(placement)
+                .child(frame.composer.clone()),
+        )
         .when(frame.mode == StartMode::Terminal, |column| {
             column.child(
                 div()
@@ -171,7 +206,9 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .gap(px(SPACE_6))
         .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
-        .child(placement)
+        .when(frame.profile_unsafe, |column| {
+            column.child(profile_banner())
+        })
         .child(composer);
     if page.missing {
         column = column.child(
@@ -197,8 +234,26 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .into_any_element()
 }
 
+/// The project's name in a page heading: dotted underlined, and clickable to change the project (D-AG-01).
+pub(super) fn project_title_link(
+    id: &'static str,
+    name: String,
+    theme: &Theme,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .cursor_pointer()
+        .border_b_1()
+        .border_dashed()
+        .border_color(theme.palette.text.tertiary)
+        .child(name)
+        .on_click(move |_, window, cx| on_click(window, cx))
+}
+
 /// The start in flight, under the composer until the service answers (D-AG-01 States).
-fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
+pub(super) fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
     div()
         .debug_selector(|| "start-status".to_owned())
         .text_style(TYPE_CAPTION)
@@ -207,6 +262,19 @@ fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
 }
 
 /// A kind's mode entries as the composer's chip shows them; a bypass mode carries the warning glyph.
+/// The mode a start sends: the entry the chip shows, and only when the chip was built from exactly these choices.
+/// A chip showing another list, or an index past its end, sends no mode, so the vendor CLI starts in its default.
+pub(super) fn sent_mode(
+    choices: &[ModeChoice],
+    shown: &[AccessMode],
+    index: usize,
+) -> Option<String> {
+    if access_modes(choices).as_slice() != shown {
+        return None;
+    }
+    choices.get(index)?.id.clone()
+}
+
 pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
     choices
         .iter()
@@ -222,8 +290,16 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .collect()
 }
 
-/// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
-/// service declares no models yet.
+/// The secondary text of each of a kind's mode entries, in the same order as `access_modes`.
+pub(super) fn access_details(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
+    choices
+        .iter()
+        .map(|choice| choice.detail.clone().map(SharedString::from))
+        .collect()
+}
+
+/// The installed, enabled kinds as the picker's rail offers them: one agent each, with the kind as its only row,
+/// since the service declares no models yet.
 fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
     choices
         .iter()
@@ -242,16 +318,33 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
         .collect()
 }
 
-/// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
-fn key_hints(theme: &Theme) -> impl IntoElement {
+/// The model and effort the picker chose for `kind`, as `agent.start` takes them when the service offers them.
+pub(super) fn picked_options(picker: &PickerState, offered: bool, kind: &str) -> StartOptions {
+    let Some(model) = picker.current_model() else {
+        return StartOptions::default();
+    };
+    let efforts: Vec<&str> = model.efforts.iter().map(|label| label.as_ref()).collect();
+    start_options(
+        offered,
+        kind,
+        &picker.choice().model,
+        &efforts,
+        picker.choice().effort,
+    )
+}
+
+/// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
+pub(super) fn key_hints(theme: &Theme) -> impl IntoElement {
     div()
+        .debug_selector(|| "start-key-hints".to_owned())
         .flex()
         .flex_row()
         .flex_wrap()
-        .justify_center()
-        .gap(px(SPACE_4))
+        .gap(px(SPACE_3))
         .children(KEY_HINTS.iter().map(|(key, what)| {
+            let selector = format!("start-key-hint-{key}");
             div()
+                .debug_selector(move || selector.clone())
                 .flex()
                 .flex_row()
                 .items_center()
@@ -283,6 +376,7 @@ fn start_mode_switch(
             ],
         )
         .selected(mode.index())
+        .style(SegmentedStyle::Sunken)
         .on_change(move |index, _, cx| {
             let _ = shell.update(cx, |shell, cx| {
                 shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
@@ -436,51 +530,64 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
         let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
-        let entity = self
-            .start_composers
-            .entry(workspace_id.to_owned())
-            .or_insert_with(|| {
-                let workspace = workspace_id.to_owned();
-                let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
-                let picker = PickerState::new(
-                    Vec::new(),
-                    Choice {
-                        model: SharedString::default(),
-                        effort: None,
-                        fast: false,
-                    },
-                );
-                let entity = cx.new(|cx| {
-                    Composer::new(picker, Vec::new(), cx)
-                        .leading_control(switch)
-                        .voice_unavailable(VOICE_LATER)
-                });
-                let events = cx.subscribe(
-                    &entity,
-                    move |shell, composer, event: &ComposerEvent, cx| match event {
-                        ComposerEvent::DraftChanged if log_drafts => {
-                            let draft = composer.read(cx).draft(cx);
-                            let _ = writeln!(
-                                std::io::stderr(),
-                                "massorca-desktop: debug composer draft={draft:?}"
-                            );
-                        }
-                        ComposerEvent::Send(prompt) => {
-                            // The start page clears the prompt as it sends and gives it back on a refusal.
-                            composer.update(cx, |composer, cx| composer.set_draft("", cx));
-                            shell.start_session(&workspace, prompt, composer.clone(), cx);
-                        }
-                        _ => {}
-                    },
-                );
-                StartComposer {
-                    entity,
-                    mode: StartMode::default(),
-                    _events: events,
-                }
-            })
-            .entity
-            .clone();
+        let entity =
+            self.start_composers
+                .entry(workspace_id.to_owned())
+                .or_insert_with(|| {
+                    let workspace = workspace_id.to_owned();
+                    let switch = start_mode_switch(cx.entity().downgrade(), workspace.clone());
+                    let picker = PickerState::new(
+                        Vec::new(),
+                        Choice {
+                            model: SharedString::default(),
+                            effort: None,
+                            fast: false,
+                        },
+                    );
+                    let entity = cx.new(|cx| {
+                        Composer::new(picker, Vec::new(), cx)
+                            .leading_control(switch)
+                            .voice_unavailable(VOICE_LATER)
+                            .sends_empty()
+                            .joined_top(true)
+                    });
+                    let events = cx.subscribe(
+                        &entity,
+                        move |shell, composer, event: &ComposerEvent, cx| match event {
+                            ComposerEvent::DraftChanged if log_drafts => {
+                                let draft = composer.read(cx).draft(cx);
+                                let _ = writeln!(
+                                    std::io::stderr(),
+                                    "massorca-desktop: debug composer draft={draft:?}"
+                                );
+                            }
+                            ComposerEvent::Send(prompt) => {
+                                // The start page clears the prompt as it sends and gives it back on a refusal.
+                                composer.update(cx, |composer, cx| composer.set_draft("", cx));
+                                if workspace == HOME_START {
+                                    shell.start_from_home(prompt, composer.clone(), cx);
+                                } else {
+                                    shell.start_session(&workspace, prompt, composer.clone(), cx);
+                                }
+                            }
+                            ComposerEvent::OpenMarketplace => shell
+                                .open_marketplace(MarketplacePage::Category(ItemKind::Agent), cx),
+                            ComposerEvent::AccessChanged(index) => {
+                                shell.record_start_pick(&workspace, *index, composer.clone(), cx);
+                                shell.remember_start_mode(&composer, *index, cx);
+                            }
+                            _ => {}
+                        },
+                    );
+                    StartComposer {
+                        entity,
+                        mode: StartMode::default(),
+                        picked: None,
+                        _events: events,
+                    }
+                })
+                .entity
+                .clone();
         self.refresh_start_composer(&entity, workspace_id, cx);
         entity
     }
@@ -509,7 +616,7 @@ impl Shell {
 
     /// Keeps a start composer in step with the store: the kinds it offers, and why Send is off.
     fn refresh_start_composer(
-        &self,
+        &mut self,
         composer: &Entity<Composer>,
         workspace_id: &str,
         cx: &mut Context<Self>,
@@ -524,6 +631,8 @@ impl Shell {
         };
         composer.update(cx, |composer, cx| {
             composer.set_picker_agents(picker_agents(&choices), cx);
+            // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
+            composer.set_no_agents_installed(connected && choices.is_empty(), cx);
         });
         let chosen = composer
             .read(cx)
@@ -534,19 +643,37 @@ impl Shell {
             .model
             .clone();
         // The mode chip follows the chosen kind; a pick stays while the kind does.
-        let modes = kinds
+        let chosen_kind = kinds
             .iter()
-            .find(|kind| kind.id.as_str() == chosen.as_ref())
-            .map(|kind| access_modes(&start_choices(kind)))
-            .unwrap_or_default();
-        composer.update(cx, |composer, cx| {
-            let keep = if composer.access_modes() == modes.as_slice() {
-                composer.access_index()
+            .find(|kind| kind.id.as_str() == chosen.as_ref());
+        let (modes, details, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
+            let choices = start_choices(kind);
+            // The person's last explicit pick for this kind comes back, while the kind still declares it.
+            let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+            // A bypass mode is never restored from memory: it is sent only when picked on this composer.
+            let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
+                let index = choices
+                    .iter()
+                    .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
+                Some((index, (kind.id.clone(), id.to_owned())))
+            });
+            (access_modes(&choices), access_details(&choices), remembered)
+        });
+        let changed = composer.update(cx, |composer, cx| {
+            let changed = composer.access_modes() != modes.as_slice();
+            let keep = if changed {
+                remembered.as_ref().map_or(0, |(index, _)| *index)
             } else {
-                0
+                composer.access_index()
             };
             composer.set_access_modes(modes, keep, cx);
+            composer.set_access_details(details, cx);
+            changed
         });
+        // A restored chip is the person's pick, so the chip and the start agree; a reset chip sends no mode.
+        if changed && let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.picked = remembered.map(|(_, picked)| picked);
+        }
         let kind_chosen = choices
             .iter()
             .any(|choice| choice.id.as_str() == chosen.as_ref());
@@ -554,7 +681,15 @@ impl Shell {
             .start_pending
             .as_ref()
             .filter(|pending| pending.workspace == workspace_id);
-        let reason = send_reason(connected, kind_chosen, starting).map(SharedString::from);
+        let no_project = workspace_id == HOME_START
+            && home_choice(
+                &self.store.read(cx).state().projects,
+                self.home_project.as_ref(),
+            )
+            .is_none();
+        let reason = send_reason(connected, !choices.is_empty(), kind_chosen, starting)
+            .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
+            .map(SharedString::from);
         composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
     }
 
@@ -570,30 +705,12 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let chosen = composer
-            .read(cx)
-            .picker()
-            .read(cx)
-            .state()
-            .choice()
-            .model
-            .to_string();
-        let choices = session_kind_choices(&self.store.read(cx).state().agent_kinds);
-        let Some(kind) = choices.into_iter().find(|kind| kind.id == chosen) else {
-            return;
+        let (kind, permission_mode) = match self.chosen_start(&composer, cx) {
+            Ok(chosen) => chosen,
+            Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let permission_mode = self
-            .store
-            .read(cx)
-            .state()
-            .agent_kinds
-            .iter()
-            .find(|declared| declared.id == kind.id)
-            .and_then(|declared| {
-                let index = composer.read(cx).access_index();
-                start_choices(declared).get(index)?.id.clone()
-            });
-        let params = start_params(workspace, &kind.id, prompt, permission_mode);
+        let options = self.chosen_options(&composer, &kind.id, cx);
+        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode, options);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
@@ -611,10 +728,145 @@ impl Shell {
         cx.notify();
     }
 
+    /// Remembers the explicit mode picked on the chip of `composer`'s kind; picking the CLI's default clears it.
+    fn remember_start_mode(
+        &self,
+        composer: &Entity<Composer>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let Some(declared) = self
+            .store
+            .read(cx)
+            .state()
+            .agent_kinds
+            .iter()
+            .find(|declared| declared.id == chosen)
+        else {
+            return;
+        };
+        let mode = start_choices(declared)
+            .get(index)
+            .and_then(|choice| choice.id.clone());
+        let kind = declared.id.clone();
+        ui_state::remember_start_mode(cx, &kind, mode.as_deref());
+    }
+
+    /// The model and effort `composer`'s picker chose for `kind`, sent only when the service offers them.
+    pub(super) fn chosen_options(
+        &self,
+        composer: &Entity<Composer>,
+        kind: &str,
+        cx: &App,
+    ) -> StartOptions {
+        let offered = self.store.read(cx).state().agent_options;
+        picked_options(composer.read(cx).picker().read(cx).state(), offered, kind)
+    }
+
+    /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
+    /// shows when no agent is installed or none is chosen.
+    pub(super) fn chosen_start(
+        &self,
+        composer: &Entity<Composer>,
+        cx: &App,
+    ) -> Result<(KindChoice, Option<String>), String> {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let kinds = &self.store.read(cx).state().agent_kinds;
+        let installed = session_kind_choices(kinds);
+        if installed.is_empty() {
+            return Err(NO_AGENTS_INSTALLED.to_owned());
+        }
+        let kind = installed
+            .into_iter()
+            .find(|kind| kind.id == chosen)
+            .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
+        // `session_kind_choices` lists only kinds that can start, so an unavailable kind is refused above.
+        let shown = kinds
+            .iter()
+            .find(|declared| declared.id == kind.id)
+            .and_then(|declared| {
+                let composer = composer.read(cx);
+                sent_mode(
+                    &start_choices(declared),
+                    composer.access_modes(),
+                    composer.access_index(),
+                )
+            });
+        // A mode goes out only when the person picked it for this kind and the chip still shows it.
+        let picked = self
+            .start_composers
+            .values()
+            .find(|start| start.entity == *composer)
+            .and_then(|start| start.picked.as_ref())
+            .filter(|(picked_kind, _)| *picked_kind == kind.id)
+            .map(|(_, mode)| mode.clone());
+        let permission_mode = shown.filter(|mode| picked.as_ref() == Some(mode));
+        Ok((kind, permission_mode))
+    }
+
+    /// Records the chip entry the person chose on a start composer, by mode id; the CLI's default clears it.
+    fn record_start_pick(
+        &mut self,
+        workspace: &str,
+        index: usize,
+        composer: Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let picked = self
+            .store
+            .read(cx)
+            .state()
+            .agent_kinds
+            .iter()
+            .find(|kind| kind.id == chosen)
+            .and_then(|kind| {
+                let mode = start_choices(kind).get(index)?.id.clone()?;
+                Some((kind.id.clone(), mode))
+            });
+        if let Some(start) = self.start_composers.get_mut(workspace) {
+            start.picked = picked;
+        }
+    }
+
+    /// Keeps the data-folder banner in step with the last answer: on after `profile.unsafe_location`,
+    /// off after any call goes through.
+    pub(super) fn note_refusal(&mut self, refusal: Option<&Refusal>) {
+        match refusal {
+            None => self.profile_unsafe = false,
+            Some(refusal) if refusal.code() == Some(codes::PROFILE_UNSAFE_LOCATION) => {
+                self.profile_unsafe = true;
+            }
+            Some(_) => {}
+        }
+    }
+
     /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
     /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
     /// back to the composer with its sentence.
-    fn finish_start(
+    pub(super) fn finish_start(
         &mut self,
         prompt: &str,
         composer: Entity<Composer>,
@@ -623,6 +875,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.start_pending = None;
+        self.note_refusal(answer.as_ref().err());
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
@@ -652,4 +905,18 @@ impl Shell {
         let composer = self.start_composer(&id, cx);
         composer.update(cx, |composer, cx| composer.focus(window, cx));
     }
+}
+
+/// Send was refused before any call: the prompt goes back with the reason above the composer.
+pub(super) fn refuse_send(
+    prompt: &str,
+    composer: &Entity<Composer>,
+    refusal: String,
+    cx: &mut Context<Shell>,
+) {
+    composer.update(cx, |composer, cx| {
+        composer.set_draft(prompt, cx);
+        composer.set_error(Some(refusal.into()), cx);
+    });
+    cx.notify();
 }

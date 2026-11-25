@@ -1,10 +1,8 @@
-//! The create-workspace form and the remove-workspace flow as plain state, free of GPUI
+//! The remove-workspace flow and the project menu rows as plain state, free of GPUI
 //! (decision 0028). The views draw them; the service answers decide how they move.
 
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::workspaces::{
-    Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceRemoveParams,
-};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceRemoveParams};
 
 use crate::model::start_page::GIT_LATER;
 use crate::service::Refusal;
@@ -67,115 +65,6 @@ pub fn project_menu_rows(projects: &[Project]) -> Vec<ProjectMenuRow> {
         choice: ProjectChoice::NoProject,
     });
     rows
-}
-
-/// The "New workspace" form.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CreateForm {
-    pub project: Option<ProjectChoice>,
-    pub name: String,
-    pub branch: String,
-    pub base: String,
-    pub existing_branch: bool,
-    pub busy: bool,
-    /// Shown under the name field: the service found the name taken or unusable.
-    pub name_error: Option<String>,
-    /// Shown above the footer: any other refusal.
-    pub error: Option<String>,
-}
-
-impl CreateForm {
-    /// An empty form. With exactly one project, it is already chosen.
-    pub fn new(projects: &[Project]) -> Self {
-        let project = match projects {
-            [only] => Some(ProjectChoice::Project(only.id.clone())),
-            _ => None,
-        };
-        Self {
-            project,
-            name: String::new(),
-            branch: String::new(),
-            base: String::new(),
-            existing_branch: false,
-            busy: false,
-            name_error: None,
-            error: None,
-        }
-    }
-
-    /// The project button's text.
-    pub fn project_label(&self, projects: &[Project]) -> String {
-        match &self.project {
-            None => "Choose a project".to_owned(),
-            Some(ProjectChoice::NoProject) => NO_PROJECT_LABEL.to_owned(),
-            Some(ProjectChoice::Project(id)) => projects
-                .iter()
-                .find(|project| &project.id == id)
-                .map_or_else(|| "Choose a project".to_owned(), |p| p.name.clone()),
-        }
-    }
-
-    /// What "No project" means while the service has no sessions: nothing to create here yet.
-    pub fn no_project_note(&self) -> Option<&'static str> {
-        matches!(self.project, Some(ProjectChoice::NoProject)).then_some(
-            "Conversations without a project arrive with sessions. A workspace needs a project.",
-        )
-    }
-
-    /// Asked of a branch to reuse when none is named.
-    pub fn branch_error(&self) -> Option<&'static str> {
-        (self.existing_branch && self.branch.trim().is_empty())
-            .then_some("Name the branch to reuse.")
-    }
-
-    pub fn can_submit(&self) -> bool {
-        !self.busy
-            && !self.name.trim().is_empty()
-            && matches!(self.project, Some(ProjectChoice::Project(_)))
-            && self.branch_error().is_none()
-    }
-
-    /// The call this form asks for, or `None` while it cannot be submitted.
-    pub fn params(&self) -> Option<WorkspaceCreateParams> {
-        let Some(ProjectChoice::Project(project)) = &self.project else {
-            return None;
-        };
-        if !self.can_submit() {
-            return None;
-        }
-        Some(WorkspaceCreateParams {
-            project: project.clone(),
-            name: self.name.trim().to_owned(),
-            branch: non_empty(&self.branch),
-            base: non_empty(&self.base),
-            existing_branch: self.existing_branch,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
-        })
-    }
-
-    /// The call went out: busy until the service answers.
-    pub fn begin(&mut self) {
-        self.busy = true;
-        self.name_error = None;
-        self.error = None;
-    }
-
-    /// The service said no. A name problem sits under the name; anything else above the footer.
-    pub fn refused(&mut self, refusal: &Refusal) {
-        self.busy = false;
-        match refusal {
-            Refusal::NameProblem { message } => self.name_error = Some(message.clone()),
-            other => self.error = Some(other.message()),
-        }
-    }
-}
-
-fn non_empty(text: &str) -> Option<String> {
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// Where the remove flow stands: which dialog it shows.
@@ -499,86 +388,6 @@ mod tests {
         assert_eq!(last.choice, ProjectChoice::NoProject);
         // With no projects the menu still offers it.
         assert_eq!(project_menu_rows(&[]).len(), 1);
-    }
-
-    #[test]
-    fn a_lone_project_is_chosen_for_you() {
-        assert_eq!(
-            CreateForm::new(&[project("p1", "alpha")]).project,
-            Some(ProjectChoice::Project("p1".into()))
-        );
-        assert_eq!(CreateForm::new(&two_projects()).project, None);
-    }
-
-    #[test]
-    fn create_needs_a_project_and_a_name() {
-        let projects = two_projects();
-        let mut form = CreateForm::new(&projects);
-        assert!(!form.can_submit());
-        form.project = Some(ProjectChoice::Project("p2".into()));
-        assert!(!form.can_submit(), "no name yet");
-        form.name = "  fix-login  ".into();
-        assert!(form.can_submit());
-        let params = form.params().expect("params");
-        assert_eq!(params.project, "p2");
-        assert_eq!(params.name, "fix-login");
-        assert_eq!(params.branch, None);
-        assert_eq!(params.base, None);
-    }
-
-    #[test]
-    fn branch_and_base_are_sent_only_when_typed() {
-        let mut form = CreateForm::new(&[project("p1", "alpha")]);
-        form.name = "w".into();
-        form.branch = " feat/w ".into();
-        form.base = "origin/main".into();
-        let params = form.params().expect("params");
-        assert_eq!(params.branch.as_deref(), Some("feat/w"));
-        assert_eq!(params.base.as_deref(), Some("origin/main"));
-        assert!(!params.existing_branch);
-    }
-
-    #[test]
-    fn reusing_a_branch_needs_its_name() {
-        let mut form = CreateForm::new(&[project("p1", "alpha")]);
-        form.name = "w".into();
-        form.existing_branch = true;
-        assert_eq!(form.branch_error(), Some("Name the branch to reuse."));
-        assert!(!form.can_submit());
-        form.branch = "feat/w".into();
-        assert!(form.can_submit());
-        assert!(form.params().expect("params").existing_branch);
-    }
-
-    #[test]
-    fn no_project_cannot_create_and_says_why() {
-        let mut form = CreateForm::new(&two_projects());
-        form.name = "w".into();
-        form.project = Some(ProjectChoice::NoProject);
-        assert!(!form.can_submit());
-        assert_eq!(form.params(), None);
-        assert!(form.no_project_note().is_some());
-        assert_eq!(form.project_label(&two_projects()), "No project");
-    }
-
-    #[test]
-    fn a_name_refusal_sits_under_the_name_and_others_above_the_footer() {
-        let mut form = CreateForm::new(&[project("p1", "alpha")]);
-        form.name = "w".into();
-        form.begin();
-        assert!(
-            form.busy && !form.can_submit(),
-            "busy blocks a second submit"
-        );
-        form.refused(&Refusal::NameProblem {
-            message: "That name is taken.".into(),
-        });
-        assert!(!form.busy);
-        assert_eq!(form.name_error.as_deref(), Some("That name is taken."));
-        form.begin();
-        assert_eq!(form.name_error, None, "a new attempt clears the old error");
-        form.refused(&Refusal::unavailable("The service is not connected."));
-        assert_eq!(form.error.as_deref(), Some("The service is not connected."));
     }
 
     fn flow() -> RemoveFlow {

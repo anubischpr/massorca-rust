@@ -13,8 +13,8 @@ use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     DURATION_MODERATE, EASE_ENTER, LAYOUT_DIALOG_WIDTH_LG, LAYOUT_DIALOG_WIDTH_MD,
-    LAYOUT_DIALOG_WIDTH_SM, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY, TYPE_CAPTION,
-    TYPE_TITLE, Z_DIALOG,
+    LAYOUT_DIALOG_WIDTH_SM, RADIUS_MD, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY,
+    TYPE_CAPTION, TYPE_TITLE, Z_DIALOG,
 };
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement,
@@ -443,18 +443,25 @@ impl RenderOnce for Dialog {
         }
 
         let body_height = f32::from(window.viewport_size().height) * BODY_HEIGHT_SHARE;
-        panel = panel.child(
-            div()
-                .id((self.id.clone(), "body"))
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_2))
-                .max_h(px(body_height))
-                .overflow_y_scroll()
-                .text_style(TYPE_BODY)
-                .text_color(p.text.secondary)
-                .children(self.body),
-        );
+        // A body with content is its own area on the sunken surface, so it reads apart from the actions below it.
+        let filled = !self.body.is_empty();
+        let mut body = div()
+            .id((self.id.clone(), "body"))
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .max_h(px(body_height))
+            .overflow_y_scroll()
+            .text_style(TYPE_BODY)
+            .text_color(p.text.secondary)
+            .debug_selector(|| "dialog-body".into());
+        if filled {
+            body = body
+                .bg(p.surface.sunken)
+                .rounded(px(RADIUS_MD))
+                .p(px(SPACE_2));
+        }
+        panel = panel.child(body.children(self.body));
 
         if !self.loss.is_empty() {
             let (shown, more) = loss_rows(self.loss.len());
@@ -547,7 +554,15 @@ impl RenderOnce for Dialog {
                 .child(actions),
             None => actions,
         };
-        panel = panel.child(footer);
+        // The actions sit below a rule, so the body and its actions read as two areas.
+        panel = panel.child(
+            div()
+                .debug_selector(|| "dialog-footer".into())
+                .border_t_1()
+                .border_color(p.border.subtle)
+                .pt(px(SPACE_3))
+                .child(footer),
+        );
 
         // A busy dialog ignores the scrim as it ignores Escape: a save in flight is never dismissed.
         let scrim_closes =
@@ -971,6 +986,23 @@ mod element_tests {
         assert!(
             (leading_y - action_y).abs() < 0.5,
             "the footer control and the action share a row: {leading_y} vs {action_y}"
+        );
+    }
+
+    #[gpui::test]
+    fn the_body_and_the_actions_are_separate_areas(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| FooterHarness);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let body = cx.debug_bounds("dialog-body").expect("the body is drawn");
+        let footer = cx
+            .debug_bounds("dialog-footer")
+            .expect("the actions are drawn");
+        assert!(
+            footer.origin.y >= body.origin.y + body.size.height,
+            "the actions start below the body: body {:?}, actions {:?}",
+            body,
+            footer
         );
     }
 }

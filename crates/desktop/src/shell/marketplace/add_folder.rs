@@ -11,6 +11,7 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use crate::model::marketplace::HostTarget;
 use crate::shell::Shell;
+use crate::shell::path_field::{PickKind, path_field};
 
 /// Said when Review is pressed with no folder.
 const NO_FOLDER: &str = "Enter the folder that holds the package.";
@@ -66,7 +67,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Reviews the folder the field holds with the catalogue install's review; nothing installs until Allow and install.
+    /// Reviews the folder the field holds with the catalogue install's review; nothing installs until its button is pressed.
     pub(super) fn submit_add_extension(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.marketplace_add.as_ref() else {
             return;
@@ -103,7 +104,15 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
                     "Adds a package from a folder on this computer. Nothing installs until you review it and allow the install.",
                 ),
         )
-        .child(add.field.clone())
+        .child(path_field(
+            "marketplace-add-browse",
+            "marketplace-add-field",
+            weak.clone(),
+            &add.field,
+            PickKind::Folder,
+            matches!(shell.marketplace_pick.target(), HostTarget::Local),
+            true,
+        ))
         .child(
             div()
                 .flex()

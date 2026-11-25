@@ -31,7 +31,7 @@ const LAYOUT_FLAT: &str = "flat";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = Vec::new();
-    for decl in config_keys::core_settings(home_path(&["MassOrca", "Conversations"])?) {
+    for decl in config_keys::core_settings(default_conversations_root()?) {
         handles.push(registries.settings.register(decl)?);
     }
     handles.extend([
@@ -104,6 +104,12 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
     ]);
     Ok(handles)
+}
+
+/// `<user home>/MassOrca/Conversations`: where conversations without a project are saved unless `conversations.folder`
+/// says otherwise (decision 0094).
+pub(crate) fn default_conversations_root() -> Result<String, ServiceError> {
+    home_path(&["MassOrca", "Conversations"])
 }
 
 /// `<user home>/massorca/workspaces`, as a string the protocol can carry.

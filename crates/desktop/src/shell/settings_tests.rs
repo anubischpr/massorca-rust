@@ -5,7 +5,7 @@
 use super::settings::host_word;
 use super::*;
 use crate::model::marketplace::UnavailableMarketplace;
-use crate::model::navigation::{MarketplacePage, Page};
+use crate::model::navigation::Page;
 use crate::model::secret_form::FormStatus;
 use crate::model::secret_vault::VaultScopeFilter;
 use crate::model::settings::FolderStatus;
@@ -1090,14 +1090,34 @@ fn closing_the_window_clears_the_typed_value_before_the_window_goes(cx: &mut Tes
 }
 
 #[gpui::test]
-fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
+fn no_settings_section_opens_another_page(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
-    click(cx, "settings-nav-Extensions");
-    assert_eq!(
-        rig.shell
-            .read_with(cx, |shell, _| shell.model().navigation().page),
-        Page::Marketplace(MarketplacePage::Installed)
-    );
+    let selectors = [
+        "settings-nav-General",
+        "settings-nav-Agents",
+        "settings-nav-Appearance",
+        "settings-nav-Input",
+        "settings-nav-Terminal",
+        "settings-nav-Sources",
+        "settings-nav-Hosts",
+        "settings-nav-Notifications",
+        "settings-nav-Vault",
+        "settings-nav-Privacy",
+        "settings-nav-Routing",
+    ];
+    assert_eq!(selectors.len(), SettingsSection::ALL.len());
+    for (selector, section) in selectors.into_iter().zip(SettingsSection::ALL) {
+        click(cx, selector);
+        rig.shell.read_with(cx, |shell, _| {
+            assert_eq!(
+                shell.model().navigation().page,
+                Page::Settings,
+                "{selector}"
+            );
+            assert_eq!(shell.settings.section, section, "{selector}");
+        });
+    }
+    assert!(cx.debug_bounds("settings-nav-Extensions").is_none());
 }
 
 pub(super) fn paired_host(name: &str) -> HostRecord {

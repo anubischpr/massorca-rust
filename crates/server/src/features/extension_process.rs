@@ -14,8 +14,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use massorca_core_agents::SearchEnv;
-use massorca_core_agents::resolve::resolve;
-use massorca_core_extensions::host::{CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver};
+use massorca_core_agents::resolve::{PathSource, resolve, vendor_search_env};
+use massorca_core_extensions::host::{
+    CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver, ProgramSearch,
+};
 
 /// How often a running child is checked against its deadline.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -78,19 +80,32 @@ impl HostPrograms {
     /// The search path without relative entries (empty, `.`, `bin`), which would resolve against the service's
     /// working folder. Only this host side filters them; core-agents keeps its own rule.
     fn search_env(&self) -> SearchEnv {
-        let mut env = self.env.clone().unwrap_or_else(SearchEnv::current);
-        env.path = env.path.as_deref().map(absolute_entries);
-        env
+        self.search_path().0
     }
 
-    /// The allowlisted variables present in the service environment.
-    fn passed_env(&self) -> Vec<(&'static str, OsString)> {
+    /// The search path of bare names, absolute entries only, and where it came from (decision 0092).
+    fn search_path(&self) -> (SearchEnv, PathSource) {
+        let (mut env, source) = match &self.env {
+            Some(env) => (env.clone(), PathSource::Process),
+            None => vendor_search_env(),
+        };
+        env.path = env.path.as_deref().map(absolute_entries);
+        (env, source)
+    }
+
+    /// The allowlisted variables of the service environment. `PATH` is the search path the program was resolved on, so
+    /// a shim finds what it calls and no relative entry reaches the command.
+    fn passed_env(&self, search: &SearchEnv) -> Vec<(&'static str, OsString)> {
         PASSED_ENV
             .iter()
             .filter_map(|name| {
-                let value = match &self.service_env {
-                    Some(env) => env.get(*name).cloned(),
-                    None => std::env::var_os(name),
+                let value = if *name == "PATH" {
+                    search.path.clone()
+                } else {
+                    match &self.service_env {
+                        Some(env) => env.get(*name).cloned(),
+                        None => std::env::var_os(name),
+                    }
                 };
                 value.map(|value| (*name, value))
             })
@@ -107,6 +122,19 @@ fn absolute_entries(path: &OsStr) -> OsString {
 impl ProgramResolver for HostPrograms {
     fn resolve(&self, binary: &str) -> Option<PathBuf> {
         resolve(binary, &self.search_env())
+    }
+
+    fn search(&self) -> ProgramSearch {
+        let (env, source) = self.search_path();
+        let dirs = env.path.as_deref().map_or_else(Vec::new, |path| {
+            std::env::split_paths(path)
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .collect()
+        });
+        ProgramSearch {
+            source: source.name().to_owned(),
+            dirs,
+        }
     }
 }
 
@@ -149,7 +177,9 @@ impl HostPrograms {
                 .line(&format!("could not start: {error}"));
             error
         };
-        let resolved = resolve(program, &self.search_env()).ok_or_else(|| {
+        // One search path for both steps: the program is resolved on it and the command gets it as its PATH.
+        let search = self.search_env();
+        let resolved = resolve(program, &search).ok_or_else(|| {
             fail(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("`{program}` was not found on PATH"),
@@ -163,7 +193,7 @@ impl HostPrograms {
             .args(args)
             .current_dir(work.path())
             .env_clear()
-            .envs(self.passed_env())
+            .envs(self.passed_env(&search))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -845,5 +875,173 @@ mod tests {
                 .eq_ignore_ascii_case(&bundle.join("gentle-shell.cmd").to_string_lossy()),
             "{resolved:?}"
         );
+    }
+
+    /// Windows' PATHEXT is upper case, so a `.cmd` shim is resolved and run under that spelling; Unix ignores it.
+    fn windows_pathext() -> Option<String> {
+        Some(".COM;.EXE;.BAT;.CMD".to_owned())
+    }
+
+    /// The `.cmd` shim npm writes for a global install is found on a search path with Windows' upper-case PATHEXT.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_is_detected_under_windows_pathext() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        fs::write(dir.path().join("codex.cmd"), "@echo off\r\n").expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let resolved = host.resolve("codex").expect("the shim resolves");
+
+        assert!(
+            resolved
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&dir.path().join("codex.cmd").to_string_lossy()),
+            "{resolved:?}"
+        );
+    }
+
+    /// `npm install` through `npm.cmd`: the shim gets its arguments and its exit status is the installer's.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_runs_as_a_vendor_command_with_its_arguments() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        fs::write(
+            dir.path().join("npm.cmd"),
+            "@echo off\r\necho npm got [%1] [%2] [%3]\r\n",
+        )
+        .expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let exit = host
+            .run(
+                &strings(&["npm", "install", "-g", "@openai/codex"]),
+                &log,
+                LONG,
+            )
+            .expect("the shim runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(
+            text.contains("npm got [install] [-g] [@openai/codex]"),
+            "{text}"
+        );
+    }
+
+    /// A verify command that is a `.cmd` shim runs, and the exit status it returns decides the verify.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_verify_reports_its_own_exit_status() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        fs::write(
+            dir.path().join("gentle-shell.cmd"),
+            "@echo off\r\nif \"%1\"==\"--version\" exit /b 0\r\nexit /b 2\r\n",
+        )
+        .expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let passed = host
+            .run(&strings(&["gentle-shell", "--version"]), &log, LONG)
+            .expect("the shim runs");
+        let refused = host
+            .run(&strings(&["gentle-shell", "--check"]), &log, LONG)
+            .expect("the shim runs");
+
+        assert!(passed.success(), "{passed:?}");
+        assert_eq!(refused.code, Some(2), "{refused:?}");
+    }
+
+    /// A vendor command runs with the search path its program was resolved on, so a shim finds what it calls.
+    #[test]
+    fn a_vendor_command_runs_with_the_path_its_program_was_resolved_on() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        #[cfg(windows)]
+        fs::write(
+            dir.path().join("printpath.cmd"),
+            "@echo off\r\necho PATH=%PATH%\r\n",
+        )
+        .expect("a program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.path().join("printpath");
+            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let exit = host
+            .run(&strings(&["printpath"]), &log, LONG)
+            .expect("the program runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(
+            text.contains(&dir.path().to_string_lossy().into_owned()),
+            "the command got the resolved search path: {text}"
+        );
+    }
+
+    /// Only the absolute entries of the search path reach the command, and they are the ones its program was resolved
+    /// on: the relative `.` and `bin` do not resolve and do not reach the child's PATH.
+    #[test]
+    fn a_vendor_command_gets_only_the_absolute_search_path_it_resolved_on() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        #[cfg(windows)]
+        fs::write(
+            dir.path().join("printpath.cmd"),
+            "@echo off\r\necho PATH=%PATH%\r\n",
+        )
+        .expect("a program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.path().join("printpath");
+            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+        let search = std::env::join_paths([
+            PathBuf::from("."),
+            PathBuf::from("bin"),
+            dir.path().to_path_buf(),
+        ])
+        .expect("a search path");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(search),
+            pathext: if cfg!(windows) {
+                Some(".COM;.EXE;.BAT;.CMD".to_owned())
+            } else {
+                None
+            },
+        });
+
+        let exit = host
+            .run(&strings(&["printpath"]), &log, LONG)
+            .expect("the program runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        let path = text
+            .lines()
+            .find_map(|line| line.strip_prefix("PATH="))
+            .expect("the command printed its PATH");
+        let entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+        assert_eq!(entries, vec![dir.path().to_path_buf()], "{text}");
     }
 }

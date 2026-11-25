@@ -558,7 +558,7 @@ mod tests {
         let source = tempfile::tempdir().unwrap();
         std::fs::write(source.path().join("token.json"), "{}").unwrap();
         assert_not_enabled(
-            agents.accounts_import("fake", source.path().to_str().unwrap(), None),
+            agents.accounts_import("fake", source.path().to_str(), None),
             "fake",
             "ext.fake",
             "disabled",

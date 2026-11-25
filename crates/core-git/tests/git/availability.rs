@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use massorca_core_git::{Git, GitAvailability, GitError, GitVersion};
 
+use crate::fixture::write_executable;
+
 fn version(major: u32, minor: u32, patch: u32) -> GitVersion {
     GitVersion {
         major,
@@ -32,13 +34,7 @@ fn stand_in(dir: &Path, version_line: &str) -> (Git, PathBuf) {
             ),
         )
     };
-    std::fs::write(&binary, script).expect("write the stand-in git");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
-            .expect("make the stand-in git executable");
-    }
+    write_executable(&binary, &script);
     (Git::with_binary(binary), log)
 }
 

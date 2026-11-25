@@ -4,6 +4,7 @@ mod agent_redaction;
 mod agents;
 mod command_schema;
 mod config;
+pub(crate) use config::default_conversations_root;
 mod config_keys;
 mod devices;
 mod events;

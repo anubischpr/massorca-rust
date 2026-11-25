@@ -9,6 +9,7 @@ pub mod app_theme;
 pub mod canvas;
 pub mod close_confirm;
 pub mod devices;
+pub mod home_start;
 pub mod hosts;
 pub mod marketplace;
 pub mod morph;
