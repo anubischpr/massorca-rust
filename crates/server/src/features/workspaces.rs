@@ -207,7 +207,7 @@ async fn remove(
     let (target, children) = {
         let domain = Arc::clone(&domain);
         let selector = params.workspace.clone();
-        blocking(move || domain.delegated_child_workspaces(&selector)).await?
+        blocking(move || domain.delegated_child_workspaces(&selector, waivers)).await?
     };
     if !children.is_empty() && !params.with_children {
         return Err(has_children(&target, &children));

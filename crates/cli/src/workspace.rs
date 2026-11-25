@@ -180,13 +180,50 @@ fn current_path(path: Option<&Path>, paths: PathRules) -> Result<String, CliErro
     }
 }
 
-/// Names the command line flag in a `workspace.has_children` refusal; the service names the protocol field.
+/// Rewords a `workspace.has_children` refusal for the command line: the service names the protocol field, the CLI
+/// names the flag.
 fn with_children_hint(mut error: CliError, workspace: &str) -> CliError {
-    if error.code == codes::WORKSPACE_HAS_CHILDREN {
-        error.message = format!(
-            "{}; run `massorca workspace rm {workspace} --with-children`",
-            error.message
-        );
+    if error.code != codes::WORKSPACE_HAS_CHILDREN {
+        return error;
     }
+    let children: Vec<&str> = error
+        .data
+        .as_deref()
+        .and_then(|data| data.get("children"))
+        .and_then(|children| children.as_array())
+        .map(|children| children.iter().filter_map(|child| child.as_str()).collect())
+        .unwrap_or_default();
+    let selector = if workspace.chars().any(char::is_whitespace) {
+        format!("\"{workspace}\"")
+    } else {
+        workspace.to_owned()
+    };
+    error.message = format!(
+        "{workspace} has workspaces of delegated children: {}; run `massorca workspace rm {selector} --with-children` to remove them first",
+        children.join(", ")
+    );
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn refusal() -> CliError {
+        CliError {
+            data: Some(Box::new(json!({ "children": ["a-1", "a"] }))),
+            ..CliError::new(codes::WORKSPACE_HAS_CHILDREN, "service text", exit::ERROR)
+        }
+    }
+
+    #[test]
+    fn the_hint_names_the_children_and_quotes_a_selector_with_spaces() {
+        assert_eq!(
+            with_children_hint(refusal(), "my ws").message,
+            "my ws has workspaces of delegated children: a-1, a; run `massorca workspace rm \"my ws\" --with-children` to remove them first"
+        );
+        let other = CliError::new(codes::WORKSPACE_DIRTY, "service text", exit::ERROR);
+        assert_eq!(with_children_hint(other, "w").message, "service text");
+    }
 }

@@ -159,8 +159,8 @@ project) at the time the project is added.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
 - A workspace whose delegated children write in workspaces of their own, a child's child
-  included, refuses with `workspace.has_children`; the message names them. `--with-children`
-  removes them first, deepest first, each with the same checks and the other flags given. A
+  included, refuses with `workspace.has_children`; the message names them. The workspace's own
+  refusals above are checked first and come before it. `--with-children` removes them first, deepest first, each with the same checks and the other flags given. A
   refused child stops the removal: the children already removed stay removed, the message names
   them, and the workspace is kept (decision 0098).
 

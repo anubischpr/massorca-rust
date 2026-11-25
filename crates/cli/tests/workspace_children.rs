@@ -8,6 +8,7 @@ use std::path::Path;
 
 use harness::{Sandbox, git_repo, single_document, with_json};
 use massorca_core_store::{AgentSessionRow, RunExit, RunExitReason, RunMode, Store, new_id};
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 /// An ended session in `workspace_id`, delegated from `parent` when given. Returns its id.
@@ -71,9 +72,10 @@ fn rm_names_the_child_workspaces_and_the_flag_and_with_children_removes_them_fir
     sandbox
         .run("default", &["workspace", "rm", "lead"])
         .code(1)
-        .stderr(contains("lead-1"))
-        .stderr(contains("massorca workspace rm lead --with-children"))
-        .stderr(contains("workspace.has_children"));
+        .stderr(contains(
+            "error: lead has workspaces of delegated children: lead-1; run `massorca workspace rm lead --with-children` to remove them first (workspace.has_children)",
+        ))
+        .stderr(contains("with_children").not());
     let refused = sandbox
         .run("default", &with_json(&["workspace", "rm", "lead"]))
         .code(1);

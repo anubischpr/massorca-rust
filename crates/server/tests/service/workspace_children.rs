@@ -3,17 +3,22 @@
 //! checks. No agent is started: the sessions are written to the store directly, as ended runs.
 
 use std::path::Path;
+use std::time::Duration;
 
 use massorca_client::{Client, ClientError};
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, new_id, now_ms,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, WorkspaceKind as StoreWorkspaceKind,
+    WorkspaceRow, WorkspaceState as StoreWorkspaceState, new_id, now_ms,
 };
 use massorca_protocol::codes;
-use massorca_protocol::methods::events::{TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING};
+use massorca_protocol::methods::events::{
+    ChangeEvent, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+};
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceState,
 };
 use serde_json::{Value, json};
+use tokio::time::timeout;
 
 use super::common::{connect, profile, start, stop, temp_home};
 use super::workspaces::{add_repo_project, create_params, git_repo, next_event, remove_params};
@@ -192,11 +197,26 @@ async fn a_refused_child_keeps_the_workspace_and_reports_the_children_already_re
     let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
     let tree = tree(&client, home.path(), &store).await;
     std::fs::write(Path::new(&tree.child.path).join("scratch.txt"), "work").expect("write change");
+    let mut events = client.subscribe_events().await.expect("subscribe");
 
     let refused = client
         .call::<_, WorkspaceRemoved>(workspaces::REMOVE, &with_children("lead", false))
         .await
         .expect_err("a dirty child");
+    // Only the grandchild's removal is announced; the dirty child and the lead never start one.
+    for topic in [TOPIC_WORKSPACE_REMOVING, TOPIC_WORKSPACE_REMOVED] {
+        let event = next_event(&mut events).await;
+        assert_eq!(
+            (event.topic.as_str(), event.id),
+            (topic, tree.grandchild.id.clone())
+        );
+    }
+    assert!(
+        timeout(Duration::from_millis(500), events.next_as::<ChangeEvent>())
+            .await
+            .is_err(),
+        "no other workspace began a removal"
+    );
     let (code, message, data) = error_body(&refused);
     assert_eq!(
         code,
@@ -259,5 +279,120 @@ async fn a_workspace_with_only_a_read_only_child_is_removed_as_before() {
     assert!(removed.removed_children.is_empty());
     assert!(removed.branch_deleted);
     assert!(!Path::new(&solo.path).exists());
+    stop(running).await;
+}
+
+/// A workspace row for the project's main worktree, which removal always refuses.
+fn main_worktree_row(store: &Store, project_id: &str, repo: &Path) -> Workspace {
+    let row = WorkspaceRow {
+        id: new_id(),
+        project_id: project_id.to_owned(),
+        kind: StoreWorkspaceKind::Worktree,
+        name: "main-row".to_owned(),
+        path: repo.to_str().expect("utf-8").to_owned(),
+        path_key: "main-row-key".to_owned(),
+        branch: None,
+        base_ref: None,
+        created_branch: false,
+        state: StoreWorkspaceState::Ready,
+        request_id: None,
+        created_at: now_ms(),
+        comment: None,
+    };
+    store
+        .insert_workspace(&row)
+        .expect("insert the main worktree row");
+    Workspace {
+        id: row.id,
+        project_id: row.project_id,
+        kind: workspaces::WorkspaceKind::Worktree,
+        name: row.name,
+        path: row.path,
+        branch: None,
+        base_ref: None,
+        created_branch: false,
+        state: WorkspaceState::Ready,
+        missing: false,
+        created_at_ms: row.created_at,
+        locked: None,
+        prunable: None,
+        base_refresh: None,
+        comment: None,
+        setup: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_parent_s_own_refusal_comes_first_and_removes_no_child() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let main = main_worktree_row(&store, &project.id, &repo);
+    let child = create(&client, &project.name, "main-row-1").await;
+    let parent = session(&store, &main, None, false);
+    session(&store, &child, Some(&parent), false);
+
+    for params in [
+        remove_params("main-row", true),
+        with_children("main-row", true),
+    ] {
+        let refused = client
+            .call::<_, WorkspaceRemoved>(workspaces::REMOVE, &params)
+            .await
+            .expect_err("the main worktree");
+        assert_eq!(error_body(&refused).0, codes::WORKSPACE_MAIN_WORKTREE);
+    }
+    assert!(Path::new(&child.path).is_dir());
+    assert_eq!(state_of(&client, &child).await, WorkspaceState::Ready);
+    assert_eq!(state_of(&client, &main).await, WorkspaceState::Ready);
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dirty_parent_without_force_removes_no_child() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let tree = tree(&client, home.path(), &store).await;
+    std::fs::write(Path::new(&tree.lead.path).join("scratch.txt"), "work").expect("write change");
+
+    let refused = client
+        .call::<_, WorkspaceRemoved>(workspaces::REMOVE, &with_children("lead", false))
+        .await
+        .expect_err("a dirty parent");
+    let (code, _, data) = error_body(&refused);
+    assert_eq!(code, codes::WORKSPACE_DIRTY);
+    assert_eq!(data, Value::Null, "the parent's own refusal, not a child's");
+    for workspace in [&tree.lead, &tree.child, &tree.grandchild] {
+        assert!(Path::new(&workspace.path).is_dir());
+        assert_eq!(state_of(&client, workspace).await, WorkspaceState::Ready);
+    }
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_child_whose_row_is_gone_is_skipped() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let tree = tree(&client, home.path(), &store).await;
+    assert!(
+        store
+            .delete_workspace(&tree.grandchild.id)
+            .expect("forget the grandchild")
+    );
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &with_children("lead", false))
+        .await
+        .expect("removal without the forgotten child");
+    assert_eq!(names(&removed.removed_children), ["lead-1"]);
+    assert!(!Path::new(&tree.lead.path).exists());
     stop(running).await;
 }

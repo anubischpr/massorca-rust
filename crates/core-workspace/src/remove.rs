@@ -57,13 +57,18 @@ impl RemovalWaivers {
 
 impl Workspaces {
     /// The workspace `selector` names and the workspaces its delegated children run in, deepest first (decision
-    /// 0098). Each child is removed through [`Workspaces::begin_remove`] before the workspace itself.
+    /// 0098). Each child is removed through [`Workspaces::begin_remove`] before the workspace itself. When there are
+    /// children, the workspace's own refusals under `waivers` come first, read-only, so a refused workspace loses none.
     pub fn delegated_child_workspaces(
         &self,
         selector: &str,
+        waivers: RemovalWaivers,
     ) -> Result<(Workspace, Vec<Workspace>), DomainError> {
         let row = self.resolve_workspace(selector)?;
         let children = self.store.list_delegated_child_workspaces(&row.id)?;
+        if !children.is_empty() {
+            self.check_removable(&row, waivers)?;
+        }
         Ok((
             views::workspace(&row),
             children.iter().map(views::workspace).collect(),
