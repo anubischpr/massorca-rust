@@ -1,7 +1,8 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
-//! A create runs the new worktree's setup script in a service terminal (decision 0086).
+//! A create runs the new worktree's setup script in a service terminal (decision 0086); a removal runs the project's
+//! archive script in the worktree first (decision 0095).
 
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use massorca_core_workspace::RemovalWaivers;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
-use crate::features::workspace_setup;
+use crate::features::{workspace_archive, workspace_setup};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -199,22 +200,61 @@ async fn remove(
     ctx: RequestCtx,
     params: WorkspaceRemoveParams,
 ) -> Result<WorkspaceRemoved, ErrorBody> {
-    let domain = Arc::new(for_mutation(&ctx).await?);
     let waivers = RemovalWaivers {
         force: params.force,
         discard_ignored: params.discard_ignored,
         forget_orphan: params.forget_orphan,
     };
-    let selector = params.workspace;
+    remove_workspace(&ctx, params.workspace, waivers, params.allow_failed_archive).await
+}
+
+/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, then the removal and
+/// `workspace.removed`. Nothing is stopped: the caller checked under the mutation lock that nothing runs in it, and a
+/// `removing` workspace takes no new start, resume or terminal (decision 0163).
+pub(crate) async fn finish_begun_removal(
+    ctx: &RequestCtx,
+    begun: String,
+    waivers: RemovalWaivers,
+) -> Result<WorkspaceRemoved, ErrorBody> {
+    let domain = for_mutation(ctx).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun);
+    let removed = blocking(move || domain.finish_remove(&begun, waivers)).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
+    Ok(removed)
+}
+
+/// Removes workspace `selector` with `waivers`: the refusals, `workspace.removing`, every run in it stopped, then the
+/// removal and `workspace.removed`. `agent.forget` with `remove_workspace` (decision 0163) begins its removal itself,
+/// under the start gate, and finishes it with [`finish_begun_removal`]; both meet the same removal guards and codes.
+pub(crate) async fn remove_workspace(
+    ctx: &RequestCtx,
+    selector: String,
+    waivers: RemovalWaivers,
+    allow_failed_archive: bool,
+) -> Result<WorkspaceRemoved, ErrorBody> {
+    let domain = Arc::new(for_mutation(ctx).await?);
     let begun = {
         let domain = Arc::clone(&domain);
         blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
-    publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
-    stop_runs(&ctx, &begun.id).await?;
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    // Before anything is stopped: the archive may save work from the running checkout.
+    let archive = match workspace_archive::run(ctx, &begun, allow_failed_archive).await {
+        Ok(archive) => archive,
+        Err(refusal) => {
+            let id = begun.id.clone();
+            let cancel = Arc::clone(&domain);
+            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
+                publish(ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
+            }
+            return Err(refusal);
+        }
+    };
+    stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
-    let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
-    publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
+    let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    removed.archive = archive;
+    publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
 }
 

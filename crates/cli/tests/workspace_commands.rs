@@ -2,6 +2,7 @@
 
 mod harness;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use harness::{Sandbox, execute, git, git_repo, single_document, stdout_text, with_json};
@@ -460,13 +461,45 @@ fn a_worktree_left_by_an_interrupted_create_is_listed_until_a_create_adopts_it()
     assert!(listed.get("unregistered").is_none());
 }
 
-/// Git prints `prunable` in `worktree list --porcelain` from 2.31; older git leaves it off.
-fn git_reports_prunable(repo: &Path) -> bool {
-    let version = git(repo, &["--version"]);
-    let mut parts = version.trim().trim_start_matches("git version ").split('.');
-    let major: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
-    let minor: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
-    (major, minor) >= (2, 31)
+#[test]
+fn a_linked_worktree_outside_the_workspaces_root_is_listed_with_its_lock() {
+    let sandbox = Sandbox::new();
+    let repo = add_repo_project(&sandbox);
+    let outside = sandbox.home().join("elsewhere").join("side");
+    fs::create_dir_all(outside.parent().expect("a parent")).expect("create the parent");
+    let outside_text = outside.to_string_lossy().into_owned();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "side",
+            outside_text.as_str(),
+            "HEAD",
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "agent is busy",
+            outside_text.as_str(),
+        ],
+    );
+
+    let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
+    assert_eq!(listed["unregistered"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed["unregistered"][0]["branch"], "side");
+    assert_eq!(listed["unregistered"][0]["locked"], "agent is busy");
+    sandbox
+        .run("default", &["workspace", "list", "--project", "repo"])
+        .success()
+        .stdout(contains("unregistered worktree"))
+        .stdout(contains("locked: agent is busy"));
+    assert!(outside.is_dir(), "listing never removes the worktree");
 }
 
 #[test]
@@ -510,19 +543,17 @@ fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
     let shown = sandbox.json_ok("default", &["workspace", "show", "usb"]);
     assert_eq!(shown["locked"], "on a usb disk");
 
-    if git_reports_prunable(&repo) {
-        let gone_row = listed["workspaces"]
-            .as_array()
-            .expect("workspaces")
-            .iter()
-            .find(|row| row["name"] == "gone")
-            .expect("the gone row");
-        assert!(gone_row["prunable"].is_string());
-        sandbox
-            .run("default", &["workspace", "list", "--project", "repo"])
-            .success()
-            .stdout(contains("prunable: "));
-    }
+    let gone_row = listed["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .iter()
+        .find(|row| row["name"] == "gone")
+        .expect("the gone row");
+    assert!(gone_row["prunable"].is_string());
+    sandbox
+        .run("default", &["workspace", "list", "--project", "repo"])
+        .success()
+        .stdout(contains("prunable: "));
 }
 
 #[test]

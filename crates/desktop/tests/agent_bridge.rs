@@ -777,8 +777,7 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
 /// Until the service offers `agent-archive/1`, a forget with its options is refused in the desktop and never sent.
 /// When the service offers it, this test must send the call to a real session instead.
 #[tokio::test]
-async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_service_lacks_the_capability()
- {
+async fn a_forget_with_the_archive_options_reaches_the_service_that_offers_the_capability() {
     let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
@@ -794,8 +793,9 @@ async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_
     })
     .await
     .expect("the capability answer arrives after the connect");
-    assert!(!offered, "the service does not offer agent-archive/1 yet");
+    assert!(offered, "the service offers agent-archive/1");
 
+    // The desktop sends the forget; the service answers for a session it does not have.
     let refused = bridge
         .handle()
         .agent_forget(ForgetSessionParams {
@@ -805,8 +805,8 @@ async fn a_forget_with_the_archive_options_is_refused_without_sending_while_the_
         })
         .await;
     match refused {
-        Err(Refusal::Failed { code, .. }) => assert_eq!(code, "service.capability_missing"),
-        other => panic!("the forget is refused in the desktop, got {other:?}"),
+        Err(Refusal::Failed { code, .. }) => assert_ne!(code, "service.capability_missing"),
+        other => panic!("the service refuses an unknown session, got {other:?}"),
     }
 
     drop(bridge);

@@ -180,6 +180,8 @@ pub struct TerminalInfo {
     pub exit: Option<ExitRecord>,
     /// Set at creation for a run that got vault secrets, and never cleared.
     pub holds_secrets: bool,
+    /// Set at creation for an agent run: git inside it never waits for a credential prompt (TERM-24).
+    pub git_credential_guard: bool,
 }
 
 /// One terminal's process memory (`TerminalManager::memory`).
@@ -414,6 +416,7 @@ impl TerminalManager {
     ) -> Result<TerminalInfo> {
         let config = &self.inner.config;
         let id = uuid::Uuid::now_v7().to_string();
+        let git_credential_guard = crate::credential_guard::requested(&spec.env);
         let env = build_environment(
             &config.base_env,
             &TerminalEnv {
@@ -444,6 +447,7 @@ impl TerminalManager {
             title: spec.title,
             request_id: spec.request_id.clone(),
             holds_secrets: spec.holds_secrets,
+            git_credential_guard,
             pid: spawned.master.pid(),
             master: Arc::new(spawned.master),
             tree: spawned.tree,
@@ -1027,6 +1031,7 @@ pub(crate) struct Terminal {
     title: Option<String>,
     request_id: Option<String>,
     holds_secrets: bool,
+    git_credential_guard: bool,
     pid: Option<u32>,
     master: Arc<PtyMaster>,
     tree: ProcessTree,
@@ -1082,6 +1087,7 @@ impl Terminal {
             created_at_ms: self.created_at_ms,
             exit,
             holds_secrets: self.holds_secrets,
+            git_credential_guard: self.git_credential_guard,
         }
     }
 

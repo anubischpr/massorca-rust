@@ -1,3 +1,4 @@
+use massorca_protocol::capabilities;
 use massorca_protocol::methods::{
     RESERVED_EXTENSION_METHOD_PREFIX, config, events, projects, service, workspaces,
 };
@@ -426,6 +427,7 @@ fn workspace_remove_params_default_force_to_false() {
             force: false,
             discard_ignored: false,
             forget_orphan: false,
+            allow_failed_archive: false,
         }
     );
     assert_wire(&params, &json!({ "workspace": "feat-x", "force": false }));
@@ -439,6 +441,7 @@ fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
             force: true,
             discard_ignored: true,
             forget_orphan: true,
+            allow_failed_archive: false,
         },
         &json!({
             "workspace": "feat-x",
@@ -652,6 +655,7 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             branch_deleted: true,
             branch_kept_reason: None,
             directory_kept: false,
+            archive: None,
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
     );
@@ -665,6 +669,7 @@ fn workspace_removed_says_when_a_directory_was_kept() {
             branch_deleted: false,
             branch_kept_reason: None,
             directory_kept: true,
+            archive: None,
         },
         &json!({
             "workspace": sample_workspace_json(),
@@ -682,6 +687,7 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
             directory_kept: false,
+            archive: None,
         },
         &json!({
             "workspace": sample_workspace_json(),
@@ -870,4 +876,34 @@ fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
     let newer: workspaces::WorkspaceSetup =
         serde_json::from_value(json!({ "outcome": "queued" })).expect("decodes");
     assert_eq!(newer, workspaces::WorkspaceSetup::Unknown);
+}
+
+#[test]
+fn script_trust_shapes_are_optional_on_the_wire_and_unknown_outcomes_decode() {
+    let untrusted = workspaces::WorkspaceSetup::Untrusted {
+        reason: "not trusted".to_owned(),
+        hash: "ab".to_owned(),
+    };
+    assert_wire(
+        &untrusted,
+        &json!({ "outcome": "untrusted", "reason": "not trusted", "hash": "ab" }),
+    );
+    assert_wire(
+        &workspaces::WorkspaceArchive::Succeeded {
+            terminal: "t1".to_owned(),
+        },
+        &json!({ "outcome": "succeeded", "terminal": "t1" }),
+    );
+    let newer: workspaces::WorkspaceArchive =
+        serde_json::from_value(json!({ "outcome": "queued", "at": 1 })).expect("decodes");
+    assert_eq!(newer, workspaces::WorkspaceArchive::Unknown);
+    let kind: projects::ScriptKind = serde_json::from_value(json!("teardown")).expect("decodes");
+    assert_eq!(kind, projects::ScriptKind::Unknown);
+    let old_reply: workspaces::WorkspaceRemoved = serde_json::from_value(json!({
+        "workspace": sample_workspace_json(),
+        "branch_deleted": true
+    }))
+    .expect("an older reply decodes");
+    assert_eq!(old_reply.archive, None);
+    assert_eq!(capabilities::SCRIPT_TRUST, "script-trust/1");
 }

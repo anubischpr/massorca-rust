@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-use massorca_core_git::{Git, GitVersion};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::workspaces::WorkspaceKind;
@@ -122,7 +121,7 @@ fn a_lock_without_a_reason_is_an_empty_lock_reason() {
 }
 
 #[test]
-fn a_worktree_whose_directory_is_gone_is_prunable_where_git_reports_it() {
+fn a_worktree_whose_directory_is_gone_is_prunable() {
     let fx = Fixture::new();
     let project = fx.repo_project();
     let ws = fx.create(&project.name, "gone");
@@ -130,22 +129,8 @@ fn a_worktree_whose_directory_is_gone_is_prunable_where_git_reports_it() {
 
     let listed = fx.workspaces.list_workspaces(None).expect("list");
     assert!(listed[0].missing);
-    // Git prints `prunable` from 2.31; older git leaves the flag absent.
-    let since = GitVersion {
-        major: 2,
-        minor: 31,
-        patch: 0,
-    };
-    let reports_prunable = Git::discover()
-        .expect("git on PATH")
-        .version()
-        .expect("git --version")
-        >= since;
-    if reports_prunable {
-        assert!(listed[0].prunable.is_some());
-    } else {
-        assert_eq!(listed[0].prunable, None);
-    }
+    // Git before 2.31 prints no `prunable`; the folder's absence fills it in on every version.
+    assert!(listed[0].prunable.is_some());
 }
 
 #[test]

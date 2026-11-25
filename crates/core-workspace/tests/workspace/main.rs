@@ -23,3 +23,4 @@ mod remove;
 mod rollback;
 mod selectors;
 mod unique_names;
+mod unregistered_listing;
