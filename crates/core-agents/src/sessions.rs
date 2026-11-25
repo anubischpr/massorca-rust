@@ -1985,8 +1985,8 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
-/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state;
-/// a state that cannot be read is reported with the read failure.
+/// Refuses an entry whose package is not enabled (decision 0059), saying in plain words which agent it is and why; the
+/// code and data still name the kind, its package and the state. A state that cannot be read is reported as that.
 fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
     if entry.enabled() {
         return Ok(());
@@ -1996,6 +1996,10 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let package = entry.package.id.clone().unwrap_or_default();
+    let name = entry
+        .decl
+        .as_ref()
+        .map_or(entry.id.as_str(), |decl| decl.name.as_str());
     // A state that cannot be read (an unreadable lockfile) is that failure, which installing or enabling cannot fix.
     let message = if state == "unknown" && !entry.problems.is_empty() {
         format!(
@@ -2004,10 +2008,12 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
             entry.problems.join("; ")
         )
     } else {
-        format!(
-            "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
-            entry.id
-        )
+        let reason = match state.as_str() {
+            "available" => format!("{name} is not installed yet"),
+            "disabled" => format!("{name} is turned off"),
+            _ => format!("{name} is not ready to use"),
+        };
+        format!("{reason}; install or enable it in the Marketplace.")
     };
     let mut error = AgentError::new(codes::AGENT_KIND_NOT_ENABLED, message);
     error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
@@ -2472,5 +2478,58 @@ mod release_tests {
         // Four bytes would start inside the two-byte é: the cut moves forward to the next character.
         assert_eq!(keep_archive_tail(&text, 4), ("yyy".to_owned(), true));
         assert_eq!(ARCHIVE_MAX_BYTES, 262_144);
+    }
+}
+
+#[cfg(test)]
+mod not_enabled_tests {
+    use massorca_protocol::methods::agents::{KindPackage, PackageState};
+    use serde_json::json;
+
+    use super::*;
+    use crate::CatalogEntry;
+
+    fn entry(state: PackageState) -> CatalogEntry {
+        CatalogEntry {
+            id: "antigravity".to_owned(),
+            owner: "massorca".to_owned(),
+            decl: KindDecl::from_json(
+                r#"{"id":"antigravity","name":"Antigravity","program":["agy"]}"#,
+            )
+            .ok(),
+            source: None,
+            problems: Vec::new(),
+            package: KindPackage {
+                state,
+                id: Some("massorca.antigravity".to_owned()),
+                version: None,
+            },
+        }
+    }
+
+    /// The refusal names the agent by its display name; its code and data are unchanged.
+    #[test]
+    fn a_kind_whose_package_is_not_installed_is_refused_by_name() {
+        let error = require_enabled(&entry(PackageState::Available)).expect_err("refused");
+        assert_eq!(error.code, codes::AGENT_KIND_NOT_ENABLED);
+        assert_eq!(
+            error.message,
+            "Antigravity is not installed yet; install or enable it in the Marketplace."
+        );
+        assert_eq!(
+            error.data,
+            Some(
+                json!({ "kind": "antigravity", "package": "massorca.antigravity", "state": "available" })
+            )
+        );
+    }
+
+    #[test]
+    fn a_kind_whose_package_is_off_is_refused_by_name() {
+        let error = require_enabled(&entry(PackageState::Disabled)).expect_err("refused");
+        assert_eq!(
+            error.message,
+            "Antigravity is turned off; install or enable it in the Marketplace."
+        );
     }
 }
