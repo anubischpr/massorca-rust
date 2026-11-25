@@ -1,5 +1,6 @@
 //! Core features. Each registers its capabilities, methods, commands and settings through the registries, and the service keeps the handles for its lifetime.
 
+mod agent_chat;
 mod agent_redaction;
 mod agents;
 mod command_schema;
@@ -61,6 +62,7 @@ pub(crate) fn register_core(
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
+    handles.extend(agent_chat::register(registries)?);
     handles.extend(extensions::register(registries)?);
     handles.extend(skills::register(registries)?);
     handles.extend(git::register(registries)?);

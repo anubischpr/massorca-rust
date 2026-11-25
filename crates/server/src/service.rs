@@ -296,12 +296,18 @@ impl Service {
         timings.mark("built-in agents");
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
-        agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
+        let (chat_changes, _) = broadcast::channel(CHAT_CHANGES_CAPACITY);
+        agents.set_listener(agent_listener(
+            events.clone(),
+            agent_changes.clone(),
+            chat_changes.clone(),
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
             events,
             agent_changes,
+            chat_changes,
             shutdown: shutdown.clone(),
             registries,
             workspaces,
@@ -325,11 +331,16 @@ impl Service {
         let outcome_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
 
-        // Terminals end as soon as shutdown is requested, alongside the connections' grace period.
+        // Terminals and chat runs end as soon as shutdown is requested, alongside the connections' grace period.
         let mut terminals_signal = signal.clone();
+        let chat_runs = state.agents.clone();
         let terminals_stop = tokio::spawn(async move {
             terminals_signal.wait().await;
-            let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                terminals.shutdown();
+                chat_runs.stop_chat_runs();
+            })
+            .await;
         });
         let outcomes_stop = tokio::spawn(features::follow_task_outcomes(
             Arc::clone(&state),
@@ -368,13 +379,28 @@ impl Service {
 
 /// Agent changes a watcher may fall behind by before it is given a fresh snapshot.
 const AGENT_CHANGES_CAPACITY: usize = 1024;
+/// Chat journal changes kept for chat streams that are behind; one that falls further behind is reset to a snapshot.
+const CHAT_CHANGES_CAPACITY: usize = 4096;
 
 /// Announces each agent status change on the event bus (`agent.changed`) and to the watchers, without blocking.
-fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> ChangeListener {
+fn agent_listener(
+    events: EventBus,
+    changes: broadcast::Sender<Change>,
+    chats: broadcast::Sender<Change>,
+) -> ChangeListener {
     Box::new(move |change: Change| {
         let id = match &change {
             Change::Updated(session) => session.id.clone(),
-            Change::Forgotten(id) => id.clone(),
+            Change::Forgotten(id) => {
+                // A forgotten session's chat streams end (decision 0101).
+                let _ = chats.send(change.clone());
+                id.clone()
+            }
+            // A chat journal change goes to the chat streams only; no session record changed (decision 0101).
+            Change::Chat(_) => {
+                let _ = chats.send(change);
+                return;
+            }
             // An account change is announced under its kind; it is not a session change, so no watcher gets it.
             Change::Account(account) => {
                 events.publish(ChangeEvent {
@@ -533,8 +559,9 @@ mod agent_queue_event_tests {
         runtime.block_on(async {
             let events = EventBus::new();
             let (changes, mut watcher) = broadcast::channel(8);
+            let (chats, _) = broadcast::channel(8);
             let mut subscription = events.subscribe();
-            let listener = agent_listener(events.clone(), changes);
+            let listener = agent_listener(events.clone(), changes, chats);
 
             listener(Change::Queue("session-1".to_owned()));
 
@@ -554,6 +581,54 @@ mod agent_queue_event_tests {
                 "no watcher receives a queue change"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod chat_change_tests {
+    use massorca_core_agents::Change;
+    use massorca_core_agents::chat::ChatChanged;
+    use massorca_protocol::methods::chat::{ChatBatch, ChatCursor};
+    use tokio::sync::broadcast;
+
+    use super::{EventBus, agent_listener};
+
+    /// A chat journal change reaches the chat streams only; a forgotten session reaches them and the watchers
+    /// (decision 0101).
+    #[test]
+    fn a_chat_change_goes_to_the_chat_streams_and_a_forget_to_both() {
+        let events = EventBus::new();
+        let (changes, mut watcher) = broadcast::channel(8);
+        let (chats, mut chat) = broadcast::channel(8);
+        let listener = agent_listener(events, changes, chats);
+        let changed = Change::Chat(Box::new(ChatChanged {
+            session: "session-1".to_owned(),
+            batch: ChatBatch {
+                cursor: ChatCursor {
+                    epoch: "e".to_owned(),
+                    seq: 1,
+                },
+                updates: Vec::new(),
+                activity: None,
+            },
+        }));
+
+        listener(changed.clone());
+        assert_eq!(chat.try_recv().ok(), Some(changed));
+        assert!(
+            watcher.try_recv().is_err(),
+            "no watcher receives a chat change"
+        );
+
+        listener(Change::Forgotten("session-1".to_owned()));
+        assert_eq!(
+            chat.try_recv().ok(),
+            Some(Change::Forgotten("session-1".to_owned()))
+        );
+        assert_eq!(
+            watcher.try_recv().ok(),
+            Some(Change::Forgotten("session-1".to_owned()))
+        );
     }
 }
 

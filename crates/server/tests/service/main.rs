@@ -2,6 +2,7 @@
 //! the cases the client cannot produce.
 
 mod agent_packages;
+mod agents_chat;
 mod agents_redaction;
 mod agents_seen;
 mod capabilities;
