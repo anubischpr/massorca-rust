@@ -1,4 +1,4 @@
-//! `git.diff`, `git.diff_file` (decision 0011) and `git.file_content` (decision 0099).
+//! `git.diff`, `git.diff_file` (decision 0011) and `git.file_content` (decision 0103).
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use massorca_core_git::{FileContentError, SideContent};

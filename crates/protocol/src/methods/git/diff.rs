@@ -1,5 +1,5 @@
 //! `git.diff` lists the changed files of a comparison; `git.diff_file` returns one file's patch (decision 0011);
-//! `git.file_content` returns one file's bytes on one side of a comparison (decision 0099).
+//! `git.file_content` returns one file's bytes on one side of a comparison (decision 0103).
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -132,7 +132,7 @@ pub struct SubmodulePointer {
     pub summary: String,
 }
 
-/// Which side of a comparison a file is read from (decision 0099).
+/// Which side of a comparison a file is read from (decision 0103).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "side", rename_all = "snake_case")]
 pub enum FileSide {

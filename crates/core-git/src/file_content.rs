@@ -1,4 +1,4 @@
-//! One file's bytes on one side of a comparison: the working tree, the index or a revision (decision 0099).
+//! One file's bytes on one side of a comparison: the working tree, the index or a revision (decision 0103).
 //! The working tree is read from disk behind a containment check; the other sides come from git's object store.
 
 use std::fs::{File, Metadata};

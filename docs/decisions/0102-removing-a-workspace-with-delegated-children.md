@@ -1,4 +1,4 @@
-# 0098: Removing a workspace with delegated children
+# 0102: Removing a workspace with delegated children
 
 Status: accepted, 2026-11-24.
 

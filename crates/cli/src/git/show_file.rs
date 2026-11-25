@@ -1,4 +1,4 @@
-//! `massorca git show-file`: one file's bytes on the working tree, the index or a revision (decision 0099).
+//! `massorca git show-file`: one file's bytes on the working tree, the index or a revision (decision 0103).
 
 use std::path::PathBuf;
 

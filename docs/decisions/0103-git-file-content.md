@@ -1,4 +1,4 @@
-# 0099: Git file content
+# 0103: Git file content
 
 Status: accepted, 2026-11-25.
 
