@@ -13,7 +13,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionAssetParams, ExtensionInstallParams, ExtensionRemoveParams,
-    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams, RiskLevel,
+    ExtensionRollbackParams, ExtensionRunAction, ExtensionRunOutcome, ExtensionSetEnabledParams,
+    ExtensionState, ExtensionUpdateParams, RiskLevel,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -534,5 +535,123 @@ async fn update_refuses_an_agent_run_and_names_a_package_that_is_not_installed()
         .await
         .expect_err("nothing is installed");
     assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_INSTALLED);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn rollback_restores_the_version_an_update_replaced_and_refuses_what_it_cannot_restore() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let refused = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            agent_token: Some("a-run-token".to_owned()),
+        })
+        .await
+        .expect_err("an agent run may not roll back");
+    assert_eq!(remote_code(&refused), codes::EXTENSION_NEEDS_PERSON);
+    let missing = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("nothing is installed");
+    assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_INSTALLED);
+
+    let first = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_install(&ExtensionInstallParams {
+            source: source.clone(),
+            consent: Some(first.consent.clone()),
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("installs");
+    let nothing_kept = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(first.consent.clone()),
+            agent_token: None,
+        })
+        .await
+        .expect_err("no version is kept yet");
+    assert_eq!(
+        remote_code(&nothing_kept),
+        codes::EXTENSION_NO_PREVIOUS_VERSION
+    );
+
+    let manifest_path = package.path().join("extension.json");
+    let newer = std::fs::read_to_string(&manifest_path)
+        .expect("manifest")
+        .replace("\"1.2.0\"", "\"1.3.0\"");
+    std::fs::write(&manifest_path, newer).expect("manifest");
+    let second = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_update(&ExtensionUpdateParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(second.consent),
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("updates");
+
+    let rolled = client
+        .extension_rollback(&ExtensionRollbackParams {
+            id: "acme.kit".to_owned(),
+            consent: Some(first.consent),
+            agent_token: None,
+        })
+        .await
+        .expect("rolls back");
+    assert_eq!(rolled.version, "1.2.0");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn log_lists_the_runs_of_a_package_and_refuses_an_id_that_is_not_one() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let empty = client.extension_log("acme.kit").await.expect("the log");
+    assert!(empty.runs.is_empty(), "nothing has run yet");
+
+    let review = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_install(&ExtensionInstallParams {
+            source,
+            consent: Some(review.consent),
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("installs");
+
+    let log = client.extension_log("acme.kit").await.expect("the log");
+    assert_eq!(log.id, "acme.kit");
+    assert_eq!(log.runs.len(), 1);
+    assert_eq!(log.runs[0].action, ExtensionRunAction::Install);
+    assert_eq!(log.runs[0].outcome, ExtensionRunOutcome::Ok);
+    assert_eq!(log.runs[0].to_version.as_deref(), Some("1.2.0"));
+    let invalid = client
+        .extension_log("../acme.kit")
+        .await
+        .expect_err("not an id");
+    assert_eq!(remote_code(&invalid), codes::EXTENSION_NOT_FOUND);
     stop(running).await;
 }

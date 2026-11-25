@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::methods::chat::KindChat;
 use crate::methods::terminals::{TerminalExit, TerminalState};
 
 /// Params: none. Result: [`AgentKinds`].
@@ -239,6 +240,10 @@ pub struct AgentKind {
     /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
+    /// Whether the kind can run as a structured chat (capability `agent-chat/1`, decision 0101), and why not. Absent from
+    /// a kind without chat support and from an older peer: no chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<KindChat>,
     /// The `model` the kind takes at start, with its choices (decisions 0094, 0096). Absent when the kind takes no model,
     /// and from a peer that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -335,6 +340,7 @@ struct AgentKindWire {
     #[serde(default)]
     default_permission_mode: Option<String>,
     #[serde(default)]
+    chat: Option<KindChat>,
     model: Option<KindModel>,
     #[serde(default)]
     effort: Option<KindEffort>,
@@ -357,6 +363,7 @@ impl From<AgentKindWire> for AgentKind {
             problems: wire.problems,
             permission_modes: wire.permission_modes,
             default_permission_mode: wire.default_permission_mode,
+            chat: wire.chat,
             model: wire.model,
             effort: wire.effort,
         }
@@ -493,6 +500,9 @@ pub struct AgentPromptParams {
 pub enum ReceiptKind {
     /// The bytes were written to the terminal; nothing more is known.
     HandedToTerminal,
+    /// The text was written to a chat run's structured input as a user message (decision 0101); the transcript shows
+    /// it as a `user_message` item. Nothing more is known.
+    SentToChat,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
@@ -977,6 +987,11 @@ pub struct AccountsImported {
     pub account: Option<AccountSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The existing account this import updated, when the login was already that account (decision 0098): it got the
+    /// imported files and kept its id, label, active mark and project choices. `account` is then that account. Absent for
+    /// a new account, so an older peer reads the result as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
 }
 
 /// Params of `agent.accounts.import_candidates` (decision 0097). Without `kind`, every kind that declares credential
