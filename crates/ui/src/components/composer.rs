@@ -110,6 +110,8 @@ pub struct Composer {
     access_note: Option<SharedString>,
     /// Each access mode's secondary text by index, `None` for none; see `set_access_details`.
     access_details: Vec<Option<SharedString>>,
+    /// Each access mode's tag by index, `None` for none; see `set_access_tags`.
+    access_tags: Vec<Option<SharedString>>,
     agent_name: SharedString,
     voice: bool,
     /// Whether the attach button, its menu and dropped files are offered.
@@ -186,6 +188,7 @@ impl Composer {
             access_index: 0,
             access_note: None,
             access_details: Vec::new(),
+            access_tags: Vec::new(),
             agent_name: "Claude".into(),
             voice: true,
             attach_offered: true,
