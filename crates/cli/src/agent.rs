@@ -9,9 +9,9 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
-    AgentWatchParams,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentKind, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams,
+    AgentWatchEvent, AgentWatchParams, KindEffort, KindModel,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -320,6 +320,63 @@ pub struct AgentListArgs {
     pub workspace: Option<String>,
 }
 
+/// The `agent kinds` text: the shared table and problems, then a `models:` and an `efforts:` line for each kind that
+/// declares choices (decision 0096). The ids keep their declared order, and the default is marked.
+fn kinds_text(kinds: &[AgentKind]) -> Vec<String> {
+    let mut lines = agent_text::kinds_lines(kinds);
+    for kind in kinds {
+        if let Some(model) = kind
+            .model
+            .as_ref()
+            .filter(|model| !model.choices.is_empty())
+        {
+            lines.push(format!("models: {}: {}", kind.id, model_ids(model)));
+        }
+        if let Some(effort) = kind
+            .effort
+            .as_ref()
+            .filter(|effort| !effort.levels.is_empty())
+        {
+            lines.push(format!("efforts: {}: {}", kind.id, effort_ids(effort)));
+        }
+    }
+    lines
+}
+
+/// `sonnet (default), haiku`: the model ids in order, the default marked.
+fn model_ids(model: &KindModel) -> String {
+    model
+        .choices
+        .iter()
+        .map(|choice| marked(&choice.id, choice.default))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `low, medium, high (default)`: the effort ids in order, the default marked.
+fn effort_ids(effort: &KindEffort) -> String {
+    effort
+        .levels
+        .iter()
+        .map(|level| {
+            marked(
+                &level.id,
+                effort.default.as_deref() == Some(level.id.as_str()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The id, with ` (default)` after it when it is the default.
+fn marked(id: &str, default: bool) -> String {
+    if default {
+        format!("{id} (default)")
+    } else {
+        id.to_owned()
+    }
+}
+
 /// Runs one `agent` subcommand against the service `target` names.
 pub async fn execute(
     target: &Target,
@@ -347,7 +404,7 @@ pub async fn execute(
     match command {
         AgentCommand::Kinds => {
             let kinds = client.agent_kinds().await?;
-            output.success(&kinds, &agent_text::kinds_lines(&kinds.kinds));
+            output.success(&kinds, &kinds_text(&kinds.kinds));
         }
         AgentCommand::Start(args) => {
             let started = client

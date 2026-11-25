@@ -215,7 +215,7 @@ pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 pub const AGENT_MODE_UNKNOWN: &str = "agent.mode_unknown";
 /// The mode has no launch arguments and its live switch cannot be sent at start, because the kind reports no idle state.
 pub const AGENT_MODE_UNAVAILABLE: &str = "agent.mode_unavailable";
-/// The kind declares no flag for a `model` or `effort` the start asked for (decision 0092); the message names the kind.
+/// The kind declares no flag for a `model` or `effort` the start asked for (decision 0094); the message names the kind.
 pub const AGENT_OPTION_UNSUPPORTED: &str = "agent.option_unsupported";
 /// The session's kind has no status mechanism, so it has no prompt queue (decision 0084).
 pub const AGENT_QUEUE_UNAVAILABLE: &str = "agent.queue_unavailable";

@@ -254,8 +254,8 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
         panic!("an agent.accounts.import call was expected");
     };
     assert_eq!(
-        (params.kind.as_str(), params.from.as_str(), params.label),
-        ("claude", "placeholder-folder", None)
+        (params.kind.as_str(), params.from.as_deref(), params.label),
+        ("claude", Some("placeholder-folder"), None)
     );
     reply
         .send(Ok(AccountsImported {

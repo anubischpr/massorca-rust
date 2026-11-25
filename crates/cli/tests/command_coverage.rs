@@ -69,6 +69,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent-context",
             "agent.accounts.activate",
             "agent.accounts.add",
+            "agent.accounts.candidates",
             "agent.accounts.check",
             "agent.accounts.import",
             "agent.accounts.list",
