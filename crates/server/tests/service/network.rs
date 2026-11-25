@@ -22,7 +22,7 @@ use massorca_protocol::methods::skills::{self as skills, SkillDiscovery, SkillsD
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{
-    DiscoveryOptions, ListenSpec, NetworkConfig, RunningService, Scopes, Service,
+    DiscoveryOptions, ListenSpec, NetworkConfig, RunningService, Scopes, Service, VaultOptions,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
@@ -59,6 +59,28 @@ pub(crate) async fn start_listening_with_discovery(
     )
     .await
     .expect("the service starts");
+    wait_listening(home, running).await
+}
+
+/// A listening service whose vault key goes to a file in the temporary profile, never to a real keyring.
+pub(crate) async fn start_listening_file_vault(home: &Path) -> RunningService {
+    let network = NetworkConfig {
+        listen: vec![ListenSpec::Address(SocketAddr::from((
+            Ipv4Addr::LOCALHOST,
+            0,
+        )))],
+    };
+    let running = Service::start_with_network_and_vault(
+        service_config(home, "server"),
+        network,
+        VaultOptions { force_file: true },
+    )
+    .await
+    .expect("the service starts");
+    wait_listening(home, running).await
+}
+
+async fn wait_listening(home: &Path, running: RunningService) -> RunningService {
     // The listener binds in the background; wait until an offer can name it.
     let owner = connect(home, "server").await;
     for _ in 0..100 {

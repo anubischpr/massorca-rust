@@ -1,9 +1,12 @@
 //! The team files (D-ED-13, screens 4.9): the team folder and the files of linked projects in a
 //! 288 px tree, with the editor beside it. The editor is not built yet, so the pane says so.
 
+use super::super::Shell;
 use super::team_pill;
-use crate::model::teams::{Team, TeamFile};
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, div, prelude::*, px};
+use crate::model::teams::{Team, TeamFile, TeamPage};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
+};
 use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_CAPTION, TYPE_HEADING};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
@@ -12,7 +15,12 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 const TREE_WIDTH: f32 = 288.0;
 
 /// The Files page of one team.
-pub(in crate::shell) fn files_page(team: &Team, cx: &mut App) -> AnyElement {
+pub(in crate::shell) fn files_page(
+    team: &Team,
+    shell: &WeakEntity<Shell>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let theme = *cx.theme();
     let folder: Vec<&TeamFile> = team
         .files
@@ -34,7 +42,14 @@ pub(in crate::shell) fn files_page(team: &Team, cx: &mut App) -> AnyElement {
                 .text_color(theme.palette.text.primary)
                 .child("Files"),
         )
-        .child(team_pill(&team.name, team.character, &theme));
+        .child(team_pill(
+            TeamPage::Files(team.id),
+            &team.name,
+            team.character,
+            shell,
+            window,
+            cx,
+        ));
     let tree = div()
         .flex()
         .flex_col()

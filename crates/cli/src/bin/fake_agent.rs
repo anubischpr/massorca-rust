@@ -7,6 +7,7 @@
 //! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it. It
 //! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160). It
 //! can say whether it got MassOrca's instructions and whether `massorca`'s folder is first on its `PATH` (decision 0161).
+//! Started as `chat`, it speaks the tiny structured dialect of core-agents' `TestAdapter` instead (decision 0101).
 
 use std::env;
 use std::ffi::OsString;
@@ -79,6 +80,12 @@ const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// A stdin line starting with this switches the permission mode; the rest of the line is the mode.
 const MODE_SWITCH: &str = "/mode ";
+/// Names a file the `chat` mode waits for after the first part of each reply, so a test can subscribe in between.
+const CHAT_GO_FILE_ENV: &str = "FAKE_CHAT_GO_FILE";
+/// Set to `1`, the `chat` mode never reads its input, as a CLI that is stuck.
+const CHAT_DEAF_ENV: &str = "FAKE_CHAT_DEAF";
+/// How long the `chat` mode waits for that file before it replies anyway.
+const CHAT_GO_WAIT: Duration = Duration::from_secs(60);
 
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
@@ -92,6 +99,7 @@ fn main() -> ExitCode {
         Some("logout") => return logout(),
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
+        Some("chat") => return chat(),
         Some("--help") => return help(),
         _ => {}
     }
@@ -656,13 +664,87 @@ fn logout() -> ExitCode {
 /// A check that never finishes: it starts a child that inherits the same output pipes, and both sleep. A stopped check
 /// must take its child with it, or the pipes stay open and its output is never read to the end.
 fn hang() -> ExitCode {
+    spawn_hang_child();
+    hang_child()
+}
+
+/// Starts [`hang_child`] with this program's output, and leaves it running.
+fn spawn_hang_child() {
     if let Ok(me) = env::current_exe() {
         let _ = massorca_process::command(me)
             .arg("hang-child")
             .stdin(Stdio::null())
             .spawn();
     }
-    hang_child()
+}
+
+/// The structured mode (decision 0101): one JSON object per line on both streams, the dialect core-agents'
+/// `TestAdapter` reads. For each `{"type":"user","text":T}` it writes `{"type":"text","id":"a<turn>","text":"echo: "}`,
+/// waits for [`CHAT_GO_FILE_ENV`]'s file when it is set, then writes the same id with `T` (an append) and
+/// `{"type":"done","outcome":"success"}`. The message `crash` exits with [`CRASH_EXIT_CODE`]; the message `hang` starts a
+/// child that keeps the output open and stops reading, so only a kill of the whole tree ends the run; `leave` starts such
+/// a child, ends the turn and exits 0, leaving the child behind. An interrupt is noted. Standard error gets one line at
+/// start. It exits when its input ends; with [`CHAT_DEAF_ENV`] it never reads it.
+fn chat() -> ExitCode {
+    let _ = writeln!(io::stderr(), "fake-chat: started");
+    if env::var_os(CHAT_DEAF_ENV).is_some_and(|value| value == "1") {
+        return hang_child();
+    }
+    let go_file = env::var_os(CHAT_GO_FILE_ENV).map(PathBuf::from);
+    let mut turn = 0_u32;
+    for line in io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        let frame: Value = match serde_json::from_str(&line) {
+            Ok(frame) => frame,
+            Err(_) => {
+                emit(&serde_json::json!({ "type": "notice", "text": "unreadable input" }));
+                continue;
+            }
+        };
+        match frame["type"].as_str() {
+            Some("user") => {
+                let text = frame["text"].as_str().unwrap_or_default();
+                match text {
+                    "crash" => return ExitCode::from(CRASH_EXIT_CODE),
+                    "hang" => return hang(),
+                    "leave" => {
+                        spawn_hang_child();
+                        emit(&serde_json::json!({ "type": "done", "outcome": "success" }));
+                        return ExitCode::SUCCESS;
+                    }
+                    _ => {}
+                }
+                turn += 1;
+                let id = format!("a{turn}");
+                emit(&serde_json::json!({ "type": "text", "id": id, "text": "echo: " }));
+                if let Some(go) = &go_file {
+                    wait_for_file(go);
+                }
+                emit(&serde_json::json!({ "type": "text", "id": id, "text": text }));
+                emit(&serde_json::json!({ "type": "done", "outcome": "success" }));
+            }
+            Some("interrupt") => {
+                emit(&serde_json::json!({ "type": "notice", "text": "interrupted" }));
+            }
+            _ => emit(&serde_json::json!({ "type": "notice", "text": "unknown input" })),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Writes one JSON line to standard output at once.
+fn emit(frame: &Value) {
+    let mut stdout = io::stdout().lock();
+    let _ = writeln!(stdout, "{frame}");
+    let _ = stdout.flush();
+}
+
+/// Waits until `path` exists, at most [`CHAT_GO_WAIT`].
+fn wait_for_file(path: &Path) {
+    let deadline = std::time::Instant::now() + CHAT_GO_WAIT;
+    while !path.exists() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The sleeping half of [`hang`].

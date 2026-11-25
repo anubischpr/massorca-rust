@@ -50,6 +50,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::PROJECTS,
             capabilities::SECRETS,
             capabilities::SERVICE,
+            capabilities::SERVICES,
             capabilities::SKILLS,
             capabilities::TEAM_ROOM,
             capabilities::TEAMS,

@@ -9,6 +9,7 @@ use crate::components::agent_status::{AgentState, AgentStatusSize};
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::StatePreview;
 use crate::components::list_row::{ListRow, RowDensity, RowLeading};
+use crate::components::team_character::TeamCharacterMark;
 use crate::components::usage_ring::UsageSlot;
 use crate::icon::IconName;
 use crate::style::Surface;
@@ -70,6 +71,16 @@ impl SidebarRow {
     /// A navigation entry (Prototypes, Tasks, Automations): an icon and a label.
     pub fn nav(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Self {
         Self::new(id, label).map_row(|r| r.leading(RowLeading::Icon(icon)))
+    }
+
+    /// A Bot Teams team: its 16 px character and its name (A57, SidebarRow.md).
+    pub fn team(
+        id: impl Into<ElementId>,
+        mark: TeamCharacterMark,
+        name: impl Into<SharedString>,
+    ) -> Self {
+        let mark = mark.size(SIZE_ICON_SM).into_any_element();
+        Self::new(id, name).map_row(|r| r.leading(RowLeading::Element(mark)))
     }
 
     /// A project at the top level: its icon and its name in `body-strong` (A41).

@@ -96,4 +96,4 @@ mod imp {
     }
 }
 
-pub(crate) use imp::spawn;
+pub(crate) use imp::{Tree, spawn};
