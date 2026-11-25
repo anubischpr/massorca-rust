@@ -68,6 +68,8 @@ pub enum StoreUpdate {
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
     AgentChatOffered(bool),
+    /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
+    AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
     AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
@@ -255,6 +257,8 @@ pub struct StoreState {
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
     pub agent_chat: bool,
+    /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
+    pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The settings the service declares with their values, as the last read or change left them.
@@ -293,6 +297,7 @@ impl Default for StoreState {
             agent_no_project: false,
             agent_options: false,
             agent_chat: false,
+            agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
@@ -399,6 +404,7 @@ impl StoreState {
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
+            StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {

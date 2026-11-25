@@ -27,6 +27,7 @@ pub mod secret_form;
 pub mod secret_requests;
 pub mod secret_vault;
 pub mod service_view;
+pub mod session_delete;
 pub mod session_menu;
 pub mod settings;
 pub mod settings_sections;

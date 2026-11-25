@@ -4,6 +4,7 @@
 
 mod accounts;
 mod agent_chat;
+mod agent_forget;
 mod agent_queue;
 mod agents;
 mod bridge;
@@ -27,6 +28,7 @@ mod secrets_tests;
 #[cfg(test)]
 pub(crate) use accounts::AccountCommand;
 pub use agent_chat::{ChatUnsupportedReason, KindChat};
+pub use agent_forget::ForgetSessionParams;
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]

@@ -43,6 +43,7 @@ use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
@@ -135,6 +136,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -739,6 +745,9 @@ impl Link {
         self.emit(StoreUpdate::AgentChatOffered(
             client.has_capability(AGENT_CHAT_CAPABILITY),
         ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1104,6 +1113,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1182,7 +1194,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
