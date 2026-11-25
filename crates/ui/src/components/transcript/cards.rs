@@ -41,6 +41,7 @@ pub fn user_message(text: &SharedString, p: Palette) -> AnyElement {
 }
 
 /// The agent's text, in the chat style on the canvas.
+// TODO: draw Markdown once crates/ui has a renderer; until then the text is plain.
 pub fn prose(text: &SharedString, p: Palette) -> AnyElement {
     div()
         .text_style(TYPE_CHAT)
