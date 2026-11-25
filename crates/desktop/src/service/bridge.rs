@@ -55,6 +55,7 @@ use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::host_sessions::{self, Followed};
+use super::host_terminal::{self, HostAttach};
 use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
@@ -181,6 +182,8 @@ pub(crate) enum Command {
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// A terminal of a paired host, attached over that host's own connection; its items and writes are the attach's.
+    HostTerminalAttach(HostAttach),
     /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
     AgentForget {
         params: ForgetSessionParams,
@@ -736,6 +739,10 @@ impl Link {
                 reply,
             } => {
                 host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
+                None
+            }
+            Command::HostTerminalAttach(attach) => {
+                host_terminal::spawn_attach(self.profile.clone(), attach);
                 None
             }
             Command::HostedServices {

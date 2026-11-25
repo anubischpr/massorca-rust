@@ -13,6 +13,7 @@ mod connection;
 mod extensions;
 mod git;
 mod host_sessions;
+mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
@@ -55,6 +56,9 @@ pub use connection::{
 pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
 pub use host_sessions::{HostAgents, HostSessions, HostSessionsRead};
+#[cfg(test)]
+pub(crate) use host_terminal::{HostAttach, HostWrite};
+pub use host_terminal::{HostTerminal, HostTerminalItem, HostWriter};
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};

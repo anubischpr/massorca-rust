@@ -25,6 +25,8 @@ pub struct RemoteSessionView {
     pub kind: String,
     pub state: AgentState,
     pub reached: bool,
+    /// The terminal the session runs in on its host, when it has one.
+    pub terminal: Option<String>,
 }
 
 /// Each paired host's sessions, by host name, for the hosts the store has checked at least once.
@@ -61,18 +63,15 @@ pub fn remote_session_view(state: &StoreState, host: &str, id: &str) -> Option<R
     let held = state.host_sessions.get(host)?;
     let sessions = sessions_of(held);
     let row = find_in(&sessions.rows, id)?;
-    let kind = held
-        .sessions
-        .iter()
-        .find(|session| session.id == id)
-        .map(|session| session.kind.clone())?;
+    let listed = held.sessions.iter().find(|session| session.id == id)?;
     Some(RemoteSessionView {
         host: host.to_owned(),
         session: row.id.clone(),
         title: row.title.clone(),
-        kind,
+        kind: listed.kind.clone(),
         state: row.state,
         reached: held.reached,
+        terminal: listed.terminal_id.clone(),
     })
 }
 
