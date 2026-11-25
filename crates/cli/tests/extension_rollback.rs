@@ -1,5 +1,6 @@
 //! `massorca extension rollback` and `massorca extension log`: the review and consent of the version a rollback restores,
-//! the rollback itself, the run log, and the refusal of an agent run, through the CLI. No vendor command runs.
+//! the rollback itself, the run log, the refusal of an agent run, and the version each package can roll back to, through
+//! the CLI. No vendor command runs.
 
 mod extension_support;
 mod harness;
@@ -135,5 +136,91 @@ fn log_of_a_package_that_never_ran_is_empty() {
     assert!(
         log["runs"].as_array().expect("the runs").is_empty(),
         "{log}"
+    );
+}
+
+/// The `show` item of the test package, as JSON.
+fn shown(host: &Host) -> Value {
+    host.json(&["extension", "show", KIT_ID])
+}
+
+/// The lockfile as JSON, read from the profile's extensions folder.
+fn lock(host: &Host) -> Value {
+    let text = fs::read_to_string(host.extensions_dir().join("lock.json")).expect("the lockfile");
+    serde_json::from_str(&text).expect("the lockfile as JSON")
+}
+
+/// Rewrites the lockfile's kept record of the test package with `edit`.
+fn edit_kept(host: &Host, edit: impl FnOnce(&mut Value)) {
+    let mut lock = lock(host);
+    let entry = lock["packages"]
+        .as_array_mut()
+        .expect("the packages")
+        .iter_mut()
+        .find(|entry| entry["id"] == KIT_ID)
+        .expect("the test package");
+    edit(&mut entry["previous"]);
+    fs::write(host.extensions_dir().join("lock.json"), lock.to_string()).expect("the lockfile");
+}
+
+#[test]
+fn after_an_update_the_item_names_the_version_it_can_roll_back_to() {
+    let host = Host::new();
+    updated(&host);
+
+    assert_eq!(shown(&host)["previous_version"], "1.2.0");
+}
+
+#[test]
+fn after_a_rollback_the_item_names_the_version_the_rollback_replaced() {
+    let host = Host::new();
+    updated(&host);
+
+    host.json(&["extension", "rollback", KIT_ID, "--yes"]);
+
+    assert_eq!(shown(&host)["previous_version"], "1.3.0");
+}
+
+#[test]
+fn a_fresh_install_has_no_previous_version() {
+    let host = Host::new();
+    install_kit(&host);
+
+    assert!(
+        shown(&host).get("previous_version").is_none(),
+        "{}",
+        shown(&host)
+    );
+}
+
+#[test]
+fn a_kept_version_whose_replaced_path_is_stale_has_no_previous_version() {
+    let host = Host::new();
+    updated(&host);
+    edit_kept(&host, |kept| {
+        kept["replaced_path"] = json!("pkgs/acme.kit/elsewhere")
+    });
+
+    assert!(
+        shown(&host).get("previous_version").is_none(),
+        "{}",
+        shown(&host)
+    );
+}
+
+#[test]
+fn a_kept_version_whose_folder_is_missing_has_no_previous_version() {
+    let host = Host::new();
+    updated(&host);
+    let kept_path = lock(&host)["packages"][0]["previous"]["path"]
+        .as_str()
+        .expect("the kept path")
+        .to_owned();
+    fs::remove_dir_all(host.extensions_dir().join(&kept_path)).expect("the kept folder is removed");
+
+    assert!(
+        shown(&host).get("previous_version").is_none(),
+        "{}",
+        shown(&host)
     );
 }

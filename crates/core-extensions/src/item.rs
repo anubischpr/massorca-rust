@@ -29,6 +29,8 @@ pub struct Item {
     pub publisher: String,
     pub state: ItemState,
     pub installed: Option<InstalledInfo>,
+    /// The version `extensions.rollback` restores, when the kept version is a valid rollback target.
+    pub previous_version: Option<String>,
     /// Logo, category, developer, mention, banner and connections.
     pub listing: ListingView,
     pub permissions: Vec<PermissionView>,
@@ -198,15 +200,16 @@ impl Extensions {
 
     /// An installed package from its manifest, or, when its files cannot be trusted, its lockfile record and problem.
     fn installed_item_or_problem(&self, entry: &LockEntry) -> Item {
+        let previous_version = self.rollback_target(entry).map(|kept| kept.version);
         if catalogue::is_unvouched_first_party(entry) {
             let error = Error::ReservedIdentity {
                 id: entry.id.clone(),
                 reference: entry.source.reference.clone(),
             };
-            return lockfile_item(entry, &error);
+            return lockfile_item(entry, &error, previous_version);
         }
         self.installed_item(entry)
-            .unwrap_or_else(|error| lockfile_item(entry, &error))
+            .unwrap_or_else(|error| lockfile_item(entry, &error, previous_version))
     }
 
     fn item(&self, manifest: &Manifest, entry: Option<&LockEntry>) -> Item {
@@ -249,6 +252,9 @@ impl Extensions {
             publisher: manifest.publisher.clone(),
             state: state_of(entry),
             installed: entry.map(installed_info),
+            previous_version: entry
+                .and_then(|entry| self.rollback_target(entry))
+                .map(|kept| kept.version),
             listing: ListingView::of(manifest),
             permissions: manifest
                 .permissions
@@ -320,7 +326,7 @@ fn installed_info(entry: &LockEntry) -> InstalledInfo {
 
 /// An installed package whose files cannot be trusted: its lockfile record, the problem, and no manifest data. Its
 /// files are still removable, so the danger zone keeps the always-true effects.
-fn lockfile_item(entry: &LockEntry, error: &Error) -> Item {
+fn lockfile_item(entry: &LockEntry, error: &Error, previous_version: Option<String>) -> Item {
     Item {
         id: entry.id.clone(),
         name: String::new(),
@@ -329,6 +335,7 @@ fn lockfile_item(entry: &LockEntry, error: &Error) -> Item {
         publisher: String::new(),
         state: state_of(Some(entry)),
         installed: Some(installed_info(entry)),
+        previous_version,
         listing: ListingView {
             logo: None,
             category: "",

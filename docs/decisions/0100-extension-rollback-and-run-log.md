@@ -50,6 +50,8 @@ rules of decision 0092 and about 20 runs, as the orchestrator set.
 - **CLI.** `massorca extension rollback <id>` takes consent as `extension update` does: `--yes` accepts the review the
   refusal printed, and `--consent <FINGERPRINT>` accepts an earlier run's review. `massorca extension log <id>` prints
   the runs oldest first.
+- **Name the rollback target.** The package item carries `previous_version`, the version a rollback restores, present
+  only when the kept version passes the rollback check (its `replaced_path` is the current path and its folder exists).
 
 ## Consequences
 

@@ -212,6 +212,9 @@ pub struct ExtensionItem {
     pub state: ExtensionState,
     #[serde(default)]
     pub installed: Option<InstalledInfo>,
+    /// The version `extensions.rollback` restores, when the kept version is a valid rollback target. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<String>,
     pub listing: Listing,
     #[serde(default)]
     pub permissions: Vec<Permission>,

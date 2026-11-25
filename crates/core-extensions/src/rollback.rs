@@ -19,17 +19,9 @@ impl Extensions {
             .cloned()
             .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
         self.refuse_if_busy(id)?;
-        // A kept version is a rollback target only while it names the path of the current version; otherwise an older
-        // binary carried it forward past a later update, and its folder may be gone.
-        let kept = current
-            .previous
-            .as_deref()
-            .filter(|kept| kept.replaced_path == current.path)
-            .cloned()
+        let kept = self
+            .rollback_target(&current)
             .ok_or_else(|| Error::NoPreviousVersion(id.to_owned()))?;
-        if !self.layout.resolve(&kept.path).is_dir() {
-            return Err(Error::NoPreviousVersion(id.to_owned()));
-        }
         let target = restored(&current, &kept);
         // The kept folder must hash to what the lockfile records before its manifest is trusted.
         let manifest = self.installed_manifest(&target)?;
@@ -86,6 +78,20 @@ impl Extensions {
             Vec::new(),
         );
         Ok(fresh)
+    }
+}
+
+impl Extensions {
+    /// The kept version `current` can roll back to, when it is a valid target. It is valid only while it names the path
+    /// of the current version, and its folder exists: an older binary carried it forward past a later update otherwise.
+    pub(crate) fn rollback_target(&self, current: &LockEntry) -> Option<KeptVersion> {
+        current
+            .previous
+            .as_deref()
+            .filter(|kept| {
+                kept.replaced_path == current.path && self.layout.resolve(&kept.path).is_dir()
+            })
+            .cloned()
     }
 }
 
