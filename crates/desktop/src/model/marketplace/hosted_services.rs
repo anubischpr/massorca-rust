@@ -112,6 +112,12 @@ impl HostedServicesView {
         self.request
     }
 
+    /// The number of the latest read; a connect or disconnect answer carries it.
+    #[must_use]
+    pub fn request(&self) -> u64 {
+        self.request
+    }
+
     /// The host the latest read is for.
     #[must_use]
     pub fn host(&self) -> Option<&str> {

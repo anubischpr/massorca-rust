@@ -38,6 +38,8 @@ pub use connection::{
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+#[cfg(test)]
+pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};

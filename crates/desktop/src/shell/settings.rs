@@ -25,7 +25,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use super::Shell;
 use crate::model::app_theme::ThemeChoice;
 use crate::model::hosts::HostState;
-use crate::model::marketplace::AgentLink;
+use crate::model::marketplace::{AgentLink, ItemKind};
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_requests::RequestRow;
 use crate::model::secret_vault::VaultPage;
@@ -353,6 +353,7 @@ fn row(
             )),
         ),
         RowBody::AddHost => (row, Some(add_host_button(id.clone(), frame))),
+        RowBody::MarketplaceServices => (row, Some(services_link(id.clone(), frame))),
         RowBody::PairingLink => (
             row,
             Some(page_link(
@@ -367,6 +368,23 @@ fn row(
         Some(control) => row.control(control).into_any_element(),
         None => row.into_any_element(),
     }
+}
+
+/// Opens the Marketplace's Services category, which reads the picked host's services (SKL-35).
+fn services_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+    let shell = frame.shell.clone();
+    let button = Button::new(id, "Open")
+        .variant(ButtonVariant::Ghost)
+        .trailing_icon(IconName::ChevronRight)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_marketplace(MarketplacePage::Category(ItemKind::Service), cx);
+            });
+        });
+    div()
+        .debug_selector(|| "settings-services-open".to_owned())
+        .child(button)
+        .into_any_element()
 }
 
 /// The "Add host" button of its row: it opens the dialog on this page (D-HO-02).
