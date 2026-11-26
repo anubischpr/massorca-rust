@@ -348,3 +348,5 @@ pub const AUTOMATION_NOT_FOUND: &str = "automation.not_found";
 pub const AUTOMATION_SCHEDULE_INVALID: &str = "automation.schedule_invalid";
 /// An automation's time zone is unknown, or the host's zone cannot be read so the automation needs one.
 pub const AUTOMATION_ZONE_INVALID: &str = "automation.zone_invalid";
+/// A calendar window that ends before it starts, or spans more than 62 days.
+pub const CALENDAR_WINDOW_INVALID: &str = "calendar.window_invalid";
