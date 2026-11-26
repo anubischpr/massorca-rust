@@ -10,11 +10,14 @@ use massorca_protocol::methods::terminals::{
     AttachMode, ExitReason, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
     TerminalState,
 };
+use massorca_ui::components::work_panel_tabs::WorkTabsAction;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use super::service_tests::{Rig, click, connected, draw, rig};
+use super::work_panel::PANE_WAIT_FRAMES;
 use super::*;
+use crate::model::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
 use crate::service::{
     Command, ConnectionState, Refusal, Script, StoreUpdate, StreamEnd, TerminalCommand,
     TerminalStreamItem, TerminalWrite,
@@ -55,6 +58,7 @@ fn terminal(id: &str, state: TerminalState, exit: Option<TerminalExit>) -> Termi
         created_at_ms: 1,
         exit,
         holds_secrets: false,
+        git_credential_guard: false,
     }
 }
 
@@ -111,10 +115,8 @@ fn start_page(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
 
 /// "Open terminal" on the start page, answered with the live terminal t1 the store then lists.
 fn open_terminal(rig: &mut Rig, cx: &mut VisualTestContext) {
-    click(cx, "start-terminal");
-    let (params, reply) = create_call(&mut rig.script).expect("a terminal.create call");
+    let (params, reply) = start_terminal_create(rig, cx);
     assert_eq!(params.workspace, "w1");
-    assert_eq!((params.cols, params.rows), (Some(120), Some(40)));
     let terminal = live("t1");
     rig.updates
         .send(StoreUpdate::TerminalChanged(terminal.clone()))
@@ -123,6 +125,32 @@ fn open_terminal(rig: &mut Rig, cx: &mut VisualTestContext) {
         .send(Ok(terminal))
         .expect("the shell waits for its answer");
     cx.run_until_parked();
+}
+
+/// One frame as the platform runs it: the callbacks scheduled for it, then the paint.
+fn frame(cx: &mut VisualTestContext) {
+    frame_callbacks(cx);
+    draw(cx);
+    cx.run_until_parked();
+}
+
+/// Runs the callbacks scheduled for the next frame, without painting it.
+fn frame_callbacks(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+}
+
+/// "Open terminal" on the start page, run through the frames its create waits for: the pane paints
+/// its size first, then the create goes out at that grid.
+fn start_terminal_create(
+    rig: &mut Rig,
+    cx: &mut VisualTestContext,
+) -> (TerminalCreateParams, TerminalReply) {
+    click(cx, "start-terminal");
+    frame(cx);
+    frame(cx);
+    create_call(&mut rig.script).expect("a terminal.create call once the pane has painted")
 }
 
 /// Answers the attach of the selected view with a stream the test feeds.
@@ -164,6 +192,158 @@ fn open_and_show(rig: &mut Rig, cx: &mut VisualTestContext) -> UnboundedSender<T
     cx.run_until_parked();
     draw(cx);
     items
+}
+
+/// A live terminal the service created at `cols` x `rows`, as the store then lists it.
+fn live_at(id: &str, cols: u16, rows: u16) -> Terminal {
+    Terminal {
+        cols,
+        rows,
+        ..live(id)
+    }
+}
+
+fn resize_call(script: &mut Script) -> Option<String> {
+    find_call(script, |command| match command {
+        Command::Terminal(TerminalCommand::Write(TerminalWrite::Resize { terminal, .. })) => {
+            Some(terminal)
+        }
+        _ => None,
+    })
+}
+
+#[gpui::test]
+fn a_new_work_panel_terminal_opens_at_the_grid_its_pane_applies_without_a_resize(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page(cx);
+    // t1 is attached but no output is fed, so its emulator keeps the grid its pane applied on the first draw.
+    open_terminal(&mut rig, cx);
+    let (_, _items) = attach_with_stream(&mut rig.script);
+    cx.run_until_parked();
+    draw(cx);
+    // t1's pane has painted, so the Work panel knows its size; the grid its surface applied is the one it fits.
+    let applied = rig.shell.read_with(cx, |shell, cx| {
+        let feed = shell
+            .terminal_views
+            .get("t1")
+            .expect("t1 has a view")
+            .surface
+            .read(cx)
+            .feed();
+        (feed.columns() as u16, feed.lines() as u16)
+    });
+    while rig.script.next().is_some() {}
+
+    cx.update(|window, cx| {
+        rig.shell.update(cx, |shell, cx| {
+            shell.work_action(WorkTabsAction::Add, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let (params, reply) = create_call(&mut rig.script).expect("a terminal.create call");
+    assert_eq!(
+        (params.cols, params.rows),
+        (Some(applied.0), Some(applied.1)),
+        "the second terminal opens at the grid t1's pane applied"
+    );
+
+    let terminal = live_at("t2", applied.0, applied.1);
+    rig.updates
+        .send(StoreUpdate::TerminalChanged(terminal.clone()))
+        .expect("the store listens");
+    reply
+        .send(Ok(terminal))
+        .expect("the shell waits for its answer");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+
+    assert!(
+        resize_call(&mut rig.script).is_none(),
+        "the first draw fits the grid the service already holds"
+    );
+    rig.shell.read_with(cx, |shell, cx| {
+        let feed = shell
+            .terminal_views
+            .get("t2")
+            .expect("t2 has a view")
+            .surface
+            .read(cx)
+            .feed();
+        assert_eq!(
+            (feed.columns() as u16, feed.lines() as u16),
+            applied,
+            "the surface applies the grid terminal.create sent"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_fresh_run_opens_its_first_terminal_at_the_grid_its_pane_applies_without_a_resize(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page(cx);
+    // No pane has painted yet in this run, so the create waits for the first paint and sends the grid it measured.
+    let (params, reply) = start_terminal_create(&mut rig, cx);
+    let (cols, rows) = (params.cols.unwrap(), params.rows.unwrap());
+    let terminal = live_at("t1", cols, rows);
+    rig.updates
+        .send(StoreUpdate::TerminalChanged(terminal.clone()))
+        .expect("the store listens");
+    reply
+        .send(Ok(terminal))
+        .expect("the shell waits for its answer");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+
+    assert!(
+        resize_call(&mut rig.script).is_none(),
+        "the first draw fits the grid the service already holds"
+    );
+    rig.shell.read_with(cx, |shell, cx| {
+        let feed = shell
+            .terminal_views
+            .get("t1")
+            .expect("t1 has a view")
+            .surface
+            .read(cx)
+            .feed();
+        assert_eq!(
+            (feed.columns() as u16, feed.lines() as u16),
+            (cols, rows),
+            "the surface applies the grid terminal.create sent"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_pane_that_never_paints_opens_its_terminal_at_the_fixed_size(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page(cx);
+    // The Work panel stays hidden, so its pane never paints and no size arrives: the wait runs out.
+    cx.update(|window, cx| {
+        rig.shell.update(cx, |shell, cx| {
+            shell.work_action(WorkTabsAction::Add, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    for _ in 0..PANE_WAIT_FRAMES {
+        frame_callbacks(cx);
+    }
+    cx.run_until_parked();
+    assert!(
+        create_call(&mut rig.script).is_none(),
+        "the create waits while its frames run out"
+    );
+    frame_callbacks(cx);
+    cx.run_until_parked();
+    let (params, _) = create_call(&mut rig.script).expect("a terminal.create call");
+    assert_eq!(
+        (params.cols, params.rows),
+        (Some(NEW_TERMINAL_COLS), Some(NEW_TERMINAL_ROWS)),
+        "without a measured pane the terminal opens at the fixed size"
+    );
 }
 
 #[gpui::test]
@@ -402,8 +582,7 @@ fn a_gap_in_the_output_attaches_again_at_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_refused_attach_says_why_and_draws_no_pane(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page(cx);
-    click(cx, "start-terminal");
-    let (_, reply) = create_call(&mut rig.script).expect("a terminal.create call");
+    let (_, reply) = start_terminal_create(&mut rig, cx);
     rig.updates
         .send(StoreUpdate::TerminalChanged(live("t1")))
         .expect("the store listens");

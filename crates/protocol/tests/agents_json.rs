@@ -13,7 +13,13 @@ use massorca_protocol::methods::agents::{
     KindPackage, ModeApplied, ModeSource, Outcome, PackageState, PermissionMode, PromptReceipt,
     ReceiptKind, StatusMechanism,
 };
+use massorca_protocol::methods::agents::{
+    AgentArchiveSessionParams, AgentForgetParams, AgentForgetPreview, AgentForgotten,
+    AgentListParams, ForgetPreviewWorkspace, ModeTone, WorkspaceRemovalError,
+};
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
+use massorca_protocol::methods::workspaces::WorkspaceKind;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
@@ -38,6 +44,7 @@ fn live_session() -> AgentSession {
         brought_back_at_ms: None,
         agent_ref: None,
         terminal_id: Some("t-1".to_owned()),
+        run: Default::default(),
         created_at_ms: 1_767_225_600_000,
         execution: Execution {
             state: TerminalState::Live,
@@ -53,6 +60,11 @@ fn live_session() -> AgentSession {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        archived: false,
+        resume: None,
+        delegation: None,
+        notes: Vec::new(),
+        shared_folder_with: Vec::new(),
     }
 }
 
@@ -110,6 +122,37 @@ fn a_live_session_omits_absent_fields() {
 }
 
 #[test]
+fn a_chat_session_names_its_run_and_an_absent_run_reads_as_terminal() {
+    let chat = AgentSession {
+        terminal_id: None,
+        run: RunType::Chat,
+        ..live_session()
+    };
+    assert_wire(
+        &chat,
+        &json!({
+            "id": "s-1",
+            "kind": "claude",
+            "workspace_id": "w-1",
+            "read_only": false,
+            "run": "chat",
+            "created_at_ms": 1_767_225_600_000_i64,
+            "execution": { "state": "live" }
+        }),
+    );
+    let older: AgentSession = serde_json::from_value(json!({
+        "id": "s-1",
+        "kind": "claude",
+        "workspace_id": "w-1",
+        "read_only": false,
+        "created_at_ms": 1,
+        "execution": { "state": "live" }
+    }))
+    .expect("deserializes");
+    assert_eq!(older.run, RunType::Terminal);
+}
+
+#[test]
 fn an_exited_session_carries_its_exit_activity_and_result() {
     let session = AgentSession {
         title: Some("fix the build".to_owned()),
@@ -142,6 +185,10 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
         pending_permission_mode: None,
         retained: false,
         released: false,
+        archived: false,
+        resume: None,
+        delegation: None,
+        notes: Vec::new(),
         ..live_session()
     };
     assert_wire(
@@ -578,6 +625,9 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
             bypass: false,
             live_switch: false,
             may_fall_back: true,
+            icon: None,
+            tone: None,
+            selectable: true,
         },
         PermissionMode {
             id: "wild".to_owned(),
@@ -586,6 +636,9 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
             bypass: true,
             live_switch: true,
             may_fall_back: false,
+            icon: None,
+            tone: None,
+            selectable: true,
         },
     ];
     kind.default_permission_mode = Some("careful".to_owned());
@@ -967,4 +1020,232 @@ fn an_import_that_updated_an_account_names_it_and_a_new_one_omits_the_field() {
         json!({ "result": "imported" }),
         "a new account's result has no `updated`"
     );
+}
+
+#[test]
+fn a_session_says_which_children_it_could_delegate_and_an_older_one_says_nothing() {
+    use massorca_protocol::methods::agents::{DelegationOptions, WritingChild};
+
+    let mut session = live_session();
+    session.delegation = Some(Box::new(DelegationOptions {
+        writing_child: WritingChild::Unavailable,
+        read_only_child: false,
+        reason: Some("at the depth limit".to_owned()),
+    }));
+    session.notes = vec!["works in this folder".to_owned()];
+    let value = serde_json::to_value(&session).expect("serializes");
+    assert_eq!(
+        value["delegation"],
+        json!({
+            "writing_child": "unavailable",
+            "read_only_child": false,
+            "reason": "at the depth limit"
+        })
+    );
+    assert_eq!(value["notes"], json!(["works in this folder"]));
+    let decoded: AgentSession = serde_json::from_value(value).expect("deserializes");
+    assert_eq!(decoded, session);
+
+    for (child, wire) in [
+        (WritingChild::OwnWorktree, "own_worktree"),
+        (WritingChild::SharedFolder, "shared_folder"),
+    ] {
+        assert_eq!(serde_json::to_value(child).expect("serializes"), wire);
+    }
+    let newer: WritingChild = serde_json::from_value(json!("elsewhere")).expect("decodes");
+    assert_eq!(newer, WritingChild::Unknown);
+
+    // A record from an older peer has neither field.
+    let mut older = serde_json::to_value(live_session()).expect("serializes");
+    assert!(older.get("delegation").is_none());
+    older.as_object_mut().expect("an object").remove("notes");
+    let decoded: AgentSession = serde_json::from_value(older).expect("an older record decodes");
+    assert_eq!(decoded.delegation, None);
+    assert!(decoded.notes.is_empty());
+}
+
+#[test]
+fn a_mode_carries_its_icon_tone_and_whether_it_is_offered_and_an_older_one_reads_as_offered() {
+    let mode = PermissionMode {
+        id: "hush".to_owned(),
+        label: "Hush".to_owned(),
+        description: None,
+        bypass: false,
+        live_switch: false,
+        may_fall_back: false,
+        icon: Some("ban".to_owned()),
+        tone: Some(ModeTone::Normal),
+        selectable: false,
+    };
+    assert_wire(
+        &mode,
+        &json!({
+            "id": "hush", "label": "Hush", "bypass": false, "live_switch": false, "may_fall_back": false,
+            "icon": "ban", "tone": "normal", "selectable": false
+        }),
+    );
+    let older: PermissionMode = serde_json::from_value(json!({ "id": "x", "label": "X" })).unwrap();
+    assert!(older.selectable, "an older peer's mode is offered");
+    assert_eq!((older.icon, older.tone), (None, None));
+    let offered = serde_json::to_value(PermissionMode {
+        selectable: true,
+        tone: Some(ModeTone::Warning),
+        ..mode
+    })
+    .unwrap();
+    assert!(
+        offered.get("selectable").is_none(),
+        "an offered mode omits it"
+    );
+    assert_eq!(offered["tone"], "warning");
+    let newer: PermissionMode =
+        serde_json::from_value(json!({ "id": "x", "label": "X", "tone": "loud" })).unwrap();
+    assert_eq!(newer.tone, Some(ModeTone::Unknown));
+}
+
+#[test]
+fn archive_and_list_params_and_the_archived_flag() {
+    assert_wire(
+        &AgentArchiveSessionParams {
+            session: "s1".to_owned(),
+            archived: true,
+        },
+        &json!({ "session": "s1", "archived": true }),
+    );
+    assert_wire(
+        &AgentListParams {
+            workspace: None,
+            include_archived: true,
+        },
+        &json!({ "include_archived": true }),
+    );
+    let older: AgentListParams = serde_json::from_value(json!({})).unwrap();
+    assert!(!older.include_archived);
+    let mut session = live_session();
+    assert!(
+        serde_json::to_value(&session)
+            .unwrap()
+            .get("archived")
+            .is_none()
+    );
+    session.archived = true;
+    let value = serde_json::to_value(&session).unwrap();
+    assert_eq!(value["archived"], true);
+    assert_eq!(
+        serde_json::from_value::<AgentSession>(value).unwrap(),
+        session
+    );
+}
+
+#[test]
+fn forget_takes_optional_workspace_removal_and_answers_with_the_session_flattened() {
+    let older: AgentForgetParams = serde_json::from_value(json!({ "session": "s1" })).unwrap();
+    assert!(!older.remove_workspace && !older.force && !older.discard_ignored);
+    assert_eq!(older.expect_dirty, None);
+    assert_wire(
+        &AgentForgetParams {
+            session: "s1".to_owned(),
+            remove_workspace: true,
+            force: true,
+            discard_ignored: true,
+            expect_dirty: Some(false),
+        },
+        &json!({
+            "session": "s1", "remove_workspace": true, "force": true, "discard_ignored": true,
+            "expect_dirty": false
+        }),
+    );
+    let forgotten = AgentForgotten {
+        session: live_session(),
+        workspace_removed: None,
+        workspace_error: Some(WorkspaceRemovalError {
+            code: "workspace.locked".to_owned(),
+            message: "locked".to_owned(),
+        }),
+    };
+    let value = serde_json::to_value(&forgotten).unwrap();
+    assert_eq!(
+        value["id"],
+        forgotten.session.id.as_str(),
+        "the session is flattened"
+    );
+    assert_eq!(value["workspace_error"]["code"], "workspace.locked");
+    assert!(value.get("workspace_removed").is_none());
+    assert_eq!(
+        serde_json::from_value::<AgentForgotten>(value.clone()).unwrap(),
+        forgotten
+    );
+    let as_session: AgentSession = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        as_session, forgotten.session,
+        "an older caller reads a session"
+    );
+}
+
+#[test]
+fn a_forget_preview_names_its_workspace_and_omits_what_is_absent() {
+    let preview = AgentForgetPreview {
+        session: "s1".to_owned(),
+        can_forget: true,
+        forget_blocker: None,
+        workspace: ForgetPreviewWorkspace {
+            id: "w1".to_owned(),
+            kind: WorkspaceKind::Worktree,
+            path: None,
+            branch: Some("feature".to_owned()),
+            removable: false,
+            blocker: Some("used by s2".to_owned()),
+            blocker_code: Some("agent.busy".to_owned()),
+            dirty: true,
+            untracked: false,
+            ignored_files: false,
+            other_sessions: vec!["s2".to_owned()],
+            other_teams: Vec::new(),
+            other_tasks: vec!["t1".to_owned()],
+            running_terminals: Vec::new(),
+        },
+    };
+    assert_wire(
+        &preview,
+        &json!({
+            "session": "s1",
+            "can_forget": true,
+            "workspace": {
+                "id": "w1", "kind": "worktree", "branch": "feature", "removable": false,
+                "blocker": "used by s2", "blocker_code": "agent.busy", "dirty": true, "untracked": false,
+                "other_sessions": ["s2"], "other_tasks": ["t1"]
+            }
+        }),
+    );
+}
+
+#[test]
+fn rename_takes_a_session_and_a_title() {
+    use massorca_protocol::methods::agents::{AgentRenameParams, MAX_TITLE_CHARS, RENAME};
+    assert_eq!(RENAME, "agent.rename");
+    assert_eq!(MAX_TITLE_CHARS, 120);
+    assert_wire(
+        &AgentRenameParams {
+            session: "s1".to_owned(),
+            title: "New name".to_owned(),
+        },
+        &json!({ "session": "s1", "title": "New name" }),
+    );
+}
+
+#[test]
+fn shared_folder_with_lists_the_other_writers_and_is_absent_when_empty() {
+    let shared = AgentSession {
+        shared_folder_with: vec!["s-2".to_owned()],
+        ..live_session()
+    };
+    let value = serde_json::to_value(shared.clone()).expect("serializes");
+    assert_eq!(value["shared_folder_with"], json!(["s-2"]));
+    let decoded: AgentSession = serde_json::from_value(value).expect("deserializes");
+    assert_eq!(decoded, shared);
+
+    let alone = serde_json::to_value(live_session()).expect("serializes");
+    assert!(alone.get("shared_folder_with").is_none(), "{alone}");
+    let older: AgentSession = serde_json::from_value(alone).expect("an older record decodes");
+    assert!(older.shared_folder_with.is_empty());
 }

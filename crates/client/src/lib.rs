@@ -11,6 +11,7 @@ mod extension_calls;
 mod git_calls;
 mod handshake;
 mod host_storage;
+mod hosted_service_calls;
 #[cfg(feature = "local")]
 mod hosts;
 mod identity_mismatch;

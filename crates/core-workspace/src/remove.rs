@@ -55,7 +55,96 @@ impl RemovalWaivers {
     };
 }
 
+/// What removing a workspace would meet, read without changing anything (decision 0163).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalPreview {
+    /// The workspace as it is now.
+    pub workspace: Workspace,
+    /// The refusal a removal with the given waivers would meet; `None` when it would go ahead.
+    pub refusal: Option<DomainError>,
+    /// The worktree has uncommitted changes to tracked files.
+    pub dirty: bool,
+    /// The worktree has untracked files.
+    pub untracked: bool,
+    /// The worktree holds ignored files that removal would delete.
+    pub ignored: bool,
+}
+
 impl Workspaces {
+    /// What removing `selector` with `waivers` would meet, without marking or changing anything: the same refusals
+    /// [`Workspaces::begin_remove`] runs, and the worktree's changes. A folder workspace has no git state to report.
+    pub fn removal_preview(
+        &self,
+        selector: &str,
+        waivers: RemovalWaivers,
+    ) -> Result<RemovalPreview, DomainError> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_workspace(selector)?;
+        let refusal = self.check_removable(&row, waivers).err();
+        let path = Path::new(&row.path);
+        let (dirty, untracked, ignored) =
+            if row.kind == StoreWorkspaceKind::Worktree && path.is_dir() {
+                match self.git.status_changes(path) {
+                    Ok(changes) => (
+                        changes.uncommitted > 0,
+                        changes.untracked > 0,
+                        changes.ignored > 0,
+                    ),
+                    Err(_) => (false, false, false),
+                }
+            } else {
+                (false, false, false)
+            };
+        Ok(RemovalPreview {
+            workspace: views::workspace(&row),
+            refusal,
+            dirty,
+            untracked,
+            ignored,
+        })
+    }
+
+    /// Runs the refusals of removing `selector` with `waivers` without marking or changing anything, so a caller can
+    /// refuse before it changes something else (decision 0163). A later removal runs them again.
+    pub fn check_remove(&self, selector: &str, waivers: RemovalWaivers) -> Result<(), DomainError> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_workspace(selector)?;
+        self.check_removable(&row, waivers).map(drop)
+    }
+
+    /// [`Workspaces::begin_remove`] with `guard` run first under the same mutation lock, before the row is marked
+    /// `removing` (decision 0163): a caller that must know nothing else uses the workspace checks that here, where no
+    /// removal can interleave. With `expect_clean`, a worktree that now has uncommitted or untracked changes is refused
+    /// with `workspace.dirty` whatever `waivers` say, since the person saw it clean. A refusal leaves the row as it was.
+    pub fn begin_remove_guarded<E: From<DomainError>>(
+        &self,
+        selector: &str,
+        waivers: RemovalWaivers,
+        expect_clean: bool,
+        guard: impl FnOnce(&Workspace) -> Result<(), E>,
+    ) -> Result<Workspace, E> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_workspace(selector)?;
+        guard(&views::workspace(&row))?;
+        let path = Path::new(&row.path);
+        if expect_clean && row.kind == StoreWorkspaceKind::Worktree && path.is_dir() {
+            let changes = self.git.status_changes(path).map_err(DomainError::from)?;
+            if changes.uncommitted > 0 || changes.untracked > 0 {
+                return Err(DomainError::new(
+                    codes::WORKSPACE_DIRTY,
+                    format!(
+                        "{} has changed since it was shown clean: {} uncommitted and {} untracked change(s); look again before removing it",
+                        row.path, changes.uncommitted, changes.untracked
+                    ),
+                )
+                .into());
+            }
+        }
+        let row = self.mark_removing(row)?;
+        self.settle(&row, |_| self.check_removable(&row, waivers))?;
+        Ok(views::workspace(&row))
+    }
+
     /// First half of removing `selector`. Marks the row `removing` and runs every refusal
     /// check, so the handler can publish `workspace.removing` with the returned workspace
     /// before it calls [`Workspaces::finish_remove`]. A refusal returns the row to `ready`.
@@ -70,6 +159,19 @@ impl Workspaces {
         let row = self.mark_removing(row)?;
         self.settle(&row, |_| self.check_removable(&row, waivers))?;
         Ok(views::workspace(&row))
+    }
+
+    /// Returns workspace `id` from `removing` to `ready` after [`Workspaces::begin_remove`], when a step before git
+    /// acts refuses the removal, such as a failed archive script (decision 0095). A row in any other state is left.
+    pub fn cancel_remove(&self, id: &str) -> Result<(), DomainError> {
+        let _guard = self.lock_mutations();
+        if let Some(row) = self.store.get_workspace(id)?
+            && row.state == StoreWorkspaceState::Removing
+        {
+            self.store
+                .set_workspace_state(&row.id, StoreWorkspaceState::Ready)?;
+        }
+        Ok(())
     }
 
     /// Second half of removing workspace `id`. Runs the checks again, since the tree may have
@@ -138,6 +240,7 @@ impl Workspaces {
             branch_deleted,
             branch_kept_reason,
             directory_kept,
+            archive: None,
         })
     }
 

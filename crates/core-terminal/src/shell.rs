@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::credential_guard::{self, CREDENTIAL_GUARD_ENV};
+
 /// A copy of environment variables. `Debug` shows names only: values can be secrets.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct EnvSnapshot {
@@ -52,7 +54,7 @@ impl EnvSnapshot {
 }
 
 /// Whether two variable names are the same: case-insensitive on Windows only.
-fn names_match(a: &str, b: &str) -> bool {
+pub(crate) fn names_match(a: &str, b: &str) -> bool {
     if cfg!(windows) {
         a.eq_ignore_ascii_case(b)
     } else {
@@ -172,7 +174,7 @@ pub fn build_environment(
     base: &EnvSnapshot,
     terminal: &TerminalEnv,
 ) -> Vec<(String, crate::EnvValue)> {
-    let mut vars: BTreeMap<String, (String, crate::EnvValue)> = BTreeMap::new();
+    let mut vars: EnvMap = BTreeMap::new();
     for (name, value) in &base.vars {
         if !REMOVED.iter().any(|removed| names_match(removed, name)) {
             vars.insert(
@@ -181,12 +183,7 @@ pub fn build_environment(
             );
         }
     }
-    let mut set = |name: &str, value: &str| {
-        vars.insert(
-            key(name),
-            (name.to_owned(), crate::EnvValue::new(value.to_owned())),
-        );
-    };
+    let mut set = |name: &str, value: &str| set_var(&mut vars, name, value);
     set("TERM", "xterm-256color");
     set("COLORTERM", "truecolor");
     set("TERM_PROGRAM", "MassOrca");
@@ -202,11 +199,28 @@ pub fn build_environment(
     for (name, value) in terminal.extra {
         set(name, value.as_str());
     }
+    // Consumed here, so the program never sees the request, from either source (TERM-24).
+    let guarded = credential_guard::requested(terminal.extra);
+    vars.remove(&key(CREDENTIAL_GUARD_ENV));
+    if guarded {
+        credential_guard::apply(&mut vars);
+    }
     vars.into_values().collect()
 }
 
+/// A terminal's environment, keyed by the map key of each name; each entry keeps the name as given.
+pub(crate) type EnvMap = BTreeMap<String, (String, crate::EnvValue)>;
+
+/// Sets `name` in a terminal's environment, replacing a value under the same name.
+pub(crate) fn set_var(vars: &mut EnvMap, name: &str, value: &str) {
+    vars.insert(
+        key(name),
+        (name.to_owned(), crate::EnvValue::new(value.to_owned())),
+    );
+}
+
 /// The map key for a variable name: Windows names are case-insensitive.
-fn key(name: &str) -> String {
+pub(crate) fn key(name: &str) -> String {
     if cfg!(windows) {
         name.to_ascii_uppercase()
     } else {

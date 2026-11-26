@@ -17,8 +17,18 @@ pub const NEEDS_NEWER_SERVICE: &str = "Needs a newer service.";
 /// Why "No project" is off until the service can start an agent without a workspace (A95).
 pub const NO_PROJECT_NEEDS_SERVICE: &str = NEEDS_NEWER_SERVICE;
 
-/// Send's reason while "Use an existing branch" has no branch name to reuse.
-pub const NAME_THE_BRANCH: &str = "Name the branch to reuse.";
+/// Why the branch pill is off with "No project": the conversation runs in the conversations folder, with no worktree.
+pub const NO_WORKTREE_REASON: &str =
+    "A conversation with no project runs in the conversations folder, with no worktree.";
+
+/// Why the "New worktree" switch stays on: the service makes a worktree for every Git project, and the main checkout is
+/// not offered yet.
+pub const NEW_WORKTREE_REASON: &str =
+    "Every Git project gets its own worktree; working in the main checkout is not offered yet.";
+
+/// Why the branch pill is off for a folder project: a folder is not a Git repository, so it has no worktree or branch.
+pub const FOLDER_NO_GIT_REASON: &str =
+    "This folder is not a Git repository, so it has no worktree or branch.";
 
 /// Send's reason while there is no project to create the workspace in.
 pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
@@ -26,30 +36,74 @@ pub const ADD_A_PROJECT: &str = "Add a project to start a session.";
 /// The project button's text while there is none.
 pub const CHOOSE_A_PROJECT: &str = "Choose a project";
 
-/// How many of the prompt's words name the workspace, and the longest name they make.
-const SEED_WORDS: usize = 5;
+/// The longest name a prompt's words make: the name stops before the word that would pass it.
 const SEED_MAX: usize = 40;
 
-/// A workspace name from the prompt's first words: lowercase ASCII letters and digits joined by
-/// `-`. Empty when no word survives, which asks the service for a generated name.
+/// How many names a derived name is tried under when the service cannot make names unique: itself, then -2 to -9.
+pub const FREE_NAME_TRIES: usize = 9;
+
+/// Words a derived name never ends on: English and Spanish connectors and stop words.
+const CONNECTORS: &[&str] = &[
+    "a", "al", "an", "and", "as", "at", "be", "by", "con", "de", "del", "e", "el", "en", "for",
+    "from", "in", "is", "it", "la", "las", "lo", "los", "o", "of", "on", "or", "para", "por",
+    "que", "se", "su", "sus", "the", "to", "un", "una", "with", "y",
+];
+
+/// The plain ASCII letter a Latin letter with an accent reads as, so "qué" keeps its letters in a name.
+fn plain_letter(c: char) -> char {
+    match c {
+        'á' | 'à' | 'ä' | 'â' | 'Á' | 'À' | 'Ä' | 'Â' => 'a',
+        'é' | 'è' | 'ë' | 'ê' | 'É' | 'È' | 'Ë' | 'Ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' | 'Í' | 'Ì' | 'Ï' | 'Î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' | 'Ó' | 'Ò' | 'Ö' | 'Ô' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' | 'Ú' | 'Ù' | 'Ü' | 'Û' => 'u',
+        'ñ' | 'Ñ' => 'n',
+        'ç' | 'Ç' => 'c',
+        other => other,
+    }
+}
+
+/// A workspace name from the prompt's words: lowercase ASCII letters and digits joined by `-`, whole words only, within
+/// `SEED_MAX` characters, and never ending on a connector. Empty when no word survives, which asks the service for a
+/// generated name.
+// Interim until the core session's generated-name option lands on `workspace.create`; its flag name comes later.
 pub fn workspace_name_seed(prompt: &str) -> String {
-    let mut name = String::new();
-    let words = prompt
+    let folded: String = prompt.chars().map(plain_letter).collect();
+    let words = folded
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
-        .take(SEED_WORDS);
+        .map(str::to_ascii_lowercase);
+    let mut kept: Vec<String> = Vec::new();
+    let mut length = 0;
     for word in words {
-        let word = word.to_ascii_lowercase();
-        let extra = usize::from(!name.is_empty()) + word.len();
-        if name.len() + extra > SEED_MAX {
+        let extra = usize::from(!kept.is_empty()) + word.len();
+        if length + extra > SEED_MAX {
             break;
         }
-        if !name.is_empty() {
-            name.push('-');
-        }
-        name.push_str(&word);
+        length += extra;
+        kept.push(word);
     }
-    name
+    while kept
+        .last()
+        .is_some_and(|word| CONNECTORS.contains(&word.as_str()))
+    {
+        kept.pop();
+    }
+    kept.join("-")
+}
+
+/// The name a derived name is tried under on attempt `attempt` (counted from 1): the name, then `-2` after it.
+pub fn name_for_try(base: &str, attempt: usize) -> String {
+    if attempt <= 1 {
+        base.to_owned()
+    } else {
+        format!("{base}-{attempt}")
+    }
+}
+
+/// Whether the start page derives the workspace's name from the prompt: a name the person typed is never changed.
+pub fn name_is_derived(details: &WorkspaceDetails) -> bool {
+    details.name.trim().is_empty()
 }
 
 /// The project the page creates in: the chosen one while the service lists it, else the first.
@@ -72,23 +126,14 @@ pub fn home_choice(projects: &[Project], chosen: Option<&ProjectChoice>) -> Opti
     home_project(projects, id).map(|project| ProjectChoice::Project(project.id.clone()))
 }
 
-/// The Advanced section's fields as Send reads them. Blank text sends nothing for its field.
+/// The branch popover's choices as Send reads them (D-AG-01). A blank base takes the project's base. The name is
+/// derived from the prompt; a name typed anywhere is never changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkspaceDetails {
     /// Blank takes the prompt's first words, or the service's generated name.
     pub name: String,
-    /// The new branch's name, or the existing branch's when `existing_branch` is set.
-    pub branch: String,
-    /// The base ref the new branch starts from.
+    /// The branch the new worktree starts from; blank takes the project's base.
     pub base: String,
-    pub existing_branch: bool,
-}
-
-impl WorkspaceDetails {
-    /// Why Send is off: a branch to reuse must be named.
-    pub fn send_block(&self) -> Option<&'static str> {
-        (self.existing_branch && non_empty(&self.branch).is_none()).then_some(NAME_THE_BRANCH)
-    }
 }
 
 /// The branch pill's two labels: the branch Send creates or reuses, and where a new worktree starts (D-AG-01).
@@ -98,15 +143,9 @@ pub struct BranchPill {
     pub detail: String,
 }
 
-/// The branch pill's labels: a new worktree from the base the menu names, else the project's base, else the default
-/// branch; or the branch the menu reuses.
+/// The branch pill's labels: a new worktree from the base the popover names, else the project's base, else the default
+/// branch.
 pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> BranchPill {
-    if details.existing_branch {
-        return BranchPill {
-            label: non_empty(&details.branch).unwrap_or_else(|| "Existing branch".to_owned()),
-            detail: "existing branch".to_owned(),
-        };
-    }
     let base = non_empty(&details.base)
         .or_else(|| project_base.and_then(non_empty))
         .unwrap_or_else(|| "the default branch".to_owned());
@@ -124,7 +163,8 @@ pub fn no_project_branch_pill() -> BranchPill {
     }
 }
 
-/// The `workspace.create` that Send asks for: a new worktree in `project`.
+/// The `workspace.create` that Send asks for: a new worktree in `project`, from the base the popover names when it
+/// names one; without one the service starts from the project's base.
 pub fn create_params(
     project: &str,
     prompt: &str,
@@ -133,9 +173,9 @@ pub fn create_params(
     WorkspaceCreateParams {
         project: project.to_owned(),
         name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
-        branch: non_empty(&details.branch),
+        branch: None,
         base: non_empty(&details.base),
-        existing_branch: details.existing_branch,
+        existing_branch: false,
         refresh_base: false,
         path: None,
         request_id: None,
@@ -156,8 +196,16 @@ pub fn home_start_params(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    start_in(Some(workspace), kind, prompt, permission_mode, options)
+    start_in(
+        Some(workspace),
+        kind,
+        prompt,
+        permission_mode,
+        options,
+        grid,
+    )
 }
 
 /// The `agent.start` with no workspace, which the service takes only with `agent-no-project/1`: the session runs in its
@@ -167,8 +215,9 @@ pub fn no_project_start_params(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    start_in(None, kind, prompt, permission_mode, options)
+    start_in(None, kind, prompt, permission_mode, options, grid)
 }
 
 /// The `agent.start` in `workspace`, or with none. A blank prompt starts the agent with none.
@@ -178,8 +227,9 @@ fn start_in(
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
-    let mut params = start_params(workspace, kind, prompt, permission_mode, options);
+    let mut params = start_params(workspace, kind, prompt, permission_mode, options, grid);
     if prompt.trim().is_empty() {
         params.prompt = None;
     }
@@ -199,9 +249,57 @@ mod tests {
         );
         assert_eq!(
             workspace_name_seed("  Add OAuth2: Google, GitHub & more providers now"),
-            "add-oauth2-google-github-more"
+            "add-oauth2-google-github-more-providers"
         );
-        assert_eq!(workspace_name_seed("¿Qué tal?"), "qu-tal");
+        assert_eq!(workspace_name_seed("¿Qué tal?"), "que-tal");
+    }
+
+    #[test]
+    fn the_name_never_ends_on_a_connector_in_english_or_spanish() {
+        assert_eq!(
+            workspace_name_seed("Explora el proyecto actual y"),
+            "explora-el-proyecto-actual"
+        );
+        assert_eq!(
+            workspace_name_seed("Migrate the authentication service to the new identity provider"),
+            "migrate-the-authentication-service"
+        );
+        assert_eq!(
+            workspace_name_seed(
+                "Implementar la paginación de resultados para el panel de administración"
+            ),
+            "implementar-la-paginacion-de-resultados"
+        );
+        assert_eq!(workspace_name_seed("Fix the bug in"), "fix-the-bug");
+        assert_eq!(workspace_name_seed("the a and o y"), "");
+    }
+
+    #[test]
+    fn the_name_keeps_whole_words_within_the_budget() {
+        let prompt = "Migrate the authentication service to the new identity provider";
+        let name = workspace_name_seed(prompt);
+        assert!(name.len() <= SEED_MAX);
+        let words: Vec<&str> = prompt.split(' ').collect();
+        assert!(
+            name.split('-')
+                .all(|part| words.iter().any(|word| word.eq_ignore_ascii_case(part))),
+            "every part of {name:?} is a whole word of the prompt"
+        );
+        assert_eq!(
+            workspace_name_seed("extraordinarilylongmodulenameherereallyverylongindeed"),
+            "",
+            "a single word past the budget is not cut"
+        );
+    }
+
+    #[test]
+    fn a_retry_adds_the_suffix_from_the_second_try_on() {
+        assert_eq!(name_for_try("fix-the-bug", 1), "fix-the-bug");
+        assert_eq!(name_for_try("fix-the-bug", 2), "fix-the-bug-2");
+        assert_eq!(
+            name_for_try("fix-the-bug", FREE_NAME_TRIES),
+            "fix-the-bug-9"
+        );
     }
 
     #[test]
@@ -215,7 +313,7 @@ mod tests {
         let name = workspace_name_seed(
             "refactor everything inside the extraordinarilylongmodulenameherereally",
         );
-        assert_eq!(name, "refactor-everything-inside-the");
+        assert_eq!(name, "refactor-everything-inside");
         assert!(name.len() <= SEED_MAX);
     }
 
@@ -243,23 +341,46 @@ mod tests {
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
         assert_eq!(params.branch, None);
-        assert_eq!(params.base, None);
+        assert_eq!(
+            params.base, None,
+            "no base picked: the service starts from the project's base"
+        );
         assert!(!params.existing_branch);
     }
 
     #[test]
-    fn typed_details_name_the_workspace_and_add_its_branch_and_base() {
+    fn a_picked_base_is_the_base_the_worktree_starts_from() {
         let details = WorkspaceDetails {
-            name: "  login-fix ".into(),
-            branch: "feat/login".into(),
-            base: "main".into(),
-            existing_branch: false,
+            name: String::new(),
+            base: " release ".into(),
         };
         let params = create_params("p1", "fix the login", &details);
-        assert_eq!(params.name, "login-fix");
-        assert_eq!(params.branch.as_deref(), Some("feat/login"));
-        assert_eq!(params.base.as_deref(), Some("main"));
+        assert_eq!(params.base.as_deref(), Some("release"));
+        assert_eq!(params.branch, None);
         assert!(!params.existing_branch);
+    }
+
+    #[test]
+    fn a_typed_name_is_never_changed() {
+        let details = WorkspaceDetails {
+            name: "  login-fix ".into(),
+            ..WorkspaceDetails::default()
+        };
+        assert_eq!(
+            create_params("p1", "fix the login", &details).name,
+            "login-fix"
+        );
+    }
+
+    #[test]
+    fn only_a_blank_name_is_derived_from_the_prompt() {
+        let blank = WorkspaceDetails::default();
+        let typed = WorkspaceDetails {
+            name: "mine".into(),
+            ..WorkspaceDetails::default()
+        };
+        assert!(name_is_derived(&blank));
+        assert!(!name_is_derived(&typed), "a typed name is never changed");
     }
 
     #[test]
@@ -269,21 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn reusing_a_branch_needs_its_name_and_then_sends_it_as_existing() {
-        let mut details = WorkspaceDetails {
-            existing_branch: true,
-            ..WorkspaceDetails::default()
-        };
-        assert_eq!(details.send_block(), Some(NAME_THE_BRANCH));
-        details.branch = " feat/login ".into();
-        assert_eq!(details.send_block(), None);
-        let params = create_params("p1", "fix the login", &details);
-        assert_eq!(params.branch.as_deref(), Some("feat/login"));
-        assert!(params.existing_branch);
-    }
-
-    #[test]
-    fn a_new_worktree_starts_from_the_base_the_menu_names_then_the_project_base() {
+    fn a_new_worktree_starts_from_the_picked_base_then_the_project_base() {
         let mut details = WorkspaceDetails::default();
         assert_eq!(branch_pill(&details, None).label, "New worktree");
         assert_eq!(
@@ -296,30 +403,20 @@ mod tests {
     }
 
     #[test]
-    fn reusing_a_branch_shows_the_name_typed_or_asks_for_one() {
-        let mut details = WorkspaceDetails {
-            existing_branch: true,
-            ..WorkspaceDetails::default()
-        };
-        assert_eq!(branch_pill(&details, Some("main")).label, "Existing branch");
-        details.branch = " feat/login ".into();
-        assert_eq!(
-            branch_pill(&details, Some("main")),
-            BranchPill {
-                label: "feat/login".into(),
-                detail: "existing branch".into(),
-            }
-        );
-    }
-
-    #[test]
     fn a_blank_prompt_starts_the_agent_with_no_prompt() {
         let none = StartOptions::default;
         assert_eq!(
-            home_start_params("w9", "claude", "  ", None, none()).prompt,
+            home_start_params("w9", "claude", "  ", None, none(), (120, 40)).prompt,
             None
         );
-        let params = home_start_params("w9", "claude", "fix it", Some("plan".into()), none());
+        let params = home_start_params(
+            "w9",
+            "claude",
+            "fix it",
+            Some("plan".into()),
+            none(),
+            (120, 40),
+        );
         assert_eq!(params.workspace.as_deref(), Some("w9"));
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
@@ -345,7 +442,7 @@ mod tests {
             model: Some("opus".to_owned()),
             effort: Some("xhigh".to_owned()),
         };
-        let params = no_project_start_params("claude", "fix it", None, options);
+        let params = no_project_start_params("claude", "fix it", None, options, (120, 40));
         assert_eq!(params.workspace, None);
         assert_eq!(params.model.as_deref(), Some("opus"));
         assert_eq!(params.effort.as_deref(), Some("xhigh"));
@@ -358,12 +455,14 @@ mod tests {
             "fix it",
             Some("plan".into()),
             StartOptions::default(),
+            (120, 40),
         );
         assert_eq!(params.workspace, None);
         assert_eq!(params.prompt.as_deref(), Some("fix it"));
         assert_eq!(params.permission_mode.as_deref(), Some("plan"));
         assert_eq!(
-            no_project_start_params("claude", "  ", None, StartOptions::default()).prompt,
+            no_project_start_params("claude", "  ", None, StartOptions::default(), (120, 40))
+                .prompt,
             None
         );
     }

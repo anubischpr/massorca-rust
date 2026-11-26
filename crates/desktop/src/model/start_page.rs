@@ -23,8 +23,8 @@ pub const NO_AGENTS_INSTALLED: &str = "No agents installed.";
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 
-/// Where a session started from the page opens: as a Conversation in the Canvas, or as the agent's
-/// own terminal in the Work panel (D-AG-01, pv96). Chat is the default.
+/// How a session started from the page runs: as a Conversation (chat), or as the agent's own terminal. Both open
+/// in the Canvas (D-AG-01, owner ruling 2026-11-25). Chat is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StartMode {
     #[default]
@@ -111,7 +111,8 @@ fn cannot_chat(name: &str, chat: Option<&KindChat>) -> String {
                 None => format!("{name} cannot run chat sessions."),
             }
         }
-        None => format!("{name} cannot run chat sessions."),
+        // A reason from a newer service reads as the plain one.
+        Some(ChatUnsupportedReason::Unknown) | None => format!("{name} cannot run chat sessions."),
     }
 }
 
@@ -122,7 +123,7 @@ fn version_and_range(chat: &KindChat) -> Option<(&str, &str)> {
 
 /// The note under the composer while Terminal is chosen (WS-40).
 pub const TERMINAL_NOTE: &str =
-    "The agent opens in a Work panel terminal. Some features are limited there.";
+    "The agent runs in its own terminal. Some features are limited there.";
 
 /// The key hints under the composer, each key with what it does (D-AG-01).
 pub const KEY_HINTS: [(&str, &str); 4] = [
@@ -190,56 +191,45 @@ pub struct StartOptions {
     pub effort: Option<String>,
 }
 
-/// The protocol value of a picker effort label: the values the Claude kind's `--effort` takes.
-pub fn effort_value(label: &str) -> Option<&'static str> {
-    match label {
-        "Low" => Some("low"),
-        "Medium" => Some("medium"),
-        "High" => Some("high"),
-        "Extra High" => Some("xhigh"),
-        "Max" => Some("max"),
-        _ => None,
-    }
-}
-
-/// Whether the picker row `model` is a real model of `kind`, not the kind's own row. No kind declares models yet, so
-/// each kind's only row is itself; the per-kind model lists from the kind options PR make the other rows real.
-pub fn is_real_model(kind: &str, model: &str) -> bool {
-    model != kind
-}
-
-/// The options a start sends for the picker's row `model` of `kind`, whose effort is the index `effort` of `efforts`
-/// (the labels). Sent only when the service offers `agent-options/1`, the row is a real model, and the effort names a
-/// level the model offers.
-pub fn start_options(
-    offered: bool,
-    kind: &str,
-    model: &str,
-    efforts: &[&str],
-    effort: Option<usize>,
-) -> StartOptions {
-    if !offered || !is_real_model(kind, model) {
+/// The options a start sends: the declared model id and the declared effort id the picker chose (decisions 0094 and
+/// 0096). Sent only when the service offers `agent-options/1`; a row with no declared model passes `None` for both.
+pub fn start_options(offered: bool, model: Option<&str>, effort: Option<&str>) -> StartOptions {
+    if !offered {
         return StartOptions::default();
     }
-    let effort = effort
-        .and_then(|index| efforts.get(index))
-        .and_then(|label| effort_value(label))
-        .map(str::to_owned);
     StartOptions {
-        model: Some(model.to_owned()),
-        effort,
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, at the
-/// Work panel's terminal size. A `permission_mode` is sent only when the person picked one; without it the vendor CLI
-/// starts in its own default.
+/// Why Fast is off on every model until the service offers `agent-fast/1`. No declared model carries a Fast flag yet, and
+/// `agent.start` has no field for a speed, so Fast stays off even once the service offers it.
+pub const FAST_NEEDS_NEWER_SERVICE: &str = "Fast mode needs a newer service.";
+
+/// The reason Fast is off on every model, or `None` once the service offers fast speed.
+pub fn fast_reason(service_offers_fast: bool) -> Option<&'static str> {
+    (!service_offers_fast).then_some(FAST_NEEDS_NEWER_SERVICE)
+}
+
+/// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
+/// drew (`shown`), else the grid that fits the Conversation pane (`fitted`), else the Work panel's fixed grid.
+pub fn start_grid(shown: Option<(u16, u16)>, fitted: Option<(u16, u16)>) -> (u16, u16) {
+    shown
+        .or(fitted)
+        .unwrap_or((NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS))
+}
+
+/// The `agent.start` call that opens a session in `workspace` (none starts it with no project) with `prompt`, its
+/// terminal at `grid` (see `start_grid`). A `permission_mode` is sent only when the person picked one; without it the
+/// vendor CLI starts in its own default.
 pub fn start_params(
     workspace: Option<&str>,
     kind: &str,
     prompt: &str,
     permission_mode: Option<String>,
     options: StartOptions,
+    grid: (u16, u16),
 ) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.map(str::to_owned),
@@ -249,12 +239,28 @@ pub fn start_params(
         env: BTreeMap::new(),
         read_only: false,
         title: None,
-        cols: Some(NEW_TERMINAL_COLS),
-        rows: Some(NEW_TERMINAL_ROWS),
+        cols: Some(grid.0),
+        rows: Some(grid.1),
         request_id: None,
         permission_mode,
         model: options.model,
         effort: options.effort,
+    }
+}
+
+/// The `agent.start` call that starts a session again in `workspace` with `kind`, its terminal at `grid`: no first
+/// prompt, and no saved conversation carried over from the session it replaces.
+pub fn start_again_params(workspace: &str, kind: &str, grid: (u16, u16)) -> AgentStartParams {
+    AgentStartParams {
+        prompt: None,
+        ..start_params(
+            Some(workspace),
+            kind,
+            "",
+            None,
+            StartOptions::default(),
+            grid,
+        )
     }
 }
 
@@ -477,6 +483,15 @@ mod tests {
     }
 
     #[test]
+    fn a_reason_from_a_newer_service_reads_as_the_plain_reason() {
+        let newer = agent_chat(false, Some(ChatUnsupportedReason::Unknown));
+        assert_eq!(
+            ChatAvailability::new(true, Some(("Claude", Some(&newer)))).reason(),
+            Some("Claude cannot run chat sessions.")
+        );
+    }
+
+    #[test]
     fn a_version_outside_the_range_names_the_range_and_the_version_found() {
         let outside = KindChat {
             supported: false,
@@ -507,74 +522,70 @@ mod tests {
             "fix the login",
             None,
             StartOptions::default(),
+            (150, 70),
         );
         assert_eq!(params.workspace.as_deref(), Some("w1"));
         assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
-        assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
+        assert_eq!((params.cols, params.rows), (Some(150), Some(70)));
     }
 
-    const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
-
     #[test]
-    fn each_picker_effort_label_is_the_protocol_value_the_claude_kind_takes() {
-        let values: Vec<_> = LEVELS.iter().map(|label| effort_value(label)).collect();
+    fn a_new_session_starts_at_the_shown_grid_else_the_fitted_one_else_the_work_panel_size() {
         assert_eq!(
-            values,
-            [
-                Some("low"),
-                Some("medium"),
-                Some("high"),
-                Some("xhigh"),
-                Some("max")
-            ]
+            start_grid(Some((150, 70)), Some((100, 30))),
+            (150, 70),
+            "the grid the session view last drew wins"
         );
-        assert_eq!(effort_value("Turbo"), None);
+        assert_eq!(start_grid(None, Some((100, 30))), (100, 30));
+        assert_eq!(
+            start_grid(None, None),
+            (NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS)
+        );
     }
 
     #[test]
     fn without_the_capability_neither_model_nor_effort_is_sent() {
-        let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
+        let options = start_options(false, Some("opus"), Some("xhigh"));
         assert_eq!(options, StartOptions::default());
-        let params = start_params(Some("w1"), "claude", "hi", None, options);
+        let params = start_params(Some("w1"), "claude", "hi", None, options, (120, 40));
         assert_eq!((params.model, params.effort), (None, None));
     }
 
     #[test]
-    fn a_kind_row_is_not_a_model_so_neither_is_sent_even_when_offered() {
-        assert!(!is_real_model("claude", "claude"));
+    fn a_declared_model_sends_its_id_and_the_declared_effort_id_as_it_is() {
+        // An effort id no label table names still goes out unchanged: the id is the protocol value.
         assert_eq!(
-            start_options(true, "claude", "claude", &[], None),
-            StartOptions::default()
-        );
-    }
-
-    #[test]
-    fn a_real_model_sends_its_model_and_the_effort_the_row_chose() {
-        let options = start_options(true, "claude", "opus", &LEVELS, Some(3));
-        assert_eq!(
-            options,
+            start_options(true, Some("opus"), Some("xhigh")),
             StartOptions {
                 model: Some("opus".to_owned()),
                 effort: Some("xhigh".to_owned()),
             }
         );
+        assert_eq!(
+            start_options(true, Some("codex-x"), Some("ultra"))
+                .effort
+                .as_deref(),
+            Some("ultra")
+        );
     }
 
     #[test]
-    fn a_model_without_an_effort_sends_the_model_alone_and_an_unknown_level_sends_no_effort() {
+    fn fast_is_off_with_its_reason_until_the_service_offers_agent_fast() {
+        assert_eq!(fast_reason(false), Some(FAST_NEEDS_NEWER_SERVICE));
+        assert_eq!(fast_reason(true), None);
+    }
+
+    #[test]
+    fn a_model_without_an_effort_sends_the_model_alone_and_no_model_sends_neither() {
         assert_eq!(
-            start_options(true, "claude", "haiku", &[], None).effort,
-            None
+            start_options(true, Some("haiku"), None),
+            StartOptions {
+                model: Some("haiku".to_owned()),
+                effort: None,
+            }
         );
-        assert_eq!(
-            start_options(true, "claude", "opus", &["Turbo"], Some(0)).effort,
-            None
-        );
-        assert_eq!(
-            start_options(true, "claude", "opus", &LEVELS, Some(9)).effort,
-            None
-        );
+        assert_eq!(start_options(true, None, None), StartOptions::default());
     }
 }

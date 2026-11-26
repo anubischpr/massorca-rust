@@ -259,6 +259,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
     } else {
         None
     };
+    // Probed once per installed program (decision 0101, D10).
+    let chat = crate::chat::version::kind_chat(decl, program_path.as_deref());
     AgentKind {
         id: entry.id.clone(),
         name: decl.name.clone(),
@@ -277,7 +279,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
-        chat: None,
+        chat,
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
     }
@@ -323,6 +325,16 @@ fn mode_view(mode: &PermissionModeDecl) -> wire::PermissionMode {
         bypass: mode.bypass,
         live_switch: mode.live_switch.is_some(),
         may_fall_back: mode.may_fall_back,
+        icon: mode.icon.clone(),
+        // A bypass mode that names no tone still warns (decision 0163).
+        tone: match mode.tone.as_deref() {
+            Some(crate::kind::MODE_TONE_WARNING) => Some(wire::ModeTone::Warning),
+            Some(crate::kind::MODE_TONE_NORMAL) => Some(wire::ModeTone::Normal),
+            Some(_) => Some(wire::ModeTone::Unknown),
+            None if mode.bypass => Some(wire::ModeTone::Warning),
+            None => None,
+        },
+        selectable: mode.selectable,
     }
 }
 
@@ -660,6 +672,13 @@ mod tests {
             modes_of(claude),
             [
                 (
+                    "auto",
+                    "Auto",
+                    vec!["--permission-mode", "auto"],
+                    None,
+                    false
+                ),
+                (
                     "default",
                     "Manual",
                     vec!["--permission-mode", "default"],
@@ -668,7 +687,7 @@ mod tests {
                 ),
                 (
                     "acceptEdits",
-                    "Edit automatically",
+                    "Accept edits",
                     vec!["--permission-mode", "acceptEdits"],
                     None,
                     false
@@ -681,11 +700,11 @@ mod tests {
                     false
                 ),
                 (
-                    "auto",
-                    "Auto",
-                    vec!["--permission-mode", "auto"],
+                    "bypassPermissions",
+                    "Bypass permissions",
+                    vec!["--permission-mode", "bypassPermissions"],
                     None,
-                    false
+                    true
                 ),
                 (
                     "dontAsk",
@@ -694,13 +713,23 @@ mod tests {
                     None,
                     false
                 ),
-                (
-                    "bypassPermissions",
-                    "Bypass permissions",
-                    vec!["--permission-mode", "bypassPermissions"],
-                    None,
-                    true
-                ),
+            ]
+        );
+        // `dontAsk` stays declared, so a session reporting it shows its name, but it is not offered (decision 0163).
+        let offered: Vec<&str> = claude
+            .permission_modes
+            .iter()
+            .filter(|mode| mode.selectable)
+            .map(|mode| mode.id.as_str())
+            .collect();
+        assert_eq!(
+            offered,
+            [
+                "auto",
+                "default",
+                "acceptEdits",
+                "plan",
+                "bypassPermissions"
             ]
         );
 
@@ -822,11 +851,77 @@ mod tests {
                 bypass: true,
                 live_switch: true,
                 may_fall_back: false,
+                icon: Some("shield-alert".to_owned()),
+                tone: Some(wire::ModeTone::Warning),
+                selectable: true,
             }
         );
         let claude = views.iter().find(|kind| kind.id == "claude").unwrap();
         assert_eq!(claude.permission_modes.len(), 6);
         assert!(claude.permission_modes.iter().all(|mode| !mode.live_switch));
+    }
+
+    #[test]
+    fn a_bypass_mode_without_a_tone_is_listed_as_warning() {
+        let decl: PermissionModeDecl = serde_json::from_value(serde_json::json!({
+            "id": "open", "label": "Open", "args": ["-o"], "bypass": true
+        }))
+        .unwrap();
+        assert_eq!(mode_view(&decl).tone, Some(wire::ModeTone::Warning));
+        let plain: PermissionModeDecl =
+            serde_json::from_value(serde_json::json!({ "id": "a", "label": "A", "args": ["-a"] }))
+                .unwrap();
+        assert_eq!(mode_view(&plain).tone, None);
+    }
+
+    #[test]
+    fn every_built_in_mode_has_a_description_an_icon_and_a_tone() {
+        for kind in built_ins() {
+            assert!(
+                kind.problems().is_empty(),
+                "{}: {:?}",
+                kind.id,
+                kind.problems()
+            );
+            for mode in &kind.permission_modes {
+                let name = format!("{} {}", kind.id, mode.id);
+                assert!(
+                    mode.description
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()),
+                    "{name} has no description"
+                );
+                assert!(mode.icon.is_some(), "{name} has no icon");
+                let tone = mode.tone.as_deref();
+                assert!(
+                    matches!(tone, Some("normal" | "warning")),
+                    "{name}: {tone:?}"
+                );
+                assert_eq!(
+                    mode.bypass,
+                    tone == Some("warning"),
+                    "{name}: only a bypass mode warns"
+                );
+            }
+        }
+        let profile = tempfile::tempdir().unwrap();
+        let views = Catalog::load(&BuiltInPackages, profile.path())
+            .views(profile.path(), &SearchEnv::default());
+        let claude = views.iter().find(|kind| kind.id == "claude").unwrap();
+        let bypass = claude
+            .permission_modes
+            .iter()
+            .find(|mode| mode.id == "bypassPermissions")
+            .unwrap();
+        assert_eq!(bypass.icon.as_deref(), Some("shield-alert"));
+        assert_eq!(bypass.tone, Some(wire::ModeTone::Warning));
+        assert!(bypass.selectable);
+        let dont_ask = claude
+            .permission_modes
+            .iter()
+            .find(|mode| mode.id == "dontAsk")
+            .unwrap();
+        assert!(!dont_ask.selectable);
     }
 
     #[test]

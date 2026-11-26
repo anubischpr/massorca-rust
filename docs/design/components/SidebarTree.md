@@ -18,15 +18,29 @@ Workspaces mode, top to bottom:
 | "Projects" header with actions: bell (notifications), list-filter (filter), folder-plus (add folder), plus (new project) | `overline` text in `text.secondary` | header 24 (`size.control.compact`); actions 16 px icons in 24 px boxes |
 | Project rows (top level, A10): the project icon (A41: the folder glyph or the user's chosen icon, 16 px), name, owner or org in secondary text | SidebarRow project | row 28 |
 | Host rows under each project, one per host where the project lives (D-HO-01): `server` icon, host name, connection dot, state word | SidebarRow host | row 28 |
-| Workspaces under their host row: `git-branch` icon (worktree) or `folder` (plain folder), name | SidebarRow workspace | row 28 |
-| Sessions under their workspace: AgentStatus glyph 12 px, the agent icon 16 px (A84), title | SidebarRow session | row 28 |
+| Sessions directly under their host row (A97; no workspace row): AgentStatus glyph 12 px, the agent icon 16 px (A84), session title | SidebarRow session | row 28 |
 | Child sessions nested under their parent session, by indentation only, no connector lines (A83); the indent places the child's agent icon in line with the first letter of the parent's title (A85) | SidebarRow session, child | row 28 |
 | Group "Unknown" for projects with no repository | SidebarRow group | row 28 |
+| Group "No project" (A95, A97) after the projects, struck-through folder icon: sessions started with "No project", under their host rows like a project; hidden when empty | SidebarRow project | row 28 |
+
+### Session rows (A97, 2026-11-24)
+
+- **What a row is.** One session. There is no workspace row: the workspace (git worktree and branch, or plain folder) belongs to the session and is not a level of the tree.
+- **Label.** The session title. Until the agent sets one, the row shows the branch name of its worktree (a plain folder shows the folder name).
+- **Where the worktree shows.** In the row tooltip ("feat/billing-export · ~/oppm-worktrees/feat-billing-export", or the folder path), in the Session summary Environment card (Repository and Branch rows), and in the row menu (Copy path, Open folder, Reveal in Work panel). Never as a row of its own.
+- **A session whose agent stopped** stays as a row with the idle glyph (artboard: fix-run-period). Rows leave the tree only when the session is archived or deleted.
+- **A workspace created without a session yet** (New workspace form, or the start page before the first message) shows one session row with the idle glyph, the chosen agent's icon and the branch name as its title; the first message turns it into the running session.
+- **A folder workspace** (no git) works the same; its tooltip shows the folder path and no branch.
+- **A workspace with no session left** (all archived or deleted) has no row; it is reached from the project row menu (New session in an existing worktree) and from Workspace cleanup.
+- **No project.** Sessions started with "No project" sit in a "No project" group after the projects, under their host rows; they run in the folder set in Settings, General (A95).
+- **Order.** Projects in the order the user arranged them (new projects last); host rows This PC first, then the others by name; sessions under a host oldest first, so rows do not jump while agents work; child sessions under their parent in launch order (artboard: Feed endpoints, then Integration tests).
+- **Nesting and indent.** Project 8 px, host 24 px, session 40 px, child 62 px, so the child's agent icon lines up with the first letter of the parent title (A85); no connector lines (A83). An unreachable host dims its row and its sessions (A10).
+- **Android.** The Projects list keeps A82: a host label only when the project lives on more than one host.
 | Footer: help, locate, panel toggle | icons `text.secondary` | 28 |
 
 Bot Teams mode (D-WS-29): search field; "All teams" row; one team row with its team character, then child rows "Conference room" (`messages-square`, hint "Nothing open") and "Board" (the kanban icon, A25; hint "No tasks"); "Projects" header with filter and plus; rows "Files" (`folder`), "Memory" (Lucide `brain`, A24), "Routines" (`calendar-clock`); the same footer.
 
-The grouping is by project, never by host (A10): a project that lives on two hosts shows two host rows under it, and an unreachable host dims only its own row and the workspaces under it.
+The grouping is by project, never by host (A10): a project that lives on two hosts shows two host rows under it, and an unreachable host dims only its own row and the sessions under it.
 
 ## Variants and sizes
 

@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use massorca_protocol::methods::hosted_services::ServiceConnect;
 use massorca_protocol::methods::secrets::SecretSet;
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer};
@@ -42,6 +43,15 @@ impl SecretParams for SecretSet {
         ("name", Kind::String, true),
         ("value", Kind::String, true),
         ("replace", Kind::Bool, false),
+    ];
+}
+
+impl SecretParams for ServiceConnect {
+    const FIELDS: &'static [(&'static str, Kind, bool)] = &[
+        ("service", Kind::String, true),
+        ("token", Kind::String, true),
+        ("base_url", Kind::String, false),
+        ("email", Kind::String, false),
     ];
 }
 

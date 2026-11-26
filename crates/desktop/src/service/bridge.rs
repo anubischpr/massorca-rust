@@ -44,13 +44,16 @@ use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agent_chat::kind_chats;
+use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
+use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
@@ -61,8 +64,10 @@ use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
-/// The chat arm of `agent.start`, which no service ships yet; it must match the service's name when one does.
-const AGENT_CHAT_CAPABILITY: &str = "agent-chat/1";
+/// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
+const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
+/// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
+const WORKSPACE_UNIQUE_NAME_CAPABILITY: &str = "workspace-unique-name/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -75,7 +80,13 @@ pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
+        unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
+    },
+    /// `git.branches` for one workspace: the local branch names, the current one first.
+    GitBranches {
+        workspace: String,
+        reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
     Remove {
         params: WorkspaceRemoveParams,
@@ -118,6 +129,11 @@ pub(crate) enum Command {
         refresh: bool,
     },
     Secret(SecretCommand),
+    /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
+    HostedServices {
+        host: Option<String>,
+        command: ServicesCommand,
+    },
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
     SetConfig {
@@ -151,6 +167,11 @@ pub(crate) enum Command {
     /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
     AgentStop {
         session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
+    AgentForget {
+        params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -308,7 +329,28 @@ impl ServiceHandle {
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        self.ask(|reply| Command::Create { params, reply }).await
+        self.create_workspace_with(params, false).await
+    }
+
+    /// `workspace.create` with the collision-free option when `unique_name` is set (capability `workspace-unique-name/1`).
+    pub async fn create_workspace_with(
+        &self,
+        params: WorkspaceCreateParams,
+        unique_name: bool,
+    ) -> Result<Workspace, Refusal> {
+        self.ask(|reply| Command::Create {
+            params,
+            unique_name,
+            reply,
+        })
+        .await
+    }
+
+    /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
+    /// repository, so any workspace of the project lists them all.
+    pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
+        self.ask(|reply| Command::GitBranches { workspace, reply })
+            .await
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -641,6 +683,13 @@ impl Link {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
+            Command::HostedServices {
+                host: Some(host),
+                command,
+            } => {
+                hosted_services::spawn_host(self.profile.clone(), host, command);
+                None
+            }
             Command::HostRead { host, request } => {
                 extensions::spawn_host_read(
                     self.profile.clone(),
@@ -770,7 +819,16 @@ impl Link {
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
         self.emit(StoreUpdate::AgentChatOffered(
-            client.has_capability(AGENT_CHAT_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
+        ));
+        self.emit(StoreUpdate::AgentFastOffered(
+            client.has_capability(AGENT_FAST_CAPABILITY),
+        ));
+        self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
+            client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
+        ));
+        self.emit(StoreUpdate::AgentArchiveOffered(
+            client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
@@ -844,6 +902,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::HostedServices { command, .. }) => {
+                                hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
@@ -980,7 +1041,7 @@ impl Link {
             TOPIC_AGENT_CHANGED => client
                 .agent_show(&id)
                 .await
-                .map(StoreUpdate::AgentChanged)
+                .map(|session| StoreUpdate::AgentChanged(Box::new(session)))
                 .or_else(|error| {
                     gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
                         StoreUpdate::AgentGone(id.clone())
@@ -1038,10 +1099,34 @@ fn spawn_call(
 ) {
     let client = client.clone();
     match command {
-        Command::Create { params, reply } => {
+        Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .workspace_create(&params)
+                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .await
+                    .map(|listed| {
+                        listed
+                            .branches
+                            .into_iter()
+                            .map(|branch| branch.name)
+                            .collect()
+                    })
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::Create {
+            params,
+            unique_name,
+            reply,
+        } => {
+            tokio::spawn(async move {
+                let request = WorkspaceCreateRequest {
+                    create: &params,
+                    unique_name,
+                };
+                let result = client
+                    .call::<_, Workspace>(massorca_protocol::methods::workspaces::CREATE, &request)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1147,6 +1232,9 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
+        Command::AgentForget { params, reply } => {
+            agents::spawn_forget(&client, params, reply, updates);
+        }
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1165,6 +1253,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Secret(_)
+        | Command::HostedServices { .. }
         | Command::Account(_)
         | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -1189,6 +1278,9 @@ fn refuse_while_down(command: Command) {
     let refusal = Refusal::unavailable("The service is not connected.");
     match command {
         Command::Create { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitBranches { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Remove { reply, .. } => {
@@ -1227,7 +1319,9 @@ fn refuse_while_down(command: Command) {
         Command::AgentPrompt { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
+        Command::AgentStop { reply, .. }
+        | Command::AgentResume { reply, .. }
+        | Command::AgentForget { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
@@ -1244,6 +1338,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::HostedServices { command, .. } => {
+            hosted_services::refuse_while_down(command, refusal);
+        }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),

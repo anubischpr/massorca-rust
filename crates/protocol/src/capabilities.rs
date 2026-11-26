@@ -4,6 +4,8 @@ pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
+/// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0095).
+pub const SCRIPT_TRUST: &str = "script-trust/1";
 pub const WORKSPACES: &str = "workspaces/1";
 /// Renaming a workspace and setting its comment (`workspace.update`).
 pub const WORKSPACE_UPDATE: &str = "workspace-update/1";
@@ -35,6 +37,9 @@ pub const AGENT_SEEN: &str = "agent-seen/1";
 /// Release and retain of an agent session, and its archived output (`agent.release`, `agent.retain`, `agent.archive`,
 /// decision 0090).
 pub const AGENT_RELEASE: &str = "agent-release/1";
+/// Archive and delete of an agent session (decision 0163): `agent.archive_session`, the session's `archived`,
+/// `include_archived` on `agent.list`, `remove_workspace` and `force` on `agent.forget`, and `agent.forget_preview`.
+pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 /// `agent.start` without a `workspace`: the session runs in the conversations folder, in a folder of its own (decision
 /// 0094).
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
@@ -61,6 +66,8 @@ pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
+/// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
+pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.

@@ -60,6 +60,92 @@ pub struct KindDecl {
     /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<EffortDecl>,
+    /// Inherited variables that no run of the kind and none of its account commands may see (decision 0160): markers
+    /// that a process above the service left, such as another agent's session stamp. Names compare without case on
+    /// Windows. A name the launch itself sets is set, not stripped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strip_inherited_env: Vec<String>,
+    /// Where the kind's CLI saves a conversation per agent ref (decision 0160). When the file for a session's ref is not
+    /// there, the session cannot resume. Absent means no check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_transcript: Option<ResumeTranscriptDecl>,
+    /// A regular expression over a resumed run's output that means the CLI found no conversation for the ref (decision
+    /// 0160); such a run that exits with a failure leaves the session unable to resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_not_found_pattern: Option<String>,
+    /// How a run of the kind receives MassOrca's per-launch instructions (decision 0161). Absent means the kind gets no
+    /// text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<InstructionsDecl>,
+    /// How the kind runs as a structured chat (decision 0101). Absent means it runs in a terminal only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatDecl>,
+}
+
+/// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
+pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+
+/// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
+/// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
+/// with a major version above `max_major`, is refused rather than tried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatDecl {
+    /// One of [`CHAT_ADAPTERS`].
+    pub adapter: String,
+    /// The oldest supported version, `MAJOR.MINOR.PATCH`.
+    pub min_version: String,
+    /// The newest supported major version.
+    pub max_major: u64,
+}
+
+/// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
+pub const TEXT_PLACEHOLDER: &str = "{text}";
+
+/// A kind's channel for MassOrca's per-launch instructions (decision 0161): launch arguments with [`TEXT_PLACEHOLDER`]
+/// exactly once, as `["--append-system-prompt", "{text}"]`. The text is passed on a run's own command line only, never
+/// written into the vendor's configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionsDecl {
+    pub args: Vec<String>,
+    /// How to tell whether the kind's CLI takes the channel. Absent means it always does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_when: Option<SupportProbe>,
+}
+
+/// A support check of an instruction channel (decision 0161): the kind's program run with `args`, which supports the
+/// channel when it exits 0 and its output contains `contains`. It runs without an account home and with the run's
+/// stripped names removed, once per installed program.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupportProbe {
+    pub args: Vec<String>,
+    pub contains: String,
+}
+
+impl InstructionsDecl {
+    /// The launch arguments that carry `text`.
+    #[must_use]
+    pub fn args_with(&self, text: &str) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|arg| arg.replace(TEXT_PLACEHOLDER, text))
+            .collect()
+    }
+}
+
+/// Where a kind's CLI keeps one conversation per agent ref (decision 0160). The folder is the run's account home when it
+/// used one; else `env`'s value when it is set to an absolute path; else `dir`, where `{home}` is the user's home folder.
+/// `glob` is a relative path under that folder: `/`-separated parts, where a part may be `*` (any one folder) and the
+/// last part holds `{ref}` once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeTranscriptDecl {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    pub dir: String,
+    pub glob: String,
 }
 
 /// The `model` option of a kind (decision 0094): how a start's model is passed, and the choices the picker shows
@@ -147,6 +233,44 @@ pub struct PermissionModeDecl {
     /// arguments never confirm it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_fall_back: bool,
+    /// A lucide icon name for the mode (`file-pen`): lowercase letters and digits in `-`-separated words (decision 0163).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// How a picker presents the mode (decision 0163): [`MODE_TONE_NORMAL`] or [`MODE_TONE_WARNING`]; every bypass mode
+    /// warns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    /// Whether pickers offer the mode (decision 0163). An unoffered mode stays declared, so a session reporting it still
+    /// shows its name, and a caller naming it is still served.
+    #[serde(default = "offered", skip_serializing_if = "is_offered")]
+    pub selectable: bool,
+}
+
+/// The tone of an ordinary mode.
+pub const MODE_TONE_NORMAL: &str = "normal";
+/// The tone of a mode that lifts the vendor's prompts or sandbox.
+pub const MODE_TONE_WARNING: &str = "warning";
+/// Longest icon name a mode may declare.
+const MAX_ICON_LEN: usize = 64;
+
+fn offered() -> bool {
+    true
+}
+
+fn is_offered(selectable: &bool) -> bool {
+    *selectable
+}
+
+/// Whether `icon` reads as a lucide icon name: lowercase letters and digits in `-`-separated words.
+fn valid_icon_name(icon: &str) -> bool {
+    icon.len() <= MAX_ICON_LEN
+        && !icon.is_empty()
+        && icon.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 /// How a live switch reaches the agent.
@@ -588,7 +712,125 @@ impl KindDecl {
         self.mode_problems(&mut problems);
         self.model_problems(&mut problems);
         self.effort_problems(&mut problems);
+        self.inherited_env_problems(&mut problems);
+        self.resume_check_problems(&mut problems);
+        self.instructions_problems(&mut problems);
+        self.chat_problems(&mut problems);
         problems
+    }
+
+    /// `chat.adapter` names a dialect MassOrca speaks, and its range is a version and a major version no older than it.
+    fn chat_problems(&self, problems: &mut Vec<String>) {
+        let Some(chat) = &self.chat else {
+            return;
+        };
+        if !CHAT_ADAPTERS.contains(&chat.adapter.as_str()) {
+            problems.push(format!(
+                "chat.adapter {:?} must be one of {}",
+                chat.adapter,
+                CHAT_ADAPTERS.join(", ")
+            ));
+        }
+        match crate::chat::version::Version::parse_exact(&chat.min_version) {
+            Some(min) if min.major > chat.max_major => problems.push(format!(
+                "chat.max_major {} must not be below the major version of chat.min_version",
+                chat.max_major
+            )),
+            Some(_) => {}
+            None => problems.push(format!(
+                "chat.min_version {:?} must be MAJOR.MINOR.PATCH",
+                chat.min_version
+            )),
+        }
+    }
+
+    /// `instructions.args` holds [`TEXT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
+    /// placeholder (decision 0161).
+    fn instructions_problems(&self, problems: &mut Vec<String>) {
+        let Some(instructions) = &self.instructions else {
+            return;
+        };
+        let placeholders: usize = instructions
+            .args
+            .iter()
+            .map(|arg| arg.matches(TEXT_PLACEHOLDER).count())
+            .sum();
+        if placeholders != 1 {
+            problems.push(format!(
+                "instructions.args must hold {TEXT_PLACEHOLDER} exactly once, not {placeholders} times"
+            ));
+        }
+        if instructions
+            .args
+            .iter()
+            .any(|arg| arg.replace(TEXT_PLACEHOLDER, "").contains(['{', '}']))
+        {
+            problems.push(format!(
+                "instructions.args may use {TEXT_PLACEHOLDER} as its only placeholder"
+            ));
+        }
+        if let Some(probe) = &instructions.supported_when {
+            if probe.args.is_empty() {
+                problems.push("instructions.supported_when.args must not be empty".to_owned());
+            }
+            no_placeholder("instructions.supported_when.args", &probe.args, problems);
+            if probe.contains.trim().is_empty() {
+                problems.push("instructions.supported_when.contains must not be empty".to_owned());
+            }
+        }
+    }
+
+    /// `strip_inherited_env` lists variable names, each once (without case, as Windows compares them).
+    fn inherited_env_problems(&self, problems: &mut Vec<String>) {
+        let mut seen = BTreeSet::new();
+        for name in &self.strip_inherited_env {
+            if !valid_env_name(name) {
+                problems.push(format!(
+                    "strip_inherited_env entry {name:?} is not a variable name"
+                ));
+            } else if !seen.insert(name.to_ascii_uppercase()) {
+                problems.push(format!("strip_inherited_env lists {name:?} twice"));
+            }
+        }
+    }
+
+    /// The transcript check and the not-found pattern need a resume form; the folder, the glob and the pattern must be
+    /// usable (decision 0160).
+    fn resume_check_problems(&self, problems: &mut Vec<String>) {
+        if let Some(transcript) = &self.resume_transcript {
+            if self.resume.is_none() {
+                problems.push("resume_transcript needs resume".to_owned());
+            }
+            if let Some(env) = &transcript.env
+                && !valid_env_name(env)
+            {
+                problems.push(format!(
+                    "resume_transcript.env {env:?} is not a variable name"
+                ));
+            }
+            if !valid_transcript_dir(&transcript.dir) {
+                problems.push(format!(
+                    "resume_transcript.dir {:?} must be {{home}} or an absolute local folder, without ..",
+                    transcript.dir
+                ));
+            }
+            if !valid_transcript_glob(&transcript.glob) {
+                problems.push(format!(
+                    "resume_transcript.glob {:?} must be a relative path of plain parts or *, whose last part holds {REF_PLACEHOLDER} once",
+                    transcript.glob
+                ));
+            }
+        }
+        if let Some(pattern) = &self.resume_not_found_pattern {
+            if self.resume.is_none() {
+                problems.push("resume_not_found_pattern needs resume".to_owned());
+            }
+            if let Err(error) = regex::Regex::new(pattern) {
+                problems.push(format!(
+                    "resume_not_found_pattern does not compile: {error}"
+                ));
+            }
+        }
     }
 
     /// The launch arguments of the `model` and `effort` a start asked for, in the kind's declared flags or args (decisions
@@ -784,13 +1026,31 @@ impl KindDecl {
                     "{field}: live_switch.text must be one line of text without control characters"
                 ));
             }
-            let selectable = !mode.args.is_empty() || mode.live_switch.is_some();
-            if mode.bypass && !selectable {
+            if let Some(icon) = &mode.icon
+                && !valid_icon_name(icon)
+            {
+                problems.push(format!(
+                    "{field}: icon {icon:?} must be a lucide icon name: lowercase letters and digits in words joined by -"
+                ));
+            }
+            match mode.tone.as_deref() {
+                None | Some(MODE_TONE_NORMAL | MODE_TONE_WARNING) => {}
+                Some(tone) => problems.push(format!(
+                    "{field}: tone {tone:?} must be {MODE_TONE_NORMAL} or {MODE_TONE_WARNING}"
+                )),
+            }
+            if mode.bypass && mode.tone.as_deref() == Some(MODE_TONE_NORMAL) {
+                problems.push(format!(
+                    "{field}: a bypass mode warns, so its tone must be {MODE_TONE_WARNING}"
+                ));
+            }
+            let appliable = !mode.args.is_empty() || mode.live_switch.is_some();
+            if mode.bypass && !appliable {
                 problems.push(format!(
                     "{field}: a bypass mode needs its own args or live_switch"
                 ));
             }
-            if !selectable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
+            if !appliable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
                 problems.push(format!(
                     "{field}: a mode with no args and no live_switch can only be the default"
                 ));
@@ -1135,6 +1395,46 @@ fn valid_env_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// A transcript folder (decision 0160): a source template whose parts after its root are plain names, never `.`, `..`,
+/// empty (a second root) or a drive.
+pub(crate) fn valid_transcript_dir(dir: &str) -> bool {
+    if !valid_source_template(dir) {
+        return false;
+    }
+    let rest = match dir.strip_prefix("{home}") {
+        Some(rest) => rest,
+        None if dir.starts_with('/') => dir,
+        None => &dir[2..],
+    };
+    let mut parts = rest.split(['/', '\\']);
+    // The root itself: `{home}` is followed by a separator, an absolute path starts with one.
+    if parts.next().is_some_and(|first| !first.is_empty()) {
+        return false;
+    }
+    let parts: Vec<&str> = parts.collect();
+    let trailing = usize::from(parts.last().is_some_and(|last| last.is_empty()));
+    parts[..parts.len() - trailing]
+        .iter()
+        .all(|part| valid_file_name(part))
+}
+
+/// A transcript glob (decision 0160): `/`-separated parts, none empty, `.` or `..`; a part is `*` or a plain name without
+/// `*`; the last part is a plain name with `{ref}` exactly once, and no other part has it.
+pub(crate) fn valid_transcript_glob(glob: &str) -> bool {
+    let parts: Vec<&str> = glob.split('/').collect();
+    let Some((last, folders)) = parts.split_last() else {
+        return false;
+    };
+    let folders_ok = folders
+        .iter()
+        .all(|part| *part == "*" || (valid_file_name(part) && !part.contains(['*', '{', '}'])));
+    let filled = last.replacen(REF_PLACEHOLDER, "r", 1);
+    folders_ok
+        && last.matches(REF_PLACEHOLDER).count() == 1
+        && valid_file_name(&filled)
+        && !filled.contains(['*', '{', '}'])
+}
+
 fn valid_file_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -1198,6 +1498,50 @@ mod tests {
         let mut value = minimal();
         patch(&mut value);
         parse(value).problems()
+    }
+
+    #[test]
+    fn a_chat_block_names_a_known_adapter_and_a_version_range() {
+        let valid = problems_of(|value| {
+            value["chat"] = serde_json::json!({
+                "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        for (chat, expected) in [
+            (
+                serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
+                "chat.adapter \"acp\" must be one of claude-stream-json",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),
+                "chat.min_version \"2.1\" must be MAJOR.MINOR.PATCH",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "3.0.0", "max_major": 2 }),
+                "chat.max_major 2 must not be below the major version of chat.min_version",
+            ),
+        ] {
+            let problems = problems_of(|value| value["chat"] = chat.clone());
+            assert_eq!(problems, [expected], "{chat}");
+        }
+    }
+
+    #[test]
+    fn the_built_in_claude_kind_runs_as_a_chat_from_2_1_258_through_2_x() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|kind| kind.id == "claude")
+            .expect("built in");
+        assert_eq!(
+            claude.chat,
+            Some(ChatDecl {
+                adapter: "claude-stream-json".to_owned(),
+                min_version: "2.1.258".to_owned(),
+                max_major: 2,
+            })
+        );
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
     }
 
     #[test]
@@ -1329,6 +1673,156 @@ mod tests {
         assert!(!parse(value.clone()).resumable());
         value["session_ref"] = serde_json::json!({ "learn": "session_id" });
         assert!(parse(value).resumable());
+    }
+
+    #[test]
+    fn inherited_strip_names_must_be_variable_names_listed_once() {
+        let problems = problems_of(|value| {
+            value["strip_inherited_env"] = serde_json::json!(["GOOD_ONE", "BAD-NAME", "good_one"]);
+        });
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("strip_inherited_env entry \"BAD-NAME\"")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("strip_inherited_env lists \"good_one\" twice")),
+            "{problems:?}"
+        );
+        let clean = problems_of(|value| {
+            value["strip_inherited_env"] = serde_json::json!(["MARKER_ONE", "MARKER_TWO"]);
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+    }
+
+    #[test]
+    fn the_resume_checks_need_a_resume_form_a_usable_folder_glob_and_pattern() {
+        let problems = problems_of(|value| {
+            value["resume_transcript"] =
+                serde_json::json!({ "env": "1BAD", "dir": "relative", "glob": "../{ref}.log" });
+            value["resume_not_found_pattern"] = serde_json::json!("(");
+        });
+        for expected in [
+            "resume_transcript needs resume",
+            "resume_transcript.env",
+            "resume_transcript.dir",
+            "resume_transcript.glob",
+            "resume_not_found_pattern needs resume",
+            "resume_not_found_pattern does not compile",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let clean = problems_of(|value| {
+            value["resume"] = serde_json::json!(["--resume", "{ref}"]);
+            value["session_ref"] = serde_json::json!({ "learn": "session_id" });
+            value["resume_transcript"] = serde_json::json!({
+                "env": "FAKE_VENDOR_DIR", "dir": "{home}/.fake", "glob": "projects/*/{ref}.jsonl"
+            });
+            value["resume_not_found_pattern"] = serde_json::json!("No conversation found");
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+    }
+
+    #[test]
+    fn the_instructions_channel_holds_the_text_placeholder_once_and_no_other() {
+        for (args, expected) in [
+            (serde_json::json!(["--append"]), "exactly once, not 0 times"),
+            (
+                serde_json::json!(["--a", "{text}", "--b", "{text}"]),
+                "exactly once, not 2 times",
+            ),
+            (
+                serde_json::json!(["--a", "{text}", "{ref}"]),
+                "as its only placeholder",
+            ),
+        ] {
+            let problems = problems_of(|value| {
+                value["instructions"] = serde_json::json!({ "args": args.clone() });
+            });
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {problems:?}"
+            );
+        }
+        let probe = problems_of(|value| {
+            value["instructions"] = serde_json::json!({
+                "args": ["--a", "{text}"],
+                "supported_when": { "args": [], "contains": " " }
+            });
+        });
+        for expected in [
+            "supported_when.args must not be empty",
+            "supported_when.contains must not be empty",
+        ] {
+            assert!(
+                probe.iter().any(|problem| problem.contains(expected)),
+                "{expected}: {probe:?}"
+            );
+        }
+        let clean = problems_of(|value| {
+            value["instructions"] = serde_json::json!({
+                "args": ["--append-system-prompt", "{text}"],
+                "supported_when": { "args": ["--help"], "contains": "--append-system-prompt" }
+            });
+        });
+        assert!(clean.is_empty(), "{clean:?}");
+        let decl = parse({
+            let mut value = minimal();
+            value["instructions"] = serde_json::json!({ "args": ["--note={text}"] });
+            value
+        });
+        assert_eq!(
+            decl.instructions.expect("declared").args_with("hello"),
+            ["--note=hello"]
+        );
+    }
+
+    #[test]
+    fn a_transcript_glob_is_relative_with_the_ref_once_in_its_last_part() {
+        for good in [
+            "{home}",
+            "{home}/.claude",
+            "/opt/vendor",
+            "C:\\vendor\\data",
+            "{home}/.fake/",
+        ] {
+            assert!(valid_transcript_dir(good), "{good}");
+        }
+        for bad in [
+            "relative",
+            "{home}/../elsewhere",
+            "{home}/./x",
+            "{home}//abs",
+            "/opt/../etc",
+            "{home}/C:/x",
+            "C:\\a\\..\\b",
+        ] {
+            assert!(!valid_transcript_dir(bad), "{bad}");
+        }
+        for good in ["{ref}.jsonl", "projects/*/{ref}.jsonl", "a/b/{ref}"] {
+            assert!(valid_transcript_glob(good), "{good}");
+        }
+        for bad in [
+            "",
+            "/abs/{ref}",
+            "C:/abs/{ref}",
+            "projects/*",
+            "{ref}/x.jsonl",
+            "a/../{ref}",
+            "a//{ref}",
+            "a\\b/{ref}",
+            "a/*{ref}",
+            "{ref}{ref}",
+            "p*/{ref}",
+        ] {
+            assert!(!valid_transcript_glob(bad), "{bad}");
+        }
     }
 
     #[test]
@@ -1687,6 +2181,63 @@ mod tests {
             placeholder.iter().any(|p| p.contains("args")),
             "{placeholder:?}"
         );
+    }
+
+    #[test]
+    fn a_mode_presentation_names_a_known_tone_and_a_lucide_icon() {
+        let good = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"], "icon": "file-pen", "tone": "normal" },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "icon": "shield-alert", "tone": "warning" },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]),
+            Some("safe"),
+        );
+        assert!(good.is_empty(), "{good:?}");
+        let tone = with_modes(
+            serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "tone": "loud" }]),
+            Some("safe"),
+        );
+        assert!(tone.iter().any(|p| p.contains("tone")), "{tone:?}");
+        let calm_bypass = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "tone": "normal" }
+            ]),
+            Some("safe"),
+        );
+        assert!(
+            calm_bypass.iter().any(|p| p.contains("bypass mode warns")),
+            "{calm_bypass:?}"
+        );
+        for icon in [
+            "Shield",
+            "shield alert",
+            "-shield",
+            "shield-",
+            "shield--alert",
+            "",
+        ] {
+            let found = with_modes(
+                serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "icon": icon }]),
+                Some("safe"),
+            );
+            assert!(
+                found.iter().any(|p| p.contains("icon")),
+                "{icon:?}: {found:?}"
+            );
+        }
+        let kind = parse({
+            let mut value = minimal();
+            value["permission_modes"] = serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]);
+            value["default_permission_mode"] = serde_json::json!("safe");
+            value
+        });
+        assert!(kind.permission_mode("safe").unwrap().selectable);
+        assert!(!kind.permission_mode("hush").unwrap().selectable);
     }
 
     #[test]
@@ -2083,7 +2634,14 @@ mod tests {
             .iter()
             .map(|level| level.id.as_str())
             .collect();
-        assert_eq!(levels, ["low", "medium", "high"]);
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(
+            antigravity
+                .effort
+                .as_ref()
+                .and_then(|effort| effort.default.as_deref()),
+            Some("high")
+        );
 
         let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
             .expect("gentle-shell parses");
@@ -2349,5 +2907,30 @@ mod tests {
                     && source.dir == "{home}/.codex")
         );
         assert_eq!(credentials.sources.len(), 2);
+    }
+
+    #[test]
+    fn the_service_drops_exactly_the_markers_the_built_in_kinds_declare() {
+        let mut declared: Vec<String> = [
+            include_str!("../kinds/claude.json"),
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/antigravity.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ]
+        .into_iter()
+        .flat_map(|json| {
+            KindDecl::from_json(json)
+                .expect("parses")
+                .strip_inherited_env
+        })
+        .collect();
+        declared.sort();
+        declared.dedup();
+        let mut constant: Vec<String> = crate::launch::INHERITED_VENDOR_MARKERS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        constant.sort();
+        assert_eq!(declared, constant);
     }
 }

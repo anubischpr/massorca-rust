@@ -172,9 +172,17 @@ impl Store {
     /// Inserts a session. Conflicts on id or request id are `StoreError::Conflict`; an unknown workspace or parent is
     /// `StoreError::Constraint`.
     pub fn insert_agent_session(&self, row: &AgentSessionRow) -> Result<(), StoreError> {
+        Self::insert_agent_session_in(&self.lock(), row)
+    }
+
+    /// [`Store::insert_agent_session`] on `connection`, which may be a transaction's.
+    pub(crate) fn insert_agent_session_in(
+        connection: &rusqlite::Connection,
+        row: &AgentSessionRow,
+    ) -> Result<(), StoreError> {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
-        self.lock().execute(
+        connection.execute(
             "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, activity_seen_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode, retained, released_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 row.id,
@@ -305,10 +313,36 @@ impl Store {
         mode: &RunMode,
         pending: Option<&str>,
     ) -> Result<bool, StoreError> {
+        self.restart_run(id, Some(terminal_id), None, holds_secrets, mode, pending)
+    }
+
+    /// [`Store::restart_agent_session`] for a chat run (decision 0101, D9): the row names the new chat run `run_id` and
+    /// no terminal.
+    pub fn restart_chat_agent_session(
+        &self,
+        id: &str,
+        run_id: &str,
+        holds_secrets: bool,
+        mode: &RunMode,
+        pending: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.restart_run(id, None, Some(run_id), holds_secrets, mode, pending)
+    }
+
+    /// Starts a new run of an exited session, in a terminal (`terminal_id`) or as a chat (`run_id`).
+    fn restart_run(
+        &self,
+        id: &str,
+        terminal_id: Option<&str>,
+        run_id: Option<&str>,
+        holds_secrets: bool,
+        mode: &RunMode,
+        pending: Option<&str>,
+    ) -> Result<bool, StoreError> {
         let connection = self.lock();
         let transaction = connection.unchecked_transaction()?;
         let changed = transaction.execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL, released_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            "UPDATE agent_sessions SET terminal_id = ?2, run_id = COALESCE(?8, run_id), holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL, released_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
             params![
                 id,
                 terminal_id,
@@ -316,7 +350,8 @@ impl Store {
                 mode.permission_mode,
                 mode.source,
                 mode.confirmed,
-                pending
+                pending,
+                run_id
             ],
         )?;
         // A new run replaces the archive of the one before it (decision 0090).
@@ -380,6 +415,72 @@ impl Store {
             params![id, retained],
         )?;
         Ok(changed > 0)
+    }
+
+    /// The ids of the teams and of the tasks whose `workspace_id` is `workspace` (decision 0163). Neither column has a
+    /// foreign key, so a workspace removal would leave them pointing at nothing.
+    pub fn teams_and_tasks_of_workspace(
+        &self,
+        workspace: &str,
+    ) -> Result<(Vec<String>, Vec<String>), StoreError> {
+        let teams = self.query_all(
+            "SELECT id FROM teams WHERE workspace_id = ?1 ORDER BY id",
+            [workspace],
+            |row| row.get::<_, String>(0),
+        )?;
+        let tasks = self.query_all(
+            "SELECT id FROM tasks WHERE workspace_id = ?1 ORDER BY id",
+            [workspace],
+            |row| row.get::<_, String>(0),
+        )?;
+        Ok((teams, tasks))
+    }
+
+    /// Sets a session's title (decision 0163). Returns whether a row matched.
+    pub fn set_agent_session_title(&self, id: &str, title: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET title = ?2 WHERE id = ?1",
+            params![id, title],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Archives a session at `at`, or clears its archive with `None` (decision 0163). Returns whether a row matched.
+    pub fn set_agent_session_archived(
+        &self,
+        id: &str,
+        at: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET archived_at = ?2 WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// When a session was archived; `None` when it is not archived or does not exist.
+    pub fn agent_session_archived_at(&self, id: &str) -> Result<Option<i64>, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT archived_at FROM agent_sessions WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<i64>>("archived_at"),
+            )?
+            .flatten())
+    }
+
+    /// The ids of every archived session.
+    pub fn archived_agent_session_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        Ok(self
+            .query_all(
+                "SELECT id FROM agent_sessions WHERE archived_at IS NOT NULL",
+                [],
+                |row| row.get::<_, String>(0),
+            )?
+            .into_iter()
+            .collect())
     }
 
     /// Writes a session's activity and result (0052), replacing both, and sets its agent ref from `agent_ref_if_unset`

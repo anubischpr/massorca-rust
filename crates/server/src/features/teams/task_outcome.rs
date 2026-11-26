@@ -45,7 +45,7 @@ async fn react(state: &Arc<AppState>, change: Change) {
     let (session_id, outcome) = match change {
         Change::Updated(session) => (session.id.clone(), observed_outcome(&session)),
         Change::Forgotten(id) => (id, None),
-        Change::Account(_) | Change::Queue(_) => return,
+        Change::Account(_) | Change::Queue(_) | Change::Chat(_) => return,
     };
     let linked = blocking_state(state, move |store, _agents| {
         latch_linked(store, &session_id, outcome).map_err(store_error)
@@ -247,6 +247,7 @@ mod tests {
             brought_back_at_ms: None,
             agent_ref: None,
             terminal_id: None,
+            run: Default::default(),
             created_at_ms: 1,
             execution: Execution {
                 state: execution,
@@ -268,6 +269,11 @@ mod tests {
             pending_permission_mode: None,
             retained: false,
             released: false,
+            archived: false,
+            resume: None,
+            delegation: None,
+            notes: Vec::new(),
+            shared_folder_with: Vec::new(),
         }))
     }
 
