@@ -161,6 +161,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TASK_NOT_FOUND, "task.not_found"),
     (codes::TASK_RUNNING, "task.running"),
     (codes::EXTENSION_UP_TO_DATE, "extension.up_to_date"),
+    (codes::EXTENSION_POINT_REFUSED, "extension.point_refused"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -202,4 +203,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_MODELS, "agent-models/1");
     assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
+    assert_eq!(capabilities::EXTENSION_POINTS, "extension-points/1");
 }

@@ -9,6 +9,7 @@ pub(crate) use config::default_conversations_root;
 mod config_keys;
 mod devices;
 mod events;
+mod extension_points;
 pub(crate) mod extension_process;
 mod extensions;
 mod git;
@@ -72,6 +73,7 @@ pub(crate) fn register_core(
     handles.extend(agents::register(registries)?);
     handles.extend(agent_chat::register(registries)?);
     handles.extend(extensions::register(registries)?);
+    handles.extend(extension_points::register(registries)?);
     handles.extend(skills::register(registries)?);
     handles.extend(skill_placement::register(registries)?);
     handles.extend(hosted_services::register(registries)?);
