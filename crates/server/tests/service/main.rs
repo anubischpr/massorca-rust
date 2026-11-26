@@ -44,6 +44,7 @@ mod secrets;
 mod secrets_hardening;
 mod skill_placement;
 mod skills;
+mod stalled_reader;
 mod tasks;
 mod team_room;
 mod teams;
