@@ -56,7 +56,9 @@ pub async fn execute(
         HostCommand::Status { name, watch: true } => {
             status_watch::execute(profile, name.as_deref(), output).await
         }
-        HostCommand::SelfTest { name } => self_test::execute(profile, &name, output).await,
+        HostCommand::SelfTest { name } => {
+            self_test::execute(profile, name.as_deref(), output).await
+        }
         HostCommand::Discover => discover::execute(profile, output).await,
         HostCommand::AddSsh(args) => add_ssh::execute(profile, &args, output).await,
         HostCommand::Memory => Err(CliError::new(

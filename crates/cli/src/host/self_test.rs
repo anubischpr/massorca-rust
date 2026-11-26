@@ -8,13 +8,14 @@ use massorca_client::{Client, ClientError, HostRecord, Hosts, SshInstall, Welcom
 use massorca_core_remote::bootstrap::UNIT_NAME;
 use massorca_net::Pin;
 use massorca_profile::Profile;
+use massorca_profile::local_socket_name;
 use massorca_protocol::codes;
-use massorca_protocol::methods::devices::{self, WhoAmI};
+use massorca_protocol::methods::devices::{self, ListenerInfo, NetworkStatus, WhoAmI};
 use massorca_protocol::methods::service::{self, ServiceInfo};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::connect::peer;
+use crate::connect::{connect_local, peer};
 use crate::error::{CliError, exit};
 use crate::output::Output;
 
@@ -26,6 +27,13 @@ const CHECKS: [&str; 8] = [
 const PORT_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the secure connection and its handshake may take, end to end.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The checks of this computer's own service; `network` joins them only when the service listens on the network.
+const LOCAL_CHECKS: [&str; 5] = ["endpoint", "connect", "protocol", "service", "latency"];
+const LOCAL_CHECKS_WITH_NETWORK: [&str; 6] = [
+    "endpoint", "connect", "protocol", "service", "latency", "network",
+];
+/// The name of a local report. It is not a host name: `local` is reserved for this computer.
+const LOCAL_NAME: &str = "local";
 
 /// One check's result: `pass`, `fail`, or `skipped` when an earlier check failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -60,11 +68,19 @@ fn journal_command(install: &SshInstall) -> String {
     words.join(" ")
 }
 
-/// Runs the self-test of host `name` and prints its report; a failing host fails the command with the report in its data.
-pub async fn execute(profile: &Profile, name: &str, output: Output) -> Result<(), CliError> {
+/// Runs the self-test of host `name`, or of this computer's own service without a name, and prints its report; a failing
+/// run fails the command with the report in its data.
+pub async fn execute(
+    profile: &Profile,
+    name: Option<&str>,
+    output: Output,
+) -> Result<(), CliError> {
     let hosts = Hosts::of(profile);
-    let mut report = run(&hosts, name).await;
-    if !report.passed {
+    let mut report = match name {
+        Some(name) => run(&hosts, name).await,
+        None => run_local(profile).await,
+    };
+    if let (false, Some(name)) = (report.passed, name) {
         report.logs = hosts
             .ssh_install(name)
             .ok()
@@ -85,9 +101,13 @@ pub async fn execute(profile: &Profile, name: &str, output: Output) -> Result<()
         .iter()
         .filter(|check| check.state == "fail")
         .count();
+    let target = name.map_or_else(|| "this computer".to_owned(), |name| format!("host {name}"));
     let mut error = CliError::new(
         "host.self_test_failed",
-        format!("{failed} of {} checks failed for host {name}", CHECKS.len()),
+        format!(
+            "{failed} of {} checks failed for {target}",
+            report.checks.len()
+        ),
         exit::ERROR,
     );
     error.data = Some(Box::new(
@@ -103,7 +123,7 @@ async fn run(hosts: &Hosts, name: &str) -> SelfTestReport {
             checks.push(pass);
             record
         }
-        Err(fail) => return finish(name, vec![fail]),
+        Err(fail) => return finish(name, &CHECKS, vec![fail]),
     };
     let addresses = match resolve(&record.addresses).await {
         Ok(pass) => {
@@ -112,22 +132,111 @@ async fn run(hosts: &Hosts, name: &str) -> SelfTestReport {
         }
         Err(fail) => {
             checks.push(fail);
-            return finish(name, checks);
+            return finish(name, &CHECKS, checks);
         }
     };
     match probe_port(addresses).await {
         Ok(pass) => checks.push(pass),
         Err(fail) => {
             checks.push(fail);
-            return finish(name, checks);
+            return finish(name, &CHECKS, checks);
         }
     }
     let client = match connect(hosts, name, &record, &mut checks).await {
         Some(client) => client,
-        None => return finish(name, checks),
+        None => return finish(name, &CHECKS, checks),
     };
     session_checks(&client, &mut checks).await;
-    finish(name, checks)
+    finish(name, &CHECKS, checks)
+}
+
+/// This computer's own service: its endpoint, a local connection that never starts the service, the handshake, the
+/// service's health and latency, and its network listeners when it has any.
+async fn run_local(profile: &Profile) -> SelfTestReport {
+    let mut checks = Vec::new();
+    if let Err(error) = local_socket_name(profile) {
+        checks.push(fail(
+            "endpoint",
+            format!("the local endpoint cannot be named: {error}"),
+            "check the profile folder: `massorca profile secure`".to_owned(),
+        ));
+        return finish_local(checks);
+    }
+    checks.push(pass(
+        "endpoint",
+        format!("profile {} has its local endpoint", profile.name()),
+    ));
+    let client = match connect_local(profile, false).await {
+        Ok(client) => {
+            checks.push(pass(
+                "connect",
+                "accepts a connection on its local endpoint".to_owned(),
+            ));
+            client
+        }
+        Err(error) => {
+            checks.push(fail(
+                "connect",
+                error.message,
+                "start the service of this profile (`massorca service run`), then run the self-test again".to_owned(),
+            ));
+            return finish_local(checks);
+        }
+    };
+    checks.push(protocol_pass(client.welcome()));
+    service_checks(&client, &mut checks).await;
+    network_check(&client, &mut checks).await;
+    finish_local(checks)
+}
+
+fn finish_local(checks: Vec<Check>) -> SelfTestReport {
+    let names: &[&'static str] = if checks.iter().any(|check| check.name == "network") {
+        &LOCAL_CHECKS_WITH_NETWORK
+    } else {
+        &LOCAL_CHECKS
+    };
+    finish(LOCAL_NAME, names, checks)
+}
+
+/// The network listeners of the service, shown only when there are some: a service that listens on no network address
+/// serves this computer alone.
+async fn network_check(client: &Client, checks: &mut Vec<Check>) {
+    let status: Result<NetworkStatus, ClientError> =
+        client.call(devices::NETWORK_STATUS, &()).await;
+    let status = match status {
+        Ok(status) if status.listeners.is_empty() => return,
+        Ok(status) => status,
+        Err(error) => {
+            checks.push(fail(
+                "network",
+                format!("the network status did not answer: {error}"),
+                "restart the service of this profile and run the self-test again".to_owned(),
+            ));
+            return;
+        }
+    };
+    let listening = status
+        .listeners
+        .iter()
+        .all(|listener| listener.state == "listening");
+    let shown: Vec<String> = status.listeners.iter().map(listener_text).collect();
+    if listening {
+        checks.push(pass("network", shown.join(", ")));
+    } else {
+        checks.push(fail(
+            "network",
+            shown.join(", "),
+            "start the service on an address this computer has: `massorca service run --listen <address>`".to_owned(),
+        ));
+    }
+}
+
+fn listener_text(listener: &ListenerInfo) -> String {
+    let address = listener.bound.as_deref().unwrap_or(&listener.requested);
+    match &listener.error {
+        Some(error) => format!("{address} {}: {error}", listener.state),
+        None => format!("{address} {}", listener.state),
+    }
 }
 
 /// The host record, with its pin read: the record check.
@@ -330,6 +439,11 @@ async fn session_checks(client: &Client, checks: &mut Vec<Check>) {
             return;
         }
     }
+    service_checks(client, checks).await;
+}
+
+/// `service.info` and one round trip of that call: the service's own health and its latency.
+async fn service_checks(client: &Client, checks: &mut Vec<Check>) {
     let sent = Instant::now();
     let info: Result<ServiceInfo, ClientError> = client.call(service::INFO, &()).await;
     let elapsed = sent.elapsed();
@@ -382,13 +496,13 @@ fn uptime_seconds(started_at_ms: i64) -> u64 {
 }
 
 /// Pads the report with a skipped check for every step that did not run, and sets `passed`.
-fn finish(name: &str, mut ran: Vec<Check>) -> SelfTestReport {
+fn finish(name: &str, names: &[&'static str], mut ran: Vec<Check>) -> SelfTestReport {
     let failed_check = ran
         .iter()
         .find(|check| check.state == "fail")
         .map(|check| check.name);
-    let mut checks = Vec::with_capacity(CHECKS.len());
-    for expected in CHECKS {
+    let mut checks = Vec::with_capacity(names.len());
+    for &expected in names {
         if let Some(index) = ran.iter().position(|check| check.name == expected) {
             checks.push(ran.remove(index));
             continue;

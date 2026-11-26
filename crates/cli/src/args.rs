@@ -576,10 +576,11 @@ pub enum HostCommand {
         watch: bool,
     },
     /// Checks one paired host step by step (address, port, key, protocol, pairing, service, round trip) and names
-    /// the step that fails and how to fix it. Exit code 0 only when every check passes.
+    /// the step that fails and how to fix it. Without a name, checks this computer's own service. Exit code 0 only
+    /// when every check passes.
     SelfTest {
-        /// Host name.
-        name: String,
+        /// Host name. Without it, this computer's own service is checked.
+        name: Option<String>,
     },
     /// Lists the online Tailscale peers, and which of them run massorca.
     Discover,

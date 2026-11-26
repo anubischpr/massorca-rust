@@ -61,9 +61,9 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         // A CLI composition like `service.status`: its method is the first request, `service.info`, on the host.
         command(
             "host.self-test",
-            "Check a paired host step by step: address, port, key, protocol, pairing, service and round trip",
+            "Check a paired host step by step, or this computer's own service: address, port, key, protocol, pairing, service and round trip",
             "service.info",
-            selector("name"),
+            json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
         ),
         command(
             "events.subscribe",

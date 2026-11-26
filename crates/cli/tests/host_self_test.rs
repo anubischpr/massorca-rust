@@ -12,6 +12,7 @@ use serde_json::Value;
 
 /// The log command for a host installed over SSH: the same unit the install wrote, read through the same target.
 const SSH_LOGS: &str = "ssh vps journalctl --user -u massorca.service -n 100 --no-pager";
+const LOCAL_CHECKS: [&str; 5] = ["endpoint", "connect", "protocol", "service", "latency"];
 
 /// Marks paired host `name` of the `client` profile as installed over SSH at `target`, the way `host add-ssh` does.
 fn mark_installed_over_ssh(client: &Sandbox, name: &str, target: &str) {
@@ -49,6 +50,13 @@ fn fake_ssh_on_path(client: &Sandbox) -> PathBuf {
     let joined = std::env::join_paths(paths).expect("a PATH");
     client.set_env("PATH", &joined.to_string_lossy());
     marker
+}
+
+fn document_checks_names(checks: &[Value]) -> Vec<String> {
+    checks
+        .iter()
+        .map(|check| check["name"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 const CHECKS: [&str; 8] = [
@@ -335,4 +343,79 @@ fn the_self_test_never_starts_ssh() {
     let (document, _) = self_test_json(&client, "srv");
     assert_eq!(document["error"]["data"]["logs"], SSH_LOGS, "{document}");
     assert!(!marker.exists(), "ssh was started");
+}
+
+#[test]
+fn a_self_test_without_a_name_passes_against_a_local_service_with_a_listener() {
+    let server = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let _service = start_server(&server, "server", &listen);
+
+    let outcome = server
+        .run("server", &with_json(&["host", "self-test"]))
+        .success();
+    let document = single_document(&outcome);
+    assert_eq!(document["ok"], true, "{document}");
+    let checks = document["result"]["checks"]
+        .as_array()
+        .expect("checks")
+        .clone();
+    let mut expected: Vec<String> = LOCAL_CHECKS.iter().map(|name| name.to_string()).collect();
+    expected.push("network".to_owned());
+    assert_eq!(document_checks_names(&checks), expected, "{checks:?}");
+    for check in &checks {
+        assert_eq!(check["state"], "pass", "{check}");
+    }
+    assert!(
+        check(&checks, "network")["detail"]
+            .as_str()
+            .unwrap()
+            .contains("listening"),
+        "{checks:?}"
+    );
+}
+
+#[test]
+fn a_local_service_without_a_listener_has_no_network_check() {
+    let server = Sandbox::new();
+    let _guard = server.spawn_service("server");
+    server.wait_for_running("server", true);
+
+    let outcome = server
+        .run("server", &with_json(&["host", "self-test"]))
+        .success();
+    let document = single_document(&outcome);
+    let checks = document["result"]["checks"]
+        .as_array()
+        .expect("checks")
+        .clone();
+    assert_eq!(
+        document_checks_names(&checks),
+        LOCAL_CHECKS
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>(),
+        "{checks:?}"
+    );
+}
+
+#[test]
+fn a_stopped_local_service_fails_the_connect_check_and_skips_the_rest() {
+    let server = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let service = start_server(&server, "server", &listen);
+    stop_server(&server, "server", service);
+
+    let outcome = server.run("server", &with_json(&["host", "self-test"]));
+    assert_ne!(outcome.get_output().status.code(), Some(0));
+    let document = single_document(&outcome);
+    let checks = document["error"]["data"]["checks"]
+        .as_array()
+        .expect("checks")
+        .clone();
+    assert_eq!(check(&checks, "endpoint")["state"], "pass", "{checks:?}");
+    assert_eq!(check(&checks, "connect")["state"], "fail", "{checks:?}");
+    assert!(check(&checks, "connect")["fix"].is_string(), "{checks:?}");
+    assert_eq!(check(&checks, "protocol")["state"], "skipped", "{checks:?}");
+    assert!(document["error"]["data"]["logs"].is_null(), "{document}");
 }
