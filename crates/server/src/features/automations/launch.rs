@@ -14,10 +14,13 @@ use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{ErrorBody, codes};
 
 use super::completion::settle_session;
+use crate::features::teams::worktree_name;
 
 /// Why a run receives no vault secrets: an automation records no host-admin creator.
 const WITHHELD: &str =
     "vault secrets do not go to automation runs: an automation records no host-admin creator";
+/// The request id of a run's agent start is this and the run id, so a retry, or the sweep at start, finds its session.
+pub(super) const RUN_REQUEST_PREFIX: &str = "automation.run:";
 /// The name of a folder project's workspace when the project has none at its own path.
 const FOLDER_WORKSPACE: &str = "automations";
 
@@ -96,7 +99,7 @@ fn start(
             cols: None,
             rows: None,
             // A retry of this run finds its session instead of starting a second one.
-            request_id: Some(format!("automation.run:{}", run.id)),
+            request_id: Some(format!("{RUN_REQUEST_PREFIX}{}", run.id)),
             permission_mode: None,
             model: None,
             fast: None,
@@ -118,7 +121,7 @@ fn place(
         ProjectKind::Git => {
             let created = workspaces.create_workspace_once(WorkspaceCreateParams {
                 project: project.id.clone(),
-                name: worktree_name(&automation.id),
+                name: worktree_name(&automation.name, &id_tail(&automation.id)),
                 branch: None,
                 base: None,
                 existing_branch: false,
@@ -142,14 +145,14 @@ fn place(
     }
 }
 
-/// The automation's worktree name: `automation-` and the end of its id, which is unique.
-fn worktree_name(automation_id: &str) -> String {
-    let tail: String = automation_id
+/// The random end of an automation's id: a worktree name keeps six characters of it, so two automations with one
+/// name get two worktrees.
+fn id_tail(automation_id: &str) -> String {
+    let alnum: Vec<char> = automation_id
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect();
-    let start = tail.len().saturating_sub(8);
-    format!("automation-{}", &tail[start..])
+    alnum[alnum.len().saturating_sub(6)..].iter().collect()
 }
 
 /// A folder project's workspace at the project's own path, made when it has none; shared by several writers.
@@ -183,13 +186,13 @@ fn folder(workspaces: &Workspaces, project: &Project) -> Result<(Workspace, bool
 
 #[cfg(test)]
 mod tests {
-    use super::worktree_name;
+    use super::id_tail;
+    use crate::features::teams::worktree_name;
 
     #[test]
-    fn the_worktree_is_named_after_the_end_of_the_automation_id() {
-        assert_eq!(
-            worktree_name("0192f3a4-7b1c-7e2d-9f00-1a2b3c4d5e6f"),
-            "automation-3c4d5e6f"
-        );
+    fn the_worktree_is_named_after_the_automation_and_the_end_of_its_id() {
+        let tail = id_tail("0192f3a4-7b1c-7e2d-9f00-1a2b3c4d5e6f");
+        assert_eq!(tail, "4d5e6f");
+        assert_eq!(worktree_name("Morning PRs", &tail), "morning-prs-4d5e6f");
     }
 }

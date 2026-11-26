@@ -1,19 +1,19 @@
 //! Ends automation runs from their agent sessions (decision 0125, AUTO-07). A run completes when its agent reports Done
 //! from a run the host can see, with the agent's result text; an agent that exits without Done fails the run; a session
-//! the agents domain forgot strands it. A run whose session is unverifiable stays dispatched: loss of contact is never
+//! the agents domain forgot strands it, also when its event was missed. A run whose session is unverifiable stays dispatched: loss of contact is never
 //! evidence that the agent ended.
 
 use std::sync::Arc;
 
 use massorca_core_agents::Change;
-use massorca_core_store::{Store, now_ms, run_state};
-use massorca_protocol::methods::agents::{ActivityState, AgentSession, Outcome};
+use massorca_core_store::{Store, TaskOutcome, now_ms, run_state};
+use massorca_protocol::methods::agents::AgentSession;
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, codes};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
 
 use crate::context::AppState;
-use crate::features::teams::{blocking_state, store_error};
+use crate::features::teams::{blocking_state, observed_outcome, store_error};
 use crate::shutdown::ShutdownSignal;
 
 use super::runs::{capped_result, prune, publish};
@@ -61,6 +61,16 @@ async fn resync(state: &Arc<AppState>) {
         for session in agents.list(None).map_err(ErrorBody::from)? {
             ended.extend(settle_session(store, &session)?);
         }
+        // A run whose session is gone missed its Forgotten event; one whose session exists, even unverifiable, stays.
+        ended.extend(
+            store
+                .fail_automation_runs_without_session(
+                    codes::AUTOMATION_RUN_STRANDED,
+                    STRANDED,
+                    now_ms(),
+                )
+                .map_err(store_error)?,
+        );
         Ok(ended)
     })
     .await;
@@ -85,7 +95,7 @@ pub(super) fn settle_session(
     store: &Store,
     session: &AgentSession,
 ) -> Result<Option<String>, ErrorBody> {
-    let ended = match done_outcome(session) {
+    let ended = match observed_outcome(session).map(TaskOutcome::as_str) {
         Some(outcome) => {
             let result = session.result.as_deref().map(capped_result);
             store.end_automation_run_by_session(
@@ -115,7 +125,10 @@ pub(super) fn settle_session(
     }))
 }
 
-fn settle_forgotten(store: &Store, session_id: &str) -> Result<Option<String>, ErrorBody> {
+pub(super) fn settle_forgotten(
+    store: &Store,
+    session_id: &str,
+) -> Result<Option<String>, ErrorBody> {
     let ended = store
         .end_automation_run_by_session(
             session_id,
@@ -130,25 +143,4 @@ fn settle_forgotten(store: &Store, session_id: &str) -> Result<Option<String>, E
         prune(store, &run.automation_id);
         run.automation_id
     }))
-}
-
-/// The stored outcome of a Done the host saw, as a task latches it; an unverifiable run or an unknown outcome is none.
-fn done_outcome(session: &AgentSession) -> Option<&'static str> {
-    if !matches!(
-        session.execution.state,
-        TerminalState::Live | TerminalState::Exited
-    ) {
-        return None;
-    }
-    let activity = session.activity.as_ref()?;
-    if activity.state != ActivityState::Done {
-        return None;
-    }
-    match activity.outcome? {
-        Outcome::Success => Some("success"),
-        Outcome::Failure => Some("failure"),
-        Outcome::Cancelled => Some("cancelled"),
-        Outcome::Interrupted => Some("interrupted"),
-        Outcome::Unknown => None,
-    }
 }

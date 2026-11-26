@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use massorca_core_agents::Change;
+use massorca_core_agents::{Agents, Change};
 use massorca_core_schedule::{ClaimDecision, decide_claim, runs_within_grace};
 use massorca_core_store::{AutomationRow, AutomationRunRow, Store, now_ms, run_state};
 use massorca_protocol::methods::automations::DEFAULT_GRACE_MINUTES;
@@ -19,9 +19,9 @@ use crate::context::AppState;
 use crate::features::teams::{blocking_state, store_error};
 use crate::shutdown::ShutdownSignal;
 
-use super::completion::follow_runs;
+use super::completion::{follow_runs, settle_forgotten, settle_session};
 use super::definition::compile;
-use super::launch::dispatch;
+use super::launch::{RUN_REQUEST_PREFIX, dispatch};
 use super::runs::{TRIGGER_SCHEDULE, missed_run, new_run, prune, publish};
 
 /// How often the host checks for due automations (AUTO-03).
@@ -43,7 +43,7 @@ pub(crate) async fn follow_automations(
     }
 }
 
-/// Fails the runs a previous service left dispatching, then checks for due automations every 60 seconds, and once at
+/// Attaches or fails the runs a previous service left dispatching, then checks for due automations every 60 seconds, and once at
 /// start, until shutdown. A sweep that fails is tried again before each check until one succeeds.
 async fn follow_schedule(state: Arc<AppState>, mut signal: ShutdownSignal) {
     let mut swept = false;
@@ -65,19 +65,24 @@ async fn follow_schedule(state: Arc<AppState>, mut signal: ShutdownSignal) {
 
 async fn sweep(state: &Arc<AppState>) -> bool {
     let started_at = state.started_at_ms;
-    let settled = blocking_state(state, move |store, _agents| {
-        store
+    let settled = blocking_state(state, move |store, agents| {
+        let ended = reattach(store, agents, started_at)?;
+        let settled = store
             .settle_dispatching_automation_runs(
                 started_at,
                 codes::AUTOMATION_RUN_INTERRUPTED,
                 INTERRUPTED,
                 now_ms(),
             )
-            .map_err(store_error)
+            .map_err(store_error)?;
+        Ok((ended, settled))
     })
     .await;
     match settled {
-        Ok(settled) => {
+        Ok((ended, settled)) => {
+            for automation_id in ended {
+                publish(state, &automation_id);
+            }
             if settled > 0 {
                 tracing::info!(
                     settled,
@@ -91,6 +96,26 @@ async fn sweep(state: &Arc<AppState>) -> bool {
             false
         }
     }
+}
+
+/// Attaches the runs whose agent started before the stop saved it, and ends those whose session already ended. Returns
+/// the automations whose runs ended.
+fn reattach(store: &Store, agents: &Agents, started_at: i64) -> Result<Vec<String>, ErrorBody> {
+    let mut ended = Vec::new();
+    for session in store
+        .reattach_dispatching_automation_runs(started_at, RUN_REQUEST_PREFIX)
+        .map_err(store_error)?
+    {
+        let settled = match agents.show(&session) {
+            Ok(view) => settle_session(store, &view)?,
+            Err(error) if error.code == codes::AGENT_NOT_FOUND => {
+                settle_forgotten(store, &session)?
+            }
+            Err(error) => return Err(ErrorBody::from(error)),
+        };
+        ended.extend(settled);
+    }
+    Ok(ended)
 }
 
 /// One check on the blocking pool, then the events for what it changed.
