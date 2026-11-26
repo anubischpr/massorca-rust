@@ -21,8 +21,18 @@ Status: accepted, 2026-11-26.
   (`permission.denied` otherwise), and the run's task names the parent. Only a task run can delegate, and only as its
   own bot. A call with no run, or a run with no task or no bot, is refused with `team.delegate_not_a_bot`. A call
   naming the caller's own bot is refused with `team.delegate_self`.
+- **Depth.** A child sits one level below the task that delegated it. The task's depth is the number of links above
+  it, and a child whose depth would exceed `agents.delegation_depth` (default 1, clamped 1 to 5, read on every call) is
+  refused with `team.delegate_depth_exceeded`, whose data carries `limit`, `setting` and `depth`. At the default a
+  child cannot delegate. A cycle cannot form: a child is always a new task, and storing an existing task as a child
+  fails.
+- **Idempotency.** `request_id` (optional) scopes a key to the parent task. A repeated call with a key the parent used
+  returns the child the first call made and starts nothing. The CLI derives its key from the run, the task text, the
+  bot, the team and the read flag, so a retried command keeps its key. The same text sent again from the same run is
+  therefore the same call; a deliberate second delegation needs a different text.
 - **Child task.** The child is a task in the target team (the caller's team, or `--team`) with the named or picked
-  bot. It is linked to its parent in `task_delegations` (one parent per child). A read-only child is marked there.
+  bot. The task and its link to its parent in `task_delegations` (one parent per child, with the read-only flag and
+  the request key) are stored in one transaction.
 - **Picking.** A bot named with `bot` is used as named. Without it, competence decides: each teammate's job and
   skills are split into words (lowercase, at least three letters, stop words removed), and the teammate that shares
   the most words with the task text wins. Ties go to the name that sorts first. In the caller's own team the caller
@@ -34,9 +44,12 @@ Status: accepted, 2026-11-26.
     plain folder.
   - A read-only child runs in the parent's workspace. A parent with none yet leaves it the team's folder.
   - A child that cannot start stays Open with the reason in `error`; the delegation stands and the call succeeds.
-- **Access and vault.** A child runs in its team's own mode, but never in a bypass mode when its parent runs in the
-  vendor's default mode. A delegated child starts without the vault (`SecretGrant::Withhold`), so it never gets more
-  scope than the run that delegated it.
+- **Read-only.** `--reads` is refused with `team.delegate_reads_other_team` for a team other than the parent's, because
+  a read-only child shares the parent's workspace. A read-only child runs in the vendor's default mode, never a
+  bypass mode, so "read-only" is enforced by its mode and not only by its prompt.
+- **Access and vault.** A writing child runs in its team's own mode, but never in a bypass mode when its parent runs in
+  the vendor's default mode, or when its parent's bot has been removed (then it keeps the vendor default). A delegated
+  child starts without the vault (`SecretGrant::Withhold`), so it never gets more scope than the run that delegated it.
 - **Result back.** A delegated child's outcome is posted to its team's Conference room by its own bot (`Done: <title>`
   or the failure word), the same line a room task gets. The lead reads the whole tree with `team.delegation_tree`,
   `team.delegation_list` or `task show`, which list each child with its state.
@@ -58,11 +71,13 @@ Status: accepted, 2026-11-26.
 
 ## Migration
 
-- One step: `task_delegations` (child task, parent task, read-only flag, creation time), with an index by parent. Removing
-  either task removes its link. No existing row changes.
+- Two steps: `task_delegations` (child task, parent task, read-only flag, creation time), with an index by parent, and
+  then `request_id` with a unique index per parent. Removing either task removes its link. No existing row changes.
 
 ## Consequences
 
 - A delegation is a task with a link, so it appears on the Board, in `task list`, and in the room like any task.
 - Competence is a word match, a first version: it is explainable and repeatable, and a bot whose job uses other words
   is picked only by name.
+- The depth limit is read by the server from the stored setting with the same clamp as core-agents; core-agents keeps
+  its own parser private, so the two parsers must change together.
