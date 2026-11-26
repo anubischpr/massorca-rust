@@ -26,6 +26,7 @@ pub mod permission_modes;
 pub mod preflight;
 pub mod project_add;
 pub mod project_icon;
+pub mod project_remove;
 pub mod rail;
 pub mod region_cycle;
 pub mod regions;

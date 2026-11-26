@@ -84,6 +84,8 @@ pub enum StoreUpdate {
     WorkspaceRenameOffered(bool),
     /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
     GitSyncOffered(bool),
+    /// Whether the service offers `projects/1`: Remove project and the project's base branch.
+    ProjectEditsOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
@@ -317,6 +319,8 @@ pub struct StoreState {
     pub workspace_rename: bool,
     /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
     pub git_sync: bool,
+    /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
+    pub project_edits: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
@@ -370,6 +374,7 @@ impl Default for StoreState {
             workspace_unique_name: false,
             workspace_rename: false,
             git_sync: false,
+            project_edits: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             chat: BTreeMap::new(),
@@ -486,6 +491,7 @@ impl StoreState {
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
             StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
+            StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::Chat { session, event } => {

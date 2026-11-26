@@ -39,6 +39,7 @@ use massorca_protocol::methods::git::remote::{
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+    ProjectRemoveParams,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
@@ -111,6 +112,11 @@ pub(crate) enum Command {
     InspectProject {
         params: ProjectInspectParams,
         reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
+    },
+    /// `project.remove`, answered on its oneshot with the removed project.
+    RemoveProject {
+        params: ProjectRemoveParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
@@ -417,6 +423,12 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.remove`. The project list changes through the resulting event, not from this answer.
+    pub async fn remove_project(&self, params: ProjectRemoveParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::RemoveProject { params, reply })
+            .await
     }
 
     /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
@@ -952,6 +964,9 @@ impl Link {
         self.emit(StoreUpdate::GitSyncOffered(
             client.has_capability(massorca_protocol::capabilities::GIT),
         ));
+        self.emit(StoreUpdate::ProjectEditsOffered(
+            client.has_capability(massorca_protocol::capabilities::PROJECTS),
+        ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
@@ -1318,6 +1333,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::RemoveProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectRemoveParams, Project>(projects::REMOVE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::InspectProject { params, reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1491,6 +1515,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::InspectProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::RemoveProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::ListConfig { reply } => {

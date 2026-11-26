@@ -20,7 +20,7 @@ use massorca_protocol::methods::git::remote::{
 };
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::git::{ChangeKind, LineCounts};
-use massorca_protocol::methods::projects::ProjectAddParams;
+use massorca_protocol::methods::projects::{ProjectAddParams, ProjectRemoveParams};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
@@ -751,5 +751,38 @@ async fn fetch_pull_and_push_reach_a_local_remote_through_the_service() {
         worktree.join("remote.txt").exists(),
         "the pulled file is in the worktree"
     );
+    session.stop().await;
+}
+
+fn remove_params(project: &str, forget_workspaces: bool) -> ProjectRemoveParams {
+    ProjectRemoveParams {
+        project: project.to_owned(),
+        forget_workspaces,
+    }
+}
+
+/// A project with workspace records is refused until its waiver forgets them; the worktree stays on disk.
+#[tokio::test]
+async fn removing_a_project_with_workspaces_waits_for_the_forget_waiver() {
+    let home = temp_home();
+    let (session, worktree) = Session::start(&home).await;
+    let project = session.workspace.project_id.clone();
+
+    let refused = session
+        .handle
+        .remove_project(remove_params(&project, false))
+        .await;
+    let Err(refusal) = refused else {
+        panic!("a project with workspaces is refused");
+    };
+    assert_eq!(refusal.code(), Some(codes::PROJECT_HAS_WORKSPACES));
+
+    let removed = session
+        .handle
+        .remove_project(remove_params(&project, true))
+        .await
+        .expect("the waiver removes the project");
+    assert_eq!(removed.id, project);
+    assert!(worktree.exists(), "the worktree stays on disk");
     session.stop().await;
 }

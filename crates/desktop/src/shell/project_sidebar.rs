@@ -41,6 +41,7 @@ pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) 
             .explanation("Not available yet.")
             .into_any_element(),
     };
+    let remove = remove_project_control(shell, handle, cx);
     div()
         .flex()
         .flex_col()
@@ -48,7 +49,42 @@ pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) 
         .min_h_0()
         .child(tabs)
         .child(content)
+        .children(remove)
         .into_any_element()
+}
+
+/// The Remove project button under the tabs, for the project of the selected workspace. It is absent
+/// without `projects/1` and while no workspace is selected.
+fn remove_project_control(
+    shell: &Shell,
+    handle: &WeakEntity<Shell>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let state = shell.store.read(cx).state();
+    if !state.project_edits {
+        return None;
+    }
+    let project = state
+        .workspace(shell.model.selected_workspace()?)?
+        .project_id
+        .clone();
+    let handle = handle.clone();
+    Some(
+        div()
+            .flex()
+            .justify_end()
+            .p(px(SPACE_2))
+            .child(
+                Button::new("project-remove", "Remove project")
+                    .variant(ButtonVariant::DangerGhost)
+                    .size(ButtonSize::Compact)
+                    .on_click(move |_, cx| {
+                        let _ =
+                            handle.update(cx, |shell, cx| shell.open_project_remove(&project, cx));
+                    }),
+            )
+            .into_any_element(),
+    )
 }
 
 /// The number of changed files, for the Source control tab's count.

@@ -21,6 +21,7 @@ mod path_field;
 mod preflight_banner;
 mod project_icon;
 mod project_mark;
+mod project_remove;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;
@@ -124,6 +125,8 @@ mod pairing_tests;
 mod path_field_tests;
 #[cfg(test)]
 mod preflight_banner_tests;
+#[cfg(test)]
+mod project_remove_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
@@ -264,6 +267,8 @@ pub struct Shell {
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
+    /// The Remove project dialog's flow, while the dialog is open.
+    project_remove: Option<crate::model::project_remove::ProjectRemoveFlow>,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
@@ -667,6 +672,7 @@ impl Shell {
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
+            project_remove: None,
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
@@ -1151,6 +1157,10 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let remove_project = self
+            .project_remove
+            .as_ref()
+            .map(|flow| project_remove::project_remove_dialog(flow, &shell, cx));
         let discard = self
             .source_control
             .discard
@@ -1280,6 +1290,7 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
+            .when_some(remove_project, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_switch, |el, menu| el.child(menu))
