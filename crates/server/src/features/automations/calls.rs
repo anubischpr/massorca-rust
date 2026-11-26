@@ -1,6 +1,7 @@
 //! The `automation.*` handlers. Each reads or writes the store on the blocking pool. A create or an edit resolves its
 //! project the way `project.show` does, through the workspace domain (decision 0123).
 
+use massorca_core_git::Git;
 use massorca_core_store::{AutomationRow, StoreError, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::automations::{
@@ -47,6 +48,7 @@ pub(super) async fn create(
 ) -> Result<Automation, ErrorBody> {
     let host = HostZone::read();
     let domain = shared(&ctx);
+    let git = ctx.state.git.clone();
     blocking(&ctx, move |store, agents| {
         let key = optional_text(params.creation_key.clone());
         if let Some(key) = key.as_deref()
@@ -57,7 +59,7 @@ pub(super) async fn create(
             return automation_view(store, &existing, &host);
         }
         let now = now_ms();
-        let row = new_row(&domain, &params, now, key)?;
+        let row = new_row(&domain, &git, &params, now, key)?;
         let compiled = check(&row, agents, &host)?;
         let row = AutomationRow {
             next_run_at: next_run(&row, &compiled, now),
@@ -88,11 +90,12 @@ pub(super) async fn update(
 ) -> Result<Automation, ErrorBody> {
     let host = HostZone::read();
     let domain = shared(&ctx);
+    let git = ctx.state.git.clone();
     blocking(&ctx, move |store, agents| {
         let old = automation(store, &params.automation)?;
         let now = now_ms();
         let mut row = old.clone();
-        let schedule_moved = apply_edit(&mut row, &params, &domain, now)?;
+        let schedule_moved = apply_edit(&mut row, &params, &domain, &git, now)?;
         let compiled = check(&row, agents, &host)?;
         row.next_run_at = match (row.enabled, schedule_moved || old.next_run_at.is_none()) {
             (false, _) => None,
@@ -170,12 +173,13 @@ async fn set_enabled(
 /// A new automation from the create params. Its project is resolved here; the caller sets its next run.
 fn new_row(
     domain: &Workspaces,
+    git: &Git,
     params: &AutomationCreateParams,
     now: i64,
     key: Option<String>,
 ) -> Result<AutomationRow, ErrorBody> {
     let (project_id, _) = project_of(domain, &params.project)?;
-    let stored = destination::check(domain, &project_id, params.destination.as_ref())?;
+    let stored = destination::check(domain, git, &project_id, params.destination.as_ref())?;
     let cadence = cadence_name(params.cadence)?;
     let weekday = params
         .weekday
@@ -215,6 +219,7 @@ fn apply_edit(
     row: &mut AutomationRow,
     params: &AutomationUpdateParams,
     domain: &Workspaces,
+    git: &Git,
     now: i64,
 ) -> Result<bool, ErrorBody> {
     let before = schedule_fields(row);
@@ -271,7 +276,7 @@ fn apply_edit(
                 "the automation has no project, so it cannot take a destination",
             )
         })?;
-        let stored = destination::check(domain, &project_id, Some(given))?;
+        let stored = destination::check(domain, git, &project_id, Some(given))?;
         row.destination = stored.kind.to_owned();
         row.destination_workspace_id = stored.workspace_id;
         row.destination_path = stored.path;

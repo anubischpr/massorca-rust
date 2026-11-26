@@ -24,6 +24,7 @@ use massorca_protocol::methods::workspaces::{
 use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
+use super::workspace_setup::{add_project, repo_with_setup};
 
 const DAY_MS: i64 = 86_400_000;
 const NINE_AM_MS: i64 = 9 * 3_600_000;
@@ -781,6 +782,41 @@ async fn a_removed_destination_workspace_refuses_its_runs_with_its_sentence() {
     assert_eq!(
         run.reason.as_deref(),
         Some("The destination workspace was removed, so the run did not start.")
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_worktree_per_run_names_a_base_branch_that_must_be_a_commit_of_the_repository() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, None);
+    let project = add_project(&client, home.path(), &repo).await;
+    let per_run = |base: Option<&str>| AutomationDestination {
+        kind: AutomationDestinationKind::ProjectWorktreePerRun,
+        base_branch: base.map(str::to_owned),
+        ..AutomationDestination::default()
+    };
+
+    let mut unknown = create_params(&project.id, "Per run");
+    unknown.destination = Some(per_run(Some("no-such-branch")));
+    let error = client
+        .automation_create(&unknown)
+        .await
+        .expect_err("refused");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_BASE_BRANCH_UNKNOWN);
+
+    let mut plain = create_params(&project.id, "Per run");
+    plain.destination = Some(per_run(None));
+    let created = client
+        .automation_create(&plain)
+        .await
+        .expect("no base is the repository's own");
+    assert_eq!(
+        created.destination.kind,
+        AutomationDestinationKind::ProjectWorktreePerRun
     );
     stop(running).await;
 }

@@ -5,12 +5,15 @@
 
 use std::path::Path;
 
+use massorca_core_git::Git;
 use massorca_core_store::{AutomationRow, Store, destination};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::automations::{AutomationDestination, AutomationDestinationKind};
 use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, codes};
+
+use crate::features::git::git_error;
 
 /// A run that cannot start: its protocol code, and the fixed sentence recorded as its reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +106,7 @@ impl Stored {
 /// workspace must belong to the project and be usable; a worktree per run needs a git project.
 pub(super) fn check(
     workspaces: &Workspaces,
+    git: &Git,
     project_id: &str,
     destination: Option<&AutomationDestination>,
 ) -> Result<Stored, ErrorBody> {
@@ -129,11 +133,15 @@ pub(super) fn check(
                     project.name
                 )));
             }
+            let base = base_branch(destination.base_branch.as_deref())?;
+            if let Some(name) = &base {
+                known_base(git, &project.path, name)?;
+            }
             Ok(Stored {
                 kind: destination::PROJECT_WORKTREE_PER_RUN,
                 workspace_id: None,
                 path: None,
-                base_branch: base_branch(destination.base_branch.as_deref())?,
+                base_branch: base,
             })
         }
         AutomationDestinationKind::ExistingWorkspace => {
@@ -170,6 +178,19 @@ pub(super) fn check(
             "the destination must be project_default, project_worktree_per_run or existing_workspace",
         )),
     }
+}
+
+/// A base branch must be a commit of the project's repository, so a run is not refused later for one that never existed.
+fn known_base(git: &Git, repo: &str, name: &str) -> Result<(), ErrorBody> {
+    let repo = Path::new(repo);
+    let base = git.qualify_base(repo, name).map_err(git_error)?;
+    if git.ref_exists(repo, &base.revision).map_err(git_error)? {
+        return Ok(());
+    }
+    Err(ErrorBody::new(
+        codes::AUTOMATION_BASE_BRANCH_UNKNOWN,
+        format!("the base branch {name} is not a commit of this repository"),
+    ))
 }
 
 fn base_branch(given: Option<&str>) -> Result<Option<String>, ErrorBody> {
