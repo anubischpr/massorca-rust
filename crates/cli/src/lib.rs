@@ -10,6 +10,7 @@ pub mod agent_hook;
 pub mod agent_text;
 pub mod app;
 pub mod args;
+pub mod automations;
 pub mod cli_install;
 pub mod config;
 pub mod connect;
