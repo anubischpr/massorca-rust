@@ -48,6 +48,7 @@ use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::automations::{self, AutomationCommand};
+use super::calendar::{self, CalendarCommand};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
@@ -109,6 +110,8 @@ pub(crate) enum Command {
     Extension(ExtensionCommand),
     /// A scheduled automation call (decision 0123), answered on its oneshot.
     Automation(AutomationCommand),
+    /// A calendar call (decision 0124), answered on its oneshot.
+    Calendar(CalendarCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
     HostRead {
         host: String,
@@ -909,6 +912,9 @@ impl Link {
                             Some(Command::Automation(command)) => {
                                 automations::spawn_call(client, command);
                             }
+                            Some(Command::Calendar(command)) => {
+                                calendar::spawn_call(client, command);
+                            }
                             Some(Command::HostedServices { command, .. }) => {
                                 hosted_services::spawn_local(client, command);
                             }
@@ -1259,6 +1265,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Automation(_)
+        | Command::Calendar(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1306,6 +1313,7 @@ fn refuse_while_down(command: Command) {
         Command::Room(command) => team_room::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::Automation(command) => automations::refuse(command, refusal),
+        Command::Calendar(command) => calendar::refuse(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
         Command::Skills { .. } | Command::HostSkills { .. } => {}

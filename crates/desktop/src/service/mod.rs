@@ -9,6 +9,7 @@ mod agent_queue;
 mod agents;
 mod automations;
 mod bridge;
+mod calendar;
 mod connection;
 mod extensions;
 mod git;
@@ -39,6 +40,7 @@ pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
+pub use calendar::CAPABILITY_MISSING;
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
