@@ -11,6 +11,7 @@ use std::process::Stdio;
 
 use extension_support::{Host, Package};
 use harness::{ChildGuard, eventually, massorca_in};
+use massorca_process::test_executable::copy_executable;
 use serde_json::{Value, json};
 
 const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
@@ -51,7 +52,7 @@ fn kind_of(package: Package) -> Value {
 
 /// Puts the fake agent on the service's `PATH` as `package`'s CLI, and returns the package's `dir:` source.
 fn write_package(host: &Host, package: Package) -> String {
-    fs::copy(
+    copy_executable(
         env!("CARGO_BIN_EXE_massorca-fake-agent"),
         host.cli_path(package.binary),
     )

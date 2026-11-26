@@ -36,6 +36,7 @@ windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
 test-hooks = []
 
 [dev-dependencies]
+massorca-process = { workspace = true, features = ["test-support"] }
 massorca-core-git.workspace = true
 tempfile.workspace = true
 

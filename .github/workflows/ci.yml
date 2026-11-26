@@ -238,7 +238,7 @@ jobs:
         with:
           key: ui
           save-if: false
-      # chat_bridge.rs runs the fake agent example, which `cargo test --test` does not build.
+      # `--test '*'` builds no examples, and the bridge tests run the desktop's fake agent example.
       - run: cargo build -p massorca-desktop --examples --locked
       - run: cargo test -p massorca-desktop --test '*' --locked
 
@@ -333,6 +333,8 @@ jobs:
         with:
           key: android-apk
       - run: npm ci
+      # Caches Gradle's downloads (wrapper, plugins, dependencies), keyed on the build files and the wrapper.
+      - uses: gradle/actions/setup-gradle@v6.4.1
       - name: Build the Rust library and generate the glue
         run: npx ubrn build android --config ubrn.config.yaml --and-generate
       - name: Check the committed TypeScript is what the crate generates
@@ -345,7 +347,7 @@ jobs:
           }
       - name: Build the debug APK
         working-directory: mobile/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ../../scripts/ci/gradle-with-retry.sh assembleDebug --no-daemon
       - uses: actions/upload-artifact@v7
         with:
           name: massorca-debug-apk
@@ -355,7 +357,7 @@ jobs:
       # Metro server and no development support. Signed with the committed debug key (android/app/build.gradle).
       - name: Build the release APK for the emulator flow
         working-directory: mobile/android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ../../scripts/ci/gradle-with-retry.sh assembleRelease --no-daemon
       - uses: actions/upload-artifact@v7
         with:
           name: massorca-release-apk

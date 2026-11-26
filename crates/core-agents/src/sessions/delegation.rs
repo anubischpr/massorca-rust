@@ -588,6 +588,8 @@ impl Agents {
                 path: None,
                 request_id: request_key.clone(),
                 no_setup: false,
+                unique_name: false,
+                name_generated: false,
             })
         };
         if let Some(name) = name {
@@ -1398,17 +1400,13 @@ then report"
     /// script without a `#!` line would run under `/bin/sh` (the exec fallback), so the file names an interpreter that
     /// does not exist, which makes the exec fail with the spawn.
     fn declare_broken_kind(profile: &std::path::Path, dir: &std::path::Path) {
+        use massorca_process::test_executable::write_executable;
+
         let program = dir.join("broken.exe");
-        std::fs::write(
+        write_executable(
             &program,
             "#!/nonexistent/massorca-interpreter\nnot a program\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         let kinds = profile.join("agents").join("kinds");
         std::fs::create_dir_all(&kinds).unwrap();
         let kind = serde_json::json!({
@@ -1481,6 +1479,8 @@ then report"
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
+                name_generated: false,
             })
             .unwrap();
         let parent = session_row(&lead.id, None);

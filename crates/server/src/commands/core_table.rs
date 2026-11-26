@@ -333,6 +333,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "workspace.rename",
+            "Rename a workspace whose name the service chose, and its branch",
+            "workspace.rename",
+            json!({
+                "type": "object",
+                "required": ["workspace", "name", "from_generated"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from_generated": { "type": "boolean" },
+                    "expected_branch": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "workspace.check",
             "Check a workspace's folder and its git registration",
             "workspace.check",
