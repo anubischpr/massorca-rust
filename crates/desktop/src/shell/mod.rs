@@ -3,6 +3,7 @@
 mod actions;
 mod add_host;
 mod app_theme;
+mod automations;
 mod bring_back;
 mod canvas;
 mod close_confirm;
@@ -273,6 +274,10 @@ pub struct Shell {
     marketplace_pick: marketplace::HostPick,
     /// The hosts the Marketplace's picker offers, in its order.
     marketplace_offers: Vec<crate::model::marketplace::HostTarget>,
+    /// The Automations page's list, editor target, delete question and notice (decision 0123).
+    automations: crate::model::automations::AutomationsState,
+    /// Whether a read of the automations is on its way to the service.
+    automations_loading: bool,
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
@@ -593,6 +598,8 @@ impl Shell {
                 ui_state::saved_marketplace_host(cx).unwrap_or_default(),
             ),
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
+            automations: Default::default(),
+            automations_loading: false,
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
@@ -772,6 +779,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.ensure_automations_loaded(cx);
         self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
@@ -896,6 +904,8 @@ impl Render for Shell {
             &self.zones,
             canvas::PageFrames {
                 settings,
+                automations: (self.model.canvas() == Canvas::Page(Page::Automations))
+                    .then(|| self.automations_frame(&shell)),
                 start,
                 home,
                 setup_rows,
@@ -1024,6 +1034,11 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let automation_delete = self
+            .automations
+            .delete_target()
+            .and_then(|id| self.automations.find(id))
+            .map(|automation| automations::delete_dialog(&automation.name, &shell, &theme));
         let team_menu = self
             .team_menu
             .as_ref()
@@ -1135,6 +1150,7 @@ impl Render for Shell {
             .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
+            .when_some(automation_delete, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
