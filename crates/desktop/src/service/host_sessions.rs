@@ -3,11 +3,11 @@
 //! again on each connection the link makes. While the link has no connection the host keeps the sessions it last
 //! ran, unverified: losing contact is never proof that a run ended.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use massorca_client::{Client, ClientError, LiveWatch};
-use massorca_protocol::codes;
+use massorca_client::{Client, ClientError, LiveWatch, Subscription};
 use massorca_protocol::methods::agents::AgentSession;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceListParams};
@@ -23,6 +23,8 @@ static CHECKS: AtomicU64 = AtomicU64::new(0);
 
 /// How often a host that refuses the event subscription is read again on its connection.
 const READ_AGAIN_EVERY: Duration = Duration::from_secs(30);
+/// The pause before a subscription the host ended, on a connection still up, is opened again.
+const SUBSCRIBE_AGAIN_AFTER: Duration = Duration::from_secs(1);
 
 /// Numbers one check of a host. A later check always has a larger number.
 fn next_check() -> u64 {
@@ -54,6 +56,41 @@ pub struct HostSessions {
     pub workspaces: Vec<Workspace>,
 }
 
+/// What the follower uses of one connection: its change events and its reads. A `Client` provides them; the tests
+/// script them.
+trait HostConnection: Sync {
+    type Events: Send;
+
+    fn subscribe_changes(&self) -> impl Future<Output = Result<Self::Events, ClientError>> + Send;
+    /// The next change, or `None` once the subscription has ended.
+    fn next_change(
+        events: &mut Self::Events,
+    ) -> impl Future<Output = Option<Result<ChangeEvent, ClientError>>> + Send;
+    fn read_now(&self) -> impl Future<Output = Option<HostAgents>> + Send;
+    /// Resolves once the connection has ended.
+    fn wait_closed(&self) -> impl Future<Output = ()> + Send;
+}
+
+impl HostConnection for Client {
+    type Events = Subscription;
+
+    fn subscribe_changes(&self) -> impl Future<Output = Result<Subscription, ClientError>> + Send {
+        self.subscribe_events()
+    }
+
+    async fn next_change(events: &mut Subscription) -> Option<Result<ChangeEvent, ClientError>> {
+        events.next_as::<ChangeEvent>().await
+    }
+
+    async fn read_now(&self) -> Option<HostAgents> {
+        read(self).await
+    }
+
+    async fn wait_closed(&self) {
+        self.closed().await;
+    }
+}
+
 /// Follows one paired host's sessions on its link's connection until the link stops. Each connection is read at
 /// once and on each `agent.changed` event; when it is lost the sessions read so far stay, marked unreached.
 pub(super) async fn follow(
@@ -74,11 +111,15 @@ pub(super) async fn follow(
             match link_changed {
                 // The connection was lost or replaced: the loop reads what the link has now.
                 Some(true) => continue,
-                Some(false) => {
-                    report_unreached(&updates, &host, check);
-                    return;
+                // The link stopped, so its host is no longer followed: nothing is reported for it.
+                Some(false) => return,
+                // Ended on its own: a stopped link reports nothing, a lost one is reported once the link confirms it.
+                None => {
+                    if !link.changed().await {
+                        return;
+                    }
+                    continue;
                 }
-                None => {}
             }
         }
         if read_once {
@@ -90,37 +131,39 @@ pub(super) async fn follow(
     }
 }
 
-/// Reads the host on one connection, then again on each `agent.changed` event, until the connection ends. A host that
-/// does not let this device subscribe is read again every `READ_AGAIN_EVERY` instead.
-async fn follow_connection(
-    client: &Client,
+/// Reads the host on one connection, then again on each `agent.changed` event, until the connection ends. A
+/// subscription the host ends while the connection stays up is opened again; a host that refuses subscriptions is
+/// read again every `READ_AGAIN_EVERY` instead.
+async fn follow_connection<C: HostConnection>(
+    conn: &C,
     host: &str,
     check: u64,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
 ) {
-    report_read(client, host, check, updates).await;
-    let Ok(mut events) = client.subscribe_events().await else {
-        loop {
-            tokio::select! {
-                () = client.closed() => return,
-                () = tokio::time::sleep(READ_AGAIN_EVERY) => {
-                    report_read(client, host, check, updates).await;
-                }
-            }
-        }
-    };
     loop {
-        match events.next_as::<ChangeEvent>().await {
-            Some(Ok(event)) if event.topic == TOPIC_AGENT_CHANGED => {
-                report_read(client, host, check, updates).await;
+        // Subscribed before the read, so a change made between the two is still followed.
+        let subscribed = conn.subscribe_changes().await;
+        report_read(conn, host, check, updates).await;
+        let pause = match subscribed {
+            Ok(mut events) => {
+                loop {
+                    match C::next_change(&mut events).await {
+                        Some(Ok(event)) if event.topic == TOPIC_AGENT_CHANGED => {
+                            report_read(conn, host, check, updates).await;
+                        }
+                        // A change this build cannot read changes nothing it shows.
+                        Some(Ok(_)) | Some(Err(ClientError::Protocol(_))) => {}
+                        // The subscription ended: the host overflowed it, or the connection was lost.
+                        Some(Err(_)) | None => break,
+                    }
+                }
+                SUBSCRIBE_AGAIN_AFTER
             }
-            Some(Ok(_)) => {}
-            Some(Err(ClientError::Remote(body))) if body.code == codes::STREAM_OVERFLOW => {
-                report_read(client, host, check, updates).await;
-            }
-            // A change this build cannot read changes nothing it shows.
-            Some(Err(ClientError::Protocol(_))) => {}
-            Some(Err(_)) | None => return,
+            Err(_) => READ_AGAIN_EVERY,
+        };
+        tokio::select! {
+            () = conn.wait_closed() => return,
+            () = tokio::time::sleep(pause) => {}
         }
     }
 }
@@ -141,13 +184,13 @@ async fn read(client: &Client) -> Option<HostAgents> {
     })
 }
 
-async fn report_read(
-    client: &Client,
+async fn report_read<C: HostConnection>(
+    conn: &C,
     host: &str,
     request: u64,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
 ) {
-    let answer = read(client).await;
+    let answer = conn.read_now().await;
     let _ = updates.send(StoreUpdate::HostSessions(HostSessionsRead {
         host: host.to_owned(),
         request,
@@ -201,12 +244,158 @@ impl ServiceHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::next_check;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use massorca_protocol::{ErrorBody, codes};
+    use tokio::sync::watch;
+
+    use super::*;
+
+    /// One scripted subscription: its items in order, where `None` ends it. A subscription whose items run out stays
+    /// open until the connection ends.
+    type Script = Result<VecDeque<Option<Result<ChangeEvent, ClientError>>>, ClientError>;
+
+    /// A connection whose subscriptions are scripted, and which records the calls made on it in order.
+    struct Scripted {
+        subscriptions: Mutex<VecDeque<Script>>,
+        calls: Mutex<Vec<&'static str>>,
+        closed: watch::Sender<bool>,
+    }
+
+    /// The events of one scripted subscription.
+    struct Subscribed {
+        items: VecDeque<Option<Result<ChangeEvent, ClientError>>>,
+        closed: watch::Receiver<bool>,
+    }
+
+    impl Scripted {
+        fn new(subscriptions: Vec<Script>) -> Self {
+            Self {
+                subscriptions: Mutex::new(subscriptions.into()),
+                calls: Mutex::new(Vec::new()),
+                closed: watch::channel(false).0,
+            }
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().expect("the calls").clone()
+        }
+
+        fn end(&self) {
+            self.closed.send_replace(true);
+        }
+    }
+
+    impl HostConnection for Scripted {
+        type Events = Subscribed;
+
+        async fn subscribe_changes(&self) -> Result<Subscribed, ClientError> {
+            self.calls.lock().expect("the calls").push("subscribe");
+            let next = self
+                .subscriptions
+                .lock()
+                .expect("the subscriptions")
+                .pop_front()
+                .unwrap_or(Err(ClientError::Disconnected));
+            next.map(|items| Subscribed {
+                items,
+                closed: self.closed.subscribe(),
+            })
+        }
+
+        async fn next_change(events: &mut Subscribed) -> Option<Result<ChangeEvent, ClientError>> {
+            match events.items.pop_front() {
+                Some(item) => item,
+                None => {
+                    let _ = events.closed.wait_for(|closed| *closed).await;
+                    None
+                }
+            }
+        }
+
+        async fn read_now(&self) -> Option<HostAgents> {
+            self.calls.lock().expect("the calls").push("read");
+            Some(HostAgents {
+                sessions: Vec::new(),
+                workspaces: Vec::new(),
+            })
+        }
+
+        async fn wait_closed(&self) {
+            let mut closed = self.closed.subscribe();
+            let _ = closed.wait_for(|closed| *closed).await;
+        }
+    }
+
+    fn agent_changed() -> Option<Result<ChangeEvent, ClientError>> {
+        let event = serde_json::json!({ "topic": TOPIC_AGENT_CHANGED, "id": "s1" });
+        Some(Ok(serde_json::from_value(event).expect("a change event")))
+    }
+
+    fn overflow() -> Option<Result<ChangeEvent, ClientError>> {
+        Some(Err(ClientError::Remote(ErrorBody::new(
+            codes::STREAM_OVERFLOW,
+            "the subscriber fell behind, so the stream ended",
+        ))))
+    }
+
+    fn refused() -> Script {
+        Err(ClientError::Remote(ErrorBody::new(
+            "method.unknown",
+            "the host does not offer the subscription",
+        )))
+    }
 
     #[test]
     fn a_later_check_has_a_larger_number() {
         let first = next_check();
         let second = next_check();
         assert!(second > first);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_subscription_the_host_ends_on_a_live_connection_is_opened_again() {
+        let connection = Arc::new(Scripted::new(vec![
+            Ok(VecDeque::from([agent_changed(), overflow()])),
+            Ok(VecDeque::new()),
+        ]));
+        let (updates, _received) = mpsc::unbounded_channel();
+        let follower = tokio::spawn({
+            let connection = Arc::clone(&connection);
+            async move { follow_connection(&*connection, "vps", 1, &updates).await }
+        });
+
+        // The overflow ends the first subscription; the second opens after its pause and stays open.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        connection.end();
+        follower
+            .await
+            .expect("the follower ends with its connection");
+        assert_eq!(
+            connection.calls(),
+            ["subscribe", "read", "read", "subscribe", "read"],
+            "subscribed before each read, and read again after the subscription came back"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_that_refuses_subscriptions_is_read_again_every_thirty_seconds() {
+        let connection = Arc::new(Scripted::new(vec![refused(), refused()]));
+        let (updates, _received) = mpsc::unbounded_channel();
+        let follower = tokio::spawn({
+            let connection = Arc::clone(&connection);
+            async move { follow_connection(&*connection, "vps", 1, &updates).await }
+        });
+
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        connection.end();
+        follower
+            .await
+            .expect("the follower ends with its connection");
+        assert_eq!(
+            connection.calls(),
+            ["subscribe", "read", "subscribe", "read"]
+        );
     }
 }
