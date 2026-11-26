@@ -117,3 +117,41 @@ impl Store {
         Ok(removed > 0)
     }
 }
+
+impl Store {
+    /// Links `child` to the `parent` task that delegated it (decision 0128). A child has one parent.
+    pub fn insert_task_delegation(
+        &self,
+        child: &str,
+        parent: &str,
+        read_only: bool,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.lock().execute(
+            "INSERT INTO task_delegations (child_task_id, parent_task_id, read_only, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![child, parent, read_only, now],
+        )?;
+        Ok(())
+    }
+
+    /// The parent task of `child` and whether the child only reads in it; `None` for a task nobody delegated.
+    pub fn task_delegation_parent(
+        &self,
+        child: &str,
+    ) -> Result<Option<(String, bool)>, StoreError> {
+        self.query_optional(
+            "SELECT parent_task_id, read_only FROM task_delegations WHERE child_task_id = ?1",
+            [child],
+            |row| Ok((row.get("parent_task_id")?, row.get("read_only")?)),
+        )
+    }
+
+    /// The child tasks `parent` delegated, oldest first.
+    pub fn task_delegation_children(&self, parent: &str) -> Result<Vec<String>, StoreError> {
+        self.query_all(
+            "SELECT child_task_id FROM task_delegations WHERE parent_task_id = ?1 ORDER BY created_at, child_task_id",
+            [parent],
+            |row| row.get("child_task_id"),
+        )
+    }
+}

@@ -310,6 +310,12 @@ pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
+/// `team.delegate` from a call that is not an agent run of a bot with its run token (decision 0128).
+pub const TEAM_DELEGATE_NOT_A_BOT: &str = "team.delegate_not_a_bot";
+/// `team.delegate` without `bot`, where no teammate's job or skills match the task's words.
+pub const TEAM_DELEGATE_NO_BOT: &str = "team.delegate_no_bot";
+/// `team.delegate` naming the bot its own run is; a bot never delegates to itself.
+pub const TEAM_DELEGATE_SELF: &str = "team.delegate_self";
 
 /// `marketplace.service.*` names a service this build does not know.
 pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";

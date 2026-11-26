@@ -700,6 +700,20 @@ CREATE INDEX automation_runs_by_session ON automation_runs (session_id);
 "#,
         foreign_keys_off: false,
     },
+    // Bot delegation (decision 0128): a child task links to the parent task that delegated it. `read_only` children
+    // share the parent's workspace. Removing either task removes the link.
+    Migration {
+        sql: r#"
+CREATE TABLE task_delegations (
+    child_task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    parent_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    read_only INTEGER NOT NULL DEFAULT 0 CHECK(read_only IN (0,1)),
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX task_delegations_by_parent ON task_delegations (parent_task_id, created_at);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

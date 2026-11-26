@@ -3,10 +3,12 @@
 //! A team is selected by id or exact name. A bot or project is selected by id, or by exact name within its team.
 //! Every enum here has an `Unknown` variant for values from a newer peer; fields are only ever added (0002).
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::methods::projects::ProjectKind;
-use crate::methods::tasks::{CardState, Column};
+use crate::methods::tasks::{CardState, Column, Task};
 
 /// Params: [`TeamCreateParams`]. Result: [`Team`].
 pub const CREATE: &str = "team.create";
@@ -36,6 +38,10 @@ pub const PROJECT_UPDATE: &str = "team.project_update";
 pub const PROJECT_REMOVE: &str = "team.project_rm";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
+/// Params: [`TeamDelegateParams`]. Result: [`TeamDelegated`]. Called by a bot's agent run (capability `team-delegate/1`).
+pub const DELEGATE: &str = "team.delegate";
+/// Params: [`crate::methods::tasks::TaskRef`]. Result: [`DelegationTree`], the task and the children it delegated.
+pub const DELEGATION_TREE: &str = "team.delegation_tree";
 /// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
 pub const MEMORY_LIST: &str = "team.memory_list";
 /// Params: [`TeamMemoryAddParams`]. Result: [`TeamMemoryLine`].
@@ -605,4 +611,67 @@ pub struct RoutineRun {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineRunList {
     pub runs: Vec<RoutineRun>,
+}
+
+/// Params of `team.delegate` (decision 0128). The run names its own `session` and `agent_token`; the caller is that run's
+/// bot, and the task the run works on is the parent the child links to. `text` is never logged.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamDelegateParams {
+    /// The teammate that takes the child: id or exact name in the team it goes to. Absent: picked by competence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+    pub text: String,
+    /// The team the child task is filed in, by id or exact name. Absent: the caller's own team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// The child only reads: it runs in its parent's workspace instead of a workspace of its own.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
+    /// The delegating run's session (`MASSORCA_AGENT_SESSION`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The run token of `session` (`MASSORCA_AGENT_TOKEN`). `Debug` never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+impl fmt::Debug for TeamDelegateParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeamDelegateParams")
+            .field("bot", &self.bot)
+            .field("text", &"[redacted]")
+            .field("team", &self.team)
+            .field("read_only", &self.read_only)
+            .field("session", &self.session)
+            .field(
+                "agent_token",
+                &self.agent_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
+/// Result of `team.delegate`: the child task, started when its bot could start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamDelegated {
+    pub task: Task,
+    /// The task the child is linked to: the one the delegating run works on.
+    pub parent: String,
+    /// `true` when competence picked the bot because `bot` was absent.
+    pub picked: bool,
+}
+
+/// Result of `team.delegation_tree`: a task and the children it delegated, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationTree {
+    pub task: Task,
+    pub children: Vec<DelegationChild>,
+}
+
+/// One child in a delegation tree. Its status is the task's own: its column and outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationChild {
+    pub task: Task,
+    /// The child only read in its parent's workspace.
+    pub read_only: bool,
 }

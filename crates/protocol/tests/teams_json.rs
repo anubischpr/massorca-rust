@@ -5,8 +5,8 @@ use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::tasks::{CardState, Column};
 use massorca_protocol::methods::teams::{
     Board, BoardCard, BoardColumn, BoardParams, Bot, BotUpdateParams, MemorySource, Team,
-    TeamAccess, TeamCharacter, TeamCreateParams, TeamMemoryAddParams, TeamMemoryLine, TeamProject,
-    TeamProjectAddParams, TeamProjectUpdateParams,
+    TeamAccess, TeamCharacter, TeamCreateParams, TeamDelegateParams, TeamMemoryAddParams,
+    TeamMemoryLine, TeamProject, TeamProjectAddParams, TeamProjectUpdateParams,
 };
 use serde_json::{Value, json};
 
@@ -347,4 +347,34 @@ fn a_bot_update_sends_skills_only_when_given_and_an_empty_list_to_clear_them() {
         serde_json::to_value(update(Some(Vec::new()))).unwrap()["skills"],
         json!([])
     );
+}
+
+fn delegate(read_only: bool) -> TeamDelegateParams {
+    TeamDelegateParams {
+        bot: Some("Mara".to_owned()),
+        text: "Parse the headers".to_owned(),
+        team: None,
+        read_only,
+        session: Some("session-1".to_owned()),
+        agent_token: Some("secret-token".to_owned()),
+    }
+}
+
+#[test]
+fn a_delegation_sends_read_only_only_when_it_is_set() {
+    let writing = serde_json::to_value(delegate(false)).unwrap();
+    assert!(writing.get("read_only").is_none());
+    assert!(writing.get("team").is_none());
+    assert_eq!(
+        serde_json::to_value(delegate(true)).unwrap()["read_only"],
+        json!(true)
+    );
+}
+
+#[test]
+fn a_delegation_debug_shows_neither_its_text_nor_its_token() {
+    let shown = format!("{:?}", delegate(false));
+    assert!(!shown.contains("Parse the headers"));
+    assert!(!shown.contains("secret-token"));
+    assert!(shown.contains("Mara"));
 }
