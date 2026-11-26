@@ -4,7 +4,8 @@
 
 use massorca_protocol::methods::tasks::{self, Task, TaskCreateParams, TaskRef};
 use massorca_protocol::methods::teams::{
-    self, DelegationTree, Team, TeamCreateParams, TeamDelegateParams, TeamDelegated,
+    self, DelegationList, DelegationTree, Team, TeamCreateParams, TeamDelegateParams,
+    TeamDelegated, TeamRef,
 };
 use massorca_protocol::{capabilities, codes};
 
@@ -140,6 +141,50 @@ async fn a_task_nobody_delegated_has_an_empty_tree_and_an_unknown_task_is_refuse
         .await
         .expect_err("unknown task");
     assert_eq!(remote_code(&unknown), codes::TASK_NOT_FOUND);
+
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_team_without_delegations_lists_none_and_an_unknown_team_is_refused() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let team: Team = client
+        .call(
+            teams::CREATE,
+            &TeamCreateParams {
+                name: "alpha".to_owned(),
+                purpose: None,
+                character: None,
+                access: None,
+                workspaces: None,
+            },
+        )
+        .await
+        .expect("team.create");
+
+    let list: DelegationList = client
+        .call(
+            teams::DELEGATION_LIST,
+            &TeamRef {
+                team: team.id.clone(),
+            },
+        )
+        .await
+        .expect("team.delegation_list");
+    assert!(list.links.is_empty());
+
+    let unknown = client
+        .call::<_, DelegationList>(
+            teams::DELEGATION_LIST,
+            &TeamRef {
+                team: "no-such-team".to_owned(),
+            },
+        )
+        .await
+        .expect_err("unknown team");
+    assert_eq!(remote_code(&unknown), codes::TEAM_NOT_FOUND);
 
     stop(running).await;
 }

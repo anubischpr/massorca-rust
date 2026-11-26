@@ -10,7 +10,8 @@ use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::TOPIC_TASK_CHANGED;
 use massorca_protocol::methods::tasks::{TaskCreateParams, TaskRef};
 use massorca_protocol::methods::teams::{
-    self, DelegationChild, DelegationTree, TeamDelegateParams, TeamDelegated,
+    self, DelegationChild, DelegationLink, DelegationList, DelegationTree, TeamDelegateParams,
+    TeamDelegated, TeamRef,
 };
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -57,6 +58,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             tree,
         )?,
+        methods.register(
+            Owner::Core,
+            teams::DELEGATION_LIST,
+            capabilities::TEAM_DELEGATE,
+            Permission::Read,
+            list,
+        )?,
     ])
 }
 
@@ -72,6 +80,13 @@ async fn delegate(ctx: RequestCtx, params: TeamDelegateParams) -> Result<TeamDel
     let delegated = result?;
     publish(&ctx, TOPIC_TASK_CHANGED, &delegated.task.id);
     Ok(delegated)
+}
+
+async fn list(ctx: RequestCtx, params: TeamRef) -> Result<DelegationList, ErrorBody> {
+    blocking(&ctx, move |store, agents| {
+        delegation_list(store, agents, &params.team)
+    })
+    .await
 }
 
 async fn tree(ctx: RequestCtx, params: TaskRef) -> Result<DelegationTree, ErrorBody> {
@@ -252,9 +267,41 @@ fn delegation_tree(
     selector: &str,
 ) -> Result<DelegationTree, ErrorBody> {
     let parent = selectors::task(store, selector)?;
+    Ok(DelegationTree {
+        children: children_of(store, agents, &parent.id)?,
+        task: view_of(&parent, &task_state::load(agents, &parent)?),
+    })
+}
+
+/// Every delegated child of the team, with the task that delegated it, the team's tasks in creation order.
+fn delegation_list(
+    store: &Store,
+    agents: &Agents,
+    selector: &str,
+) -> Result<DelegationList, ErrorBody> {
+    let team = selectors::team(store, selector)?;
+    let mut links = Vec::new();
+    for parent in store.list_tasks(Some(&team.id)).map_err(store_error)? {
+        for child in children_of(store, agents, &parent.id)? {
+            links.push(DelegationLink {
+                parent: parent.id.clone(),
+                read_only: child.read_only,
+                child: child.task,
+            });
+        }
+    }
+    Ok(DelegationList { links })
+}
+
+/// The children `parent` delegated, oldest first, with their state.
+fn children_of(
+    store: &Store,
+    agents: &Agents,
+    parent: &str,
+) -> Result<Vec<DelegationChild>, ErrorBody> {
     let mut children = Vec::new();
     for id in store
-        .task_delegation_children(&parent.id)
+        .task_delegation_children(parent)
         .map_err(store_error)?
     {
         let row = selectors::task(store, &id)?;
@@ -267,10 +314,7 @@ fn delegation_tree(
             read_only,
         });
     }
-    Ok(DelegationTree {
-        task: view_of(&parent, &task_state::load(agents, &parent)?),
-        children,
-    })
+    Ok(children)
 }
 
 /// The mode a delegated child runs in (decision 0128): the team's own mode, but never a bypass mode when the parent runs

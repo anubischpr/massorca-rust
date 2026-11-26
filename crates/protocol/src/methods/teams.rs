@@ -42,6 +42,8 @@ pub const BOARD: &str = "team.board";
 pub const DELEGATE: &str = "team.delegate";
 /// Params: [`crate::methods::tasks::TaskRef`]. Result: [`DelegationTree`], the task and the children it delegated.
 pub const DELEGATION_TREE: &str = "team.delegation_tree";
+/// Params: [`TeamRef`]. Result: [`DelegationList`], every delegated child of the team's tasks, oldest first.
+pub const DELEGATION_LIST: &str = "team.delegation_list";
 /// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
 pub const MEMORY_LIST: &str = "team.memory_list";
 /// Params: [`TeamMemoryAddParams`]. Result: [`TeamMemoryLine`].
@@ -666,6 +668,21 @@ pub struct TeamDelegated {
 pub struct DelegationTree {
     pub task: Task,
     pub children: Vec<DelegationChild>,
+}
+
+/// Result of `team.delegation_list`: every delegated child of a team's tasks, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationList {
+    pub links: Vec<DelegationLink>,
+}
+
+/// One delegated child and the task that delegated it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationLink {
+    /// The delegating task's id.
+    pub parent: String,
+    pub read_only: bool,
+    pub child: Task,
 }
 
 /// One child in a delegation tree. Its status is the task's own: its column and outcome.

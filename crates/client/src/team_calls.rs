@@ -11,12 +11,12 @@ use massorca_protocol::methods::team_room::{
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
-    DelegationTree, Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
-    RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams, TeamDelegateParams,
-    TeamDelegated, TeamList, TeamMemoryAddParams, TeamMemoryLine, TeamMemoryList,
-    TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject, TeamProjectAddParams,
-    TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams,
-    TeamUpdateParams,
+    DelegationList, DelegationTree, Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun,
+    RoutineRunList, RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams,
+    TeamDelegateParams, TeamDelegated, TeamList, TeamMemoryAddParams, TeamMemoryLine,
+    TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
+    TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -136,6 +136,14 @@ impl Client {
         params: &TaskRef,
     ) -> Result<DelegationTree, ClientError> {
         self.call(teams::DELEGATION_TREE, params).await
+    }
+
+    /// `team.delegation_list`: every delegated child of a team's tasks, for the Conference room (capability `team-delegate/1`).
+    pub async fn team_delegation_list(
+        &self,
+        params: &TeamRef,
+    ) -> Result<DelegationList, ClientError> {
+        self.call(teams::DELEGATION_LIST, params).await
     }
 
     /// `team.room_answer`: answers a room's choice card once (decision 0121).
