@@ -154,6 +154,11 @@ the Marketplace and the post-pair setup (M-PA-05). The navigation stack (M-SH-01
 
 The emulator job runs only when `crates/client*`, `crates/protocol` or `mobile/` change, because it is slow.
 
+*Changed 2026-11-26:* on pull requests the emulator job now runs only when `crates/client-ffi/`, `mobile/` or the
+flow's own scripts change. A `crates/client` or `crates/protocol` change reaches the phone through `client-ffi`, which the
+Kotlin bindings job tests on every such change, and every push to `main` still runs the flow. The old rule added 15 or
+more minutes to every merge of a protocol change.
+
 ### 6. Tasks
 
 Each task is one pull request of about 400 changed lines or less (lock files apart), with its tests, based on `main`.
