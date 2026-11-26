@@ -120,7 +120,7 @@ fn add_project(
         goal: params.goal.unwrap_or_default().trim().to_owned(),
         brief: params.brief.unwrap_or_default(),
         created_at: now_ms(),
-        source_project_id: source_project_id(workspaces, params.source_project)?,
+        source_project_id: source_project_id(workspaces, &team, params.source_project)?,
         code_source,
     };
     store.insert_team_project(&row).map_err(store_error)?;
@@ -144,7 +144,7 @@ fn update_project(
         row.brief = brief;
     }
     if let Some(source) = params.source_project {
-        row.source_project_id = source_project_id(workspaces, Some(source))?;
+        row.source_project_id = source_project_id(workspaces, &team, Some(source))?;
     }
     if params.code_source.is_some() {
         row.code_source = code_source_name(&team, params.code_source)?;
@@ -188,12 +188,22 @@ fn code_source_name(
         Some(CodeSource::NewFolderWithGit) => CODE_SOURCE_NEW_FOLDER,
         Some(CodeSource::Unknown) => return Err(invalid("the code source is not a known kind")),
     };
-    if !team.workspaces {
-        return Err(invalid(
-            "a code source needs Workspaces in this team; turn it on with: massorca team update TEAM --workspaces true",
-        ));
-    }
+    require_workspaces(team, "record a code source")?;
     Ok(Some(name.to_owned()))
+}
+
+/// Connecting a project to code needs the team's Workspaces option (decision 0120, pv96); it gates nothing else.
+fn require_workspaces(team: &TeamRow, action: &str) -> Result<(), ErrorBody> {
+    if team.workspaces {
+        return Ok(());
+    }
+    Err(ErrorBody::new(
+        codes::TEAM_WORKSPACES_OFF,
+        format!(
+            "team {} has Workspaces off, so it cannot {action}; turn it on with: massorca team update TEAM --workspaces true",
+            team.name
+        ),
+    ))
 }
 
 const CODE_SOURCE_EXISTING: &str = "existing_repository";
@@ -207,13 +217,18 @@ fn code_source_of(name: &str) -> CodeSource {
     }
 }
 
-/// The Workspaces project `selector` names by id, exact name or path; a blank selector links none.
+/// The Workspaces project `selector` names by id, exact name or path; a blank selector links none, which a team with
+/// Workspaces off may still do.
 fn source_project_id(
     workspaces: &Workspaces,
+    team: &TeamRow,
     selector: Option<String>,
 ) -> Result<Option<String>, ErrorBody> {
     match optional_text(selector) {
-        Some(selector) => Ok(Some(workspaces.show_project(&selector)?.id)),
+        Some(selector) => {
+            require_workspaces(team, "link a Workspaces project")?;
+            Ok(Some(workspaces.show_project(&selector)?.id))
+        }
         None => Ok(None),
     }
 }
