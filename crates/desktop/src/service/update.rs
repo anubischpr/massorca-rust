@@ -1820,6 +1820,14 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Every `SecretName` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_name() -> massorca_protocol::methods::secrets::SecretName {
+        massorca_protocol::methods::secrets::SecretName {
+            scope: "project:p1".to_owned(),
+            name: "OPENAI_API_KEY".to_owned(),
+        }
+    }
+
     /// Every `SecretRemoved` field at its usual value; tests override the fields they vary.
     pub fn base_secret_removed() -> massorca_protocol::methods::secrets::SecretRemoved {
         massorca_protocol::methods::secrets::SecretRemoved {
