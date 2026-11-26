@@ -10,6 +10,7 @@ use massorca_core_agents::{
 };
 use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, now_ms};
 use massorca_core_workspace::Workspaces;
+use massorca_protocol::methods::agents::PermissionMode;
 use massorca_protocol::methods::events::TOPIC_TASK_CHANGED;
 use massorca_protocol::methods::tasks::{TaskCreateParams, TaskRef};
 use massorca_protocol::methods::teams::{
@@ -393,8 +394,32 @@ fn children_of(
     Ok(children)
 }
 
-/// The mode a delegated child runs in (decision 0128). A read-only child runs in the vendor's default, never a bypass
-/// mode. A writing child gets its team's mode, but none when its parent runs in the default or its parent's bot is gone.
+/// The plan mode of kind `kind`, the mode a read-only child starts in (decision 0128). `None` when the kind declares none,
+/// and the child then keeps the vendor's default, which is never a bypass mode.
+fn plan_mode_of(agents: &Agents, kind: &str) -> Option<String> {
+    let modes = agents
+        .kinds()
+        .kinds
+        .into_iter()
+        .find(|declared| declared.id == kind)?
+        .permission_modes;
+    plan_mode_among(&modes)
+}
+
+/// The first mode that is a plan mode: not a bypass, and named `plan` by its id or its label, in any letter case.
+fn plan_mode_among(modes: &[PermissionMode]) -> Option<String> {
+    modes
+        .iter()
+        .find(|mode| {
+            !mode.bypass
+                && (mode.id.eq_ignore_ascii_case("plan") || mode.label.eq_ignore_ascii_case("plan"))
+        })
+        .map(|mode| mode.id.clone())
+}
+
+/// The mode a delegated child runs in (decision 0128). A read-only child starts in its kind's plan mode, so it cannot
+/// edit, and keeps the vendor's default when the kind has none. A writing child gets its team's mode, but none when its
+/// parent runs in the default or its parent's bot is gone.
 pub(super) fn child_mode(
     store: &Store,
     agents: &Agents,
@@ -409,7 +434,7 @@ pub(super) fn child_mode(
         return Ok(team_mode(agents, team, bot));
     };
     if read_only {
-        return Ok(None);
+        return Ok(plan_mode_of(agents, &bot.kind));
     }
     let parent = selectors::task(store, &parent_id)?;
     let parent_bot = match parent.bot_id.as_deref() {
@@ -584,6 +609,32 @@ mod tests {
         assert_eq!(parse_depth_limit(Some("9")), 5);
         assert_eq!(parse_depth_limit(Some("0")), 1);
         assert_eq!(parse_depth_limit(Some("\"x\"")), 1);
+    }
+
+    fn mode(id: &str, label: &str, bypass: bool) -> PermissionMode {
+        serde_json::from_value(serde_json::json!({ "id": id, "label": label, "bypass": bypass }))
+            .expect("a permission mode")
+    }
+
+    #[test]
+    fn a_read_only_child_takes_the_kinds_plan_mode_and_never_a_bypass() {
+        let modes = vec![
+            mode("bypassPermissions", "Bypass", true),
+            mode("acceptEdits", "Accept edits", false),
+            mode("plan", "Plan", false),
+        ];
+        assert_eq!(plan_mode_among(&modes).as_deref(), Some("plan"));
+        let by_label = vec![mode("read-only", "PLAN", false)];
+        assert_eq!(plan_mode_among(&by_label).as_deref(), Some("read-only"));
+        let bypass_plan = vec![mode("plan", "Plan", true)];
+        assert_eq!(plan_mode_among(&bypass_plan), None);
+    }
+
+    #[test]
+    fn a_kind_without_a_plan_mode_gives_a_read_only_child_none() {
+        let modes = vec![mode("acceptEdits", "Accept edits", false)];
+        assert_eq!(plan_mode_among(&modes), None);
+        assert_eq!(plan_mode_among(&[]), None);
     }
 
     #[test]

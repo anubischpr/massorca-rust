@@ -45,8 +45,11 @@ Status: accepted, 2026-11-26.
   - A read-only child runs in the parent's workspace. A parent with none yet leaves it the team's folder.
   - A child that cannot start stays Open with the reason in `error`; the delegation stands and the call succeeds.
 - **Read-only.** `--reads` is refused with `team.delegate_reads_other_team` for a team other than the parent's, because
-  a read-only child shares the parent's workspace. A read-only child runs in the vendor's default mode, never a
-  bypass mode, so "read-only" is enforced by its mode and not only by its prompt.
+  a read-only child shares the parent's workspace. A read-only child starts in its kind's plan mode, so it cannot edit
+  the workspace it shares: the kind's plan mode is the first mode that is not a bypass and is named `plan` by its id or
+  its label, in any letter case. A kind with no plan mode gives the child the vendor's default, which is never a bypass
+  mode; the child then has no mode of its own and the decision does not promise it is read-only. The start goes through
+  the agent layer's own mode check, without changes to core-agents.
 - **Access and vault.** A writing child runs in its team's own mode, but never in a bypass mode when its parent runs in
   the vendor's default mode, or when its parent's bot has been removed (then it keeps the vendor default). A delegated
   child starts without the vault (`SecretGrant::Withhold`), so it never gets more scope than the run that delegated it.
