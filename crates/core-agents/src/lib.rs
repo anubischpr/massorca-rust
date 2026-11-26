@@ -41,5 +41,5 @@ pub use resume_state::VendorEnv;
 pub use sessions::{
     AgentError, Agents, AgentsConfig, ArchivedOutput, Change, ChatOpened, DELEGATION_DEPTH_DEFAULT,
     DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult,
-    RepoOps,
+    PromptDelivered, PromptListener, RepoOps,
 };

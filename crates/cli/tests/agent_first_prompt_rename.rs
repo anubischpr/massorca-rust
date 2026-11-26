@@ -185,7 +185,10 @@ fn the_first_prompt_names_a_generated_workspace_and_renames_its_branch() {
     });
     assert_eq!(renamed["branch"], "fix-login", "{renamed}");
     assert_eq!(renamed["path"], created["path"], "the folder is not moved");
-    assert_eq!(renamed["name_generated"], true);
+    assert!(
+        renamed.get("name_generated").is_none(),
+        "the trigger's rename makes the name the person's: {renamed}"
+    );
     let report = fs::read_to_string(report_of(&sandbox)).expect("the title run wrote its report");
     assert!(report.contains("Fix the login bug"), "{report}");
     log_with(
@@ -318,4 +321,63 @@ fn the_setting_is_declared_on_by_default_and_settable_through_config() {
     sandbox
         .run("default", &with_json(&["config", "set", SETTING, "false"]))
         .success();
+}
+
+#[test]
+fn a_first_prompt_the_queue_delivers_names_the_workspace_too() {
+    let sandbox = sandbox("say:Fix login");
+    let created = create(&sandbox, &[]);
+    let id = created["id"].as_str().expect("id").to_owned();
+    let session = start_session(&sandbox, &id);
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "queue",
+            "add",
+            session.as_str(),
+            "Fix the login bug",
+        ],
+    );
+
+    eventually("the queued first prompt renamed the workspace", || {
+        (workspace(&sandbox, &id)["name"] == "fix-login").then_some(())
+    });
+    assert!(
+        report_of(&sandbox).exists(),
+        "the queued prompt asked for a title"
+    );
+}
+
+#[test]
+fn a_rename_by_the_trigger_is_final_after_a_service_restart() {
+    let sandbox = sandbox("say:Fix login");
+    let created = create(&sandbox, &[]);
+    let id = created["id"].as_str().expect("id").to_owned();
+    let session = start_session(&sandbox, &id);
+    prompt(&sandbox, &session, "Fix the login bug");
+    eventually("the first prompt renamed the workspace", || {
+        (workspace(&sandbox, &id)["name"] == "fix-login").then_some(())
+    });
+    let renamed = workspace(&sandbox, &id);
+    assert!(
+        renamed.get("name_generated").is_none(),
+        "the trigger's rename ends the generated state: {renamed}"
+    );
+
+    sandbox.run("default", &["service", "stop"]);
+    fs::remove_file(report_of(&sandbox)).expect("the first run wrote its report");
+    let later = start_session_with(&sandbox, &id, &["--read-only"]);
+    prompt(&sandbox, &later, "Write the changelog");
+
+    log_with(
+        &sandbox,
+        &format!("first-prompt rename of workspace {id} left its name: a name a person gave"),
+    );
+    assert_eq!(workspace(&sandbox, &id)["name"], "fix-login");
+    assert!(
+        !report_of(&sandbox).exists(),
+        "a later run asks no title for a name the trigger already settled"
+    );
 }

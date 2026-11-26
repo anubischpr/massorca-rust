@@ -3,17 +3,18 @@
 //! decision is a table in [`Titles`]; the title run happens in the background, so no prompt waits for it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use massorca_core_agents::oneshot::{TitleRequest, title_timeout};
+use massorca_core_agents::{PromptDelivered, PromptListener};
 use massorca_core_store::{WorkspaceKind, WorkspaceState};
 use massorca_protocol::methods::agents::AgentSession;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_WORKSPACE_UPDATED};
 use massorca_protocol::methods::workspaces::WorkspaceRenameParams;
 use massorca_protocol::{ErrorBody, codes};
+use tokio::runtime::Handle;
 
-use crate::context::{AppState, RequestCtx};
-use crate::features::agents::on_agents;
+use crate::context::AppState;
 use crate::features::workspace_domain::{core_setting, for_mutation_in};
 use crate::store_blocking;
 
@@ -183,32 +184,42 @@ pub(crate) fn note_started(
         prompt.map(|text| titles.prompt(&session.id, text))
     });
     if let Some(step) = step {
-        act(state, step);
+        act(state, step, &Handle::current());
     }
 }
 
-/// Decides a prompt the service just delivered to the session `selector` names.
-pub(crate) async fn note_prompt(ctx: &RequestCtx, selector: String, prompt: String) {
-    let Ok(session) = on_agents(ctx, move |agents| agents.show(&selector)).await else {
-        return;
-    };
-    let step = ctx.state.first_prompt_titles.with(|titles| {
+/// Decides a prompt of the person that reached a session (decision 0118). Both the handler's and the queue's deliveries
+/// reach it through the prompt listener, so it only decides: a title run goes to `handle`.
+pub(crate) fn delivered(state: &Arc<AppState>, handle: &Handle, prompt: &PromptDelivered) {
+    let step = state.first_prompt_titles.with(|titles| {
         // A session this run did not start predates it, so its next prompt is not a first one.
         titles.learn(
-            &session.id,
-            &session.workspace_id,
-            &session.kind,
-            session.parent_id.is_some(),
+            &prompt.session,
+            &prompt.workspace,
+            &prompt.kind,
+            prompt.child,
             None,
             true,
         );
-        titles.prompt(&session.id, &prompt)
+        titles.prompt(&prompt.session, &prompt.text)
     });
-    act(&ctx.state, step);
+    act(state, step, handle);
 }
 
-/// Logs a held prompt that is its session's first, and starts a title run in the background.
-fn act(state: &Arc<AppState>, step: Step) {
+/// The prompt listener the service registers before it builds the state, which the listener reaches once built.
+pub(crate) fn prompt_listener(
+    state: Arc<OnceLock<Weak<AppState>>>,
+    handle: Handle,
+) -> PromptListener {
+    Box::new(move |prompt| {
+        if let Some(state) = state.get().and_then(Weak::upgrade) {
+            delivered(&state, &handle, &prompt);
+        }
+    })
+}
+
+/// Logs a held prompt that is its session's first, and starts a title run on `handle`.
+fn act(state: &Arc<AppState>, step: Step, handle: &Handle) {
     match step {
         Step::Untracked => {}
         Step::Held { first: false, .. } => {}
@@ -228,7 +239,7 @@ fn act(state: &Arc<AppState>, step: Step) {
             }
         }
         Step::Start(run) => {
-            tokio::spawn(title_run(Arc::clone(state), run));
+            handle.spawn(title_run(Arc::clone(state), run));
         }
     }
 }
@@ -327,7 +338,7 @@ async fn name_from_prompt(state: &Arc<AppState>, run: &Run) -> Outcome {
         from_generated: true,
         expected_branch,
     };
-    match tokio::task::spawn_blocking(move || domain.rename_workspace(params)).await {
+    match tokio::task::spawn_blocking(move || domain.rename_from_first_prompt(params)).await {
         Ok(Ok(renamed)) => {
             state.events.publish(ChangeEvent {
                 topic: TOPIC_WORKSPACE_UPDATED.to_owned(),

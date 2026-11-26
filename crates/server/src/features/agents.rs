@@ -603,13 +603,10 @@ async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentMo
 /// Types a prompt into a run's terminal (0054). The text is never logged.
 async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
-    let (selector, text) = (params.session.clone(), params.text.clone());
-    let receipt = on_agents(&ctx, move |agents| {
+    on_agents(&ctx, move |agents| {
         agents.prompt(&params.session, &params.text, params.force)
     })
-    .await?;
-    first_prompt_rename::note_prompt(&ctx, selector, text).await;
-    Ok(receipt)
+    .await
 }
 
 /// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a

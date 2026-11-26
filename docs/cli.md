@@ -177,10 +177,10 @@ project) at the time the project is added.
   script (decision 0095).
 
 Settings that affect workspace names are changed with `config set` (`config list` shows every setting).
-`workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt of its
-first session, from a title the kind's one-shot form writes, and its branch with it. It never renames a typed name, and
-it renames a workspace once per service run, since that memory is not kept across restarts (decision 0118). Set it to
-`false` to keep the generated names.
+`workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt the person
+sends to its first session, from a title the kind's one-shot form writes, and its branch with it. Prompts typed by the
+prompt queue count too. A rename by this setting makes the name the person's, so the workspace is renamed once, and
+never a typed name (decision 0118). Set it to `false` to keep the generated names.
 
 ### Terminals
 

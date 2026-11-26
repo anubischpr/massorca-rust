@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
@@ -313,6 +313,12 @@ impl Service {
             agent_changes.clone(),
             chat_changes.clone(),
         ));
+        // The prompt listener reaches the state once it is built, below (decision 0118).
+        let first_prompt_state: Arc<OnceLock<Weak<AppState>>> = Arc::default();
+        agents.set_prompt_listener(features::first_prompt_rename::prompt_listener(
+            Arc::clone(&first_prompt_state),
+            tokio::runtime::Handle::current(),
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -340,6 +346,7 @@ impl Service {
             activity: Activity::default(),
             first_prompt_titles: Default::default(),
         });
+        let _ = first_prompt_state.set(Arc::downgrade(&state));
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
         let outcome_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
