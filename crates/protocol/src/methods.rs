@@ -4,6 +4,8 @@
 //! (`project`, `workspace`) resolve by id, then exact name, then path.
 
 pub mod agents;
+pub mod automations;
+pub mod calendar;
 pub mod chat;
 pub mod commands;
 pub mod config;

@@ -4,6 +4,7 @@
 
 use super::super::Shell;
 use super::bot_advanced::{AdvancedOptions, advanced_view};
+use super::bot_skills::{SkillChips, skills_view};
 use super::new_project::{NewProjectDialog, new_project_view};
 use super::team_bots::bots_section;
 use crate::model::agent_kinds::{
@@ -110,6 +111,7 @@ pub(in crate::shell) struct AddBotDialog {
     unavailable: Vec<UnavailableKind>,
     /// The Model and Effort choices under Advanced options, for the kind the form has chosen.
     pub(super) advanced: AdvancedOptions,
+    pub(super) skills: SkillChips,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -135,6 +137,7 @@ impl AddBotDialog {
                 .unwrap_or_default(),
             model,
             effort,
+            skills: self.skills.chosen.clone(),
         }
     }
 }
@@ -412,6 +415,14 @@ impl Shell {
             stored_effort.as_deref(),
             cx,
         );
+        let skills = SkillChips::new(
+            bot.as_ref()
+                .map(|current| current.skills.clone())
+                .unwrap_or_default(),
+            self.discovered_skills(cx),
+            cx,
+        );
+        self.ask_skills_once(cx);
         let edit = bot.map(|current| BotEdit {
             bot: current.id,
             opened: BotForm::of(&current),
@@ -427,6 +438,7 @@ impl Shell {
             host_select,
             unavailable,
             advanced,
+            skills,
             error: None,
             _subscriptions: vec![name_events, role_events, agent_events],
         })));
@@ -700,6 +712,7 @@ impl Shell {
         let job = dialog.role.read(cx).text().trim().to_owned();
         let kind = choice_at(&dialog.kinds, dialog.agent).map(|kind| kind.id.clone());
         let (model, effort) = dialog.advanced.values(cx);
+        let skills = dialog.skills.chosen.clone();
         let no_kinds = dialog.kinds.is_empty();
         let team = self.team_key(dialog.team, cx);
         let form = TeamDialog::AddBot(Box::new(dialog));
@@ -728,6 +741,7 @@ impl Shell {
             model,
             effort,
             lead: false,
+            skills,
         };
         cx.spawn(async move |this, cx| {
             let answer = service.add_bot(params).await;
@@ -777,6 +791,7 @@ impl Shell {
             model: change.model,
             effort: change.effort,
             lead: None,
+            skills: change.skills,
         };
         cx.spawn(async move |this, cx| {
             let answer = service.update_bot(params).await;
@@ -1267,6 +1282,7 @@ fn add_bot_view(form: &AddBotDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dia
                 .iter()
                 .map(|kind| unavailable_link(kind, shell)),
         )
+        .child(skills_view(&form.skills, shell, cx))
         .child(advanced_view(&form.advanced, shell));
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
@@ -1413,9 +1429,21 @@ mod tests {
     use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
     use crate::service::fixtures::{agent_kind, team};
     use crate::service::{
-        Command, ProjectRecord, Refusal, StoreUpdate, TeamCommand, TeamRecord, TeamsRead,
+        Command, ProjectRecord, Refusal, SkillsListing, SkillsRead, StoreUpdate, TeamCommand,
+        TeamRecord, TeamsRead,
     };
     use crate::shell::service_tests::{Rig, click, draw, rig};
+    use massorca_protocol::methods::skills::SkillDiscovery;
+
+    /// The next call the UI sent, past the skills read a bot form asks for when none is held.
+    fn next_call(rig: &mut Rig) -> Option<Command> {
+        loop {
+            match rig.script.next() {
+                Some(Command::Skills { .. }) => {}
+                other => return other,
+            }
+        }
+    }
     use gpui::{Entity, TestAppContext, VisualTestContext};
     use massorca_protocol::methods::agents::{
         AgentKind, KindEffort, KindEffortLevel, KindModel, KindModelChoice, PackageState,
@@ -1654,9 +1682,8 @@ mod tests {
         record.projects.push(ProjectRecord {
             project: checkout(),
             board: Board {
-                team_id: "t1".into(),
                 project_id: Some("p1".into()),
-                columns: Vec::new(),
+                ..crate::service::fixtures::base_board()
             },
         });
         record
@@ -1664,16 +1691,7 @@ mod tests {
 
     fn checkout() -> TeamProject {
         TeamProject {
-            id: "p1".into(),
-            team_id: "t1".into(),
-            name: "Checkout".into(),
-            goal: String::new(),
-            brief: "Old".into(),
-            created_at_ms: 1,
-            source_project: None,
-            source_project_name: None,
-            source_kind: None,
-            code_source: None,
+            ..crate::service::fixtures::base_team_project()
         }
     }
 
@@ -1701,7 +1719,7 @@ mod tests {
             project,
             brief,
             reply,
-        })) = rig.script.next()
+        })) = next_call(&mut rig)
         else {
             panic!("the brief goes to the service");
         };
@@ -1733,7 +1751,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::SaveBrief { reply, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::SaveBrief { reply, .. })) = next_call(&mut rig) else {
             panic!("the brief goes to the service");
         };
         let _ = reply.send(Err(Refusal::Failed {
@@ -1791,7 +1809,7 @@ mod tests {
             team,
             project,
             reply,
-        })) = rig.script.next()
+        })) = next_call(&mut rig)
         else {
             panic!("the delete goes to the service");
         };
@@ -1832,7 +1850,8 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = next_call(&mut rig)
+        else {
             panic!("the edit goes to the service");
         };
         assert_eq!(params.team, "t1");
@@ -1860,7 +1879,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.confirm_team_delete(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::RemoveTeam { reply, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::RemoveTeam { reply, .. })) = next_call(&mut rig) else {
             panic!("the removal goes to the service");
         };
         let _ = reply.send(Err(Refusal::Failed {
@@ -1888,6 +1907,7 @@ mod tests {
             effort: None,
             lead: true,
             created_at_ms: 1,
+            skills: Vec::new(),
         });
         record
     }
@@ -1937,7 +1957,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         assert_eq!((params.team.as_str(), params.bot.as_str()), ("t1", "b1"));
@@ -1972,7 +1992,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.confirm_team_delete(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::RemoveBot { params, reply })) = rig.script.next()
+        let Some(Command::Team(TeamCommand::RemoveBot { params, reply })) = next_call(&mut rig)
         else {
             panic!("the removal goes to the service");
         };
@@ -2016,7 +2036,8 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateTeam { params, .. })) = next_call(&mut rig)
+        else {
             panic!("the edit goes to the service");
         };
         assert_eq!(
@@ -2056,7 +2077,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateTeam { reply, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateTeam { reply, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         let _ = reply.send(Err(Refusal::NameProblem {
@@ -2109,7 +2130,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateBot { reply, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateBot { reply, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         let _ = reply.send(Err(Refusal::NameProblem {
@@ -2140,7 +2161,7 @@ mod tests {
             }),
             effort: Some(KindEffort {
                 levels: vec![level("low", "Low"), level("high", "High")],
-                default: None,
+                ..crate::service::fixtures::base_kind_effort()
             }),
             ..agent_kind("claude", "Claude", PackageState::Enabled)
         }
@@ -2154,7 +2175,7 @@ mod tests {
             }),
             effort: Some(KindEffort {
                 levels: vec![level("high", "High")],
-                default: None,
+                ..crate::service::fixtures::base_kind_effort()
             }),
             ..agent_kind("codex", "Codex", PackageState::Enabled)
         }
@@ -2164,9 +2185,8 @@ mod tests {
         KindModelChoice {
             id: id.into(),
             label: label.into(),
-            default: false,
             efforts: efforts.map(|ids| ids.into_iter().map(str::to_owned).collect()),
-            fast: false,
+            ..crate::service::fixtures::base_kind_model_choice()
         }
     }
 
@@ -2260,7 +2280,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = next_call(&mut rig) else {
             panic!("the bot goes to the service");
         };
         assert_eq!(
@@ -2289,7 +2309,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = next_call(&mut rig) else {
             panic!("the bot goes to the service");
         };
         assert_eq!((params.model, params.effort), (None, None));
@@ -2342,12 +2362,17 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         assert_eq!(
-            (params.name.as_deref(), params.model, params.effort),
-            (Some("Lucia"), None, None)
+            (
+                params.name.as_deref(),
+                params.model,
+                params.effort,
+                params.skills
+            ),
+            (Some("Lucia"), None, None, None)
         );
     }
 
@@ -2367,7 +2392,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         assert_eq!(
@@ -2392,7 +2417,7 @@ mod tests {
         rig.shell
             .update(cx, |shell, cx| shell.submit_team_dialog(cx));
         cx.run_until_parked();
-        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = rig.script.next() else {
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = next_call(&mut rig) else {
             panic!("the edit goes to the service");
         };
         assert_eq!(
@@ -2417,5 +2442,91 @@ mod tests {
             team_confirm_body(&confirm),
             "Its routines stop and its tasks are removed from the Board. This cannot be undone."
         );
+    }
+
+    /// Sends this computer's discovered skills to the store, as the service's answer does.
+    fn discover(rig: &Rig, names: &[&str], cx: &mut VisualTestContext) {
+        let skills = names
+            .iter()
+            .map(|name| {
+                serde_json::from_value(serde_json::json!({
+                    "id": name,
+                    "name": name,
+                    "providers": [],
+                    "source_kind": "home",
+                    "source_label": "Home",
+                    "installed": true
+                }))
+                .expect("a discovered skill")
+            })
+            .collect();
+        rig.updates
+            .send(StoreUpdate::Skills(SkillsRead {
+                host: None,
+                request: 0,
+                listing: SkillsListing::Found(SkillDiscovery {
+                    skills,
+                    sources: Vec::new(),
+                    scanned_at: 0,
+                }),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_new_bot_sends_the_skills_picked_from_the_discovered_ones(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(&rig, vec![claude_options()], team("t1", "Desarrollo"), cx);
+        discover(&rig, &["review", "deploy"], cx);
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_add_bot(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        let name = bot_form(&rig.shell, cx, |form| form.name.clone());
+        name.update_in(cx, |field, window, cx| field.set_text("Ada", window, cx));
+        let picker = bot_form(&rig.shell, cx, |form| form.skills.picker.clone());
+        choose(&picker, 1, cx);
+        draw(cx);
+        assert_eq!(
+            bot_form(&rig.shell, cx, |form| form.skills.chosen.clone()),
+            vec!["review".to_owned()]
+        );
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::AddBot { params, .. })) = next_call(&mut rig) else {
+            panic!("the bot goes to the service");
+        };
+        assert_eq!(params.skills, vec!["review".to_owned()]);
+    }
+
+    #[gpui::test]
+    fn an_edit_form_opened_before_the_skills_arrive_offers_them_and_sends_the_new_list(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        connect(
+            &rig,
+            vec![claude_options()],
+            team_with_nora_on("opus", "high"),
+            cx,
+        );
+        open_first_bot_edit(&rig.shell, cx);
+        assert!(
+            bot_form(&rig.shell, cx, |form| form.skills.chosen.is_empty()),
+            "a bot has no skills by default"
+        );
+        discover(&rig, &["deploy"], cx);
+        let picker = bot_form(&rig.shell, cx, |form| form.skills.picker.clone());
+        choose(&picker, 0, cx);
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::UpdateBot { params, .. })) = next_call(&mut rig) else {
+            panic!("the edit goes to the service");
+        };
+        assert_eq!(params.skills, Some(vec!["deploy".to_owned()]));
     }
 }

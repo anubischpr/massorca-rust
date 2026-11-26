@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use massorca_net::Pin;
 use massorca_protocol::methods::devices::ListenerInfo;
+use tokio::sync::Notify;
 
 use crate::network::listen::ListenSpec;
 use crate::network::live::LiveDevices;
@@ -62,6 +63,8 @@ pub struct NetworkState {
     listeners: Mutex<Vec<(ListenSpec, ListenerState)>>,
     pub(crate) pairing: Pairing,
     pub(crate) live: Arc<LiveDevices>,
+    /// Woken whenever a listener changes state.
+    changed: Notify,
 }
 
 impl NetworkState {
@@ -77,12 +80,35 @@ impl NetworkState {
             ),
             pairing: Pairing::default(),
             live: Arc::new(LiveDevices::default()),
+            changed: Notify::new(),
         }
     }
 
     pub(crate) fn set_listener(&self, index: usize, state: ListenerState) {
         if let Some(entry) = self.lock().get_mut(index) {
             entry.1 = state;
+        }
+        self.changed.notify_waiters();
+    }
+
+    /// True once every listener has made its first bind attempt: listening, or waiting with the reason.
+    pub(crate) fn settled(&self) -> bool {
+        self.lock()
+            .iter()
+            .all(|(_, state)| !matches!(state, ListenerState::Starting))
+    }
+
+    /// Resolves once [`Self::settled`] holds.
+    pub(crate) async fn wait_settled(&self) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            // Registered before the check, so a change between the check and the wait is not missed.
+            changed.as_mut().enable();
+            if self.settled() {
+                return;
+            }
+            changed.await;
         }
     }
 

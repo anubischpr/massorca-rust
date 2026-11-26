@@ -334,12 +334,14 @@
             throw new Error('xterm.js did not load');
           }
           var FitAddon = window.FitAddon.FitAddon || window.FitAddon;
+          // screenReaderMode also puts the output in the DOM, so screen readers and the accessibility tree can read it.
           var term = new Terminal({
             allowProposedApi: true,
             convertEol: false,
             cursorBlink: true,
             fontFamily: 'monospace',
             fontSize: 12,
+            screenReaderMode: true,
             scrollback: 5000,
           });
           var fit = new FitAddon();

@@ -9,7 +9,7 @@ use massorca_core_terminal::credential_guard::{CREDENTIAL_GUARD_ENV, CREDENTIAL_
 use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 use serde_json::{Value, json};
 
-use crate::kind::{FastDecl, KindDecl, PromptMode, REF_PLACEHOLDER, StatusMechanism};
+use crate::kind::{FastDecl, KindDecl, PasteMode, PromptMode, REF_PLACEHOLDER, StatusMechanism};
 use crate::paths;
 use crate::provided_env::{ProvidedEnv, dangerous_caller_name, reserved_name, same_name};
 
@@ -38,7 +38,25 @@ pub enum Run<'a> {
     },
     /// A new run of an exited session, with the agent's known id.
     Resume { agent_ref: &'a str },
+    /// The first run of a session forked from another (decision 0168): the kind's fork form with the source's ref, then
+    /// the prompt as a first run takes it. The new run's ref is learned from its reports, never assigned.
+    Fork {
+        prompt: Option<&'a str>,
+        source_ref: &'a str,
+    },
 }
+
+/// Most bytes of a prompt passed as a launch argument (decision 0168). A Windows command line holds at most 32,767
+/// UTF-16 units in all, shared with the program path, the kind's and the caller's arguments, the settings path and the
+/// per-launch instructions, and quoting can double a prompt's length; 4 KiB keeps a quoted prompt under a quarter of it.
+/// A `.cmd` or `.bat` program has a smaller line, see [`CMD_SHIM_ARGV_PROMPT_MAX_BYTES`]. A longer prompt is typed after
+/// the agent is ready when its kind can take it so (see [`plan`]).
+pub const ARGV_PROMPT_MAX_BYTES: usize = 4 * 1024;
+
+/// Most bytes of a prompt passed as a launch argument by a `.cmd` or `.bat` program (decision 0168). Such a program runs
+/// through `cmd.exe`, whose command line holds 8,191 characters in all, shared with the program path, the arguments and
+/// the instructions. Quoting can double a prompt too, so 2 KiB keeps the prompt under half of that line.
+pub const CMD_SHIM_ARGV_PROMPT_MAX_BYTES: usize = 2 * 1024;
 
 /// Everything a plan is built from.
 #[derive(Debug, Clone, Copy)]
@@ -86,7 +104,8 @@ pub struct LaunchPlan {
     pub files: Vec<(PathBuf, String)>,
     /// The agent's id assigned at this launch.
     pub agent_ref: Option<String>,
-    /// A first prompt the kind cannot take at launch (`prompt.mode` `none`).
+    /// A first prompt typed at the run's first idle: the kind takes none at launch (`prompt.mode` `none`), or it does not
+    /// fit a launch argument and the kind can take it after launch (decision 0168).
     pub pending_prompt: Option<String>,
     /// Copied to the run's terminal at its creation (decision 0071).
     pub holds_secrets: bool,
@@ -112,6 +131,10 @@ impl std::fmt::Debug for LaunchPlan {
 pub enum LaunchError {
     #[error("the prompt is longer than {MAX_PROMPT_BYTES} bytes")]
     PromptTooLong,
+    #[error(
+        "the prompt is longer than {CMD_SHIM_ARGV_PROMPT_MAX_BYTES} bytes for a .cmd or .bat program, and the kind cannot take it after launch"
+    )]
+    ShimPromptTooLong,
     #[error("the prompt contains a NUL character")]
     PromptHasNul,
     #[error(
@@ -120,6 +143,8 @@ pub enum LaunchError {
     PromptHasControl,
     #[error("the kind declares no resume form")]
     NotResumable,
+    #[error("the kind declares no fork form")]
+    NotForkable,
     #[error(
         "the vault provides {0}, which the run sets itself or which may not carry a secret; rename that secret"
     )]
@@ -176,40 +201,35 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     let mut agent_ref = None;
     let mut pending_prompt = None;
     let mut prompt_args = Vec::new();
-    match input.run {
+    let first_prompt = match input.run {
         Run::First { prompt, new_ref } => {
             if let Some(assign) = decl.session_ref.as_ref().and_then(|r| r.assign.as_ref()) {
                 args.extend(with_ref(assign, new_ref));
                 agent_ref = Some(new_ref.to_owned());
             }
-            if let Some(text) = prompt {
-                check_prompt(text)?;
-                match decl.prompt.mode {
-                    PromptMode::Argv => {
-                        if decl.prompt.separator {
-                            prompt_args.push("--".to_owned());
-                        }
-                        prompt_args.push(text.to_owned());
-                    }
-                    PromptMode::Flag => {
-                        prompt_args.extend(decl.prompt.flag.clone());
-                        prompt_args.push(text.to_owned());
-                    }
-                    PromptMode::StartupQuery => {
-                        prompt_args.extend(
-                            decl.prompt
-                                .flag
-                                .as_ref()
-                                .map(|flag| format!("{flag}={text}")),
-                        );
-                    }
-                    PromptMode::None => pending_prompt = Some(text.to_owned()),
-                }
-            }
+            prompt
+        }
+        Run::Fork { prompt, source_ref } => {
+            let fork = decl.fork.as_ref().ok_or(LaunchError::NotForkable)?;
+            args.extend(with_ref(fork, source_ref));
+            prompt
         }
         Run::Resume { agent_ref: known } => {
             let resume = decl.resume.as_ref().ok_or(LaunchError::NotResumable)?;
             args.extend(with_ref(resume, known));
+            None
+        }
+    };
+    if let Some(text) = first_prompt {
+        check_prompt(text)?;
+        let shim = is_cmd_shim(input.program);
+        if decl.prompt.mode == PromptMode::None || types_after_ready(decl, text, shim) {
+            pending_prompt = Some(text.to_owned());
+        } else if shim && text.len() > CMD_SHIM_ARGV_PROMPT_MAX_BYTES {
+            // The kind cannot take it after launch, and the shim's line would overflow cmd.exe's limit (decision 0168).
+            return Err(LaunchError::ShimPromptTooLong);
+        } else {
+            prompt_args = launch_prompt_args(decl, text);
         }
     }
     args.extend(input.caller_args.iter().cloned());
@@ -226,6 +246,63 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
         pending_prompt,
         holds_secrets: input.holds_secrets || !input.provided_env.is_empty(),
     })
+}
+
+/// Whether a prompt the kind takes at launch is typed at the run's first idle instead (decision 0168): it is longer than
+/// the argument limit of its program ([`ARGV_PROMPT_MAX_BYTES`], or [`CMD_SHIM_ARGV_PROMPT_MAX_BYTES`] for a `.cmd` or
+/// `.bat` program) or holds a line break, and the kind reports an idle state to type it on. A multi-line prompt also
+/// needs bracketed paste, so its lines are not submitted one by one. Otherwise it stays on the command line: the run is
+/// spawned without a shell, so its line breaks reach the agent intact, and [`MAX_PROMPT_BYTES`] keeps it within the
+/// platform's limit.
+fn types_after_ready(decl: &KindDecl, text: &str, shim: bool) -> bool {
+    let multi_line = text.contains(['\n', '\r']);
+    let limit = if shim {
+        CMD_SHIM_ARGV_PROMPT_MAX_BYTES
+    } else {
+        ARGV_PROMPT_MAX_BYTES
+    };
+    let too_long = text.len() > limit;
+    decl.reports_idle()
+        && (too_long || multi_line)
+        && (!multi_line || decl.prompt.paste == PasteMode::Bracketed)
+}
+
+/// Whether `program` is a Windows batch file, which `cmd.exe` runs: its command line holds 8,191 characters at most
+/// (decision 0168).
+fn is_cmd_shim(program: &Path) -> bool {
+    program
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+}
+
+/// The launch arguments of a prompt in the kind's mode (0054).
+fn launch_prompt_args(decl: &KindDecl, text: &str) -> Vec<String> {
+    let mut prompt_args = Vec::new();
+    match decl.prompt.mode {
+        PromptMode::Argv => {
+            if decl.prompt.separator {
+                prompt_args.push("--".to_owned());
+            }
+            prompt_args.push(text.to_owned());
+        }
+        PromptMode::Flag => {
+            prompt_args.extend(decl.prompt.flag.clone());
+            prompt_args.push(text.to_owned());
+        }
+        PromptMode::StartupQuery => {
+            prompt_args.extend(
+                decl.prompt
+                    .flag
+                    .as_ref()
+                    .map(|flag| format!("{flag}={text}")),
+            );
+        }
+        PromptMode::None => {}
+    }
+    prompt_args
 }
 
 fn with_ref(args: &[String], agent_ref: &str) -> Vec<String> {
@@ -611,6 +688,60 @@ mod tests {
             fixture.first(None).args,
             ["--plain"],
             "no prompt, no separator"
+        );
+    }
+
+    /// A `.cmd` or `.bat` program keeps an argument prompt under its line limit: a longer one waits for the agent's
+    /// first idle, and a kind that cannot type it is refused (decision 0168). Any other program keeps the larger limit.
+    #[test]
+    fn a_cmd_shim_keeps_its_argument_prompt_under_the_line_limit() {
+        let idle_kind = || {
+            kind(json!({
+                "id": "fake", "name": "Fake", "program": ["fake"], "prompt": { "mode": "argv" },
+                "status": { "mechanism": "env-command", "events": { "start": "idle" } }
+            }))
+        };
+        let mut fixture = Fixture::new(idle_kind());
+        fixture.program = PathBuf::from("C:/agents/agent.cmd");
+        let past_limit = "x".repeat(CMD_SHIM_ARGV_PROMPT_MAX_BYTES + 1);
+        let held = fixture.first(Some(&past_limit));
+        assert_eq!(held.pending_prompt.as_deref(), Some(past_limit.as_str()));
+        assert!(!held.args.contains(&past_limit), "{:?}", held.args);
+
+        let within = "x".repeat(CMD_SHIM_ARGV_PROMPT_MAX_BYTES);
+        assert_eq!(fixture.first(Some(&within)).args.last(), Some(&within));
+
+        let mut batch = Fixture::new(idle_kind());
+        batch.program = PathBuf::from("C:/agents/agent.bat");
+        assert_eq!(
+            batch
+                .plan(Run::First {
+                    prompt: Some(&past_limit),
+                    new_ref: "r-1",
+                })
+                .unwrap()
+                .pending_prompt,
+            Some(past_limit.clone())
+        );
+
+        let plain = Fixture::new(kind(json!({
+            "id": "fake", "name": "Fake", "program": ["fake"], "prompt": { "mode": "argv" }
+        })));
+        let mut refused = plain;
+        refused.program = PathBuf::from("C:/agents/agent.cmd");
+        assert_eq!(
+            refused.plan(Run::First {
+                prompt: Some(&past_limit),
+                new_ref: "r-1",
+            }),
+            Err(LaunchError::ShimPromptTooLong),
+            "a kind that cannot type the prompt leaves it no line"
+        );
+
+        fixture.program = PathBuf::from("/opt/agents/agent");
+        assert!(
+            fixture.first(Some(&past_limit)).args.contains(&past_limit),
+            "a program that is no batch file keeps the larger limit"
         );
     }
 
@@ -1070,6 +1201,97 @@ mod tests {
                 && !debug.contains("secret prompt")
                 && !debug.contains("provided-placeholder"),
             "{debug}"
+        );
+    }
+
+    /// A kind whose first idle is reported, so a prompt can be typed after launch (decision 0168).
+    fn ready_kind(prompt: serde_json::Value) -> KindDecl {
+        kind(json!({
+            "id": "fake", "name": "Fake", "program": ["fake"], "args": ["--plain"],
+            "prompt": prompt,
+            "session_ref": { "learn": "session_id" },
+            "fork": ["--fork", "{ref}"],
+            "status": { "mechanism": "env-command", "events": { "start": "idle", "stop": "done" } }
+        }))
+    }
+
+    #[test]
+    fn a_prompt_longer_than_an_argument_is_typed_at_the_first_idle_when_the_kind_reports_one() {
+        let long = "a".repeat(ARGV_PROMPT_MAX_BYTES + 1);
+        let plan = Fixture::new(ready_kind(json!({ "mode": "argv" }))).first(Some(&long));
+        assert_eq!(plan.args, ["--plain"], "nothing on the command line");
+        assert_eq!(plan.pending_prompt.as_deref(), Some(long.as_str()));
+
+        let at_limit = "a".repeat(ARGV_PROMPT_MAX_BYTES);
+        let plan = Fixture::new(ready_kind(json!({ "mode": "argv" }))).first(Some(&at_limit));
+        assert_eq!(
+            plan.args.last(),
+            Some(&at_limit),
+            "a prompt at the limit rides the command"
+        );
+        assert_eq!(plan.pending_prompt, None);
+
+        let flagged = Fixture::new(ready_kind(json!({ "mode": "flag", "flag": "--prompt" })))
+            .first(Some(&long));
+        assert_eq!(flagged.args, ["--plain"], "a flag prompt falls back too");
+        assert_eq!(flagged.pending_prompt.as_deref(), Some(long.as_str()));
+    }
+
+    #[test]
+    fn a_multi_line_prompt_is_typed_at_the_first_idle_only_with_bracketed_paste() {
+        let text = "line one\nline two";
+        let bracketed = Fixture::new(ready_kind(json!({ "mode": "argv", "paste": "bracketed" })))
+            .first(Some(text));
+        assert_eq!(bracketed.args, ["--plain"]);
+        assert_eq!(bracketed.pending_prompt.as_deref(), Some(text));
+
+        // Plain paste would submit each line on its own, so the prompt stays one argument.
+        let plain = Fixture::new(ready_kind(json!({ "mode": "argv" }))).first(Some(text));
+        assert_eq!(plain.args, ["--plain", text]);
+        assert_eq!(plain.pending_prompt, None);
+    }
+
+    #[test]
+    fn a_kind_that_reports_no_idle_keeps_a_long_or_multi_line_prompt_on_the_command_line() {
+        let fixture = Fixture::new(fake(json!({ "mode": "argv", "paste": "bracketed" })));
+        let long = "a".repeat(ARGV_PROMPT_MAX_BYTES + 1);
+        let plan = fixture.first(Some(&long));
+        assert_eq!(plan.args.last(), Some(&long));
+        assert_eq!(plan.pending_prompt, None);
+        let plan = fixture.first(Some("a\nb"));
+        assert_eq!(plan.args.last().map(String::as_str), Some("a\nb"));
+        assert_eq!(plan.pending_prompt, None);
+    }
+
+    #[test]
+    fn a_fork_takes_the_fork_form_with_the_source_ref_and_assigns_no_ref() {
+        let mut decl = ready_kind(json!({ "mode": "argv" }));
+        decl.session_ref = Some(
+            serde_json::from_value(
+                json!({ "assign": ["--session-id", "{ref}"], "learn": "session_id" }),
+            )
+            .unwrap(),
+        );
+        let fixture = Fixture::new(decl);
+        let plan = fixture
+            .plan(Run::Fork {
+                prompt: Some("go on"),
+                source_ref: "src-1",
+            })
+            .unwrap();
+        assert_eq!(plan.args, ["--plain", "--fork", "src-1", "go on"]);
+        assert_eq!(
+            plan.agent_ref, None,
+            "the fork's ref is learned from its run"
+        );
+
+        let no_fork = Fixture::new(fake(json!({ "mode": "argv" })));
+        assert_eq!(
+            no_fork.plan(Run::Fork {
+                prompt: None,
+                source_ref: "src-1",
+            }),
+            Err(LaunchError::NotForkable)
         );
     }
 }

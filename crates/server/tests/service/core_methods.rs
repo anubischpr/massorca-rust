@@ -71,6 +71,7 @@ const AGENT_METHODS: &[&str] = &[
     "agent.watch",
     "agent.delegate",
     "agent.tree",
+    "agent.set_options",
     "agent.bring_back",
     "agent.credentials.import",
     "agent.credentials.show",

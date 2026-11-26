@@ -110,9 +110,11 @@ fn session_row(
     SessionRow {
         id: session.id.clone(),
         title: title_of(session, workspace),
+        archived: session.archived,
         agent: agent_of_kind(&session.kind),
         state: status,
         workspace_id: session.workspace_id.clone(),
+        terminal_id: session.terminal_id.clone(),
         branch: workspace.and_then(|workspace| workspace.branch.clone()),
         path: workspace.map(|workspace| workspace.path.clone()),
         place: parent.map(|parent| place_of(session, parent, listed)),
@@ -294,7 +296,7 @@ pub fn agent_of_kind(kind: &str) -> Agent {
 mod tests {
     use std::time::Instant;
 
-    use massorca_protocol::methods::agents::{ActivitySource, ActivityState, Outcome};
+    use massorca_protocol::methods::agents::{ActivityState, Outcome};
     use massorca_protocol::methods::terminals::TerminalState;
 
     use super::*;
@@ -358,9 +360,7 @@ mod tests {
         Activity {
             state,
             outcome,
-            source: ActivitySource::Hook,
-            at_ms: 1,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         }
     }
 

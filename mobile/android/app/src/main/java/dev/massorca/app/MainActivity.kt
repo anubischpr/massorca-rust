@@ -1,5 +1,6 @@
 package dev.massorca.app
 
+import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -12,6 +13,14 @@ class MainActivity : ReactActivity() {
    * rendering of the component.
    */
   override fun getMainComponentName(): String = "MassOrca"
+
+  /**
+   * Starts without the saved state: react-native-screens cannot restore its fragments, so an activity Android recreates
+   * (a configuration change the manifest does not handle, or a process restart) would crash instead of starting over.
+   */
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(null)
+  }
 
   /**
    * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]

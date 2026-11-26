@@ -197,6 +197,16 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(crate::task::execute(&target, autostart, command, output))
         }
+        Commands::Automations { command } => {
+            let target = globals.target()?;
+            block_on(crate::automations::execute(
+                &target, autostart, command, output,
+            ))
+        }
+        Commands::Calendar(args) => {
+            let target = globals.target()?;
+            block_on(crate::calendar::execute(&target, autostart, args, output))
+        }
         Commands::Extension { command } => {
             let target = globals.target()?;
             block_on(extension::execute(&target, autostart, command, output))
