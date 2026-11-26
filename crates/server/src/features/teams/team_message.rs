@@ -9,7 +9,8 @@ use massorca_core_store::{
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_ROOM_CHANGED};
 use massorca_protocol::methods::team_room::{
     self, MAX_MESSAGE_BODY_BYTES, MAX_MESSAGE_SUBJECT_CHARS, MessageDelivery, MessagePriority,
-    MessageType, TO_PARENT, TeamMessage, TeamMessageSendParams, TeamMessageSent, WorkerOutcome,
+    MessageType, TO_PARENT, TeamInbox, TeamInboxParams, TeamMessage, TeamMessageReplyParams,
+    TeamMessageSendParams, TeamMessageSent, WorkerOutcome,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -37,6 +38,20 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::TEAM_MESSAGES,
             Permission::Workspace,
             send,
+        )?,
+        methods.register(
+            Owner::Core,
+            team_room::MESSAGE_REPLY,
+            capabilities::TEAM_MESSAGES,
+            Permission::Workspace,
+            reply,
+        )?,
+        methods.register(
+            Owner::Core,
+            team_room::INBOX,
+            capabilities::TEAM_MESSAGES,
+            Permission::Workspace,
+            inbox,
         )?,
     ])
 }
@@ -71,7 +86,29 @@ async fn send(
     sent
 }
 
-/// The calling run's task, bot and session: only a live bot run sends, and only as itself.
+async fn reply(
+    ctx: RequestCtx,
+    params: TeamMessageReplyParams,
+) -> Result<TeamMessageSent, ErrorBody> {
+    let (touched, sent) = blocking(&ctx, move |store, agents| {
+        let mut touched = Touched::default();
+        let sent = reply_as_run(store, agents, params, &mut touched);
+        Ok((touched, sent))
+    })
+    .await?;
+    publish_touched(&ctx, &touched);
+    sent
+}
+
+async fn inbox(ctx: RequestCtx, params: TeamInboxParams) -> Result<TeamInbox, ErrorBody> {
+    blocking(&ctx, move |store, agents| {
+        let (task, _, _) = sender(store, agents, params.session, params.agent_token)?;
+        read_inbox(store, &task, params.mark_read)
+    })
+    .await
+}
+
+/// The calling run's task, bot and session: only a live bot run sends or reads, and only as itself.
 fn sender(
     store: &Store,
     agents: &Agents,
@@ -87,7 +124,7 @@ fn sender(
     Ok((task, bot, session.unwrap_or_default()))
 }
 
-/// What a bot asks to send.
+/// What a bot asks to send, from `team.message_send` or a reply.
 #[derive(Debug, Clone)]
 pub(super) struct Draft {
     pub(super) to: String,
@@ -132,6 +169,61 @@ fn send_as_run(
         session: &session,
     };
     deliver(store, &from, draft, touched)
+}
+
+fn reply_as_run(
+    store: &Store,
+    agents: &Agents,
+    params: TeamMessageReplyParams,
+    touched: &mut Touched,
+) -> Result<TeamMessageSent, ErrorBody> {
+    let (task, bot, session) = sender(store, agents, params.session, params.agent_token)?;
+    let draft = reply_draft(
+        store,
+        &task,
+        params.message,
+        params.body,
+        params.kind,
+        params.priority,
+    )?;
+    let from = SenderRun {
+        task: &task,
+        bot: &bot,
+        session: &session,
+    };
+    deliver(store, &from, draft, touched)
+}
+
+/// The draft that answers `message`, which must have been sent to `task`: back to its sender, on its thread.
+pub(super) fn reply_draft(
+    store: &Store,
+    task: &TaskRow,
+    message: String,
+    body: String,
+    kind: Option<MessageType>,
+    priority: MessagePriority,
+) -> Result<Draft, ErrorBody> {
+    let original = store
+        .get_team_message(&message)
+        .map_err(store_error)?
+        .filter(|row| row.to_task_id == task.id)
+        .ok_or_else(|| unknown_message(&message))?;
+    let subject = if original.subject.starts_with("Re: ") {
+        original.subject.clone()
+    } else {
+        format!("Re: {}", original.subject)
+    };
+    Ok(Draft {
+        to: original.from_task_id,
+        kind: kind.unwrap_or(MessageType::Status),
+        priority,
+        subject: subject.chars().take(MAX_MESSAGE_SUBJECT_CHARS).collect(),
+        body,
+        outcome: None,
+        task: None,
+        thread: None,
+        reply_to: Some(message),
+    })
 }
 
 /// Stores a message along one delegation edge and settles the task a `worker_done` names.
@@ -345,6 +437,21 @@ fn task_outcome(outcome: WorkerOutcome) -> TaskOutcome {
         WorkerOutcome::Succeeded => TaskOutcome::Success,
         WorkerOutcome::Failed | WorkerOutcome::Unknown => TaskOutcome::Failure,
     }
+}
+
+fn read_inbox(store: &Store, task: &TaskRow, mark_read: bool) -> Result<TeamInbox, ErrorBody> {
+    let rows = store.team_inbox(&task.id, true).map_err(store_error)?;
+    if mark_read {
+        let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        store
+            .mark_team_messages_read(&task.id, &ids, now_ms())
+            .map_err(store_error)?;
+    }
+    let messages = rows
+        .iter()
+        .map(|row| view(store, row))
+        .collect::<Result<_, _>>()?;
+    Ok(TeamInbox { messages })
 }
 
 fn view(store: &Store, row: &TeamMessageRow) -> Result<TeamMessage, ErrorBody> {

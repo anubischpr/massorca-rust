@@ -430,5 +430,41 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        command(
+            "team.message.reply",
+            "Answer a message in this bot run's inbox",
+            "team.message_reply",
+            json!({
+                "type": "object",
+                "required": ["message", "body"],
+                "properties": {
+                    "message": { "type": "string" },
+                    "body": { "type": "string" },
+                    "type": { "enum": ["status", "question", "worker_done", "handoff", "escalation"] },
+                    "priority": { "enum": ["normal", "high", "urgent"] }
+                }
+            }),
+        ),
+        command(
+            "team.inbox",
+            "List this bot run's unread messages",
+            "team.inbox",
+            json!({ "type": "object", "properties": { "mark_read": { "type": "boolean" } } }),
+        ),
+        command(
+            "team.delegate",
+            "Hand a task to a teammate from inside a bot's run",
+            "team.delegate",
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "team": { "type": "string" },
+                    "read_only": { "type": "boolean" }
+                }
+            }),
+        ),
     ]
 }

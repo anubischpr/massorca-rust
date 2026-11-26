@@ -1,5 +1,5 @@
-//! Unit tests of `team_message`: the delegation edges a message may travel, the one settlement of a `worker_done`, and
-//! the refusals.
+//! Unit tests of `team_message`: the delegation edges a message may travel, the one settlement of a `worker_done`, the
+//! inbox and replies.
 
 use std::cell::RefCell;
 
@@ -339,4 +339,87 @@ fn a_worker_done_settles_only_the_senders_own_task_under_its_parent() {
         .expect("read")
         .expect("task");
     assert_eq!(untouched.outcome, None);
+}
+
+#[test]
+fn the_inbox_lists_unread_messages_and_mark_read_empties_it() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    send_as(
+        &tree,
+        &tree.child,
+        draft(TO_PARENT, MessageType::Status),
+        false,
+        &wakes,
+    )
+    .expect("first");
+    send_as(
+        &tree,
+        &tree.sibling,
+        draft(TO_PARENT, MessageType::Question),
+        false,
+        &wakes,
+    )
+    .expect("second");
+
+    let listed = read_inbox(&tree.store, &tree.parent, false).expect("inbox");
+    assert_eq!(listed.messages.len(), 2);
+    assert_eq!(listed.messages[0].kind, MessageType::Status);
+    let marked = read_inbox(&tree.store, &tree.parent, true).expect("inbox");
+    assert_eq!(marked.messages.len(), 2);
+    assert!(
+        read_inbox(&tree.store, &tree.parent, false)
+            .expect("inbox")
+            .messages
+            .is_empty()
+    );
+    assert!(
+        read_inbox(&tree.store, &tree.child, false)
+            .expect("inbox")
+            .messages
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_reply_goes_back_to_the_sender_on_its_thread_and_only_from_its_recipient() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    let asked = send_as(
+        &tree,
+        &tree.child,
+        draft(TO_PARENT, MessageType::Question),
+        false,
+        &wakes,
+    )
+    .expect("question");
+    let answer = reply_draft(
+        &tree.store,
+        &tree.parent,
+        asked.message.id.clone(),
+        "Use the new token table.".to_owned(),
+        None,
+        MessagePriority::Normal,
+    )
+    .expect("reply");
+    let replied = send_as(&tree, &tree.parent, answer, false, &wakes).expect("sent");
+    assert_eq!(replied.message.to_task, tree.child.id);
+    assert_eq!(replied.message.thread, asked.message.thread);
+    assert_eq!(
+        replied.message.reply_to.as_deref(),
+        Some(asked.message.id.as_str())
+    );
+    assert_eq!(replied.message.subject, "Re: Lexer");
+    assert_eq!(replied.message.kind, MessageType::Status);
+
+    let not_mine = reply_draft(
+        &tree.store,
+        &tree.sibling,
+        asked.message.id.clone(),
+        "Hijack".to_owned(),
+        None,
+        MessagePriority::Normal,
+    )
+    .expect_err("not in its inbox");
+    assert_eq!(not_mine.code, codes::TEAM_MESSAGE_UNKNOWN);
 }
