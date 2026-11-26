@@ -1929,7 +1929,7 @@ fn send_in_chat_mode_starts_a_chat_without_a_grid_and_gives_its_composer_the_key
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -1978,7 +1978,7 @@ fn a_chat_the_service_cannot_run_starts_a_terminal_session_and_says_why(cx: &mut
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);

@@ -596,7 +596,7 @@ fn resume_in_an_ended_chat_starts_it_with_no_grid_and_follows_the_transcript_aga
         .send(Ok(live.clone()))
         .expect("the shell waits for the answer");
     rig.updates
-        .send(StoreUpdate::AgentChanged(live))
+        .send(StoreUpdate::AgentChanged(Box::new(live)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
