@@ -561,6 +561,7 @@ mod tests {
         let options = StartOptions {
             model: Some("opus".to_owned()),
             effort: Some("xhigh".to_owned()),
+            fast: None,
         };
         let params = no_project_start_params("claude", "fix it", None, options, (120, 40));
         assert_eq!(params.workspace, None);

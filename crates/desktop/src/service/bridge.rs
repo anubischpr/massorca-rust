@@ -34,8 +34,12 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams, GitPushed,
+};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+    ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
@@ -110,6 +114,16 @@ pub(crate) enum Command {
     InspectProject {
         params: ProjectInspectParams,
         reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
+    },
+    /// `project.remove`, answered on its oneshot with the removed project.
+    RemoveProject {
+        params: ProjectRemoveParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    /// `project.set_base`, answered on its oneshot with the project as it now stands.
+    SetProjectBase {
+        params: ProjectSetBaseParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
@@ -208,6 +222,18 @@ pub(crate) enum Command {
         params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// `agent.rename` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentRename {
+        session: String,
+        title: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.archive_session` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentArchive {
+        session: String,
+        archived: bool,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
     AgentResume {
         params: AgentResumeParams,
@@ -240,6 +266,18 @@ pub(crate) enum Command {
     GitCommit {
         params: GitCommitParams,
         reply: oneshot::Sender<Result<GitCommitted, Refusal>>,
+    },
+    GitFetch {
+        params: GitFetchParams,
+        reply: oneshot::Sender<Result<GitFetched, Refusal>>,
+    },
+    GitPull {
+        params: GitPullParams,
+        reply: oneshot::Sender<Result<GitPulled, Refusal>>,
+    },
+    GitPush {
+        params: GitPushParams,
+        reply: oneshot::Sender<Result<GitPushed, Refusal>>,
     },
     /// Follows a workspace's git state until `GitUnwatch`, across reconnects.
     GitWatch {
@@ -413,6 +451,18 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.set_base`. A blank base clears it. The project list changes through the resulting event.
+    pub async fn set_project_base(&self, params: ProjectSetBaseParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::SetProjectBase { params, reply })
+            .await
+    }
+
+    /// `project.remove`. The project list changes through the resulting event, not from this answer.
+    pub async fn remove_project(&self, params: ProjectRemoveParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::RemoveProject { params, reply })
+            .await
     }
 
     /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
@@ -945,6 +995,12 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
             massorca_protocol::capabilities::WORKSPACE_RENAME,
         )));
+        self.emit(StoreUpdate::GitSyncOffered(
+            client.has_capability(massorca_protocol::capabilities::GIT),
+        ));
+        self.emit(StoreUpdate::ProjectEditsOffered(
+            client.has_capability(massorca_protocol::capabilities::PROJECTS),
+        ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
@@ -1323,6 +1379,24 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::SetProjectBase { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectSetBaseParams, Project>(projects::SET_BASE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::RemoveProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectRemoveParams, Project>(projects::REMOVE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::InspectProject { params, reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1426,6 +1500,16 @@ fn spawn_call(
         Command::AgentForget { params, reply } => {
             agents::spawn_forget(&client, params, reply, updates);
         }
+        Command::AgentRename {
+            session,
+            title,
+            reply,
+        } => agents::spawn_rename(&client, session, title, reply, updates),
+        Command::AgentArchive {
+            session,
+            archived,
+            reply,
+        } => agents::spawn_archive(&client, session, archived, reply, updates),
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1500,6 +1584,12 @@ fn refuse_while_down(command: Command) {
         Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::RemoveProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::SetProjectBase { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1541,7 +1631,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::AgentStop { reply, .. }
         | Command::AgentResume { reply, .. }
-        | Command::AgentForget { reply, .. } => {
+        | Command::AgentForget { reply, .. }
+        | Command::AgentRename { reply, .. }
+        | Command::AgentArchive { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

@@ -236,6 +236,10 @@ pub fn palette_items(snapshot: &ShellSnapshot) -> Vec<PaletteItem> {
 }
 
 fn push_session(items: &mut Vec<PaletteItem>, session: &SessionRow, location: &str) {
+    // Archived sessions stay out of the palette, as they stay out of the Sidebar until Show archived is on.
+    if session.archived {
+        return;
+    }
     items.push(PaletteItem {
         group: PaletteGroup::Sessions,
         title: session.title.clone(),
