@@ -38,6 +38,7 @@ mod sidebar;
 mod sidebar_rows;
 mod source_control;
 mod source_control_dialogs;
+mod source_control_sync;
 mod start_page;
 mod start_placement;
 mod status_bar;

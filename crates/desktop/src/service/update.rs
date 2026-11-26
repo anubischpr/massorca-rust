@@ -82,6 +82,8 @@ pub enum StoreUpdate {
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
     WorkspaceRenameOffered(bool),
+    /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
+    GitSyncOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
@@ -313,6 +315,8 @@ pub struct StoreState {
     pub workspace_unique_name: bool,
     /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
     pub workspace_rename: bool,
+    /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
+    pub git_sync: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
@@ -365,6 +369,7 @@ impl Default for StoreState {
             agent_fast: false,
             workspace_unique_name: false,
             workspace_rename: false,
+            git_sync: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             chat: BTreeMap::new(),
@@ -480,6 +485,7 @@ impl StoreState {
                 self.workspace_unique_name = offered;
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
+            StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::Chat { session, event } => {
@@ -1245,6 +1251,17 @@ pub(crate) mod fixtures {
             updated_at_ms: None,
             cli_installed: None,
             detail: None,
+        }
+    }
+
+    /// A push answer for `feat/scm` with the outcome given. Tests set `upstream_set` when they need it.
+    pub fn git_pushed(
+        outcome: massorca_protocol::methods::git::remote::PushOutcome,
+    ) -> massorca_protocol::methods::git::remote::GitPushed {
+        massorca_protocol::methods::git::remote::GitPushed {
+            remote_branch: "feat/scm".into(),
+            outcome,
+            upstream_set: false,
         }
     }
 

@@ -34,6 +34,9 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams, GitPushed,
+};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
 };
@@ -229,6 +232,18 @@ pub(crate) enum Command {
     GitCommit {
         params: GitCommitParams,
         reply: oneshot::Sender<Result<GitCommitted, Refusal>>,
+    },
+    GitFetch {
+        params: GitFetchParams,
+        reply: oneshot::Sender<Result<GitFetched, Refusal>>,
+    },
+    GitPull {
+        params: GitPullParams,
+        reply: oneshot::Sender<Result<GitPulled, Refusal>>,
+    },
+    GitPush {
+        params: GitPushParams,
+        reply: oneshot::Sender<Result<GitPushed, Refusal>>,
     },
     /// Follows a workspace's git state until `GitUnwatch`, across reconnects.
     GitWatch {
@@ -934,6 +949,9 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
             massorca_protocol::capabilities::WORKSPACE_RENAME,
         )));
+        self.emit(StoreUpdate::GitSyncOffered(
+            client.has_capability(massorca_protocol::capabilities::GIT),
+        ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));

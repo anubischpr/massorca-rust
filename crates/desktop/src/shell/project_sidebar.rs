@@ -22,6 +22,7 @@ use super::Shell;
 use super::source_control::{OpenFile, ProjectTab};
 use crate::model::source_control::{ChangeRow, CommitRow, History, Panel, PanelView, panel_view};
 use crate::model::source_control_flow::DiscardTarget;
+use crate::model::source_control_sync::{SyncAction, SyncTone};
 
 /// The Project sidebar's body under its header: the tab strip, then the open tab.
 pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> AnyElement {
@@ -64,6 +65,7 @@ fn changed_files(shell: &Shell, cx: &App) -> u32 {
 /// The Source control tab: the panel of the selected workspace, or the state it is in.
 fn source_control(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> AnyElement {
     let theme = *cx.theme();
+    let sync_offered = shell.store.read(cx).state().git_sync;
     let Some(workspace) = shell.model.selected_workspace() else {
         return note(
             "No workspace selected",
@@ -86,7 +88,7 @@ fn source_control(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> AnyEle
                 .on_retry(retry(handle))
                 .into_any_element()
         }
-        PanelView::Ready(panel) => panel_body(shell, handle, &panel, &theme),
+        PanelView::Ready(panel) => panel_body(shell, handle, &panel, &theme, sync_offered),
     };
     ScrollArea::new("source-control-scroll")
         .child(body)
@@ -116,6 +118,7 @@ fn panel_body(
     handle: &WeakEntity<Shell>,
     panel: &Panel,
     theme: &Theme,
+    sync_offered: bool,
 ) -> AnyElement {
     let busy = shell.source_control.busy;
     let mut column = div()
@@ -124,6 +127,9 @@ fn panel_body(
         .gap(px(SPACE_3))
         .p(px(SPACE_3))
         .child(branch_line(panel, theme));
+    if sync_offered {
+        column = column.child(sync_row(handle, busy));
+    }
     if let Some(operation) = panel.operation {
         column = column.child(
             Banner::new(
@@ -149,6 +155,17 @@ fn panel_body(
             "source-control-error",
             BannerVariant::Danger,
             error.clone(),
+        ));
+    }
+    if let Some(note) = &shell.source_control.notice {
+        let variant = match note.tone {
+            SyncTone::Info => BannerVariant::Info,
+            SyncTone::Warning => BannerVariant::Warning,
+        };
+        column = column.child(Banner::new(
+            "source-control-notice",
+            variant,
+            note.text.clone(),
         ));
     }
     if panel.truncated {
@@ -235,6 +252,24 @@ fn branch_line(panel: &Panel, theme: &Theme) -> AnyElement {
         line = line.child(caption("No commits yet", theme));
     }
     line.into_any_element()
+}
+
+/// Fetch, Pull and Push for the workspace the panel shows. Each waits while a call is out.
+fn sync_row(handle: &WeakEntity<Shell>, busy: bool) -> AnyElement {
+    let mut row = div().flex().flex_wrap().items_center().gap(px(SPACE_1));
+    for action in SyncAction::ALL {
+        let handle = handle.clone();
+        row = row.child(
+            Button::new(action.button_id(), action.label())
+                .variant(ButtonVariant::Secondary)
+                .size(ButtonSize::Compact)
+                .disabled(busy)
+                .on_click(move |_, cx| {
+                    let _ = handle.update(cx, |shell, cx| shell.run_sync(action, cx));
+                }),
+        );
+    }
+    row.into_any_element()
 }
 
 /// The message field, the refusals the service gave, and the Commit button (A49).

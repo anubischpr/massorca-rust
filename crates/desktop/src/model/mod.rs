@@ -47,6 +47,7 @@ pub mod sidebar;
 pub mod source_control;
 pub mod source_control_diff;
 pub mod source_control_flow;
+pub mod source_control_sync;
 pub mod start_page;
 pub mod status_items;
 pub mod teams;
