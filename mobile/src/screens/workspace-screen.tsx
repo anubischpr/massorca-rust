@@ -23,9 +23,9 @@ export interface WorkspaceScreenProps {
 
 type WorkspaceView = 'changes' | 'terminal';
 
-const VIEWS: readonly { readonly value: WorkspaceView; readonly label: string }[] = [
+const VIEWS: readonly { readonly value: WorkspaceView; readonly label: string; readonly testID?: string }[] = [
   { value: 'changes', label: CHANGES_VIEW },
-  { value: 'terminal', label: TERMINAL_TITLE },
+  { value: 'terminal', label: TERMINAL_TITLE, testID: 'workspace-view-terminal' },
 ];
 
 export function WorkspaceScreen({ host, workspace, noGit, onOpenDetails, onOpenTerminal }: WorkspaceScreenProps) {
