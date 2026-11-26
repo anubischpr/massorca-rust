@@ -6,7 +6,7 @@ use std::sync::Arc;
 use massorca_protocol::methods::git::remotes::{self, GitRemotes, GitRemotesParams};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
-use super::{blocking, git_error, git_for_caller, repository};
+use super::{blocking, git_error, git_runner, repository};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::owner::Owner;
