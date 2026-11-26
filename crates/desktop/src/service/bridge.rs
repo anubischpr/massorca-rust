@@ -815,6 +815,9 @@ impl Link {
         self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
             massorca_protocol::capabilities::AGENT_NO_PROJECT,
         )));
+        self.emit(StoreUpdate::AgentImportDetectOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
+        ));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
