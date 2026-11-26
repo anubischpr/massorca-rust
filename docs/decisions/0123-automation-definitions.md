@@ -24,6 +24,8 @@ version leaves out.
   - Day-of-month and day-of-week both restricted match a day when either matches, as standard cron reads them.
   - An expression with more than nine years between two of its days, such as `0 0 29 2 */7` (29 February that is a
     Sunday), is refused. The check walks the 400-year calendar cycle from every start, so it does not depend on the clock.
+  - Hourly fires at the minute of its time in every hour. When clocks go back, the repeated hour fires once, at its
+    earlier instant, so its second copy is not a run. Accepted for the first version.
 - D3 Store. Migration step `automations`: name, prompt, agent kind, cadence with its time, weekday or cron expression,
   an optional zone, an optional grace window, the enabled flag, an optional creation key, the next and last run times,
   and timestamps. CHECK constraints tie the weekday to the weekly cadence and the expression to the cron cadence.
