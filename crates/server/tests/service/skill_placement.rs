@@ -289,3 +289,49 @@ async fn a_skill_in_a_registered_folder_is_not_copied_and_the_capability_is_offe
     drop(client);
     stop(running).await;
 }
+
+#[tokio::test]
+async fn a_preview_reuses_the_recent_scan_instead_of_forcing_a_new_one() {
+    let profile_home = temp_home();
+    let fake = TempDir::new().expect("a temporary folder");
+    let user_home = fake.path().join("user-home");
+    skill_at(&user_home, ".claude/skills", "notes");
+    let running =
+        start_with_discovery(profile_home.path(), "default", discovery_of(&user_home)).await;
+    let client = connect(profile_home.path(), "default").await;
+    let discovery: SkillDiscovery = client
+        .call(skills::DISCOVER, &SkillsDiscoverParams::default())
+        .await
+        .expect("discovery answers");
+    let skill_id = discovery
+        .skills
+        .iter()
+        .find(|skill| skill.name == "notes")
+        .expect("the home skill")
+        .id
+        .clone();
+    // A skill added after the scan shows only once something scans again.
+    skill_at(&user_home, ".claude/skills", "later");
+
+    let _: SkillPlacementResult = client
+        .call(
+            placement::PREVIEW,
+            &SkillPlaceParams {
+                skill_id,
+                agents: vec![PlacementAgent::Cursor],
+            },
+        )
+        .await
+        .expect("previewed");
+
+    let cached: SkillDiscovery = client
+        .call(skills::DISCOVER, &SkillsDiscoverParams::default())
+        .await
+        .expect("discovery answers");
+    assert!(
+        !cached.skills.iter().any(|skill| skill.name == "later"),
+        "the preview did not rescan, so the shared scan is still the first one"
+    );
+    drop(client);
+    stop(running).await;
+}

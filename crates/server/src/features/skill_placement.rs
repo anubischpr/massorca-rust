@@ -47,7 +47,7 @@ async fn preview(
     params: wire::SkillPlaceParams,
 ) -> Result<wire::SkillPlacementResult, ErrorBody> {
     let show_paths = authorize(&ctx.principal, Permission::HostAdmin).is_ok();
-    let target = resolve(&ctx, &params).await?;
+    let target = resolve(&ctx, &params, false).await?;
     let store = record(&ctx);
     let preview =
         run(move || core::preview_placement(&target.home, &store, &target.source, &target.agents))
@@ -59,7 +59,7 @@ async fn place(
     ctx: RequestCtx,
     params: wire::SkillPlaceParams,
 ) -> Result<wire::SkillPlacementResult, ErrorBody> {
-    let target = resolve(&ctx, &params).await?;
+    let target = resolve(&ctx, &params, true).await?;
     let store = record(&ctx);
     let lock = Arc::clone(&ctx.state.skills.placements);
     let report = run(move || {
@@ -110,12 +110,17 @@ struct Target {
 }
 
 /// Finds the skill the request names among those discovery lists on this host. Only a skill in an agent tool's own home
-/// folder is placed: bundled, repository and plugin skills are not copied.
-async fn resolve(ctx: &RequestCtx, params: &wire::SkillPlaceParams) -> Result<Target, ErrorBody> {
+/// folder is placed: bundled, repository and plugin skills are not copied. Only a placement forces a fresh scan; a
+/// preview, which any reader may ask for, reuses the shared one.
+async fn resolve(
+    ctx: &RequestCtx,
+    params: &wire::SkillPlaceParams,
+    refresh: bool,
+) -> Result<Target, ErrorBody> {
     let agents = core_agents(&params.agents)?;
     let home = ctx.state.skills.home()?;
     let request = discovery_request(ctx, Vec::new()).await?;
-    let scan = ctx.state.skills.scan(request, true).await?;
+    let scan = ctx.state.skills.scan(request, refresh).await?;
     let skill = scan
         .skills
         .iter()
@@ -152,10 +157,8 @@ where
     match tokio::task::spawn_blocking(call).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(placement_error(error)),
-        Err(error) => Err(ErrorBody::new(
-            codes::INTERNAL,
-            format!("the placement task failed: {error}"),
-        )),
+        // Why: a panic's text can name a host path, and a reader without host administration may get this.
+        Err(_) => Err(ErrorBody::new(codes::INTERNAL, "the placement task failed")),
     }
 }
 
@@ -364,5 +367,20 @@ fn plan_topology(plan: &core::Plan) -> Option<wire::PlacementTopology> {
         core::Plan::Canonical => Some(wire::PlacementTopology::Canonical),
         core::Plan::AlreadyPlaced(topology) => Some(wire_topology(*topology)),
         core::Plan::Create | core::Plan::Skipped(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_task_that_panics_answers_with_a_fixed_message() {
+        let error = run(|| -> Result<(), PlacementError> { panic!("/home/someone/secret") })
+            .await
+            .expect_err("the task failed");
+
+        assert_eq!(error.code, codes::INTERNAL);
+        assert_eq!(error.message, "the placement task failed");
     }
 }
