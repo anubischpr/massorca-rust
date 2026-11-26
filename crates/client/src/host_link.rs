@@ -119,9 +119,9 @@ impl LiveWatch {
         (!client.is_closed()).then_some(client)
     }
 
-    /// The connection now, if the link has one, marked as seen.
+    /// The connection now, if the link has one open, marked as seen.
     pub fn current(&mut self) -> Option<Client> {
-        self.connection.borrow_and_update().clone()
+        self.open()
     }
 
     /// Waits until the link's connection changes from the one last seen: lost, or replaced. `false` once the link has
@@ -205,8 +205,8 @@ struct Link {
     nudge: Arc<Notify>,
 }
 
-/// Lends a link's connection to its borrowers. Dropped with the task, which an abort does, it closes the connection
-/// and clears it, so no borrower keeps a connection its link no longer holds.
+/// Lends a link's connection to its borrowers. Dropped with the task, which an abort does, it closes the connection,
+/// so no borrower keeps a connection its link no longer holds.
 struct Lending(watch::Sender<Option<Client>>);
 
 impl Lending {
@@ -217,11 +217,10 @@ impl Lending {
 
 impl Drop for Lending {
     fn drop(&mut self) {
-        self.0.send_modify(|held| {
-            if let Some(client) = held.take() {
-                client.close();
-            }
-        });
+        // No change is sent: a borrower learns the link stopped from its sender, which this drop ends.
+        if let Some(client) = self.0.borrow().as_ref() {
+            client.close();
+        }
     }
 }
 

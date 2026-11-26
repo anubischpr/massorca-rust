@@ -259,7 +259,7 @@ async fn a_closed_connection_is_not_lent() {
 }
 
 #[tokio::test]
-async fn ending_the_lending_closes_and_clears_the_connection_it_lent() {
+async fn ending_the_lending_closes_the_connection_it_lent() {
     let (client, _keep) = connection();
     let probe = client.clone();
     let (sender, held) = watch::channel(None);
@@ -267,10 +267,28 @@ async fn ending_the_lending_closes_and_clears_the_connection_it_lent() {
     lending.lend(Some(client));
     drop(lending);
 
-    assert!(held.borrow().is_none(), "the lent connection is cleared");
+    assert!(held.has_changed().is_err(), "the link no longer lends");
     tokio::time::timeout(WAIT, probe.closed())
         .await
         .expect("the lent connection is closed");
+}
+
+#[tokio::test]
+async fn a_stopped_link_without_a_connection_says_so_without_a_change() {
+    let script = Script::default();
+    let link = LiveHost::start(script.clone(), fast());
+    let mut borrower = link.watch();
+    let mut states = link.subscribe();
+    until(&mut states, "unreachable", |state| {
+        matches!(state, LiveState::Unreachable { .. })
+    })
+    .await;
+
+    drop(link);
+    let ended = tokio::time::timeout(WAIT, borrower.changed())
+        .await
+        .expect("the borrower hears of it");
+    assert!(!ended, "a stopped link is not a change of its connection");
 }
 
 #[tokio::test]
