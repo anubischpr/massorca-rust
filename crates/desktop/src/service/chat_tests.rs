@@ -30,13 +30,11 @@ fn message(id: &str, position: u64, text: &str) -> ChatItem {
         id: id.to_owned(),
         position,
         seq: position,
-        turn: None,
-        parent: None,
-        at_ms: 0,
         body: ChatItemBody::AssistantMessage {
             text: text.to_owned(),
             state: MessageState::Running,
         },
+        ..crate::service::fixtures::base_chat_item()
     }
 }
 
@@ -45,8 +43,7 @@ fn snapshot(seq: u64, items: Vec<ChatItem>, has_older: bool) -> ChatEvent {
         cursor: cursor(seq),
         items,
         has_older,
-        latest_turn: None,
-        activity: None,
+        ..crate::service::fixtures::base_chat_snapshot()
     }))
 }
 
@@ -76,7 +73,7 @@ fn the_streams_events_build_each_sessions_transcript_in_the_store() {
                     offset: 3,
                     text: "lo".to_owned(),
                 }],
-                activity: None,
+                ..crate::service::fixtures::base_chat_batch()
             }),
         ),
         now,
@@ -112,9 +109,8 @@ fn a_page_of_history_goes_before_the_items_the_store_holds() {
         StoreUpdate::ChatHistory {
             session: "s1".to_owned(),
             page: ChatHistoryPage {
-                epoch: "e1".to_owned(),
                 items: vec![message("a", 2, "one")],
-                has_older: false,
+                ..crate::service::fixtures::base_chat_history_page()
             },
         },
         now,

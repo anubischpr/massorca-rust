@@ -7,8 +7,7 @@ use std::time::Instant;
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_client::AttachUpdate;
 use massorca_protocol::methods::terminals::{
-    AttachMode, ExitReason, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
-    TerminalState,
+    AttachMode, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit, TerminalState,
 };
 use massorca_ui::components::work_panel_tabs::WorkTabsAction;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -37,9 +36,7 @@ fn exited(id: &str, code: i64) -> Terminal {
         TerminalState::Exited,
         Some(TerminalExit {
             code: Some(code),
-            signal: None,
-            reason: ExitReason::Exited,
-            at_ms: 2,
+            ..crate::service::fixtures::base_terminal_exit()
         }),
     )
 }
@@ -47,18 +44,11 @@ fn exited(id: &str, code: i64) -> Terminal {
 fn terminal(id: &str, state: TerminalState, exit: Option<TerminalExit>) -> Terminal {
     Terminal {
         id: id.to_owned(),
-        workspace_id: "w1".to_owned(),
         state,
-        title: None,
         cols: 120,
         rows: 40,
-        pid: None,
-        shell: "/bin/zsh".to_owned(),
-        cwd: "/repos/fix-login".to_owned(),
-        created_at_ms: 1,
         exit,
-        holds_secrets: false,
-        git_credential_guard: false,
+        ..crate::service::fixtures::base_terminal()
     }
 }
 

@@ -569,7 +569,7 @@ pub(crate) fn replay(
 
 #[cfg(test)]
 mod tests {
-    use massorca_core_store::{AgentSessionRow, RunMode};
+    use massorca_core_store::{AgentSessionRow, RunMode, SessionOrigin};
     use massorca_protocol::methods::chat::{NoticeLevel, ResetReason};
 
     use super::*;
@@ -629,7 +629,9 @@ mod tests {
             retained: false,
             released_at: None,
         };
-        store.insert_chat_agent_session(&row, "run").unwrap();
+        store
+            .insert_agent_session_with_origin(&row, &SessionOrigin::default(), Some("run"))
+            .unwrap();
         (store, row.id)
     }
 

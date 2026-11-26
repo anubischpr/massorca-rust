@@ -11,6 +11,7 @@ mod devices;
 mod events;
 pub(crate) mod extension_process;
 mod extensions;
+pub(crate) mod first_prompt_rename;
 mod git;
 mod glab_login;
 mod host;

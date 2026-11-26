@@ -106,19 +106,14 @@ fn repo(dir: &Path) {
 async fn add_project(home: &Path, repo_dir: &Path) -> String {
     let client = Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
     client
         .project_add(&ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: Some(
                 repo_dir
                     .parent()
@@ -127,6 +122,7 @@ async fn add_project(home: &Path, repo_dir: &Path) -> String {
                     .display()
                     .to_string(),
             ),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added")
@@ -163,13 +159,13 @@ async fn until(
 fn shell() -> ShellSpec {
     if cfg!(windows) {
         ShellSpec {
-            program: "cmd.exe".to_owned(),
             args: vec!["/Q".to_owned()],
+            ..base_shell_spec()
         }
     } else {
         ShellSpec {
             program: "/bin/sh".to_owned(),
-            args: Vec::new(),
+            ..base_shell_spec()
         }
     }
 }
@@ -179,15 +175,7 @@ fn workspace_params(project: &str) -> WorkspaceCreateParams {
         in_place: false,
         project: project.to_owned(),
         name: "terminal".to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
-        unique_name: false,
-        name_generated: false,
+        ..base_workspace_create_params()
     }
 }
 
@@ -195,12 +183,9 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
     TerminalCreateParams {
         workspace: workspace.to_owned(),
         shell: Some(shell()),
-        cwd: None,
-        env: Default::default(),
         cols: Some(80),
         rows: Some(24),
-        title: None,
-        request_id: None,
+        ..base_terminal_create_params()
     }
 }
 
@@ -535,4 +520,63 @@ async fn the_work_panel_strip_follows_the_store_and_closing_asks_by_status() {
     assert_eq!(strip.selected, None);
 
     stop_service(service).await;
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+        in_place: false,
+    }
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+/// Every `ShellSpec` field at its usual value; tests override the fields they vary.
+fn base_shell_spec() -> massorca_protocol::methods::terminals::ShellSpec {
+    massorca_protocol::methods::terminals::ShellSpec {
+        program: "cmd.exe".to_owned(),
+        args: Vec::new(),
+    }
+}
+
+/// Every `TerminalCreateParams` field at its usual value; tests override the fields they vary.
+fn base_terminal_create_params() -> massorca_protocol::methods::terminals::TerminalCreateParams {
+    massorca_protocol::methods::terminals::TerminalCreateParams {
+        workspace: String::new(),
+        shell: None,
+        cwd: None,
+        env: Default::default(),
+        cols: None,
+        rows: None,
+        title: None,
+        request_id: None,
+    }
 }

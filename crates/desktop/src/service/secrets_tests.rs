@@ -10,10 +10,7 @@ fn a_command_that_stores_a_value_never_prints_it() {
     let (reply, _answer) = oneshot::channel();
     let command = SecretCommand::Set {
         params: SecretSet {
-            scope: "global".to_owned(),
-            name: "TOKEN".to_owned(),
-            value: "hidden-test-value".to_owned(),
-            replace: false,
+            ..crate::service::fixtures::base_secret_set()
         },
         reply,
     };
@@ -27,7 +24,7 @@ fn status(count: u64) -> SecretsUpdate {
         protection: "file".to_owned(),
         state: "ready".to_owned(),
         count,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     }))
 }
 
@@ -99,10 +96,9 @@ fn a_newer_read_still_lands_after_an_older_one_delivered() {
 async fn an_answer_that_stores_a_value_sends_the_value_to_the_service_only() {
     let (handle, mut script) = ServiceHandle::scripted();
     let params = SecretSet {
-        scope: "global".to_owned(),
         name: "OPENAI_API_KEY".to_owned(),
         value: "sk-scripted-value".to_owned(),
-        replace: false,
+        ..crate::service::fixtures::base_secret_set()
     };
     let call = tokio::spawn(async move { handle.secret_set(params).await });
     tokio::task::yield_now().await;
@@ -118,9 +114,7 @@ async fn an_answer_that_stores_a_value_sends_the_value_to_the_service_only() {
 async fn an_answer_that_links_names_the_scope_that_owns_the_secret() {
     let (handle, mut script) = ServiceHandle::scripted();
     let params = SecretLink {
-        scope: "project:p1".to_owned(),
-        name: "OPENAI_API_KEY".to_owned(),
-        from_scope: "global".to_owned(),
+        ..crate::service::fixtures::base_secret_link()
     };
     let call = tokio::spawn(async move { handle.secret_link(params).await });
     tokio::task::yield_now().await;
@@ -138,7 +132,7 @@ async fn a_decline_names_the_request_and_carries_no_value() {
     let call = tokio::spawn(async move {
         handle
             .secret_decline(SecretDecline {
-                request: "request-1".to_owned(),
+                ..crate::service::fixtures::base_secret_decline()
             })
             .await
     });

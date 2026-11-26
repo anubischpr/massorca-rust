@@ -592,6 +592,16 @@ ALTER TABLE workspaces ADD COLUMN name_generated INTEGER NOT NULL DEFAULT 0 CHEC
 "#,
         foreign_keys_off: false,
     },
+    // A session's start options and lineage (decision 0168): the model and the effort it was started with, kept across
+    // resumes, and the session it was forked from. Plain text, not a foreign key: forgetting the source keeps the fork.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN model TEXT;
+ALTER TABLE agent_sessions ADD COLUMN effort TEXT;
+ALTER TABLE agent_sessions ADD COLUMN forked_from TEXT;
+"#,
+        foreign_keys_off: false,
+    },
     // Whether a workspace is the project's own checkout (decision 0112): only forgotten on removal, never deleted.
     Migration {
         sql: r#"

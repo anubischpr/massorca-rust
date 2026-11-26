@@ -2,8 +2,8 @@
 //! session and its journal to the store directly (no agent is started), and reads it back through the methods.
 
 use massorca_core_store::{
-    AgentSessionRow, NewChatItem, ProjectKind, ProjectRow, RunExit, RunExitReason, RunMode, Store,
-    WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, now_ms,
+    AgentSessionRow, NewChatItem, ProjectKind, ProjectRow, RunExit, RunExitReason, RunMode,
+    SessionOrigin, Store, WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, now_ms,
 };
 use massorca_protocol::capabilities::AGENT_CHAT;
 use massorca_protocol::codes;
@@ -81,7 +81,7 @@ fn seed(store: &Store, notes: usize) -> (String, String, String) {
         .expect("terminal session");
     let chat = row(None);
     store
-        .insert_chat_agent_session(&chat, "run-1")
+        .insert_agent_session_with_origin(&chat, &SessionOrigin::default(), Some("run-1"))
         .expect("chat session");
     let epoch = store
         .open_chat_journal(&chat.id, "epoch-1")

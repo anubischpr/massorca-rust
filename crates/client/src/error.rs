@@ -128,6 +128,43 @@ pub fn profile_refusal(error: &RootAccessError) -> Option<ErrorBody> {
 }
 
 impl ClientError {
+    /// The same failure as a new value, for a caller that holds it shared; an I/O error keeps its kind and text.
+    pub fn duplicate(&self) -> Self {
+        let io = |error: &io::Error| io::Error::new(error.kind(), error.to_string());
+        match self {
+            Self::Unavailable(error) => Self::Unavailable(io(error)),
+            Self::StartFailed(text) => Self::StartFailed(text.clone()),
+            Self::StartRefused(body) => Self::StartRefused(body.clone()),
+            Self::ProfileRefused(body) => Self::ProfileRefused(body.clone()),
+            Self::UntrustedEndpoint(text) => Self::UntrustedEndpoint(text.clone()),
+            Self::Handshake { error, supported } => Self::Handshake {
+                error: error.clone(),
+                supported: *supported,
+            },
+            Self::Remote(body) => Self::Remote(body.clone()),
+            Self::CapabilityMissing { what, capability } => Self::CapabilityMissing {
+                what: what.clone(),
+                capability: capability.clone(),
+            },
+            Self::Disconnected => Self::Disconnected,
+            Self::Protocol(text) => Self::Protocol(text.clone()),
+            Self::Io(error) => Self::Io(io(error)),
+            Self::HostUnreachable(text) => Self::HostUnreachable(text.clone()),
+            Self::ServerIdentityMismatch(mismatch) => {
+                Self::ServerIdentityMismatch(mismatch.clone())
+            }
+            Self::HostNotFound(name) => Self::HostNotFound(name.clone()),
+            Self::HostExists(name) => Self::HostExists(name.clone()),
+            Self::HostUnreadable { name, path, reason } => Self::HostUnreadable {
+                name: name.clone(),
+                path: path.clone(),
+                reason: reason.clone(),
+            },
+            Self::HostsBusy(text) => Self::HostsBusy(text.clone()),
+            Self::InvalidHostName(name) => Self::InvalidHostName(name.clone()),
+        }
+    }
+
     /// The CLI exit code (core.md): 1 for a service error or bad local data, 4 when the service cannot be reached or started.
     pub fn exit_code(&self) -> i32 {
         match self {

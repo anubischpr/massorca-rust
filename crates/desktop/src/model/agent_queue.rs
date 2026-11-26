@@ -70,13 +70,10 @@ mod tests {
     fn prompt(id: &str, state: QueueState, reason: Option<&str>) -> QueuedPrompt {
         QueuedPrompt {
             id: id.into(),
-            session: "s1".into(),
-            position: 1,
             text: format!("text {id}"),
             state,
             reason: reason.map(str::to_owned),
-            created_at_ms: 1,
-            updated_at_ms: 1,
+            ..crate::service::fixtures::base_queued_prompt()
         }
     }
 

@@ -224,17 +224,18 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Sets a workspace's name and branch in one write; the path and the generated-name flag are kept. Returns whether
-    /// a row changed. A name another workspace of the project holds is `StoreError::Conflict`.
+    /// Sets a workspace's name, branch and generated-name flag in one write; the path is kept. Returns whether a row
+    /// changed. A name another workspace of the project holds is `StoreError::Conflict`.
     pub fn rename_workspace(
         &self,
         id: &str,
         name: &str,
         branch: Option<&str>,
+        name_generated: bool,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE workspaces SET name = ?2, branch = ?3 WHERE id = ?1",
-            params![id, name, branch],
+            "UPDATE workspaces SET name = ?2, branch = ?3, name_generated = ?4 WHERE id = ?1",
+            params![id, name, branch, name_generated],
         )?;
         Ok(changed > 0)
     }

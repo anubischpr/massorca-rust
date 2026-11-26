@@ -1,6 +1,8 @@
 //! The view models the shell renders from (decision 0023). A `DataSource`
 //! fills them; views never read anything else.
 
+use super::preflight::PreflightNotice;
+
 /// An agent the app can run. Mapped to `massorca_ui` icons by the views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Agent {
@@ -46,6 +48,8 @@ pub struct SessionRow {
     pub state: AgentState,
     /// The workspace the session runs in. It shows in the row's tooltip, never as a row (A97).
     pub workspace_id: String,
+    /// The current or last run's terminal, which the Work panel shows; None for a chat session.
+    pub terminal_id: Option<String>,
     /// The branch of the session's worktree; None for a plain folder.
     pub branch: Option<String>,
     /// The worktree's path, or the folder's path.
@@ -102,8 +106,8 @@ pub struct HostGroup {
 pub struct ProjectGroup {
     pub id: String,
     pub name: String,
-    /// The project's emoji icon, if its icon is one; the other icon kinds are not drawn yet (decision 0091).
-    pub emoji: Option<String>,
+    /// What the project's row and pickers draw (decision 0091).
+    pub icon: crate::model::project_icon::ProjectGlyph,
     /// The owner or org of the project's remote, drawn after its name (A10); None until the protocol carries one.
     pub owner: Option<String>,
     /// A folder that is not a Git repository: its row shows the No Git marker (WS-02).
@@ -317,6 +321,8 @@ pub struct ShellSnapshot {
     /// The service link, when the data comes from a service. Sample data has none.
     pub service_status: Option<ServiceStatus>,
     pub service_notice: Option<ServiceNotice>,
+    /// The startup preflight notice for git, when the service reports it missing or too old (PLAT-08).
+    pub preflight: Option<PreflightNotice>,
 }
 
 #[cfg(test)]
