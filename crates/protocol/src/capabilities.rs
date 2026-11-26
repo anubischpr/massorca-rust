@@ -51,6 +51,9 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
+/// where its kind declares a live command for them, and kept for the session's next resume otherwise.
+pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
 /// `fast` on `agent.start` and `fast` on the kinds, models and sessions (decision 0165): fast mode passed to the settings the
 /// kind declares for it.
 pub const AGENT_FAST: &str = "agent-fast/1";
