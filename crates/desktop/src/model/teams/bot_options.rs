@@ -169,6 +169,7 @@ mod tests {
             label: label.into(),
             default: false,
             efforts: efforts.map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
+            fast: false,
         }
     }
 

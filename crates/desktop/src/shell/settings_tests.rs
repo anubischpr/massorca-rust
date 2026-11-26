@@ -1176,3 +1176,27 @@ fn a_paired_host_is_a_row_in_the_hosts_section(cx: &mut TestAppContext) {
         "the paired host has its row, after This PC"
     );
 }
+
+#[gpui::test]
+fn remove_on_a_host_row_opens_the_remove_confirm(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig._updates
+        .send(StoreUpdate::HostsResync(vec![paired_host("vps")]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Hosts");
+    click(cx, "settings-host-remove-vps");
+    cx.run_until_parked();
+    assert_eq!(
+        rig.shell.read_with(cx, |shell, _| shell
+            .host_remove
+            .as_ref()
+            .map(|flow| flow.name.clone())),
+        Some("vps".to_owned())
+    );
+    let mut counted = false;
+    while let Some(command) = rig.script.next() {
+        counted |= matches!(command, Command::CountHostLoss { ref name, .. } if name == "vps");
+    }
+    assert!(counted, "the confirm asks the host what it holds");
+}

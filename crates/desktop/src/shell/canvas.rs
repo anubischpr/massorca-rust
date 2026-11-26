@@ -56,6 +56,8 @@ pub(super) struct PageFrames<'a> {
     pub session: Option<SessionFrame>,
     /// The Conference room, while the Canvas shows one.
     pub room: Option<teams::RoomFrame>,
+    /// The New or Edit routine form, while the Canvas shows that page.
+    pub routine_form: Option<&'a teams::RoutineForm>,
 }
 
 pub(super) fn canvas(
@@ -208,8 +210,16 @@ fn conversation(
             )
             .into_any_element(),
         },
-        Canvas::Team(page) => {
-            placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
+        Canvas::Team(TeamPage::NewRoutine(_) | TeamPage::EditRoutine(_, _)) => {
+            match pages.routine_form {
+                Some(form) => teams::routine_form_page(form, model, shell, cx),
+                None => {
+                    placeholder("Routine", "This page is not built yet.", theme).into_any_element()
+                }
+            }
+        }
+        Canvas::Team(TeamPage::RoutineHistory(team, routine)) => {
+            teams::routine_history_page(model, shell, team, routine, cx)
         }
         // Drawn above: the start page is not centred in the box below.
         Canvas::Workspace(_) => placeholder(

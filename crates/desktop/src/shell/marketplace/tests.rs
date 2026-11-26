@@ -125,10 +125,44 @@ fn the_installed_view_lists_only_installed_items(cx: &mut TestAppContext) {
         page(&shell, cx),
         Page::Marketplace(MarketplacePage::Installed)
     );
-    assert!(shown(cx, "marketplace-item-1"), "Claude is installed");
+    assert!(
+        shown(cx, "marketplace-row-1"),
+        "Claude is installed, as a row"
+    );
+    assert!(
+        !shown(cx, "marketplace-item-1"),
+        "the Installed list is rows, not the Discover cards"
+    );
+    assert!(shown(cx, "marketplace-row-6"), "Quick notes is installed");
     assert!(
         !shown(cx, "marketplace-item-3"),
         "GitHub is found on this PC but not installed"
+    );
+}
+
+#[gpui::test]
+fn the_row_menu_offers_remove_which_asks_the_existing_uninstall_confirm(cx: &mut TestAppContext) {
+    let (shell, cx) = open_shell(cx);
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    click(cx, "button:marketplace-row-6-more");
+    assert!(shown(cx, "menu-item-0"), "the row's menu lists Remove");
+    assert!(
+        !shown(cx, "menu-item-1"),
+        "Remove is the only entry: no action that does not work yet"
+    );
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "nothing asks to be removed until Remove is chosen"
+    );
+    click(cx, "menu-item-0");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "Remove opens the uninstall confirm"
+    );
+    assert!(
+        matches!(item_state(&shell, cx, 6), ItemState::Installed { .. }),
+        "the item stays installed until the confirm's own action"
     );
 }
 

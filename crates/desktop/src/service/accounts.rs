@@ -11,6 +11,7 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::agents::{
     AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded, AccountsCheckParams,
     AccountsImportParams, AccountsImported, AccountsRemoveParams, AccountsRemoved,
+    ImportCandidates,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -90,6 +91,11 @@ pub(crate) enum AccountCommand {
         params: AccountsImportParams,
         reply: oneshot::Sender<Result<AccountsImported, Refusal>>,
     },
+    /// Reads where an import without a folder would copy `kind`'s files from. Changes nothing, so no list follows it.
+    ImportCandidates {
+        kind: String,
+        reply: oneshot::Sender<Result<ImportCandidates, Refusal>>,
+    },
     Activate {
         params: AccountsActivateParams,
         reply: oneshot::Sender<Result<AccountSummary, Refusal>>,
@@ -118,6 +124,15 @@ impl ServiceHandle {
     ) -> Result<AccountsImported, Refusal> {
         self.ask(|reply| Command::Account(AccountCommand::Import { params, reply }))
             .await
+    }
+
+    /// `agent.accounts.import_candidates` (capability `agent-import-detect/1`); `None` when the service does not offer it
+    /// or refuses the read, so the folder stays manual.
+    pub async fn accounts_import_candidates(&self, kind: &str) -> Option<ImportCandidates> {
+        let kind = kind.to_owned();
+        self.ask(|reply| Command::Account(AccountCommand::ImportCandidates { kind, reply }))
+            .await
+            .ok()
     }
 
     /// `agent.accounts.activate`: makes an account the kind's active one, or a project's choice.
@@ -167,6 +182,13 @@ pub(super) fn spawn_call(
             write(rig, params.kind.clone(), reply, |c| async move {
                 c.agent_accounts_import(&params).await
             })
+        }
+        AccountCommand::ImportCandidates { kind, reply } => {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let result = client.agent_accounts_import_candidates(Some(&kind)).await;
+                let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+            });
         }
         AccountCommand::Activate { params, reply } => {
             write(rig, params.kind.clone(), reply, |c| async move {
@@ -218,6 +240,9 @@ pub(super) fn refuse_while_down(command: AccountCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         AccountCommand::Import { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        AccountCommand::ImportCandidates { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         AccountCommand::Activate { reply, .. } | AccountCommand::Check { reply, .. } => {

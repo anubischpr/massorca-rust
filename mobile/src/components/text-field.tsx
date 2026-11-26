@@ -15,6 +15,7 @@ export function TextField({
   helper,
   error,
   editable = true,
+  testID,
 }: {
   readonly label: string;
   readonly value: string;
@@ -24,6 +25,7 @@ export function TextField({
   readonly helper?: string;
   readonly error?: string;
   readonly editable?: boolean;
+  readonly testID?: string;
 }) {
   const palette = usePalette();
   const [focused, setFocused] = useState(false);
@@ -36,6 +38,7 @@ export function TextField({
       <Text style={[styles.label, { color: palette['text.secondary'] }]}>{label}</Text>
       <TextInput
         accessibilityLabel={label}
+        testID={testID}
         value={value}
         onChangeText={onChangeText}
         editable={editable}

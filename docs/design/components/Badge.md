@@ -26,8 +26,10 @@ Inventory IDs: none of its own. Used by D-SH-15 (rail usage state), extension ra
 | solid (status) | `status.<kind>.solid` | `status.<kind>.on` | none | high-emphasis status on a dark row only |
 | count | `badge.neutral.bg` or the kind's `bg` | `badge.neutral.fg` | none (the kind's `border` on a kind `bg`) | numbers; max "99+" |
 | dot | the kind's `solid` | none | none | unread, rail badge dot; always beside a labelled item |
+| tag (neutral) | `surface.sunken` | `text.secondary`, optional 12 px icon (`size.icon.xs`) before the text | `border.subtle`, 1 px | metadata chips on cards and rows: assignee ("Unassigned"), "What it adds", scope, source. Height `size.tag.height` (20 px), padding 6 px horizontal (`space.1` + `space.half`), gap `space.1`, radius `radius.sm`, text `caption` (11 / 16 / 400). Ruling B9, 2026-11-25 |
+| tag (accent) | `accent.subtle.raised` | `accent.fg` | none | the selected or highlighted tag, same metrics as tag (neutral) |
 
-Sizes: one size on desktop (16 px high, `caption` text inside). Android: text 12 sp, height 20 dp, may grow with font scale to 130 percent (cap for chips and badges).
+Sizes: 16 px high on desktop (`caption` text inside), except the tag variant, which is 20 px high (`size.tag.height`) so it sits on the 18 to 20 px lines of cards and rows. Android: text 12 sp, height 20 dp, may grow with font scale to 130 percent (cap for chips and badges).
 
 ## States
 

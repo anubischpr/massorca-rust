@@ -3,6 +3,7 @@
 use super::Shell;
 use super::path_field::{PickKind, path_field};
 use super::workspace_dialogs::AddProjectDialog;
+use crate::model::project_add::plain_folder_copy;
 use crate::model::session_delete::{SessionDeleteFlow, SessionDeleteStage};
 use crate::model::workspace_flow::{DialogCopy, DialogKind, KEEP_BRANCH_LATER, RemoveFlow};
 use gpui::{AnyElement, App, Focusable, WeakEntity, Window, div, prelude::*, px};
@@ -12,12 +13,15 @@ use massorca_ui::components::dialog::{Dialog, DialogVariant};
 use massorca_ui::tokens::SPACE_3;
 
 /// "Add a project…": one path field. A refusal about the path shows under it, any other refusal in
-/// the dialog (A38).
+/// the dialog (A38). A folder that is not a Git repository shows the warning instead (WS-31).
 pub(super) fn add_project_dialog(
     dialog: &AddProjectDialog,
     shell: &WeakEntity<Shell>,
     cx: &App,
 ) -> Dialog {
+    if dialog.form.plain_folder.is_some() {
+        return plain_folder_dialog(shell, cx);
+    }
     let form = &dialog.form;
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
     let mut view = Dialog::new("add-project", "Add a project")
@@ -46,6 +50,30 @@ pub(super) fn add_project_dialog(
         view = view.error(error.clone());
     }
     view
+}
+
+/// The warning for a folder that is not a Git repository: what it loses, then Continue without Git or Cancel back
+/// to the path (WS-31). Initialize Git is not offered until the service can run git init.
+fn plain_folder_dialog(shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
+    let (on_continue, on_cancel) = (shell.clone(), shell.clone());
+    flow_dialog(
+        "add-project-plain-folder",
+        plain_folder_copy(),
+        false,
+        None,
+        cx,
+        (
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_continue.update(cx, |shell, cx| {
+                    shell.continue_add_project_without_git(cx);
+                });
+            },
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_cancel.update(cx, |shell, cx| shell.cancel_plain_folder(cx));
+            },
+        ),
+        None,
+    )
 }
 
 /// The remove dialog for the flow's current stage: confirm, one waiver, or a plain refusal.

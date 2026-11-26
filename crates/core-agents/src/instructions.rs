@@ -12,6 +12,8 @@ pub use crate::probe::PROBE_TIMEOUT;
 
 /// The file in a session's run directory that holds why its current run got no instructions.
 const WITHHELD_FILE: &str = "instructions-withheld";
+/// The arguments of the help probe that a permission mode's launch value is chosen from (decision 0164).
+const HELP_ARGS: [&str; 1] = ["--help"];
 
 /// Whether `program`, the kind's resolved program, takes the kind's instruction channel: always without a declared
 /// probe; else when the probe exits 0 within [`PROBE_TIMEOUT`] and its output contains the declared text. The probe runs
@@ -26,6 +28,55 @@ pub(crate) fn channel_supported(decl: &KindDecl, program: &Path) -> bool {
     };
     let output = crate::probe::cached_probe(decl, program, &probe.args);
     output.exit == Some(0) && output.output.contains(&probe.contains)
+}
+
+/// The `--help` text of `program`, which a permission mode's launch value is chosen from (decision 0164). It is the same
+/// cached probe the instruction channel runs, so one run serves both.
+pub(crate) fn help_output(decl: &KindDecl, program: &Path) -> Option<String> {
+    let output = crate::probe::cached_probe(decl, program, &HELP_ARGS.map(str::to_owned));
+    (output.exit == Some(0)).then_some(output.output)
+}
+
+/// Whether the help text lists `value` among the choices of the option `flag` (decision 0164). The option's own line and
+/// the lines it wraps onto, up to the next option or blank line, count; another option's choices do not. A word counts
+/// only as a whole, so `manual` is not listed by `manually`.
+pub(crate) fn lists_choice(help: &str, flag: &str, value: &str) -> bool {
+    let mut inside = false;
+    for line in help.lines() {
+        if !inside {
+            if !names_option(line, flag) {
+                continue;
+            }
+            inside = true;
+        } else if line.trim().is_empty() || line.trim_start().starts_with('-') {
+            return false;
+        }
+        if has_word(line, value) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the names at the start of a help line include `flag`, as in `-p, --permission-mode <MODE>`.
+fn names_option(line: &str, flag: &str) -> bool {
+    line.trim_start()
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, ',' | '=' | '<' | '[' | '>' | ']')
+        })
+        .filter(|token| !token.is_empty())
+        .take_while(|token| token.starts_with('-'))
+        .any(|token| token == flag)
+}
+
+/// Whether `word` occurs in `text` with no letter, digit, `-` or `_` on either side.
+fn has_word(text: &str, word: &str) -> bool {
+    let joins = |character: char| character.is_alphanumeric() || matches!(character, '-' | '_');
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(joins) && !after.is_some_and(joins)
+    })
 }
 
 /// What a session records when its run got no instructions because its CLI failed the channel's probe.
@@ -131,6 +182,29 @@ mod tests {
         assert!(channel_supported(&kind, &missing));
         kind.instructions = None;
         assert!(!channel_supported(&kind, &missing));
+    }
+
+    #[test]
+    fn a_help_line_lists_a_choice_of_its_own_option_as_a_whole_word() {
+        let help = "  --permission-mode <MODE>  Permission mode (choices: \"acceptEdits\", \"manual\")\n  --model <M>  Model\n";
+        assert!(lists_choice(help, "--permission-mode", "manual"));
+        assert!(lists_choice(help, "--permission-mode", "acceptEdits"));
+        assert!(!lists_choice(help, "--permission-mode", "default"));
+        assert!(!lists_choice(help, "--model", "manual"));
+    }
+
+    #[test]
+    fn a_choice_on_a_wrapped_line_counts_and_a_longer_word_does_not() {
+        let wrapped = "  -p, --permission-mode <MODE>  Permission mode\n      (choices: \"manually\", \"manual\")\n  -v, --verbose  Verbose\n";
+        assert!(lists_choice(wrapped, "--permission-mode", "manual"));
+        let longer = "  --permission-mode <MODE>  Permission mode (choices: \"manually\")\n";
+        assert!(!lists_choice(longer, "--permission-mode", "manual"));
+    }
+
+    #[test]
+    fn a_choice_after_the_option_block_does_not_count() {
+        let help = "  --permission-mode <MODE>  Permission mode\n\n  --other  Lists \"manual\"\n";
+        assert!(!lists_choice(help, "--permission-mode", "manual"));
     }
 
     #[test]

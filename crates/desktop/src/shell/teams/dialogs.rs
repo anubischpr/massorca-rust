@@ -2197,6 +2197,7 @@ mod tests {
             label: label.into(),
             default: false,
             efforts: efforts.map(|ids| ids.into_iter().map(str::to_owned).collect()),
+            fast: false,
         }
     }
 
