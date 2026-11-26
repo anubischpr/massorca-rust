@@ -300,6 +300,10 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
+    /// The model listings the service keeps (decision 0166), held in memory.
+    models: crate::model_catalog::ModelCache,
+    /// How long a model listing may run before it is stopped (decision 0166).
+    listing_timeout: Duration,
     /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
     /// are held.
     chat_runs: Mutex<HashMap<String, Arc<ChatRun>>>,
@@ -381,6 +385,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Agents {
+    /// The model listings the service keeps (decision 0166).
+    pub(crate) fn model_cache(&self) -> &crate::model_catalog::ModelCache {
+        &self.inner.models
+    }
+
+    /// How long a model listing may run (decision 0166).
+    pub(crate) fn listing_timeout(&self) -> Duration {
+        self.inner.listing_timeout
+    }
+}
+
+impl Agents {
     /// The service, with its exit sweep running every [`SWEEP_INTERVAL`] for as long as the service exists.
     pub fn new(config: AgentsConfig) -> Self {
         let agents = Self {
@@ -393,6 +409,12 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
+                models: crate::model_catalog::ModelCache::default(),
+                listing_timeout: crate::model_catalog::listing_timeout_from(
+                    std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
+                        .ok()
+                        .as_deref(),
+                ),
                 chat_runs: Mutex::new(HashMap::new()),
                 journals: Mutex::new(HashMap::new()),
                 sign_in_timeout: crate::sign_in::sign_in_timeout_from(

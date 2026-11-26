@@ -7,13 +7,13 @@ use massorca_protocol::methods::agents::{
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
     AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
-    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, GenerateTitleParams, GenerateTitleResult, ImportCandidates,
-    ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, GenerateTitleParams,
+    GenerateTitleResult, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
@@ -267,6 +267,21 @@ impl Client {
     /// `agent.kinds`: every declared agent kind, its package state, whether a program is detected, and its problems.
     pub async fn agent_kinds(&self) -> Result<AgentKinds, ClientError> {
         self.call(agents::KINDS, &()).await
+    }
+
+    /// `agent.models`: the models a kind's picker offers for an account, the declared choices first and then what the
+    /// kind's vendor CLI lists (decision 0166). A service that does not offer `agent-models/1` is refused before anything
+    /// is sent.
+    pub async fn agent_models(
+        &self,
+        params: &AgentModelsParams,
+    ) -> Result<AgentModels, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_MODELS),
+            capabilities::AGENT_MODELS,
+            "the models of an agent kind",
+        )?;
+        self.call(agents::MODELS, params).await
     }
 
     /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
@@ -760,6 +775,23 @@ mod require_offered_tests {
             ClientError::CapabilityMissing { what, capability } => {
                 assert_eq!(what, "a session with no project");
                 assert_eq!(capability, "agent-no-project/1");
+            }
+            other => panic!("unexpected refusal: {other}"),
+        }
+    }
+
+    #[test]
+    fn the_models_of_an_agent_kind_need_agent_models() {
+        let refused = require_offered(
+            false,
+            capabilities::AGENT_MODELS,
+            "the models of an agent kind",
+        )
+        .expect_err("refused without the capability");
+        match refused {
+            ClientError::CapabilityMissing { what, capability } => {
+                assert_eq!(what, "the models of an agent kind");
+                assert_eq!(capability, "agent-models/1");
             }
             other => panic!("unexpected refusal: {other}"),
         }

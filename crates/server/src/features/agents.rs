@@ -14,14 +14,14 @@ use massorca_protocol::methods::agents::{
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
     AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
-    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
-    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
-    CredentialsRemoved, CredentialsShown, GenerateTitleParams, GenerateTitleResult,
-    ImportCandidate, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
-    WorkspaceRemovalError,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
+    ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -74,6 +74,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_IMPORT_DETECT, Owner::Core)?,
+        // The models a kind's picker offers for an account (decision 0166).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_MODELS, Owner::Core)?,
         // Archive and delete of a session, and the delete's preview (decision 0163).
         registries
             .capabilities
@@ -109,6 +113,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Read,
             kinds,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::MODELS,
+            agents_cap,
+            Permission::Workspace,
+            models,
         )?,
         methods.register(
             Owner::Core,
@@ -364,6 +375,15 @@ const WATCH_QUEUE_CAPACITY: usize = 64;
 /// Every declared kind, read again from the profile on each call, with programs resolved on the service's `PATH`.
 async fn kinds(ctx: RequestCtx, _params: NoParams) -> Result<AgentKinds, ErrorBody> {
     on_agents(&ctx, |agents| Ok(agents.kinds())).await
+}
+
+/// The models a kind's picker offers for an account (decision 0166). The vendor CLI may take seconds to answer, so the
+/// listing runs on the service's worker rather than on the connection.
+async fn models(ctx: RequestCtx, params: AgentModelsParams) -> Result<AgentModels, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.agent_models(&params.kind, params.account.as_deref(), params.refresh)
+    })
+    .await
 }
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
