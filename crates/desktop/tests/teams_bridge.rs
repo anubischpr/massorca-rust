@@ -1,7 +1,9 @@
 //! The Bot Teams reads of the bridge against a real service in a temporary profile, driven headlessly: no
 //! window opens. The service runs in this test's runtime; the bridge runs on its own thread, as in the app.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Once, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -22,6 +24,12 @@ use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
 struct TempHome {
@@ -65,6 +73,7 @@ async fn start_service(home: &Path) -> RunningService {
 
 /// Stops the service and says how long the stop took.
 async fn stop_service(running: RunningService) -> Duration {
+    record_link_events();
     let started = Instant::now();
     running.shutdown_handle().shutdown();
     timeout(WAIT, running.wait())
@@ -121,6 +130,57 @@ async fn until_the_link_stops(
     .await;
 }
 
+/// Debug events of the connection and pump, kept with the time they happened so a stalled link wait can print them.
+static LINK_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LINK_EVENTS_FROM: OnceLock<Instant> = OnceLock::new();
+
+/// Records the `connection::serve` and client pump timing events; no payloads are in them.
+struct LinkEvents;
+
+struct FieldText(String);
+
+impl Visit for FieldText {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.0.push_str(&format!(" {}={value:?}", field.name()));
+    }
+}
+
+impl<S: Subscriber> Layer<S> for LinkEvents {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let target = event.metadata().target();
+        if !(target.starts_with("massorca_server::connection")
+            || target.starts_with("massorca_client::pump"))
+        {
+            return;
+        }
+        let mut fields = FieldText(String::new());
+        event.record(&mut fields);
+        let from = LINK_EVENTS_FROM.get_or_init(Instant::now);
+        LINK_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("+{:?} {target}{}", from.elapsed(), fields.0));
+    }
+}
+
+/// Starts recording the link events once for this test binary.
+fn record_link_events() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        LINK_EVENTS_FROM.get_or_init(Instant::now);
+        let layer = LinkEvents.with_filter(LevelFilter::DEBUG);
+        // Another subscriber being set already only means the events go unrecorded.
+        let _ = tracing_subscriber::registry().with(layer).try_init();
+    });
+}
+
+fn link_events() -> Vec<String> {
+    LINK_EVENTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// The variant name of a debug-printed update, so a trace never carries its payload.
 fn update_kind(debug: &str) -> &str {
     debug
@@ -153,8 +213,9 @@ async fn until_within(
     .await;
     assert!(
         folded.is_ok(),
-        "timed out waiting for {what} after {:?}; updates applied while waiting: {trace:#?}; {state:?}",
-        started.elapsed()
+        "timed out waiting for {what} after {:?}; updates applied while waiting: {trace:#?}; connection and pump events (since the first stop, all tests of this binary): {:#?}; {state:?}",
+        started.elapsed(),
+        link_events()
     );
 }
 
