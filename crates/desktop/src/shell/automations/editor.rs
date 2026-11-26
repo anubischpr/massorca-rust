@@ -2,7 +2,9 @@
 //! checks before it is sent. Cadence and weekday are choices; the cron and time fields apply to their own cadences.
 
 use super::super::Shell;
-use crate::model::automations::{AutomationForm, Cadence, WEEKDAYS, weekday_label};
+use crate::model::automations::{
+    AutomationForm, Cadence, FormDestination, WEEKDAYS, weekday_label,
+};
 use gpui::{
     App, Context, Entity, Focusable, ParentElement, Styled, WeakEntity, div, prelude::*, px,
 };
@@ -20,6 +22,9 @@ pub(in crate::shell) struct AutomationEditor {
     pub error: Option<String>,
     name: Entity<TextField>,
     project: Entity<TextField>,
+    destination: Entity<SelectView>,
+    workspace: Entity<TextField>,
+    base_branch: Entity<TextField>,
     prompt: Entity<TextField>,
     agent: Entity<TextField>,
     cadence: Entity<SelectView>,
@@ -42,6 +47,28 @@ impl AutomationEditor {
             error: None,
             name: text_field(cx, "Name", "Morning PRs", &form.name),
             project: text_field(cx, "Project", "Name, id or path", &form.project),
+            destination: cx.new(|cx| {
+                SelectView::new(FormDestination::LABELS, cx)
+                    .selected(Some(form.destination.index()))
+            }),
+            workspace: text_field(
+                cx,
+                "Workspace",
+                "Its id, name or path",
+                match &form.destination {
+                    FormDestination::Workspace { workspace } => workspace.as_str(),
+                    _ => "",
+                },
+            ),
+            base_branch: text_field(
+                cx,
+                "Base branch",
+                "Blank for the project's base",
+                match &form.destination {
+                    FormDestination::NewWorktree { base_branch } => base_branch.as_str(),
+                    _ => "",
+                },
+            ),
             prompt: text_field(
                 cx,
                 "Prompt",
@@ -92,6 +119,11 @@ impl AutomationEditor {
             weekday,
             cron: self.cron.read(cx).text().to_owned(),
             zone: self.zone.read(cx).text().to_owned(),
+            destination: FormDestination::from_choice(
+                self.destination.read(cx).selected_index(),
+                self.base_branch.read(cx).text().to_owned(),
+                self.workspace.read(cx).text().to_owned(),
+            ),
         }
     }
 
@@ -117,6 +149,9 @@ pub(in crate::shell) fn editor_dialog(
         .gap(px(SPACE_3))
         .child(editor.name.clone())
         .child(editor.project.clone())
+        .child(editor.destination.clone())
+        .child(editor.workspace.clone())
+        .child(editor.base_branch.clone())
         .child(editor.prompt.clone())
         .child(editor.agent.clone())
         .child(editor.cadence.clone())

@@ -157,7 +157,7 @@ impl AutomationsState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use massorca_protocol::methods::automations::AutomationCadence;
+    use massorca_protocol::methods::automations::{AutomationCadence, AutomationDestination};
 
     fn automation(id: &str, name: &str) -> Automation {
         Automation {
@@ -175,6 +175,7 @@ mod tests {
             zone_used: None,
             grace_minutes: 720,
             enabled: true,
+            destination: AutomationDestination::default(),
             next_run_at_ms: None,
             last_run_at_ms: None,
             created_at_ms: 0,

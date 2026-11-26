@@ -2,8 +2,8 @@
 //! checks only name the field a person must change.
 
 use massorca_protocol::methods::automations::{
-    Automation, AutomationCadence, AutomationCreateParams, AutomationUpdateParams,
-    AutomationWeekday,
+    Automation, AutomationCadence, AutomationCreateParams, AutomationDestination,
+    AutomationDestinationKind, AutomationUpdateParams, AutomationWeekday,
 };
 
 /// The editor field a refusal names.
@@ -15,6 +15,7 @@ pub enum Field {
     Agent,
     Time,
     Cron,
+    Destination,
 }
 
 /// A field that cannot be sent as it stands, and what to change.
@@ -101,6 +102,86 @@ pub fn weekday_label(day: AutomationWeekday) -> &'static str {
     }
 }
 
+/// Where the runs work, as the editor holds it (decision 0127). The workspace may be an id, a name or a path; the service
+/// resolves it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FormDestination {
+    /// The project's own place: one worktree kept for the automation.
+    #[default]
+    ProjectDefault,
+    /// A new worktree for each run, from `base_branch` when it is not blank.
+    NewWorktree { base_branch: String },
+    /// One existing workspace; every run goes there.
+    Workspace { workspace: String },
+}
+
+impl FormDestination {
+    /// The choices the editor offers, in the order it lists them.
+    pub const LABELS: [&'static str; 3] = [
+        "The project's own place",
+        "A new worktree per run",
+        "An existing workspace",
+    ];
+
+    /// The position of this destination's choice in [`Self::LABELS`].
+    pub fn index(&self) -> usize {
+        match self {
+            Self::ProjectDefault => 0,
+            Self::NewWorktree { .. } => 1,
+            Self::Workspace { .. } => 2,
+        }
+    }
+
+    /// The destination a choice position and the two text fields mean. Positions past the choices are the default.
+    pub fn from_choice(index: Option<usize>, base_branch: String, workspace: String) -> Self {
+        match index {
+            Some(1) => Self::NewWorktree { base_branch },
+            Some(2) => Self::Workspace { workspace },
+            _ => Self::ProjectDefault,
+        }
+    }
+
+    /// The destination an automation shows as.
+    pub fn of(destination: &AutomationDestination) -> Self {
+        match destination.kind {
+            AutomationDestinationKind::ProjectWorktreePerRun => Self::NewWorktree {
+                base_branch: destination.base_branch.clone().unwrap_or_default(),
+            },
+            AutomationDestinationKind::ExistingWorkspace => Self::Workspace {
+                workspace: destination.workspace.clone().unwrap_or_default(),
+            },
+            AutomationDestinationKind::ProjectDefault | AutomationDestinationKind::Unknown => {
+                Self::ProjectDefault
+            }
+        }
+    }
+
+    /// The destination the request carries. The editor always sends one, so an edit can return to the default.
+    fn to_protocol(&self) -> Result<AutomationDestination, FormError> {
+        match self {
+            Self::ProjectDefault => Ok(AutomationDestination::default()),
+            Self::NewWorktree { base_branch } => Ok(AutomationDestination {
+                kind: AutomationDestinationKind::ProjectWorktreePerRun,
+                base_branch: non_blank(base_branch),
+                ..AutomationDestination::default()
+            }),
+            Self::Workspace { workspace } => {
+                let workspace = non_blank(workspace).ok_or_else(|| {
+                    error(
+                        Field::Destination,
+                        "Name the workspace the runs go to: its id, name or path.",
+                    )
+                })?;
+                Ok(AutomationDestination {
+                    kind: AutomationDestinationKind::ExistingWorkspace,
+                    workspace: Some(workspace),
+                    ..AutomationDestination::default()
+                })
+            }
+        }
+    }
+}
+
 /// What the editor holds. The project is required to create an automation; an edit may keep the one it has.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AutomationForm {
@@ -116,6 +197,7 @@ pub struct AutomationForm {
     pub cron: String,
     /// An IANA zone name; blank means the host's zone.
     pub zone: String,
+    pub destination: FormDestination,
 }
 
 impl AutomationForm {
@@ -131,6 +213,7 @@ impl AutomationForm {
             weekday: AutomationWeekday::Monday,
             cron: String::new(),
             zone: String::new(),
+            destination: FormDestination::default(),
         }
     }
 
@@ -150,6 +233,7 @@ impl AutomationForm {
             weekday: automation.weekday.unwrap_or(AutomationWeekday::Monday),
             cron: automation.cron.clone().unwrap_or_default(),
             zone: automation.zone.clone().unwrap_or_default(),
+            destination: FormDestination::of(&automation.destination),
         }
     }
 
@@ -171,6 +255,7 @@ impl AutomationForm {
             zone: Some(checked.zone).filter(|zone| !zone.is_empty()),
             grace_minutes: None,
             creation_key,
+            destination: Some(checked.destination),
         })
     }
 
@@ -190,6 +275,7 @@ impl AutomationForm {
             cron: checked.cron,
             zone: Some(checked.zone),
             grace_minutes: None,
+            destination: Some(checked.destination),
         })
     }
 
@@ -214,6 +300,7 @@ impl AutomationForm {
         }
         let project_on_edit = project.clone();
         let project = project.unwrap_or_default();
+        let destination = self.destination.to_protocol()?;
         let (time, cron) = match self.cadence {
             Cadence::Cron => {
                 let cron = non_blank(&self.cron).ok_or_else(|| {
@@ -237,6 +324,7 @@ impl AutomationForm {
             time,
             cron,
             zone: self.zone.trim().to_owned(),
+            destination,
         })
     }
 }
@@ -251,6 +339,7 @@ struct Checked {
     time: String,
     cron: Option<String>,
     zone: String,
+    destination: AutomationDestination,
 }
 
 fn error(field: Field, message: &str) -> FormError {
@@ -281,6 +370,7 @@ fn valid_time(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use massorca_protocol::methods::automations::AutomationDestinationKind;
 
     fn filled() -> AutomationForm {
         AutomationForm {
@@ -390,5 +480,86 @@ mod tests {
         assert_eq!(moved.project.as_deref(), Some("app"));
         assert_eq!(params.name.as_deref(), Some("Morning PRs"));
         assert_eq!(params.zone.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn the_destination_choice_is_sent_with_the_request() {
+        let default = filled().create_params(None).expect("valid");
+        assert_eq!(
+            default.destination.map(|destination| destination.kind),
+            Some(AutomationDestinationKind::ProjectDefault)
+        );
+
+        let per_run = AutomationForm {
+            destination: FormDestination::NewWorktree {
+                base_branch: " main ".to_owned(),
+            },
+            ..filled()
+        };
+        let destination = per_run
+            .create_params(None)
+            .expect("valid")
+            .destination
+            .expect("sent");
+        assert_eq!(
+            destination.kind,
+            AutomationDestinationKind::ProjectWorktreePerRun
+        );
+        assert_eq!(destination.base_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn an_existing_workspace_needs_a_name_and_an_edit_always_sends_its_destination() {
+        let blank = AutomationForm {
+            destination: FormDestination::Workspace {
+                workspace: "  ".to_owned(),
+            },
+            ..filled()
+        };
+        assert_eq!(
+            blank.create_params(None).unwrap_err().field,
+            Field::Destination
+        );
+
+        let named = AutomationForm {
+            destination: FormDestination::Workspace {
+                workspace: " feature-x ".to_owned(),
+            },
+            ..filled()
+        };
+        let edit = named.update_params("automation-1").expect("valid");
+        let destination = edit.destination.expect("an edit sends it");
+        assert_eq!(
+            destination.kind,
+            AutomationDestinationKind::ExistingWorkspace
+        );
+        assert_eq!(destination.workspace.as_deref(), Some("feature-x"));
+    }
+
+    #[test]
+    fn the_choice_positions_map_to_the_destinations_they_name() {
+        assert_eq!(
+            FormDestination::from_choice(Some(1), "main".to_owned(), String::new()),
+            FormDestination::NewWorktree {
+                base_branch: "main".to_owned()
+            }
+        );
+        assert_eq!(
+            FormDestination::from_choice(Some(2), String::new(), "ws".to_owned()),
+            FormDestination::Workspace {
+                workspace: "ws".to_owned()
+            }
+        );
+        assert_eq!(
+            FormDestination::from_choice(None, String::new(), String::new()),
+            FormDestination::ProjectDefault
+        );
+        assert_eq!(
+            FormDestination::Workspace {
+                workspace: String::new()
+            }
+            .index(),
+            2
+        );
     }
 }
