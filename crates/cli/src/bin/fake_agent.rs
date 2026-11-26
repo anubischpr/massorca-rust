@@ -4,7 +4,12 @@
 //! stdin, and reports its activity through `massorca agent hook` when `MASSORCA_BIN`
 //! names that program. It prints whether a credential file exists, never its contents, and whether the
 //! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values. It prints the permission mode it was started in
-//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it.
+//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it. It
+//! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160). It
+//! can say whether it got MassOrca's instructions and whether `massorca`'s folder is first on its `PATH` (decision 0161).
+//! Started as `chat`, it speaks the tiny structured dialect of core-agents' `TestAdapter` instead (decision 0101).
+//! Started with `-p` (as the Claude adapter starts a chat run), it plays a hand-written script of stream-json frames
+//! ([`claude_stream`]), and `--version` prints a Claude-style version line.
 
 use std::env;
 use std::ffi::OsString;
@@ -26,8 +31,26 @@ const CREDENTIAL_HOME_ENV: &str = "FAKE_AGENT_HOME";
 const CREDENTIAL_FILE: &str = "token.json";
 /// Comma-separated variable names whose state (`set`, `empty` or `unset`) is printed at start, never their values.
 const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
+/// Names whose values the agent prints. Tests list non-secret variables only.
+const SHOW_ENV: &str = "FAKE_AGENT_SHOW_ENV";
+/// Comma-separated `NAME=VALUE` pairs: start prints `env NAME foreign` when the variable holds VALUE, else `env NAME own`
+/// (decision 0160), so a test can see that an inherited value did not reach the run. Never a value.
+const PROBE_FOREIGN_ENV: &str = "FAKE_AGENT_PROBE_FOREIGN";
+/// Set to `1`, a run started with `--resume <ID>` prints the vendor's "no conversation" line and exits 1, as a CLI whose
+/// saved conversation is gone (decision 0160).
+const RESUME_MISSING_ENV: &str = "FAKE_AGENT_RESUME_MISSING";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
+/// Set to `1`, start prints `path first massorca` when the first `PATH` entry is the folder of `MASSORCA_BIN`, else
+/// `path first other` (decision 0161). Never a path.
+const PRINT_PATH_ENV: &str = "FAKE_AGENT_PRINT_PATH";
+/// What start looks for in `--instructions`: it prints `instructions delegate` when the text names it, else
+/// `instructions other`. Never the text.
+const DELEGATE_COMMAND: &str = "massorca agent delegate";
+/// Set to `1`, `--help` leaves `--instructions` out, as a CLI too old for the instruction channel.
+const HELP_WITHOUT_INSTRUCTIONS_ENV: &str = "FAKE_AGENT_HELP_WITHOUT_INSTRUCTIONS";
+/// Names a file `--help` appends a line to on each run.
+const HELP_MARKER_ENV: &str = "FAKE_AGENT_HELP_MARKER";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
@@ -61,6 +84,22 @@ const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// A stdin line starting with this switches the permission mode; the rest of the line is the mode.
 const MODE_SWITCH: &str = "/mode ";
+/// Names a file the `chat` mode waits for after the first part of each reply, so a test can subscribe in between.
+const CHAT_GO_FILE_ENV: &str = "FAKE_CHAT_GO_FILE";
+/// Set to `1`, the `chat` mode never reads its input, as a CLI that is stuck.
+const CHAT_DEAF_ENV: &str = "FAKE_CHAT_DEAF";
+/// How long the `chat` mode waits for that file before it replies anyway.
+const CHAT_GO_WAIT: Duration = Duration::from_secs(60);
+/// What `--version` prints; `2.1.330 (Claude Code)` when unset.
+const VERSION_ENV: &str = "FAKE_CLAUDE_VERSION";
+/// The script of frames the `-p` mode plays: one JSON value per line.
+const CLAUDE_SCRIPT_ENV: &str = "FAKE_CLAUDE_SCRIPT";
+/// The script a `-p` run started with `--resume` plays instead, when set.
+const CLAUDE_RESUME_SCRIPT_ENV: &str = "FAKE_CLAUDE_RESUME_SCRIPT";
+/// A file the `-p` mode appends each line of its standard input to, so a test can see what reached the CLI.
+const CLAUDE_STDIN_LOG_ENV: &str = "FAKE_CLAUDE_STDIN_LOG";
+/// A file the `-p` mode appends its arguments to, as one JSON array per run.
+const CLAUDE_ARGS_LOG_ENV: &str = "FAKE_CLAUDE_ARGS_LOG";
 
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
@@ -70,12 +109,23 @@ fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("login") => return login(),
         Some("whoami") => return whoami(),
+        Some("whoami-json") => return whoami_json(),
         Some("logout") => return logout(),
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
+        Some("chat") => return chat(),
+        Some("--help") => return help(),
+        Some("--version") => return version(),
+        Some("-p") => return claude_stream(),
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
+    if let Some(id) = &arguments.resume
+        && env::var_os(RESUME_MISSING_ENV).is_some_and(|value| value == "1")
+    {
+        say(&format!("No conversation found with session ID: {id}"));
+        return ExitCode::from(1);
+    }
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
@@ -120,6 +170,8 @@ struct Arguments {
     /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
     model: Option<String>,
     effort: Option<String>,
+    /// `--instructions <TEXT>`, the channel a test kind declares for MassOrca's per-launch instructions (decision 0161).
+    instructions: Option<String>,
     prompt: Option<String>,
 }
 
@@ -141,6 +193,7 @@ impl Arguments {
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
+                "--instructions" if words.is_empty() => parsed.instructions = args.next(),
                 // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
                 "-m" if words.is_empty() => parsed.model = args.next(),
                 "-c" if words.is_empty() => {
@@ -212,6 +265,20 @@ impl Agent {
         if let Some(effort) = &arguments.effort {
             say(&format!("effort {effort}"));
         }
+        if let Some(text) = &arguments.instructions {
+            say(if text.contains(DELEGATE_COMMAND) {
+                "instructions delegate"
+            } else {
+                "instructions other"
+            });
+        }
+        if env::var_os(PRINT_PATH_ENV).is_some_and(|value| value == "1") {
+            say(if massorca_first_on_path() {
+                "path first massorca"
+            } else {
+                "path first other"
+            });
+        }
         say(if credentials_found() {
             "credentials found"
         } else {
@@ -234,8 +301,18 @@ impl Agent {
                 if present { "present" } else { "absent" }
             ));
         }
-        for name in probed_env() {
+        for name in listed_env(PROBE_ENV) {
             say(&format!("env {name} {}", env_state(&name)));
+        }
+        for name in listed_env(SHOW_ENV) {
+            say(&format!("value {name} {}", env_value(&name)));
+        }
+        for (name, foreign) in probed_foreign() {
+            let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
+            say(&format!(
+                "env {name} {}",
+                if held { "foreign" } else { "own" }
+            ));
         }
         self.hook("start", None);
     }
@@ -436,6 +513,34 @@ fn whoami() -> ExitCode {
     }
 }
 
+/// A JSON check, as `claude auth status --json` prints one (decision 0098): `{"loggedIn", "email", "orgName"}`. The email
+/// is the token's (or the default identity), the organisation its `"org"` field (or `null`); a token containing
+/// `"loggedOut":true` prints `{"loggedIn": false}` and still exits 0. No token prints `{"loggedIn": false}` and exits 1.
+fn whoami_json() -> ExitCode {
+    let token =
+        credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
+    let (status, code) = match token {
+        Some(text) if text.contains(r#""loggedOut":true"#) => {
+            (serde_json::json!({ "loggedIn": false }), ExitCode::SUCCESS)
+        }
+        Some(text) => {
+            let email = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
+            let org = text
+                .split("\"org\":\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_owned);
+            (
+                serde_json::json!({ "loggedIn": true, "email": email, "orgName": org }),
+                ExitCode::SUCCESS,
+            )
+        }
+        None => (serde_json::json!({ "loggedIn": false }), ExitCode::from(1)),
+    };
+    let _ = writeln!(io::stdout().lock(), "{status:#}");
+    code
+}
+
 /// The credential home, when the variable names one.
 fn credential_home() -> Option<PathBuf> {
     env::var_os(CREDENTIAL_HOME_ENV)
@@ -462,14 +567,68 @@ fn email_of(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The names listed in `FAKE_AGENT_PROBE_ENV`.
-fn probed_env() -> Vec<String> {
-    env::var(PROBE_ENV)
+/// `--help`: prints the options, `--instructions` among them unless [`HELP_WITHOUT_INSTRUCTIONS_ENV`] is `1`, and
+/// appends a line to the file [`HELP_MARKER_ENV`] names, so a test can count the probes (decision 0161).
+fn help() -> ExitCode {
+    if let Some(marker) = env::var_os(HELP_MARKER_ENV).filter(|path| !path.is_empty())
+        && let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(marker)
+    {
+        let _ = writeln!(file, "help");
+    }
+    let mut text = String::from(
+        "Usage: massorca-fake-agent [OPTIONS] [PROMPT]
+  --session-id <ID>
+  --resume <ID>
+  --mode <ID>
+",
+    );
+    if env::var_os(HELP_WITHOUT_INSTRUCTIONS_ENV).is_none_or(|value| value != "1") {
+        text.push_str(
+            "  --instructions <TEXT>
+",
+        );
+    }
+    let mut stdout = io::stdout().lock();
+    let _ = stdout.write_all(text.as_bytes());
+    let _ = stdout.flush();
+    ExitCode::SUCCESS
+}
+
+/// Whether the first `PATH` entry is the folder of the program `MASSORCA_BIN` names (decision 0161).
+fn massorca_first_on_path() -> bool {
+    let Some(folder) = env::var_os(HOOK_PROGRAM_ENV)
+        .map(PathBuf::from)
+        .and_then(|bin| bin.parent().map(Path::to_path_buf))
+    else {
+        return false;
+    };
+    env::var_os("PATH")
+        .and_then(|path| env::split_paths(&path).next())
+        .is_some_and(|first| first == folder)
+}
+
+/// The names listed in the variable `variable`, separated by commas.
+fn listed_env(variable: &str) -> Vec<String> {
+    env::var(variable)
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
+        .collect()
+}
+
+/// The `NAME=VALUE` pairs of [`PROBE_FOREIGN_ENV`].
+fn probed_foreign() -> Vec<(String, String)> {
+    env::var(PROBE_FOREIGN_ENV)
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| (name.trim().to_owned(), value.to_owned()))
+        .filter(|(name, _)| !name.is_empty())
         .collect()
 }
 
@@ -479,6 +638,14 @@ fn env_state(name: &str) -> &'static str {
         None => "unset",
         Some(value) if value.is_empty() => "empty",
         Some(_) => "set",
+    }
+}
+
+/// A variable's value in brackets, so an empty value shows; `unset` when it is not set.
+fn env_value(name: &str) -> String {
+    match env::var_os(name) {
+        None => "unset".to_owned(),
+        Some(value) => format!("[{}]", value.to_string_lossy()),
     }
 }
 
@@ -524,13 +691,185 @@ fn logout() -> ExitCode {
 /// A check that never finishes: it starts a child that inherits the same output pipes, and both sleep. A stopped check
 /// must take its child with it, or the pipes stay open and its output is never read to the end.
 fn hang() -> ExitCode {
+    spawn_hang_child();
+    hang_child()
+}
+
+/// Starts [`hang_child`] with this program's output, and leaves it running.
+fn spawn_hang_child() {
     if let Ok(me) = env::current_exe() {
         let _ = massorca_process::command(me)
             .arg("hang-child")
             .stdin(Stdio::null())
             .spawn();
     }
-    hang_child()
+}
+
+/// The structured mode (decision 0101): one JSON object per line on both streams, the dialect core-agents'
+/// `TestAdapter` reads. For each `{"type":"user","text":T}` it writes `{"type":"text","id":"a<turn>","text":"echo: "}`,
+/// waits for [`CHAT_GO_FILE_ENV`]'s file when it is set, then writes the same id with `T` (an append) and
+/// `{"type":"done","outcome":"success"}`. The message `crash` exits with [`CRASH_EXIT_CODE`]; the message `hang` starts a
+/// child that keeps the output open and stops reading, so only a kill of the whole tree ends the run; `leave` starts such
+/// a child, ends the turn and exits 0, leaving the child behind. An interrupt is noted. Standard error gets one line at
+/// start. It exits when its input ends; with [`CHAT_DEAF_ENV`] it never reads it.
+fn chat() -> ExitCode {
+    let _ = writeln!(io::stderr(), "fake-chat: started");
+    if env::var_os(CHAT_DEAF_ENV).is_some_and(|value| value == "1") {
+        return hang_child();
+    }
+    let go_file = env::var_os(CHAT_GO_FILE_ENV).map(PathBuf::from);
+    let mut turn = 0_u32;
+    for line in io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        let frame: Value = match serde_json::from_str(&line) {
+            Ok(frame) => frame,
+            Err(_) => {
+                emit(&serde_json::json!({ "type": "notice", "text": "unreadable input" }));
+                continue;
+            }
+        };
+        match frame["type"].as_str() {
+            Some("user") => {
+                let text = frame["text"].as_str().unwrap_or_default();
+                match text {
+                    "crash" => return ExitCode::from(CRASH_EXIT_CODE),
+                    "hang" => return hang(),
+                    "leave" => {
+                        spawn_hang_child();
+                        emit(&serde_json::json!({ "type": "done", "outcome": "success" }));
+                        return ExitCode::SUCCESS;
+                    }
+                    _ => {}
+                }
+                turn += 1;
+                let id = format!("a{turn}");
+                emit(&serde_json::json!({ "type": "text", "id": id, "text": "echo: " }));
+                if let Some(go) = &go_file {
+                    wait_for_file(go);
+                }
+                emit(&serde_json::json!({ "type": "text", "id": id, "text": text }));
+                emit(&serde_json::json!({ "type": "done", "outcome": "success" }));
+            }
+            Some("interrupt") => {
+                emit(&serde_json::json!({ "type": "notice", "text": "interrupted" }));
+            }
+            _ => emit(&serde_json::json!({ "type": "notice", "text": "unknown input" })),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `--version`: a version line as Claude Code prints one.
+fn version() -> ExitCode {
+    let text = env::var(VERSION_ENV).unwrap_or_else(|_| "2.1.330 (Claude Code)".to_owned());
+    let mut stdout = io::stdout().lock();
+    let _ = writeln!(stdout, "{text}");
+    let _ = stdout.flush();
+    ExitCode::SUCCESS
+}
+
+/// Appends `line` to the file `env_name` names, when it is set.
+fn append_to(env_name: &str, line: &str) {
+    if let Some(path) = env::var_os(env_name).filter(|path| !path.is_empty())
+        && let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Whether a line of standard input is what a script's `await` waits for: `user` (a user message), `control_response`
+/// (an answer to a permission request) or `interrupt` (an interrupt control request).
+fn awaited(wanted: &str, line: &str) -> bool {
+    let Ok(message) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    match wanted {
+        "interrupt" => {
+            message["type"] == "control_request" && message["request"]["subtype"] == "interrupt"
+        }
+        other => message["type"] == other,
+    }
+}
+
+/// The stream-json mode (decision 0101): a stand-in for `claude -p --input-format stream-json --output-format
+/// stream-json ...`. It plays [`CLAUDE_SCRIPT_ENV`]'s script (or [`CLAUDE_RESUME_SCRIPT_ENV`]'s when started with
+/// `--resume`), one JSON value per line: `{"await":"user"|"control_response"|"interrupt"}` waits for such a line on
+/// standard input (an interrupt is answered with a success control response), `{"sleep_ms":N}` waits, and any other
+/// line is written to standard output as it is. Every input line is appended to [`CLAUDE_STDIN_LOG_ENV`]'s file and the
+/// arguments to [`CLAUDE_ARGS_LOG_ENV`]'s. After the script it reads until its input ends, then exits 0.
+fn claude_stream() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    append_to(
+        CLAUDE_ARGS_LOG_ENV,
+        &Value::from(
+            args.iter()
+                .map(|arg| Value::from(arg.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .to_string(),
+    );
+    let resumed = args.iter().any(|arg| arg == "--resume");
+    let script = (resumed)
+        .then(|| env::var_os(CLAUDE_RESUME_SCRIPT_ENV))
+        .flatten()
+        .or_else(|| env::var_os(CLAUDE_SCRIPT_ENV));
+    let Some(script) = script.and_then(|path| fs::read_to_string(path).ok()) else {
+        let _ = writeln!(io::stderr(), "fake-claude: no script");
+        return ExitCode::from(2);
+    };
+    let (lines, input) = std::sync::mpsc::channel::<String>();
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            append_to(CLAUDE_STDIN_LOG_ENV, &line);
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    for step in script.lines().filter(|line| !line.trim().is_empty()) {
+        let parsed: Value = serde_json::from_str(step).unwrap_or(Value::Null);
+        if let Some(wanted) = parsed["await"].as_str() {
+            loop {
+                let Ok(line) = input.recv() else {
+                    return ExitCode::SUCCESS;
+                };
+                if awaited(wanted, &line) {
+                    if wanted == "interrupt" {
+                        let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+                        emit(&serde_json::json!({
+                            "type": "control_response",
+                            "response": { "subtype": "success", "request_id": request["request_id"] }
+                        }));
+                    }
+                    break;
+                }
+            }
+        } else if let Some(wait) = parsed["sleep_ms"].as_u64() {
+            thread::sleep(Duration::from_millis(wait));
+        } else {
+            let mut stdout = io::stdout().lock();
+            let _ = writeln!(stdout, "{step}");
+            let _ = stdout.flush();
+        }
+    }
+    while input.recv().is_ok() {}
+    ExitCode::SUCCESS
+}
+
+/// Writes one JSON line to standard output at once.
+fn emit(frame: &Value) {
+    let mut stdout = io::stdout().lock();
+    let _ = writeln!(stdout, "{frame}");
+    let _ = stdout.flush();
+}
+
+/// Waits until `path` exists, at most [`CHAT_GO_WAIT`].
+fn wait_for_file(path: &Path) {
+    let deadline = std::time::Instant::now() + CHAT_GO_WAIT;
+    while !path.exists() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The sleeping half of [`hang`].

@@ -116,7 +116,13 @@ fn reset_key_is_refused_while_a_secret_exists_and_frees_an_empty_vault() {
         .expect("set");
     let refused = vault.reset_key().unwrap_err();
     assert!(
-        matches!(refused, VaultError::VaultNotEmpty { count: 1 }),
+        matches!(
+            refused,
+            VaultError::VaultNotEmpty {
+                count: 1,
+                services: 0
+            }
+        ),
         "{refused:?}"
     );
     assert!(vault_dir.join("key").exists());

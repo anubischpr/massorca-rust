@@ -36,6 +36,7 @@ mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod transcript_rows;
 mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
@@ -54,9 +55,10 @@ use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use std::collections::BTreeSet;
+
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -77,7 +79,9 @@ use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
 use source_control::SourceControl;
-use std::collections::{BTreeMap, HashMap};
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -111,11 +115,13 @@ mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod session_menu_tests;
+#[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
-mod sidebar_fold_tests;
+mod sidebar_session_rows_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -203,10 +209,16 @@ pub struct Shell {
     profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
+    /// Each session's header mode chip, kept while its kind lists the same modes.
+    session_mode_chips: HashMap<String, session_view::SessionModeChip>,
     /// The call in flight for each session, if any: one at a time per session.
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
+    chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
+    /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
+    session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -216,6 +228,14 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The menu of a team card, if one is open (screen 4.5).
     team_menu: Option<teams::OpenTeamMenu>,
+    /// The menu of a memory entry's More button, if one is open (screen 4.8).
+    memory_menu: Option<teams::OpenMemoryMenu>,
+    /// The team pill's switch menu, while it is open.
+    team_switch: Option<teams::OpenTeamSwitch>,
+    /// The Conference room's composer, receivers and refusals (decision 0102).
+    room_page: teams::RoomPage,
+    /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
+    filter_menu: Option<teams::OpenFilterMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -235,6 +255,12 @@ pub struct Shell {
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
     /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
+    /// The Services section's reads of the picked host (SKL-35).
+    marketplace_services: crate::model::marketplace::HostedServicesView,
+    /// The connect dialog of a hosted service, if open.
+    marketplace_service_dialog: Option<marketplace::ServiceDialog>,
+    /// A refused disconnect, with the service it concerns.
+    marketplace_service_error: Option<(String, String)>,
     /// The Add extension dialog on screen, if any.
     marketplace_add: Option<marketplace::AddFolderDialog>,
     /// The last refused change to an installed package, with the item it concerns.
@@ -250,14 +276,28 @@ pub struct Shell {
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
+    /// The request number of the newest skills read; only its answer is shown.
+    marketplace_skills_request: u64,
+    /// Whether the Skills section's "Where MassOrca looked" report is open.
+    marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
+    work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
+    /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
+    work_panel_applied: Option<(u16, u16)>,
+    /// New terminals waiting for the Work panel's pane to paint its size (`create_terminal`).
+    pane_waits: usize,
     /// The grid the session view last drew its terminal at (`session_grid`).
     session_grid: Option<(u16, u16)>,
+    /// The Conversation's size in pixels as the canvas last painted it, for the grid a new session starts at (`start_grid`).
+    conversation_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The terminal whose closing waits for the stop question.
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
+    focus_started_terminal: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -268,8 +308,8 @@ pub struct Shell {
     theme_notice: Option<String>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
-    sidebar_folds: SidebarFolds,
+    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    collapsed_projects: BTreeSet<String>,
 }
 
 impl Shell {
@@ -518,13 +558,20 @@ impl Shell {
             path_picker: path_field::system_picker(),
             profile_unsafe: false,
             session_composers: HashMap::new(),
+            session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            chat_transcripts: HashMap::new(),
+            session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
+            memory_menu: None,
+            team_switch: None,
+            room_page: teams::RoomPage::default(),
+            filter_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -535,6 +582,9 @@ impl Shell {
             marketplace_error: None,
             marketplace_uninstall: None,
             marketplace_review: None,
+            marketplace_services: crate::model::marketplace::HostedServicesView::default(),
+            marketplace_service_dialog: None,
+            marketplace_service_error: None,
             marketplace_add: None,
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
@@ -545,16 +595,23 @@ impl Shell {
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
+            marketplace_skills_request: 0,
+            marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
+            work_panel_size: Rc::default(),
+            work_panel_applied: None,
+            pane_waits: 0,
             session_grid: None,
+            conversation_size: Rc::default(),
             stop_prompt: None,
             terminal_notice: None,
+            focus_started_terminal: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
-            sidebar_folds: SidebarFolds::default(),
+            collapsed_projects: BTreeSet::new(),
         }
     }
 
@@ -715,6 +772,7 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -748,7 +806,7 @@ impl Render for Shell {
                 .as_ref()
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
-            let mode = self.start_mode(&page.id);
+            let mode = self.start_mode(&page.id, cx);
             start_page::StartFrame {
                 profile_unsafe: self.profile_unsafe,
                 page,
@@ -764,6 +822,7 @@ impl Render for Shell {
         .then(|| self.home_frame(cx))
         .flatten();
         let session = self.session_frame(cx);
+        let room = self.room_frame(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
             .store
@@ -846,7 +905,9 @@ impl Render for Shell {
                 marketplace,
                 pairing,
                 session,
+                room,
             },
+            self.conversation_size.clone(),
             window,
             cx,
         );
@@ -881,7 +942,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -907,7 +968,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.sidebar_folds,
+                        &self.collapsed_projects,
                         &self.search,
                         true,
                         self.rail.morph_generation(),
@@ -940,6 +1001,11 @@ impl Render for Shell {
             .remove
             .as_ref()
             .map(|flow| workspace_dialog_views::remove_dialog(flow, &shell, cx));
+        let delete_session = self
+            .dialogs
+            .delete_session
+            .as_ref()
+            .map(|flow| workspace_dialog_views::session_delete_dialog(flow, &shell, cx));
         let menu = self
             .dialogs
             .menu
@@ -960,6 +1026,23 @@ impl Render for Shell {
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
         let team_menu = self
             .team_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let team_switch = self
+            .team_switch
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let memory_menu = self
+            .memory_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let receiver_menu = self
+            .room_page
+            .receiver_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let filter_menu = self
+            .filter_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
@@ -1043,9 +1126,14 @@ impl Render for Shell {
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
+            .when_some(team_switch, |el, menu| el.child(menu))
+            .when_some(memory_menu, |el, menu| el.child(menu))
+            .when_some(receiver_menu, |el, menu| el.child(menu))
+            .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
@@ -1057,5 +1145,21 @@ impl Render for Shell {
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
             .when_some(close_dialog, |el, dialog| el.child(dialog))
+    }
+}
+
+impl Shell {
+    /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
+    /// composer can never start a second session.
+    fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.focus_started_terminal.as_deref() else {
+            return;
+        };
+        let Some(view) = self.terminal_views.get(terminal) else {
+            return;
+        };
+        let focus = view.surface.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        self.focus_started_terminal = None;
     }
 }

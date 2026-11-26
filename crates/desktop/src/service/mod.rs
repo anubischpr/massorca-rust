@@ -3,20 +3,26 @@
 //! refusals that pick a dialog.
 
 mod accounts;
+mod agent_chat;
+mod agent_forget;
 mod agent_queue;
 mod agents;
 mod bridge;
 mod connection;
 mod extensions;
 mod git;
+mod hosted_services;
 mod hosts;
 mod launch;
 mod quit;
 mod refusal;
 mod secrets;
+mod skills;
+mod team_room;
 mod teams;
 mod terminals;
 mod update;
+mod workspace_create;
 
 #[cfg(test)]
 mod git_tests;
@@ -25,6 +31,8 @@ mod secrets_tests;
 
 #[cfg(test)]
 pub(crate) use accounts::AccountCommand;
+pub use agent_chat::{ChatUnsupportedReason, KindChat};
+pub use agent_forget::ForgetSessionParams;
 #[cfg(test)]
 pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
@@ -37,6 +45,8 @@ pub use connection::{
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+#[cfg(test)]
+pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
@@ -44,6 +54,10 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+pub use skills::{SkillsListing, SkillsRead};
+#[cfg(test)]
+pub(crate) use team_room::RoomCommand;
+pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
@@ -54,6 +68,7 @@ pub use update::{
     GitUpdate, HostEntry, HostLink, SecretsState, SecretsUpdate, StoreState, StoreUpdate,
     WorkspaceGit,
 };
+pub use workspace_create::create_for_start;
 
 #[cfg(test)]
 pub(crate) use update::fixtures;

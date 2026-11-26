@@ -221,7 +221,11 @@ pub fn palette_items(snapshot: &ShellSnapshot) -> Vec<PaletteItem> {
                     action: PaletteAction::OpenWorkspace(workspace.id.clone()),
                 });
                 let location = format!("{} / {}", project.name, workspace.name);
-                for session in &workspace.sessions {
+                let own = host
+                    .sessions
+                    .iter()
+                    .filter(|session| session.workspace_id == workspace.id);
+                for session in own {
                     push_session(&mut items, session, &location);
                 }
             }

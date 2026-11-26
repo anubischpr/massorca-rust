@@ -61,6 +61,11 @@ impl Layout {
         self.root.join("logs").join(format!("{id}-uninstall.log"))
     }
 
+    /// `logs/<id>-runs.json`, the package's run log. It stays after removal, so the removal is in it.
+    pub fn run_log(&self, id: &str) -> PathBuf {
+        self.root.join("logs").join(format!("{id}-runs.json"))
+    }
+
     /// `lock.json`, the source of truth for what is installed.
     pub fn lock_path(&self) -> PathBuf {
         self.root.join("lock.json")

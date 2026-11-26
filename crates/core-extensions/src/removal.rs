@@ -8,10 +8,13 @@ use massorca_ext_package::manifest::Manifest;
 use serde::Serialize;
 
 use crate::error::{Error, HookError, codes};
-use crate::hooks::{HookHandle, HookKind};
+use crate::hooks::{HookHandle, HookKind, HookRun, RemovedPackage};
 use crate::host::INSTALLER_TIMEOUT;
+use crate::install_log_tail::last_log_lines_after;
 use crate::lockfile::{LockCli, LockEntry};
 use crate::review::uninstall_fingerprint;
+use crate::run_log::RunAction;
+use crate::run_log::log_len;
 use crate::service::{Extensions, describe};
 use massorca_ext_package::manifest::agent::CliOs;
 
@@ -79,22 +82,25 @@ impl Extensions {
         guard: impl Fn(&str) -> Result<(), HookError> + Send + Sync + 'static,
     ) -> HookHandle {
         self.hooks
-            .register(HookKind::Guard, owner.into(), Arc::new(guard))
+            .register(owner.into(), HookRun::Guard(Arc::new(guard)))
     }
 
-    /// Registers a cleanup that runs after a removal, only when `delete_agent_homes` is asked for.
+    /// Registers a cleanup that runs after a removal, only when `delete_agent_homes` is asked for. It runs after the
+    /// package's files are deleted, so it is given what the package provided (decision 0098).
     pub fn register_remove_cleanup(
         &self,
         owner: impl Into<String>,
-        cleanup: impl Fn(&str) -> Result<(), HookError> + Send + Sync + 'static,
+        cleanup: impl Fn(&RemovedPackage) -> Result<(), HookError> + Send + Sync + 'static,
     ) -> HookHandle {
         self.hooks
-            .register(HookKind::Cleanup, owner.into(), Arc::new(cleanup))
+            .register(owner.into(), HookRun::Cleanup(Arc::new(cleanup)))
     }
 
     pub(crate) fn run_guards(&self, id: &str) -> Result<(), Error> {
-        for (owner, guard) in self.hooks.of(HookKind::Guard) {
-            guard(id).map_err(|error| Error::Refused { owner, error })?;
+        for (owner, run) in self.hooks.of(HookKind::Guard) {
+            if let HookRun::Guard(guard) = run {
+                guard(id).map_err(|error| Error::Refused { owner, error })?;
+            }
         }
         Ok(())
     }
@@ -142,7 +148,10 @@ impl Extensions {
                 .cloned()
                 .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
             // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
-            let manifest = self.installed_manifest(&entry).ok();
+            let manifest = self.installed_manifest(&entry);
+            // When the files cannot be read, the kinds they provided are not guessed: their accounts are left (0098).
+            let unread = manifest.as_ref().err().map(|error| error.code().to_owned());
+            let manifest = manifest.ok();
             if uninstall_cli {
                 // The uninstall runs only for the commands the person accepted (0062, V2): nothing changes without them.
                 let commands = pending_uninstalls(&entry, manifest.as_ref(), self.os);
@@ -161,17 +170,37 @@ impl Extensions {
                 }
             }
             self.run_guards(id)?;
+            // Read before the files go: the cleanups run after, and need the kinds this package provided (0098).
+            let removed = RemovedPackage {
+                id: id.to_owned(),
+                agent_kinds: provided_kinds(&entry, manifest.as_ref()),
+            };
             lockfile.packages.retain(|package| package.id != id);
             lockfile.write(&self.layout.lock_path())?;
-            let failures = self.delete_package(id, delete_agent_homes);
+            let failures = self.delete_package(&removed, delete_agent_homes, unread.as_deref());
             let busy = self.mark_busy(id, Vec::new())?;
             (entry, manifest, failures, busy)
         };
-        let cli = entry
+        let uninstall_log = self.layout.uninstall_log(id);
+        let offset = log_len(&uninstall_log);
+        let cli: Vec<CliRemoval> = entry
             .cli
             .iter()
             .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
             .collect();
+        let ok = failures.is_empty()
+            && cli
+                .iter()
+                .all(|removal| !matches!(removal.action, CliAction::Failed { .. }));
+        let output = last_log_lines_after(&uninstall_log, offset);
+        self.log_run(
+            id,
+            RunAction::Remove,
+            Some(entry.version.clone()),
+            None,
+            ok,
+            output,
+        );
         Ok(Removed {
             id: id.to_owned(),
             version: entry.version,
@@ -181,7 +210,13 @@ impl Extensions {
     }
 
     /// Deletes a removed package's folders and, when asked, runs the cleanups. A failure is reported, not rolled back.
-    fn delete_package(&self, id: &str, delete_agent_homes: bool) -> Vec<Failure> {
+    fn delete_package(
+        &self,
+        removed: &RemovedPackage,
+        delete_agent_homes: bool,
+        unread: Option<&str>,
+    ) -> Vec<Failure> {
+        let id = removed.id.as_str();
         let mut failures = Vec::new();
         for dir in [self.layout.package_root(id), self.layout.data_dir(id)] {
             if let Err(error) = remove_tree(&dir) {
@@ -192,9 +227,21 @@ impl Extensions {
                 });
             }
         }
+        if delete_agent_homes && let Some(code) = unread {
+            failures.push(Failure {
+                owner: "extensions".to_owned(),
+                code: code.to_owned(),
+                message: format!(
+                    "the files of {id} could not be read, so the accounts of its agent kinds were left; remove them with `agent accounts remove`"
+                ),
+            });
+        }
         if delete_agent_homes {
-            for (owner, cleanup) in self.hooks.of(HookKind::Cleanup) {
-                if let Err(error) = cleanup(id) {
+            for (owner, run) in self.hooks.of(HookKind::Cleanup) {
+                let HookRun::Cleanup(cleanup) = run else {
+                    continue;
+                };
+                if let Err(error) = cleanup(removed) {
                     failures.push(Failure {
                         owner,
                         code: error.code,
@@ -300,4 +347,22 @@ fn pending_uninstalls(
                 .map(|step| step.command.clone())
         })
         .collect()
+}
+
+/// The agent kinds a package provides, read from its manifest: none for a first-party id the catalogue does not vouch
+/// for, and none when the manifest cannot be read (the removal then reports that the accounts were left).
+fn provided_kinds(entry: &LockEntry, manifest: Option<&Manifest>) -> Vec<String> {
+    if crate::catalogue::is_unvouched_first_party(entry) {
+        return Vec::new();
+    }
+    manifest
+        .map(|manifest| {
+            manifest
+                .contributes
+                .agent_adapters
+                .iter()
+                .map(|adapter| adapter.id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }

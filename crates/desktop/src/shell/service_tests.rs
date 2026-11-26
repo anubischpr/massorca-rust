@@ -21,7 +21,7 @@ pub(super) struct Rig {
     pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
@@ -104,6 +104,7 @@ fn removed() -> WorkspaceRemoved {
         branch_kept_reason: None,
         directory_kept: false,
         removed_children: Vec::new(),
+        archive: None,
     }
 }
 

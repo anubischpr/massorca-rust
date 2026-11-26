@@ -4,7 +4,7 @@
 use gpui::prelude::*;
 use gpui::{App, Div, FocusHandle, Role, Stateful, Window, div, px};
 use massorca_ui::components::tooltip::TooltipTrigger;
-use massorca_ui::style::FocusRing;
+use massorca_ui::style::{FocusRing, StateFill, Surface};
 use massorca_ui::tokens::{
     Color, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, TYPE_LABEL,
 };
@@ -49,14 +49,9 @@ pub(super) fn pill_focus(id: &'static str, window: &mut Window, cx: &mut App) ->
         .tab_stop(true)
 }
 
-/// The fill an enabled pill takes on hover: the canvas hover token the artboard uses (D-AG-01).
-fn pill_hover(theme: &Theme) -> Color {
-    theme.palette.fill.hover_canvas
-}
-
 /// A placement pill: its icon, its label, an optional second label, and a chevron. It is a Tab stop with a focus ring,
-/// and Enter or Space clicks it. A pill that is not `enabled` takes no hover fill; the page attaches a click only where
-/// the pill acts.
+/// and Enter or Space clicks it. An enabled pill takes the canvas hover and pressed fills (D-AG-01); a pill that is not
+/// `enabled` takes neither, and its text is disabled. The page attaches a click only where the pill acts.
 pub(super) fn pill(
     id: &'static str,
     icon: IconName,
@@ -66,7 +61,6 @@ pub(super) fn pill(
     theme: &Theme,
     focus: FocusHandle,
 ) -> Stateful<Div> {
-    let hover = pill_hover(theme);
     let text = pill_text(enabled, theme);
     let name = match &secondary {
         Some(secondary) => format!("{label} {secondary}"),
@@ -96,7 +90,7 @@ pub(super) fn pill(
                 .child(label),
         );
     if enabled {
-        row = row.hover(move |style| style.bg(hover));
+        row = row.state_fills(theme, Surface::Canvas);
     }
     if let Some(secondary) = secondary {
         row = row.child(
@@ -118,6 +112,7 @@ pub(super) fn off_pill(
     id: &'static str,
     icon: IconName,
     label: String,
+    secondary: Option<String>,
     reason: &'static str,
     theme: &Theme,
     focus: FocusHandle,
@@ -125,7 +120,7 @@ pub(super) fn off_pill(
     TooltipTrigger::new(
         format!("{id}-reason"),
         reason,
-        pill(id, icon, label, None, false, theme, focus.clone()),
+        pill(id, icon, label, secondary, false, theme, focus.clone()),
     )
     .focus_handle(focus)
 }
@@ -142,6 +137,7 @@ pub(super) fn host_pill(
         id,
         IconName::Server,
         host.to_owned(),
+        None,
         NEEDS_NEWER_SERVICE,
         theme,
         focus,
@@ -198,9 +194,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pill_hovers_on_the_canvas_fill_token() {
+    fn a_pill_hovers_and_presses_on_the_canvas_state_fills() {
         let theme = Theme::new(Appearance::Dark);
-        assert_eq!(pill_hover(&theme), theme.palette.fill.hover_canvas);
-        assert_ne!(pill_hover(&theme), theme.palette.fill.hover_raised);
+        let fills = Surface::Canvas.fills(&theme);
+        assert_eq!(fills.hover, theme.palette.fill.hover_canvas);
+        assert_eq!(fills.pressed, theme.palette.fill.pressed_canvas);
+        assert_ne!(fills.pressed, fills.hover);
+        assert_ne!(fills.hover, theme.palette.fill.hover_raised);
     }
 }

@@ -14,13 +14,17 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
+use massorca_protocol::methods::projects::ScriptKind;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceState,
+    self, Workspace, WorkspaceArchive, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
+    WorkspaceState,
 };
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
 use super::common::{connect, profile, start, stop, temp_home};
+use super::workspace_archive::{ARCHIVED, copy_script, repo_with_archive};
+use super::workspace_setup::{add_project, trust};
 use super::workspaces::{add_repo_project, create_params, git_repo, next_event, remove_params};
 
 /// An ended session in `workspace`, delegated from `parent` when given. Returns its id.
@@ -394,5 +398,48 @@ async fn a_child_whose_row_is_gone_is_skipped() {
         .expect("removal without the forgotten child");
     assert_eq!(names(&removed.removed_children), ["lead-1"]);
     assert!(!Path::new(&tree.lead.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn with_children_runs_a_trusted_archive_script_in_each_child_before_removing_it() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let lead_repo = home.path().join("lead-repo");
+    git_repo(&lead_repo);
+    let lead_project = add_repo_project(&client, home.path(), &lead_repo).await;
+    let lead = create(&client, &lead_project.name, "lead").await;
+    let child_repo = home.path().join("child-repo");
+    repo_with_archive(&child_repo, copy_script());
+    let child_project = add_project(&client, home.path(), &child_repo).await;
+    trust(&client, &child_project.id, ScriptKind::Archive).await;
+    let child = create(&client, &child_project.name, "lead-1").await;
+    let parent = session(&store, &lead, None, false);
+    session(&store, &child, Some(&parent), false);
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &with_children("lead", false))
+        .await
+        .expect("removal with children");
+
+    let child_removed = removed
+        .removed_children
+        .first()
+        .expect("the child was removed");
+    assert!(
+        matches!(
+            child_removed.archive,
+            Some(WorkspaceArchive::Succeeded { .. })
+        ),
+        "the child's archive did not run: {:?}",
+        child_removed.archive
+    );
+    // Git may check the worktree's copy out with CRLF line ends.
+    let archived = std::fs::read_to_string(child_repo.join(ARCHIVED))
+        .expect("the child's archive script ran in its worktree");
+    assert_eq!(archived.replace("\r\n", "\n"), "work worth keeping\n");
+    assert!(!Path::new(&child.path).exists());
     stop(running).await;
 }

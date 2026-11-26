@@ -238,7 +238,7 @@ The workspace domain lets one agent write in a workspace at a time
   workspace can have and a worktree cannot. A folder has no git index to
   corrupt, and the team's bots seeing each other's files is the point of a
   team folder. Every other workspace keeps one writer and
-  `agent.workspace_busy`. pv96 ran a team's bots in one shared folder in the
+  `agent.workspace_busy` (a folder takes several writers since 2026-11-25, decision 0169). pv96 ran a team's bots in one shared folder in the
   same way.
 - **A busy bot:** superseded by the 2026-11-23 amendment "a bot runs several
   tasks at once" below. Hosts before it refused the start with `bot.busy`.
@@ -566,3 +566,13 @@ before the stop reads it.
 ## Amendment 2026-11-24: desktop project and bot edits
 
 The desktop's New project form sends `team.project_add` (a name, a goal, and a code source when the team has Workspaces). The Edit team form changes a bot with `team.bot_update`, sending only the fields that changed, and removes it with `team.bot_rm` and `unassign` off, so a bot that owns open tasks is refused and the reason stays on the confirm.
+
+## Amendment 2026-11-24: Board moves and filters
+
+- A drop on the desktop Board makes the call its move asks for: Open to Running starts the task (`task.start`, the path `massorca task start` takes), Running to Waiting stops it (`task.stop`, graceful), a drop on Done finishes it (refused while its run goes on), and Done or Waiting back to Open reopens it. Other moves say why and send nothing. This replaces "Not in this change: a Stop control on the desktop Board" above.
+- The Board's Filter shows the cards of one project or those no project holds, as pv96's chips do; the CLI form is `massorca team board <team> --no-project`. pv96's "Show archived" has no service counterpart yet, so the Sidebar's Filters hides finished projects (a project whose cards are all Done) instead. Both are view state: the service stores nothing of them.
+
+## Amendment 2026-11-25: several writers in a folder
+
+The one-writer rule above (`agent.workspace_busy`) now covers worktrees only. A folder workspace takes several writing
+sessions at once, and a folder marked to share writers needs no mark for it. See decision 0169.

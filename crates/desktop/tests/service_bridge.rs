@@ -173,6 +173,7 @@ fn remove_params(workspace: &str) -> WorkspaceRemoveParams {
         discard_ignored: false,
         forget_orphan: false,
         with_children: false,
+        allow_failed_archive: false,
     }
 }
 

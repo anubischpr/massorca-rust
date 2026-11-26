@@ -1,5 +1,8 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::Shell;
 use super::home_start::{self, HomeFrame};
 use super::marketplace::{self, MarketplaceFrame};
@@ -51,12 +54,15 @@ pub(super) struct PageFrames<'a> {
     pub pairing: PairingFrame,
     /// The open session's view, while the Canvas shows a session.
     pub session: Option<SessionFrame>,
+    /// The Conference room, while the Canvas shows one.
+    pub room: Option<teams::RoomFrame>,
 }
 
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
     mut pages: PageFrames<'_>,
+    conversation_size: Rc<Cell<Option<(f32, f32)>>>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -78,7 +84,15 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, pages, window, cx, &theme))
+        .child(conversation(
+            model,
+            &shell,
+            pages,
+            conversation_size,
+            window,
+            cx,
+            &theme,
+        ))
         .children(model.inline_regions().into_iter().map(|region| {
             let body = region_body(region, &mut work, &mut project, cx);
             region_column(
@@ -118,6 +132,7 @@ fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     pages: PageFrames<'_>,
+    conversation_size: Rc<Cell<Option<(f32, f32)>>>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
@@ -172,18 +187,18 @@ fn conversation(
         Canvas::Team(TeamPage::Project(team, project)) => {
             teams::project_page(model, shell, team, project, window, cx)
         }
-        Canvas::Team(TeamPage::Routines(team)) => teams::routines_page(model, shell, team, cx),
-        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Routines(team)) => {
+            teams::routines_page(model, shell, team, window, cx)
+        }
+        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, window, cx),
         Canvas::Team(TeamPage::Files(team)) => match model.teams().team(team) {
-            Some(team) => teams::files_page(team, cx),
+            Some(team) => teams::files_page(team, shell, window, cx),
             None => placeholder("Files", "This team is gone.", theme).into_any_element(),
         },
-        Canvas::Team(TeamPage::Conference(_)) => placeholder(
-            "Conference room",
-            "The Conference room needs live agents and sessions, which are not built yet.",
-            theme,
-        )
-        .into_any_element(),
+        Canvas::Team(TeamPage::Conference(_)) => match pages.room {
+            Some(frame) => teams::conference_page(frame, window, cx),
+            None => placeholder("Conference room", "This team is gone.", theme).into_any_element(),
+        },
         Canvas::Session(_) => match pages.session {
             Some(frame) => session_view::session_page(frame, cx),
             None => placeholder(
@@ -208,12 +223,27 @@ fn conversation(
         }
     };
     div()
+        .relative()
         .flex_1()
         .min_w(px(LAYOUT_CONVERSATION_MIN))
         .h_full()
         .flex()
         .items_center()
         .justify_center()
+        // Records the Conversation's size as it paints; the probe takes no room.
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), _, _| {
+                    conversation_size.set(Some((
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height),
+                    )));
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
         .child(body)
         .into_any_element()
 }

@@ -247,6 +247,9 @@ pub struct Terminal {
     /// The terminal's program got vault secrets (decision 0071): attaching, input and resize need host-admin scope.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub holds_secrets: bool,
+    /// The terminal runs an agent, so git inside it never waits for a credential prompt (TERM-24). Absent when not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub git_credential_guard: bool,
 }
 
 /// How an attach starts: output resumes from `since`, or a snapshot redraws the screen first.

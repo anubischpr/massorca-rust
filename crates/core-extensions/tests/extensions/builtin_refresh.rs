@@ -93,7 +93,7 @@ fn an_outdated_built_in_is_refreshed_in_place_and_keeps_its_state() {
     );
     assert_eq!(entry["adopted"], true);
     assert_eq!(entry["pinned"], true);
-    assert!(!old.exists(), "the outdated folder is removed");
+    assert!(old.exists(), "the replaced version is kept for rollback");
 
     let kind = gentle_shell(&s);
     assert_eq!(kind.state, ItemState::Disabled);

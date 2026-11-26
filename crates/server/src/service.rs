@@ -160,6 +160,15 @@ impl Service {
         Self::start_inner(config, network, vault, discovery, None).await
     }
 
+    /// As `start_with_network`, with explicit vault options instead of the environment's.
+    pub async fn start_with_network_and_vault(
+        config: ServiceConfig,
+        network: NetworkConfig,
+        vault: VaultOptions,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_inner(config, network, vault, DiscoveryOptions::default(), None).await
+    }
+
     /// As `start`, and also listens on the network as `network` says (decision 0045).
     pub async fn start_with_network(
         config: ServiceConfig,
@@ -222,8 +231,16 @@ impl Service {
         let git = Git::from_env();
         let default_root = PathBuf::from(features::default_workspace_root()?);
         let workspaces = Arc::new(Workspaces::new(store.clone(), git.clone(), default_root));
-        let mut terminal_config =
-            ManagerConfig::new(EnvSnapshot::current(), server_version.clone());
+        // A run identity the service inherited belongs to another session: no terminal of this service carries it
+        // (decision 0160). Each agent run gets its own from its launch.
+        let base_env = EnvSnapshot::from_pairs(std::env::vars_os().filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            // A vendor's session marker (an inherited CLAUDE_CODE_CHILD_SESSION, say) is dropped too, so no run reads it.
+            (!massorca_core_agents::launch::is_run_identity(&name)
+                && !massorca_core_agents::launch::is_inherited_vendor_marker(&name))
+            .then_some((name, value.into_string().ok()?))
+        }));
+        let mut terminal_config = ManagerConfig::new(base_env, server_version.clone());
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
@@ -236,7 +253,7 @@ impl Service {
         let extensions = Arc::new(Extensions::new(
             &profile,
             host_programs.clone(),
-            host_programs,
+            host_programs.clone(),
         ));
         let agents = Agents::new(AgentsConfig {
             store: store.clone(),
@@ -247,12 +264,21 @@ impl Service {
             conversations_default: PathBuf::from(crate::features::default_conversations_root()?),
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
+            // The service's own environment: where the vendor CLIs it starts save their conversations (decision 0160).
+            vendor_env: Some(massorca_core_agents::VendorEnv::process()),
         });
         // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
         let guarded = agents.clone();
         let kind_guard = extensions.register_remove_guard("agents", move |package| {
             guarded
                 .refuse_removing_package(package)
+                .map_err(|error| HookError::new(error.code, error.message))
+        });
+        // A package removed with its agent homes takes its kinds' accounts with it; nothing is signed out (decision 0098).
+        let cleaned = agents.clone();
+        let kind_cleanup = extensions.register_remove_cleanup("agents", move |removed| {
+            cleaned
+                .remove_package_accounts(&removed.id, &removed.agent_kinds)
                 .map_err(|error| HookError::new(error.code, error.message))
         });
         // No run survives the previous service (0051); nothing has started one yet in this service.
@@ -279,12 +305,18 @@ impl Service {
         timings.mark("built-in agents");
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
-        agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
+        let (chat_changes, _) = broadcast::channel(CHAT_CHANGES_CAPACITY);
+        agents.set_listener(agent_listener(
+            events.clone(),
+            agent_changes.clone(),
+            chat_changes.clone(),
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
             events,
             agent_changes,
+            chat_changes,
             shutdown: shutdown.clone(),
             registries,
             workspaces,
@@ -293,8 +325,10 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
+            _kind_cleanup: kind_cleanup,
             network: network_state,
             server: PeerInfo {
                 name: server_name,
@@ -307,11 +341,16 @@ impl Service {
         let outcome_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
 
-        // Terminals end as soon as shutdown is requested, alongside the connections' grace period.
+        // Terminals and chat runs end as soon as shutdown is requested, alongside the connections' grace period.
         let mut terminals_signal = signal.clone();
+        let chat_runs = state.agents.clone();
         let terminals_stop = tokio::spawn(async move {
             terminals_signal.wait().await;
-            let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                terminals.shutdown();
+                chat_runs.stop_chat_runs();
+            })
+            .await;
         });
         let outcomes_stop = tokio::spawn(features::follow_task_outcomes(
             Arc::clone(&state),
@@ -350,13 +389,28 @@ impl Service {
 
 /// Agent changes a watcher may fall behind by before it is given a fresh snapshot.
 const AGENT_CHANGES_CAPACITY: usize = 1024;
+/// Chat journal changes kept for chat streams that are behind; one that falls further behind is reset to a snapshot.
+const CHAT_CHANGES_CAPACITY: usize = 4096;
 
 /// Announces each agent status change on the event bus (`agent.changed`) and to the watchers, without blocking.
-fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> ChangeListener {
+fn agent_listener(
+    events: EventBus,
+    changes: broadcast::Sender<Change>,
+    chats: broadcast::Sender<Change>,
+) -> ChangeListener {
     Box::new(move |change: Change| {
         let id = match &change {
             Change::Updated(session) => session.id.clone(),
-            Change::Forgotten(id) => id.clone(),
+            Change::Forgotten(id) => {
+                // A forgotten session's chat streams end (decision 0101).
+                let _ = chats.send(change.clone());
+                id.clone()
+            }
+            // A chat journal change goes to the chat streams only; no session record changed (decision 0101).
+            Change::Chat(_) => {
+                let _ = chats.send(change);
+                return;
+            }
             // An account change is announced under its kind; it is not a session change, so no watcher gets it.
             Change::Account(account) => {
                 events.publish(ChangeEvent {
@@ -515,8 +569,9 @@ mod agent_queue_event_tests {
         runtime.block_on(async {
             let events = EventBus::new();
             let (changes, mut watcher) = broadcast::channel(8);
+            let (chats, _) = broadcast::channel(8);
             let mut subscription = events.subscribe();
-            let listener = agent_listener(events.clone(), changes);
+            let listener = agent_listener(events.clone(), changes, chats);
 
             listener(Change::Queue("session-1".to_owned()));
 
@@ -536,6 +591,54 @@ mod agent_queue_event_tests {
                 "no watcher receives a queue change"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod chat_change_tests {
+    use massorca_core_agents::Change;
+    use massorca_core_agents::chat::ChatChanged;
+    use massorca_protocol::methods::chat::{ChatBatch, ChatCursor};
+    use tokio::sync::broadcast;
+
+    use super::{EventBus, agent_listener};
+
+    /// A chat journal change reaches the chat streams only; a forgotten session reaches them and the watchers
+    /// (decision 0101).
+    #[test]
+    fn a_chat_change_goes_to_the_chat_streams_and_a_forget_to_both() {
+        let events = EventBus::new();
+        let (changes, mut watcher) = broadcast::channel(8);
+        let (chats, mut chat) = broadcast::channel(8);
+        let listener = agent_listener(events, changes, chats);
+        let changed = Change::Chat(Box::new(ChatChanged {
+            session: "session-1".to_owned(),
+            batch: ChatBatch {
+                cursor: ChatCursor {
+                    epoch: "e".to_owned(),
+                    seq: 1,
+                },
+                updates: Vec::new(),
+                activity: None,
+            },
+        }));
+
+        listener(changed.clone());
+        assert_eq!(chat.try_recv().ok(), Some(changed));
+        assert!(
+            watcher.try_recv().is_err(),
+            "no watcher receives a chat change"
+        );
+
+        listener(Change::Forgotten("session-1".to_owned()));
+        assert_eq!(
+            chat.try_recv().ok(),
+            Some(Change::Forgotten("session-1".to_owned()))
+        );
+        assert_eq!(
+            watcher.try_recv().ok(),
+            Some(Change::Forgotten("session-1".to_owned()))
+        );
     }
 }
 

@@ -22,6 +22,8 @@ pub const TOPIC_AGENT_QUEUE_CHANGED: &str = "agent.queue_changed";
 pub const TOPIC_CONFIG_CHANGED: &str = "config.changed";
 /// A team, bot or team project changed; the id is the team id.
 pub const TOPIC_TEAM_CHANGED: &str = "team.changed";
+/// A line was posted to a team's Conference room; the id is the team id (capability `team-room/1`).
+pub const TOPIC_TEAM_ROOM_CHANGED: &str = "team.room_changed";
 /// A task was created, changed, finished, reopened or removed; the id is the task id.
 pub const TOPIC_TASK_CHANGED: &str = "task.changed";
 /// A secret was set, rotated, linked, unlinked or removed. The id is `<scope>/<name>`; never a value.

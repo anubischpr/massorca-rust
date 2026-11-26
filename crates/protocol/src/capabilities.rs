@@ -4,6 +4,8 @@ pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
+/// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0095).
+pub const SCRIPT_TRUST: &str = "script-trust/1";
 pub const WORKSPACES: &str = "workspaces/1";
 /// Renaming a workspace and setting its comment (`workspace.update`).
 pub const WORKSPACE_UPDATE: &str = "workspace-update/1";
@@ -35,11 +37,17 @@ pub const AGENT_SEEN: &str = "agent-seen/1";
 /// Release and retain of an agent session, and its archived output (`agent.release`, `agent.retain`, `agent.archive`,
 /// decision 0090).
 pub const AGENT_RELEASE: &str = "agent-release/1";
+/// Archive and delete of an agent session (decision 0163): `agent.archive_session`, the session's `archived`,
+/// `include_archived` on `agent.list`, `remove_workspace` and `force` on `agent.forget`, and `agent.forget_preview`.
+pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 /// `agent.start` without a `workspace`: the session runs in the conversations folder, in a folder of its own (decision
 /// 0094).
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
+/// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
+pub const AGENT_CHAT: &str = "agent-chat/1";
 /// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
@@ -48,10 +56,18 @@ pub const GIT: &str = "git/1";
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
 pub const TEAMS: &str = "teams/1";
+/// A team's Conference room (`team.room_list`, `team.room_post`) and the `team.room_changed` topic (decision 0102).
+pub const TEAM_ROOM: &str = "team-room/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
+/// Rolling a package back to the version its update replaced (`extensions.rollback`).
+pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// The run log of a package (`extensions.log`).
+pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
+/// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
+pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.

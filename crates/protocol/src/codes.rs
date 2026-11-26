@@ -44,6 +44,12 @@ pub const WORKSPACE_HAS_CHILDREN: &str = "workspace.has_children";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
+pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
+/// The project's `orca.yaml` defines no script of the kind asked for.
+pub const SCRIPT_NOT_FOUND: &str = "script.not_found";
+/// The script's content no longer has the hash the caller asked to trust.
+pub const SCRIPT_CHANGED: &str = "script.changed";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.
@@ -198,6 +204,8 @@ pub const AGENT_BUSY: &str = "agent.busy";
 /// A prompt over the size limit or with a NUL.
 pub const AGENT_PROMPT_INVALID: &str = "agent.prompt_invalid";
 pub const AGENT_RESUME_UNAVAILABLE: &str = "agent.resume_unavailable";
+/// The kind keeps a saved conversation per agent ref, and none exists for the session's ref: a resume would fail.
+pub const AGENT_RESUME_NOT_FOUND: &str = "agent.resume_not_found";
 pub const AGENT_HOOK_REFUSED: &str = "agent.hook_refused";
 pub const AGENT_DELEGATE_NEEDS_GIT: &str = "agent.delegate_needs_git";
 pub const AGENT_DEPTH_EXCEEDED: &str = "agent.depth_exceeded";
@@ -227,6 +235,19 @@ pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
 /// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
 pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
+/// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The
+/// error's `data` is the kind's `KindChat` (decision 0101).
+pub const AGENT_CHAT_UNSUPPORTED: &str = "agent.chat_unsupported";
+/// A chat method was called on a session that does not run as a chat (decision 0101).
+pub const AGENT_NOT_CHAT: &str = "agent.not_chat";
+/// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (decision 0101).
+/// The error's `data` is the approval item when it exists.
+pub const AGENT_APPROVAL_SETTLED: &str = "agent.approval_settled";
+/// `agent.chat.approval.answer` names a `seq` the approval item no longer has: the CLI sent the request again, with new
+/// input, since the person saw it (decision 0101). The error's `data` is the item as it is now.
+pub const AGENT_APPROVAL_CHANGED: &str = "agent.approval_changed";
+/// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes (decision 0101).
+pub const AGENT_CURSOR_STALE: &str = "agent.cursor_stale";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
@@ -266,6 +287,15 @@ pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
+
+/// `marketplace.service.*` names a service this build does not know.
+pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";
+/// The service cannot do this from here: a status-only row, GitLab without `glab`, or a GitLab disconnect.
+pub const SERVICE_UNAVAILABLE: &str = "marketplace.service_unavailable";
+/// The service's program refused the token. The message is a fixed sentence, never the program's output.
+pub const SERVICE_REJECTED: &str = "marketplace.service_rejected";
+/// The service's program could not be run or did not finish in time.
+pub const SERVICE_FAILED: &str = "marketplace.service_failed";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
@@ -313,3 +343,5 @@ pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_ref
 pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
 /// `extensions.update` found the installed package already in place: nothing changed.
 pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
+/// `extensions.rollback` found no version kept for the package: nothing changed.
+pub const EXTENSION_NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";

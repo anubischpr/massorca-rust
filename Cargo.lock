@@ -3818,6 +3818,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "jiff",
  "massorca-client",
  "massorca-core-remote",
  "massorca-net",

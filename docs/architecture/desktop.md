@@ -208,6 +208,12 @@ Linux only. No automated run opens a visible window.
   returns when the host connects. A pick is saved by its stable key in the UI state store (SET-02, `ui_state.rs`) and
   restored at start; a saved host that is gone shows This computer without being overwritten. Accounts and update
   checks stay on This computer.
+- The Skills section (`shell/marketplace/skills.rs`) sits on the Skills category under the toolbar and lists the skills
+  `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). It
+  reads when the page opens, when the picked host changes, and on Refresh with `refresh: true`. This computer reads
+  through its own service; a paired host through its own connection (`service/skills.rs`). The store keeps the newest
+  answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first." The
+  "Where MassOrca looked" report under the list shows each root with its agents, its kind and why it was skipped.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.
@@ -245,6 +251,15 @@ Linux only. No automated run opens a visible window.
   Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
   sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
   not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
+- Hosted services (SKL-35, decision 0097): the Services category draws a Hosted services section
+  (`shell/marketplace/services.rs`) below its packages. It reads `marketplace.service.status` of the picked host
+  (`service/hosted_services.rs`, on a paired host's own connection), numbered in `HostedServicesView` so a late answer
+  is dropped. Each row shows Connected, Not connected or Unknown, the account or base URL when the host shows them, and
+  Connect, Replace token or Disconnect. Linear and Jira are status-only, GitLab without `glab` cannot connect, and a
+  refused GitLab disconnect shows the service's sentence under its row. The connect dialog takes the token in a masked
+  field, a base URL for GitLab, Azure DevOps and Gitea, and an email for Bitbucket; the token field is cleared the
+  moment the token is sent. Services live in the Marketplace only: Settings has no hosted-service rows and no entry that
+  only opens this section.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

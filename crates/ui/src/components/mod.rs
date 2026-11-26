@@ -56,5 +56,6 @@ pub mod text_editing;
 pub mod text_field;
 pub mod toast;
 pub mod tooltip;
+pub mod transcript;
 pub mod usage_ring;
 pub mod work_panel_tabs;

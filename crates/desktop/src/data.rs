@@ -16,12 +16,19 @@ pub trait DataSource {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SampleDataSource;
 
-fn session(id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow {
+/// A sample workspace: its id, its branch (None for a folder) and its path.
+#[derive(Clone, Copy)]
+struct Ws(&'static str, Option<&'static str>, &'static str);
+
+fn session(ws: Ws, id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow {
     SessionRow {
         id: id.into(),
         title: title.into(),
         agent,
         state,
+        workspace_id: ws.0.into(),
+        branch: ws.1.map(Into::into),
+        path: Some(ws.2.into()),
         place: None,
         own_worktree: false,
         can_bring_back: false,
@@ -30,85 +37,103 @@ fn session(id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow
     }
 }
 
+fn workspace(ws: Ws, name: &str, usage_slot: u8) -> WorkspaceRow {
+    WorkspaceRow {
+        id: ws.0.into(),
+        name: name.into(),
+        branch: ws.1.map(Into::into),
+        usage_slot,
+    }
+}
+
 impl DataSource for SampleDataSource {
     fn snapshot(&self) -> ShellSnapshot {
+        let shell = Ws("w1", Some("desktop/shell"), "D:/work/desktop-shell");
+        let store = Ws("w2", Some("pr/store"), "D:/work/core-store");
+        let deploy = Ws("w3", Some("main"), "/srv/server-deploy");
+        let gold = Ws("w4", Some("feat/gold"), "D:/work/gold-layer");
         let mut lead = session(
+            shell,
             "s1",
             "Implementation of master catalogs",
             Agent::Claude,
             AgentState::Running,
         );
         lead.children = vec![
-            session("s1a", "Feed endpoints", Agent::Codex, AgentState::Waiting),
-            session("s1b", "Catalog tests", Agent::GentleShell, AgentState::Done),
+            session(
+                shell,
+                "s1a",
+                "Feed endpoints",
+                Agent::Codex,
+                AgentState::Waiting,
+            ),
+            session(
+                shell,
+                "s1b",
+                "Catalog tests",
+                Agent::GentleShell,
+                AgentState::Done,
+            ),
         ];
         ShellSnapshot {
             projects: vec![
                 ProjectGroup {
                     emoji: None,
+                    owner: None,
+                    id: "massorca-rust".into(),
                     name: "massorca-rust".into(),
                     hosts: vec![
                         HostGroup {
                             name: "This PC".into(),
                             reach: HostReach::Connected,
                             workspaces: vec![
-                                WorkspaceRow {
-                                    id: "w1".into(),
-                                    name: "desktop-shell".into(),
-                                    branch: Some("desktop/shell".into()),
-                                    usage_slot: 1,
-                                    sessions: vec![lead],
-                                },
-                                WorkspaceRow {
-                                    id: "w2".into(),
-                                    name: "core-store".into(),
-                                    branch: Some("pr/store".into()),
-                                    usage_slot: 2,
-                                    sessions: vec![session(
-                                        "s2",
-                                        "SQLite migrations",
-                                        Agent::Codex,
-                                        AgentState::Idle,
-                                    )],
-                                },
+                                workspace(shell, "desktop-shell", 1),
+                                workspace(store, "core-store", 2),
                             ],
+                            sessions: vec![
+                                lead,
+                                session(
+                                    store,
+                                    "s2",
+                                    "SQLite migrations",
+                                    Agent::Codex,
+                                    AgentState::Idle,
+                                ),
+                            ],
+                            placeholders: Vec::new(),
                         },
                         HostGroup {
                             name: "VPS".into(),
                             reach: HostReach::Unreachable { minutes: 5 },
-                            workspaces: vec![WorkspaceRow {
-                                id: "w3".into(),
-                                name: "server-deploy".into(),
-                                branch: Some("main".into()),
-                                usage_slot: 3,
-                                sessions: vec![session(
-                                    "s3",
-                                    "Headless server smoke test",
-                                    Agent::Antigravity,
-                                    AgentState::Unreachable,
-                                )],
-                            }],
+                            workspaces: vec![workspace(deploy, "server-deploy", 3)],
+                            sessions: vec![session(
+                                deploy,
+                                "s3",
+                                "Headless server smoke test",
+                                Agent::Antigravity,
+                                AgentState::Unreachable,
+                            )],
+                            placeholders: Vec::new(),
                         },
                     ],
                 },
                 ProjectGroup {
                     emoji: None,
+                    owner: None,
+                    id: "datalake".into(),
                     name: "datalake".into(),
                     hosts: vec![HostGroup {
                         name: "This PC".into(),
                         reach: HostReach::Connected,
-                        workspaces: vec![WorkspaceRow {
-                            id: "w4".into(),
-                            name: "gold-layer".into(),
-                            branch: Some("feat/gold".into()),
-                            usage_slot: 4,
-                            sessions: vec![session(
-                                "s4",
-                                "Serve the gold tables",
-                                Agent::Antigravity,
-                                AgentState::Error,
-                            )],
-                        }],
+                        workspaces: vec![workspace(gold, "gold-layer", 4)],
+                        sessions: vec![session(
+                            gold,
+                            "s4",
+                            "Serve the gold tables",
+                            Agent::Antigravity,
+                            AgentState::Error,
+                        )],
+                        placeholders: Vec::new(),
                     }],
                 },
             ],
@@ -164,9 +189,7 @@ mod tests {
         }
         for p in &snap.projects {
             for h in &p.hosts {
-                for w in &h.workspaces {
-                    w.sessions.iter().for_each(|s| walk(s, &mut states));
-                }
+                h.sessions.iter().for_each(|s| walk(s, &mut states));
             }
         }
         for s in [

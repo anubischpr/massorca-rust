@@ -4,16 +4,17 @@
 use super::super::Shell;
 use super::super::change;
 use super::super::sidebar::row_focus;
+use super::filters::sidebar_filters_button;
 use super::new_project::new_project_button;
-use super::waiting_icon;
+use super::team_shape;
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
 use crate::model::teams::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamId, TeamPage, TeamRow, TeamsSidebar,
 };
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
-use massorca_ui::components::button::ButtonSize;
 use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
+use massorca_ui::components::team_character::TeamCharacterMark;
 use massorca_ui::tokens::{
     SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
 };
@@ -46,8 +47,7 @@ pub(in crate::shell) fn teams_list(
     }
 }
 
-/// The PROJECTS header of the team in view: Filters, which waits for a layer that does not exist yet, and
-/// New project (4.1).
+/// The PROJECTS header of the team in view: Filters and New project (4.1).
 fn teams_projects_header(
     team: TeamId,
     shell: &WeakEntity<Shell>,
@@ -73,10 +73,7 @@ fn teams_projects_header(
                 .flex_row()
                 .items_center()
                 .gap(px(SPACE_HALF))
-                .child(
-                    waiting_icon("teams-filters", IconName::ListFilter, "Filters")
-                        .size(ButtonSize::Compact),
-                )
+                .child(sidebar_filters_button(shell))
                 .child(new_project_button(team, shell)),
         )
 }
@@ -109,9 +106,9 @@ fn team_rows(
     let theme = *cx.theme();
     let focus = row_focus(window, cx, format!("team-{index}"));
     let mut row = match team.reach {
-        HostReach::Connected => SidebarRow::nav(
+        HostReach::Connected => SidebarRow::team(
             format!("team-row-{index}"),
-            IconName::Users,
+            TeamCharacterMark::new(team_shape(team.character), team.name.clone()),
             team.name.clone(),
         ),
         // An unreachable team reads like its host row: the status glyph, dimmed (A10).
@@ -194,7 +191,7 @@ fn project_row(
     let icon = match row.kind {
         ProjectRowKind::Files => IconName::Folder,
         ProjectRowKind::Memory => IconName::Brain,
-        ProjectRowKind::Routines => IconName::CalendarClock,
+        ProjectRowKind::Routines => IconName::Repeat,
         ProjectRowKind::Project(_) => IconName::FolderTree,
     };
     let page = row.page;

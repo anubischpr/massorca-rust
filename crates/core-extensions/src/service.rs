@@ -19,12 +19,13 @@ use crate::catalogue;
 use crate::error::{Diagnosis, Error};
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
-use crate::install_log_tail::last_log_lines;
+use crate::install_log_tail::{last_log_lines, last_log_lines_after};
 use crate::layout::Layout;
 use crate::lockfile::{
-    InstallerRun, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
+    InstallerRun, KeptVersion, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
 };
 use crate::review::{self, CliPlan, PlanState, Review};
+use crate::run_log::{RunAction, log_len};
 use crate::source::{self, Files, LoadedPackage, Source};
 
 /// The extension service of one profile.
@@ -104,8 +105,22 @@ impl Extensions {
         sha256: Option<&str>,
     ) -> Result<LockEntry, Error> {
         let staged = self.stage(source, consent, run_installer, sha256)?;
+        let id = staged.manifest.id.clone();
+        let to = staged.version.clone();
+        let install_log = self.layout.install_log(&id);
+        let offset = log_len(&install_log);
         let ran = self.run_installers(&staged.manifest, &staged.plan);
-        self.commit(staged, ran)
+        let output = last_log_lines_after(&install_log, offset);
+        let committed = self.commit(staged, ran);
+        self.log_run(
+            &id,
+            RunAction::Install,
+            None,
+            Some(to),
+            committed.is_ok(),
+            output,
+        );
+        committed
     }
 
     /// Checks the install and unpacks it, under the change lock. The returned mark keeps the package busy until the
@@ -162,10 +177,13 @@ impl Extensions {
         let rel = Layout::package_rel_path(&package.manifest.id, &version, &package.sha256);
         let dir = self.layout.resolve(&rel);
         let files_sha256 = source::canonical_sha256(&package.files);
-        self.unpack(&package.manifest.id, &package.files, &dir)?;
-        if let Err(error) = check_unpacked(&package.manifest.id, &dir, &files_sha256) {
-            self.remove_unpacked(&package.manifest.id, &dir);
-            return Err(error);
+        // A folder that already holds exactly these files is kept: it may be the version a rollback would restore.
+        if !dir.is_dir() || check_unpacked(&package.manifest.id, &dir, &files_sha256).is_err() {
+            self.unpack(&package.manifest.id, &package.files, &dir)?;
+            if let Err(error) = check_unpacked(&package.manifest.id, &dir, &files_sha256) {
+                self.remove_unpacked(&package.manifest.id, &dir);
+                return Err(error);
+            }
         }
         Ok(Staged {
             _busy: busy,
@@ -198,11 +216,9 @@ impl Extensions {
         });
         match committed {
             Ok((entry, displaced)) => {
-                if let Some(old) = displaced
-                    && old.path != entry.path
-                {
-                    // The displaced entry left the lockfile with this install, so its folder is only litter now.
-                    let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+                if let Some(old) = displaced {
+                    // The displaced entry left the lockfile with this install, so its folders are only litter now.
+                    self.drop_versions_outside(&old, &entry);
                 }
                 Ok(entry)
             }
@@ -224,7 +240,19 @@ impl Extensions {
         sha256: Option<&str>,
     ) -> Result<LockEntry, Error> {
         let (old, staged) = self.stage_update(id, consent, sha256)?;
-        self.commit_update(&old, staged)
+        let committed = self.commit_update(&old, staged);
+        if let Ok(entry) = &committed {
+            let to = Some(entry.version.clone());
+            self.log_run(
+                id,
+                RunAction::Update,
+                Some(old.version.clone()),
+                to,
+                true,
+                Vec::new(),
+            );
+        }
+        committed
     }
 
     /// Checks the new package and unpacks it, under the change lock. The returned mark keeps the package busy until the
@@ -296,14 +324,11 @@ impl Extensions {
         let _changes = self.lock_changes();
         match self.write_update(old, &staged) {
             Ok(entry) => {
-                if old.path != entry.path {
-                    // The replaced entry left the lockfile with this update, so its folder is only litter now.
-                    let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
-                }
+                self.drop_versions_outside(old, &entry);
                 Ok(entry)
             }
             Err(error) => {
-                self.remove_unpacked(&staged.manifest.id, &staged.dir);
+                self.discard_staged(old, &staged);
                 Err(error)
             }
         }
@@ -323,6 +348,7 @@ impl Extensions {
             enabled: current.enabled,
             source: current.source.clone(),
             installed_at_ms: current.installed_at_ms,
+            previous: kept_after_update(current, &staged.rel),
             extra: current.extra.clone(),
             ..staged.entry(current.cli.clone(), current.adopted)
         };
@@ -419,11 +445,13 @@ impl Extensions {
         if staged.is_empty() {
             return failed.map_or(Ok(Vec::new()), Err);
         }
+        let mut replaced: Vec<(LockEntry, LockEntry)> = Vec::new();
         for (old, next) in &staged {
             let fresh = LockEntry {
                 enabled: old.enabled,
                 consent: old.consent.clone(),
                 installed_at_ms: old.installed_at_ms,
+                previous: kept_after_update(old, &next.rel),
                 extra: old.extra.clone(),
                 ..next.entry(old.cli.clone(), old.adopted)
             };
@@ -432,18 +460,19 @@ impl Extensions {
                 .iter_mut()
                 .find(|entry| entry.id == old.id)
             {
-                *slot = fresh;
+                *slot = fresh.clone();
             }
+            replaced.push((old.clone(), fresh));
         }
         if let Err(error) = lockfile.write(&self.layout.lock_path()) {
-            for (_, next) in &staged {
-                self.remove_unpacked(&next.manifest.id, &next.dir);
+            for (old, next) in &staged {
+                self.discard_staged(old, next);
             }
             return Err(error);
         }
-        for (old, _) in &staged {
-            // The outdated files left the lockfile with this write, so their folder is only litter now.
-            let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+        for (old, fresh) in &replaced {
+            // The outdated files left the lockfile with this write, so the folders it no longer keeps are litter now.
+            self.drop_versions_outside(old, fresh);
         }
         match failed {
             Some(error) => Err(error),
@@ -522,7 +551,7 @@ impl Extensions {
     }
 
     /// An agent kind that another package is installing right now is taken, as an installed one would be.
-    fn check_installing_kinds(&self, id: &str, kinds: &[String]) -> Result<(), Error> {
+    pub(crate) fn check_installing_kinds(&self, id: &str, kinds: &[String]) -> Result<(), Error> {
         let installing = self
             .installing
             .lock()
@@ -545,7 +574,7 @@ impl Extensions {
 
     /// The agent kinds an installed package records. An entry from before kinds were recorded is read from its folder,
     /// best-effort: an update replaces a tampered folder anyway.
-    fn recorded_kinds(&self, entry: &LockEntry) -> Vec<String> {
+    pub(crate) fn recorded_kinds(&self, entry: &LockEntry) -> Vec<String> {
         if !entry.agent_kinds.is_empty() {
             return entry.agent_kinds.clone();
         }
@@ -553,7 +582,7 @@ impl Extensions {
             .map_or_else(|_| Vec::new(), |manifest| agent_kind_ids(&manifest))
     }
 
-    fn check_kind_conflicts(
+    pub(crate) fn check_kind_conflicts(
         &self,
         lockfile: &Lockfile,
         manifest: &Manifest,
@@ -776,6 +805,7 @@ impl Staged {
             cli,
             agent_kinds: agent_kind_ids(&self.manifest),
             adopted,
+            previous: None,
             extra: Default::default(),
         }
     }
@@ -796,8 +826,45 @@ impl Drop for Busy {
     }
 }
 
+impl Extensions {
+    /// Deletes the folders a replaced entry held that the entry now in its place no longer keeps.
+    fn drop_versions_outside(&self, replaced: &LockEntry, now: &LockEntry) {
+        let kept: Vec<&str> = std::iter::once(now.path.as_str())
+            .chain(now.previous.as_deref().map(|kept| kept.path.as_str()))
+            .collect();
+        let held = std::iter::once(replaced.path.as_str())
+            .chain(replaced.previous.as_deref().map(|kept| kept.path.as_str()));
+        for path in held {
+            if !kept.contains(&path) {
+                let _ = fs::remove_dir_all(self.layout.resolve(path));
+            }
+        }
+    }
+
+    /// Deletes a staged folder after a failed commit, unless the entry it would replace keeps that folder.
+    fn discard_staged(&self, old: &LockEntry, staged: &Staged) {
+        if old
+            .previous
+            .as_ref()
+            .is_none_or(|kept| kept.path != staged.rel)
+        {
+            self.remove_unpacked(&staged.manifest.id, &staged.dir);
+        }
+    }
+}
+
+/// The version an update leaves behind in `current`'s place: `current` itself, unless the update lands on the folder
+/// that `current` already keeps, which then stays as it is.
+fn kept_after_update(current: &LockEntry, rel: &str) -> Option<Box<KeptVersion>> {
+    if current.path == rel {
+        current.previous.clone()
+    } else {
+        Some(Box::new(KeptVersion::of(current, rel)))
+    }
+}
+
 /// The agent kind ids a package declares, as its lock entry records them.
-fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
+pub(crate) fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
     manifest
         .contributes
         .agent_adapters
@@ -807,7 +874,7 @@ fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
 }
 
 /// The source an installed package was read from, as its lock entry names it.
-fn installed_source(entry: &LockEntry) -> Source {
+pub(crate) fn installed_source(entry: &LockEntry) -> Source {
     let reference = entry.source.reference.clone();
     match entry.source.kind {
         SourceKind::Catalogue => Source::Catalogue(reference),

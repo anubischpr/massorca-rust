@@ -2,6 +2,7 @@
 //! the cases the client cannot produce.
 
 mod agent_packages;
+mod agents_chat;
 mod agents_redaction;
 mod agents_seen;
 mod capabilities;
@@ -29,6 +30,7 @@ mod handshake;
 mod host_memory;
 mod host_ports;
 mod host_storage;
+mod hosted_services;
 mod lifecycle;
 mod network;
 mod network_account_masking;
@@ -42,6 +44,7 @@ mod tasks;
 mod teams;
 mod terminal_secrets;
 mod terminal_wait;
+mod workspace_archive;
 mod workspace_children;
 mod workspace_setup;
 mod workspaces;

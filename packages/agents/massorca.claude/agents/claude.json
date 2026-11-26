@@ -7,6 +7,19 @@
   "prompt": { "mode": "argv", "separator": false, "paste": "bracketed", "submit": "\r" },
   "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
   "resume": ["--resume", "{ref}"],
+  "resume_transcript": { "env": "CLAUDE_CONFIG_DIR", "dir": "{home}/.claude", "glob": "projects/*/{ref}.jsonl" },
+  "resume_not_found_pattern": "No conversation found with session ID",
+  "instructions": {
+    "args": ["--append-system-prompt", "{text}"],
+    "supported_when": { "args": ["--help"], "contains": "--append-system-prompt" }
+  },
+  "chat": { "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2 },
+  "strip_inherited_env": [
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDECODE"
+  ],
   "status": {
     "mechanism": "claude-settings",
     "events": {
@@ -35,7 +48,12 @@
   },
   "accounts": {
     "login": ["auth", "login"],
-    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "check": {
+      "args": ["auth", "status", "--json"],
+      "signed_in_exit": 0,
+      "identity_json": ["email", "orgName"],
+      "signed_in_json": "loggedIn"
+    },
     "logout": ["auth", "logout"],
     "strip_env": [
       "ANTHROPIC_API_KEY",
@@ -61,42 +79,55 @@
   },
   "permission_modes": [
     {
+      "id": "auto",
+      "label": "Auto",
+      "description": "Everything runs, with background safety checks. Where auto mode is not available, Claude Code starts in Manual.",
+      "args": ["--permission-mode", "auto"],
+      "may_fall_back": true,
+      "icon": "sparkles",
+      "tone": "normal"
+    },
+    {
       "id": "default",
       "label": "Manual",
       "description": "Asks before file edits and commands; reads in the working directories run without asking.",
-      "args": ["--permission-mode", "default"]
+      "args": ["--permission-mode", "default"],
+      "icon": "hand",
+      "tone": "normal"
     },
     {
       "id": "acceptEdits",
-      "label": "Edit automatically",
+      "label": "Accept edits",
       "description": "File edits and common filesystem commands run without asking.",
-      "args": ["--permission-mode", "acceptEdits"]
+      "args": ["--permission-mode", "acceptEdits"],
+      "icon": "file-pen",
+      "tone": "normal"
     },
     {
       "id": "plan",
       "label": "Plan",
       "description": "Reads and plans before changing anything.",
-      "args": ["--permission-mode", "plan"]
-    },
-    {
-      "id": "auto",
-      "label": "Auto",
-      "description": "Everything runs, with background safety checks. Where auto mode is not available, Claude Code starts in Manual.",
-      "args": ["--permission-mode", "auto"],
-      "may_fall_back": true
-    },
-    {
-      "id": "dontAsk",
-      "label": "Don't ask",
-      "description": "Only pre-approved tools run; anything that would ask is denied.",
-      "args": ["--permission-mode", "dontAsk"]
+      "args": ["--permission-mode", "plan"],
+      "icon": "map",
+      "tone": "normal"
     },
     {
       "id": "bypassPermissions",
       "label": "Bypass permissions",
       "description": "Everything runs without asking. The vendor says: isolated containers and VMs only.",
       "args": ["--permission-mode", "bypassPermissions"],
-      "bypass": true
+      "bypass": true,
+      "icon": "shield-alert",
+      "tone": "warning"
+    },
+    {
+      "id": "dontAsk",
+      "label": "Don't ask",
+      "description": "Only pre-approved tools run; anything that would ask is denied.",
+      "args": ["--permission-mode", "dontAsk"],
+      "icon": "ban",
+      "tone": "normal",
+      "selectable": false
     }
   ],
   "default_permission_mode": "auto",

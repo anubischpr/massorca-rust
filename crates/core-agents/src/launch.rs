@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use massorca_core_terminal::EnvValue;
+use massorca_core_terminal::credential_guard::{CREDENTIAL_GUARD_ENV, CREDENTIAL_GUARD_ON};
 use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 use serde_json::{Value, json};
 
@@ -60,6 +61,11 @@ pub struct LaunchInput<'a> {
     /// parent. Its terminal carries the mark, and the caller's env may not add a dangerous name.
     pub holds_secrets: bool,
     pub caller_env: &'a BTreeMap<String, String>,
+    /// MassOrca's per-launch instructions (decision 0161), passed through the kind's `instructions` channel when it
+    /// declares one. `None` when the session may not delegate further.
+    pub instructions: Option<&'a str>,
+    /// The `PATH` the run's terminal inherits from the service, which the run's own `PATH` starts from.
+    pub inherited_path: Option<&'a str>,
 }
 
 /// What to run. Values in `env` may be secrets: never log them.
@@ -152,6 +158,9 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     args.extend(input.mode_args.iter().cloned());
     let mut files = Vec::new();
     install_hooks(input, &mut args, &mut files);
+    if let (Some(channel), Some(text)) = (&decl.instructions, input.instructions) {
+        args.extend(channel.args_with(text));
+    }
 
     let mut agent_ref = None;
     let mut pending_prompt = None;
@@ -277,14 +286,43 @@ fn quote_for_shell(path: &str) -> String {
     quoted
 }
 
-/// The run's own variables, the credential home when there is one, the provided ones, then the caller's; and what to
-/// strip. A provided name in `strip_env` is set, not stripped: the vault granted it.
+/// The run identity a launch sets (decision 0160): a value inherited by the service or given by the caller is never
+/// passed through, so a run never carries another session's identity.
+pub const RUN_IDENTITY_ENV: [&str; 3] = [ENV_SESSION, ENV_TOKEN, ENV_KIND];
+
+/// The vendor session markers the built-in kinds declare in `strip_inherited_env` (decision 0160). The service drops
+/// them from the environment every terminal starts from, so they are absent rather than empty; a kind installed later
+/// still has its own list emptied at launch. A test keeps this list equal to the built-in declarations.
+pub const INHERITED_VENDOR_MARKERS: &[&str] = &[
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDECODE",
+];
+
+/// Whether `name` is one of [`INHERITED_VENDOR_MARKERS`], compared as the platform compares variable names.
+#[must_use]
+pub fn is_inherited_vendor_marker(name: &str) -> bool {
+    INHERITED_VENDOR_MARKERS
+        .iter()
+        .any(|marker| same_name(marker, name))
+}
+
+/// Whether `name` is one of [`RUN_IDENTITY_ENV`], compared without case on Windows.
+#[must_use]
+pub fn is_run_identity(name: &str) -> bool {
+    RUN_IDENTITY_ENV
+        .iter()
+        .any(|identity| same_name(identity, name))
+}
+
+/// The credential home when there is one, the provided variables, the caller's, then the run's own identity, which
+/// nothing overrides; and what to strip: the credentials' `strip_env` with a home, then the kind's
+/// `strip_inherited_env` (decision 0160). A name the launch sets is set, not stripped: a provided name in `strip_env` was
+/// granted by the vault.
 fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<String>) {
     let mut env = BTreeMap::new();
     let value = |text: &str| EnvValue::new(text.to_owned());
-    env.insert(ENV_SESSION.to_owned(), value(input.session_id));
-    env.insert(ENV_TOKEN.to_owned(), value(input.token));
-    env.insert(ENV_KIND.to_owned(), value(&input.decl.id));
     env.insert(
         ENV_BIN.to_owned(),
         value(&input.massorca_bin.to_string_lossy()),
@@ -308,8 +346,63 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<Stri
         env.retain(|existing, _| !same_name(existing, name));
         env.insert(name.clone(), value(caller_value));
     }
+    env.retain(|existing, _| !is_run_identity(existing));
+    env.insert(ENV_SESSION.to_owned(), value(input.session_id));
+    env.insert(ENV_TOKEN.to_owned(), value(input.token));
+    env.insert(ENV_KIND.to_owned(), value(&input.decl.id));
+    // Last, so neither the caller nor a vault grant can switch the git guard off (TERM-24).
+    env.retain(|existing, _| !same_name(existing, CREDENTIAL_GUARD_ENV));
+    env.insert(CREDENTIAL_GUARD_ENV.to_owned(), value(CREDENTIAL_GUARD_ON));
+    for name in &input.decl.strip_inherited_env {
+        let set = env.keys().any(|existing| same_name(existing, name));
+        if !set && !remove_env.iter().any(|stripped| same_name(stripped, name)) {
+            remove_env.push(name.clone());
+        }
+    }
+    with_massorca_on_path(input, &mut env);
     (env, remove_env)
 }
+
+/// Puts the folder of the `massorca` executable first on the run's `PATH` (decision 0161), so the agent can run
+/// `massorca`: in front of the `PATH` the caller or the vault set, else the inherited one. The rest is kept as it is, and
+/// a folder that is already first is not added again.
+fn with_massorca_on_path(input: &LaunchInput<'_>, env: &mut BTreeMap<String, EnvValue>) {
+    let Some(folder) = input
+        .massorca_bin
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+    else {
+        return;
+    };
+    let folder = folder.to_string_lossy();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let current = env
+        .iter()
+        .find(|(name, _)| same_name(name, PATH_ENV))
+        .map(|(_, value)| value.as_str().to_owned())
+        .or_else(|| input.inherited_path.map(str::to_owned))
+        .unwrap_or_default();
+    let first = current.split(separator).next().unwrap_or_default();
+    let already_first = if cfg!(windows) {
+        first
+            .trim_end_matches(['\\', '/'])
+            .eq_ignore_ascii_case(folder.trim_end_matches(['\\', '/']))
+    } else {
+        first.trim_end_matches('/') == folder.trim_end_matches('/')
+    };
+    let path = if already_first {
+        current
+    } else if current.is_empty() {
+        folder.into_owned()
+    } else {
+        format!("{folder}{separator}{current}")
+    };
+    env.retain(|name, _| !same_name(name, PATH_ENV));
+    env.insert(PATH_ENV.to_owned(), EnvValue::new(path));
+}
+
+/// The search path variable a run's `PATH` is set under; Windows compares the name without case.
+const PATH_ENV: &str = "PATH";
 
 #[cfg(test)]
 mod tests {
@@ -329,6 +422,8 @@ mod tests {
         provided: ProvidedEnv,
         holds_secrets: bool,
         caller_env: BTreeMap<String, String>,
+        instructions: Option<String>,
+        inherited_path: Option<String>,
     }
 
     impl Fixture {
@@ -344,6 +439,8 @@ mod tests {
                 provided: ProvidedEnv::default(),
                 holds_secrets: false,
                 caller_env: BTreeMap::new(),
+                instructions: None,
+                inherited_path: None,
             }
         }
 
@@ -362,6 +459,8 @@ mod tests {
                 provided_env: &self.provided,
                 holds_secrets: self.holds_secrets,
                 caller_env: &self.caller_env,
+                instructions: self.instructions.as_deref(),
+                inherited_path: self.inherited_path.as_deref(),
             })
         }
 
@@ -581,12 +680,95 @@ mod tests {
         assert!(plan.remove_env.is_empty());
     }
 
+    /// The `PATH` separator and the folder of the fixture's `massorca`.
+    const SEPARATOR: &str = if cfg!(windows) { ";" } else { ":" };
+    const BIN_FOLDER: &str = "/opt/mass orca";
+
+    #[test]
+    fn the_run_path_starts_with_the_massorca_folder_and_keeps_the_rest() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.inherited_path = Some(format!("/usr/bin{SEPARATOR}/bin"));
+        let plan = fixture.first(None);
+        assert_eq!(
+            plan.env[PATH_ENV].as_str(),
+            format!("{BIN_FOLDER}{SEPARATOR}/usr/bin{SEPARATOR}/bin")
+        );
+
+        // Already first: not added again.
+        fixture.inherited_path = Some(format!("{BIN_FOLDER}{SEPARATOR}/usr/bin"));
+        assert_eq!(
+            fixture.first(None).env[PATH_ENV].as_str(),
+            format!("{BIN_FOLDER}{SEPARATOR}/usr/bin")
+        );
+
+        // Nothing inherited: the folder alone.
+        fixture.inherited_path = None;
+        assert_eq!(fixture.first(None).env[PATH_ENV].as_str(), BIN_FOLDER);
+
+        // A caller's PATH is the one the folder goes in front of.
+        fixture.inherited_path = Some("/usr/bin".to_owned());
+        let caller_name = if cfg!(windows) { "Path" } else { "PATH" };
+        fixture
+            .caller_env
+            .insert(caller_name.to_owned(), "/caller/bin".to_owned());
+        let plan = fixture.first(None);
+        let paths: Vec<_> = plan
+            .env
+            .iter()
+            .filter(|(name, _)| same_name(name, PATH_ENV))
+            .map(|(_, value)| value.as_str().to_owned())
+            .collect();
+        assert_eq!(paths, [format!("{BIN_FOLDER}{SEPARATOR}/caller/bin")]);
+    }
+
+    #[test]
+    fn instructions_go_through_the_declared_channel_only_when_given() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.instructions = Some("be brief".to_owned());
+        let plan = fixture.first(Some("go"));
+        let at = plan
+            .args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .expect("the channel's flag");
+        assert_eq!(plan.args[at + 1], "be brief");
+        assert_eq!(plan.args.last().map(String::as_str), Some("go"));
+        let resumed = fixture.plan(Run::Resume { agent_ref: "abc" }).unwrap();
+        assert!(resumed.args.iter().any(|arg| arg == "be brief"));
+
+        fixture.instructions = None;
+        let plan = fixture.first(Some("go"));
+        assert!(!plan.args.iter().any(|arg| arg == "--append-system-prompt"));
+
+        // A kind without a channel gets no text.
+        let mut codex = Fixture::new(built_in("codex"));
+        codex.instructions = Some("be brief".to_owned());
+        assert!(!codex.first(None).args.iter().any(|arg| arg == "be brief"));
+    }
+
+    #[test]
+    fn every_run_asks_its_terminal_for_the_git_credential_guard() {
+        let plan = Fixture::new(fake(json!({ "mode": "argv" }))).first(None);
+        assert_eq!(plan.env[CREDENTIAL_GUARD_ENV].as_str(), CREDENTIAL_GUARD_ON);
+    }
+
+    #[test]
+    fn a_caller_cannot_switch_the_git_credential_guard_off() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.caller_env = BTreeMap::from([(CREDENTIAL_GUARD_ENV.to_owned(), "off".to_owned())]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env[CREDENTIAL_GUARD_ENV].as_str(), CREDENTIAL_GUARD_ON);
+    }
+
     #[test]
     fn a_credential_home_sets_its_variable_and_strips_keys() {
         let mut fixture = Fixture::new(built_in("claude"));
         let without = fixture.first(None);
         assert!(!without.env.contains_key("CLAUDE_CONFIG_DIR"));
-        assert!(without.remove_env.is_empty(), "no home, nothing stripped");
+        assert_eq!(
+            without.remove_env, CLAUDE_INHERITED,
+            "no home, only the inherited markers are stripped"
+        );
 
         fixture.home = Some(PathBuf::from("/data/profiles/default/agents/homes/claude"));
         let with = fixture.first(None);
@@ -595,13 +777,57 @@ mod tests {
             "/data/profiles/default/agents/homes/claude"
         );
         assert_eq!(
-            with.remove_env,
+            with.remove_env[..3],
             [
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_TOKEN"
             ]
         );
+        assert_eq!(with.remove_env[3..], CLAUDE_INHERITED);
+    }
+
+    /// The inherited markers the built-in claude kind strips (decision 0160).
+    const CLAUDE_INHERITED: [&str; 4] = [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDECODE",
+    ];
+
+    #[test]
+    fn inherited_markers_are_stripped_from_every_run_unless_the_launch_sets_them() {
+        let mut fixture = Fixture::new(kind(json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "resume": ["--resume", "{ref}"], "session_ref": { "learn": "id" },
+            "strip_inherited_env": ["PARENT_STAMP", "PARENT_ID", "SHARED"]
+        })));
+        fixture.caller_env = BTreeMap::from([("SHARED".to_owned(), "mine".to_owned())]);
+        let first = fixture.first(None);
+        assert_eq!(first.remove_env, ["PARENT_STAMP", "PARENT_ID"]);
+        assert_eq!(
+            first.env["SHARED"].as_str(),
+            "mine",
+            "a name the launch sets is set"
+        );
+        // A resume carries no caller env (docs/architecture/agents.md), so every listed name is stripped.
+        fixture.caller_env.clear();
+        let resumed = fixture.plan(Run::Resume { agent_ref: "r-9" }).unwrap();
+        assert_eq!(resumed.remove_env, ["PARENT_STAMP", "PARENT_ID", "SHARED"]);
+    }
+
+    #[test]
+    fn the_run_identity_is_the_launch_s_own_whatever_the_caller_sets() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.caller_env = BTreeMap::from([
+            (ENV_SESSION.to_owned(), "other-session".to_owned()),
+            (ENV_TOKEN.to_owned(), "other-token".to_owned()),
+            (ENV_KIND.to_owned(), "other-kind".to_owned()),
+        ]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env[ENV_SESSION].as_str(), "s-1");
+        assert_eq!(plan.env[ENV_TOKEN].as_str(), "t0k3n");
+        assert_eq!(plan.env[ENV_KIND].as_str(), "fake");
     }
 
     #[test]

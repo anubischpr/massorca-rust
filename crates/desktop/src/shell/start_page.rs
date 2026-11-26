@@ -8,13 +8,15 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
 };
-use massorca_protocol::methods::agents::AgentSession;
+use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::composer::{AccessMode, Composer, ComposerEvent};
+use massorca_ui::components::invocation_banner::hex_colour;
 use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::model_picker::{
-    AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
+    AgentAvailability, AgentBrand, AgentOption, Choice, ModelList, ModelOption, PickerState,
 };
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
@@ -26,6 +28,7 @@ use massorca_ui::tokens::{
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::Shell;
@@ -33,16 +36,16 @@ use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_ca
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
+use crate::model::agent_models::{choice_kind, declared_model, declared_models, preselected_model};
 use crate::model::agent_sessions::agent_of_kind;
 use crate::model::home_start::{ADD_A_PROJECT, HOME_START, home_choice};
 use crate::model::marketplace::ItemKind;
 use crate::model::navigation::MarketplacePage;
-use crate::model::permission_modes::{ModeChoice, remembered_mode, start_choices};
-use crate::model::regions::Region;
+use crate::model::permission_modes::{DEFAULT_TAG, ModeChoice, remembered_mode, start_choices};
 use crate::model::start_page::{
-    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode, StartOptions,
-    StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, send_reason, start_options,
-    start_params,
+    CHOOSE_AN_AGENT, ChatAvailability, GIT_LATER, KEY_HINTS, NO_AGENTS_INSTALLED, StartMode,
+    StartOptions, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart, fast_reason,
+    send_reason, start_options, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
@@ -91,6 +94,8 @@ pub(super) struct StartComposer {
     pub mode: StartMode,
     /// The (kind, mode) the person last picked on the chip; the only mode a start can send.
     pub picked: Option<(String, String)>,
+    /// Whether Chat is available for the picked agent, as the page's last frame read it (decision 0101, D11).
+    pub chat: ChatAvailability,
     _events: Subscription,
 }
 
@@ -149,6 +154,7 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
         page.branch
             .clone()
             .unwrap_or_else(|| "No branch".to_owned()),
+        None,
         GIT_LATER,
         &theme,
         pill_focus("start-branch", window, cx),
@@ -280,11 +286,7 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
         .iter()
         .map(|choice| AccessMode {
             name: choice.name.clone().into(),
-            icon: if choice.bypass {
-                IconName::TriangleAlert
-            } else {
-                IconName::Shield
-            },
+            icon: choice.icon,
             bypass: choice.bypass,
         })
         .collect()
@@ -298,39 +300,132 @@ pub(super) fn access_details(choices: &[ModeChoice]) -> Vec<Option<SharedString>
         .collect()
 }
 
-/// The installed, enabled kinds as the picker's rail offers them: one agent each, with the kind as its only row,
-/// since the service declares no models yet.
-fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
+/// The tag of each of a kind's mode entries, in the same order as `access_modes`: the declared default's row only.
+pub(super) fn access_tags(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
     choices
         .iter()
-        .map(|choice| AgentOption {
-            kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
-            availability: AgentAvailability::Ready,
-            list: ModelList::Loaded,
-            models: vec![ModelOption {
-                id: choice.id.clone().into(),
-                name: choice.name.clone().into(),
-                efforts: Vec::new(),
-                default_effort: 0,
-                fast: false,
-            }],
+        .map(|choice| choice.default.then(|| SharedString::from(DEFAULT_TAG)))
+        .collect()
+}
+
+/// The installed kinds as the picker's rail offers them: each kind's declared models with the levels each accepts. A
+/// kind that declares no models is its own one row, with the levels the kind declares. Each agent carries the brand
+/// colours its Marketplace listing gives.
+pub(super) fn picker_agents(
+    kinds: &[AgentKind],
+    installed: &[KindChoice],
+    brands: &BTreeMap<String, AgentBrand>,
+) -> Vec<AgentOption> {
+    installed
+        .iter()
+        .map(|choice| {
+            let kind = kinds.iter().find(|kind| kind.id == choice.id);
+            let declared = kind.map(declared_models).unwrap_or_default();
+            let models = if declared.is_empty() {
+                let (efforts, default_effort) = kind.map_or_else(|| (Vec::new(), 0), kind_levels);
+                vec![ModelOption {
+                    id: choice.id.clone().into(),
+                    name: choice.name.clone().into(),
+                    efforts,
+                    default_effort,
+                    fast: false,
+                }]
+            } else {
+                declared
+                    .into_iter()
+                    .map(|model| ModelOption {
+                        id: model.id.into(),
+                        name: model.label.into(),
+                        efforts: model
+                            .efforts
+                            .into_iter()
+                            .map(|effort| SharedString::from(effort.label))
+                            .collect(),
+                        default_effort: model.default_effort,
+                        fast: false,
+                    })
+                    .collect()
+            };
+            AgentOption {
+                kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
+                availability: AgentAvailability::Ready,
+                list: ModelList::Loaded,
+                models,
+                brand: brands.get(&choice.id).copied(),
+            }
         })
         .collect()
 }
 
-/// The model and effort the picker chose for `kind`, as `agent.start` takes them when the service offers them.
-pub(super) fn picked_options(picker: &PickerState, offered: bool, kind: &str) -> StartOptions {
-    let Some(model) = picker.current_model() else {
+/// A kind's own levels as its picker row lists them, in declared order, and the index of its declared default.
+fn kind_levels(kind: &AgentKind) -> (Vec<SharedString>, usize) {
+    let Some(effort) = &kind.effort else {
+        return (Vec::new(), 0);
+    };
+    let default = effort
+        .default
+        .as_deref()
+        .and_then(|id| effort.levels.iter().position(|level| level.id == id))
+        .unwrap_or(0);
+    let labels = effort
+        .levels
+        .iter()
+        .map(|level| SharedString::from(level.label.clone()))
+        .collect();
+    (labels, default)
+}
+
+/// The brand colours of each agent kind, from the Marketplace listing of the package that declares it, the installed
+/// package before the catalogue's. The first listed colour starts the fill and the second, when given, ends it.
+pub(super) fn agent_brands(
+    installed: &[ExtensionItem],
+    catalogue: &[ExtensionItem],
+) -> BTreeMap<String, AgentBrand> {
+    let mut brands = BTreeMap::new();
+    for entry in installed.iter().chain(catalogue) {
+        if entry.listing.category != "agents" {
+            continue;
+        }
+        let (Some(kind), Some(banner)) = (entry.agents.first(), entry.listing.banner.as_ref())
+        else {
+            continue;
+        };
+        let Some(first) = banner.colors.first().and_then(|text| hex_colour(text)) else {
+            continue;
+        };
+        let second = banner.colors.get(1).and_then(|text| hex_colour(text));
+        brands
+            .entry(kind.id.clone())
+            .or_insert(AgentBrand { first, second });
+    }
+    brands
+}
+
+/// The model and effort the picker chose, as `agent.start` takes them: the declared id of the chosen model and of the
+/// level at the chosen index. A row no kind declares as a model sends neither.
+pub(super) fn picked_options(
+    picker: &PickerState,
+    offered: bool,
+    kinds: &[AgentKind],
+) -> StartOptions {
+    let chosen = picker.choice().effort;
+    if let Some((_, model)) = declared_model(kinds, &picker.choice().model) {
+        let effort = chosen
+            .and_then(|index| model.efforts.get(index))
+            .map(|effort| effort.id.as_str());
+        return start_options(offered, Some(&model.id), effort);
+    }
+    // A kind that declares levels but no model offers them on its own row, and sends the level without a model.
+    let Some(kind) = kinds.iter().find(|kind| kind.id == picker.choice().model) else {
         return StartOptions::default();
     };
-    let efforts: Vec<&str> = model.efforts.iter().map(|label| label.as_ref()).collect();
-    start_options(
-        offered,
-        kind,
-        &picker.choice().model,
-        &efforts,
-        picker.choice().effort,
-    )
+    let effort = kind
+        .effort
+        .as_ref()
+        .zip(chosen)
+        .and_then(|(effort, index)| effort.levels.get(index))
+        .map(|level| level.id.as_str());
+    start_options(offered, None, effort)
 }
 
 /// The key hints under the composer, left-aligned at its edge: each key in a keycap, then what it does (D-AG-01).
@@ -362,28 +457,40 @@ fn start_mode_switch(
     workspace: String,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_: &mut Window, cx: &mut App| -> AnyElement {
-        let mode = shell
+        let (mode, chat) = shell
             .upgrade()
-            .map(|shell| shell.read(cx).start_mode(&workspace))
-            .unwrap_or_default();
+            .map(|shell| {
+                let shell = shell.read(cx);
+                (
+                    shell.start_mode(&workspace, cx),
+                    shell.chat_availability(&workspace, cx),
+                )
+            })
+            .unwrap_or((StartMode::Terminal, ChatAvailability::new(false, None)));
         let (shell, workspace) = (shell.clone(), workspace.clone());
-        SegmentedControl::new(
-            "start-mode",
-            "start-mode-group",
-            vec![
-                Segment::icon_text(IconName::MessageSquare, "Chat"),
-                Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-            ],
-        )
-        .selected(mode.index())
-        .style(SegmentedStyle::Sunken)
-        .on_change(move |index, _, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
-            });
-        })
-        .into_any_element()
+        SegmentedControl::new("start-mode", "start-mode-group", mode_segments(&chat))
+            .selected(mode.index())
+            .style(SegmentedStyle::Sunken)
+            .on_change(move |index, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.set_start_mode(&workspace, StartMode::from_index(index), cx);
+                });
+            })
+            .into_any_element()
     }
+}
+
+/// The switch's two segments. Chat is off, with the reason `chat` gives, while Chat is not available.
+pub(super) fn mode_segments(chat: &ChatAvailability) -> Vec<Segment> {
+    let segment = Segment::icon_text(IconName::MessageSquare, "Chat");
+    let segment = match chat.reason() {
+        Some(reason) => segment.disabled(true).tooltip(reason.to_owned()),
+        None => segment,
+    };
+    vec![
+        segment,
+        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+    ]
 }
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
@@ -576,6 +683,11 @@ impl Shell {
                                 shell.record_start_pick(&workspace, *index, composer.clone(), cx);
                                 shell.remember_start_mode(&composer, *index, cx);
                             }
+                            ComposerEvent::ModelChanged(_) => {
+                                // Chat follows the picked agent: the page refreshes it, the composer redraws.
+                                composer.update(cx, |_, cx| cx.notify());
+                                cx.notify();
+                            }
                             _ => {}
                         },
                     );
@@ -583,6 +695,8 @@ impl Shell {
                         entity,
                         mode: StartMode::default(),
                         picked: None,
+                        // Set by `refresh_start_composer`, which runs right after this composer is created.
+                        chat: ChatAvailability::Available,
                         _events: events,
                     }
                 })
@@ -592,12 +706,22 @@ impl Shell {
         entity
     }
 
-    /// Where a session started from `workspace`'s page opens; Chat until the switch says otherwise.
-    pub(super) fn start_mode(&self, workspace: &str) -> StartMode {
+    /// Whether Chat is available for `workspace`'s picked agent, as the page's last frame read it (decision 0101).
+    pub(super) fn chat_availability(&self, workspace: &str, cx: &App) -> ChatAvailability {
+        self.start_composers.get(workspace).map_or_else(
+            || ChatAvailability::new(self.store.read(cx).state().agent_chat, None),
+            |start| start.chat.clone(),
+        )
+    }
+
+    /// Where a session started from `workspace`'s page opens: the switch's choice (Chat until it says otherwise),
+    /// or Terminal while Chat is not available for the picked agent.
+    pub(super) fn start_mode(&self, workspace: &str, cx: &App) -> StartMode {
         self.start_composers
             .get(workspace)
             .map(|composer| composer.mode)
             .unwrap_or_default()
+            .offered(self.chat_availability(workspace, cx).is_available())
     }
 
     /// The switch's choice for `workspace`, kept with its composer so it survives redraws.
@@ -621,18 +745,31 @@ impl Shell {
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let (choices, connected, kinds) = {
+        let (choices, connected, kinds, agent_fast, brands) = {
             let state = self.store.read(cx).state();
             (
                 session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
+                state.agent_fast,
+                {
+                    let (installed, catalogue) = state.extension_lists();
+                    agent_brands(installed, catalogue)
+                },
             )
         };
+        let installed_kinds: Vec<AgentKind> = kinds
+            .iter()
+            .filter(|kind| choices.iter().any(|choice| choice.id == kind.id))
+            .cloned()
+            .collect();
+        let preselect = preselected_model(&installed_kinds).map(SharedString::from);
         composer.update(cx, |composer, cx| {
-            composer.set_picker_agents(picker_agents(&choices), cx);
+            composer.set_picker_agents(picker_agents(&kinds, &choices, &brands), preselect, cx);
             // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
             composer.set_no_agents_installed(connected && choices.is_empty(), cx);
+            // Fast is off on every model until the service offers its speed (`AGENT_FAST_CAPABILITY`).
+            composer.set_picker_fast_reason(fast_reason(agent_fast).map(SharedString::from), cx);
         });
         let chosen = composer
             .read(cx)
@@ -643,22 +780,26 @@ impl Shell {
             .model
             .clone();
         // The mode chip follows the chosen kind; a pick stays while the kind does.
-        let chosen_kind = kinds
-            .iter()
-            .find(|kind| kind.id.as_str() == chosen.as_ref());
-        let (modes, details, remembered) = chosen_kind.map_or_else(Default::default, |kind| {
-            let choices = start_choices(kind);
-            // The person's last explicit pick for this kind comes back, while the kind still declares it.
-            let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
-            // A bypass mode is never restored from memory: it is sent only when picked on this composer.
-            let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
-                let index = choices
-                    .iter()
-                    .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
-                Some((index, (kind.id.clone(), id.to_owned())))
+        let chosen_kind = choice_kind(&kinds, chosen.as_ref());
+        let (modes, details, tags, remembered) =
+            chosen_kind.map_or_else(Default::default, |kind| {
+                let choices = start_choices(kind);
+                // The person's last explicit pick for this kind comes back, while the kind still offers it.
+                let saved = crate::ui_state::saved_start_mode(cx, &kind.id);
+                // A bypass mode is never restored from memory: it is sent only when picked on this composer.
+                let remembered = remembered_mode(kind, saved.as_deref()).and_then(|id| {
+                    let index = choices
+                        .iter()
+                        .position(|choice| choice.id.as_deref() == Some(id) && !choice.bypass)?;
+                    Some((index, (kind.id.clone(), id.to_owned())))
+                });
+                (
+                    access_modes(&choices),
+                    access_details(&choices),
+                    access_tags(&choices),
+                    remembered,
+                )
             });
-            (access_modes(&choices), access_details(&choices), remembered)
-        });
         let changed = composer.update(cx, |composer, cx| {
             let changed = composer.access_modes() != modes.as_slice();
             let keep = if changed {
@@ -668,15 +809,27 @@ impl Shell {
             };
             composer.set_access_modes(modes, keep, cx);
             composer.set_access_details(details, cx);
+            composer.set_access_tags(tags, cx);
             changed
         });
         // A restored chip is the person's pick, so the chip and the start agree; a reset chip sends no mode.
         if changed && let Some(start) = self.start_composers.get_mut(workspace_id) {
             start.picked = remembered.map(|(_, picked)| picked);
         }
-        let kind_chosen = choices
-            .iter()
-            .any(|choice| choice.id.as_str() == chosen.as_ref());
+        // Chat follows the picked agent: its chat support, or no agent picked yet.
+        let chat = {
+            let state = self.store.read(cx).state();
+            let agent = choice_kind(&state.agent_kinds, chosen.as_ref());
+            ChatAvailability::new(
+                state.agent_chat,
+                agent.map(|kind| (kind.name.as_str(), state.agent_kind_chat.get(&kind.id))),
+            )
+        };
+        if let Some(start) = self.start_composers.get_mut(workspace_id) {
+            start.chat = chat;
+        }
+        let kind_chosen =
+            chosen_kind.is_some_and(|kind| choices.iter().any(|choice| choice.id == kind.id));
         let starting = self
             .start_pending
             .as_ref()
@@ -709,9 +862,17 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let options = self.chosen_options(&composer, &kind.id, cx);
-        let params = start_params(Some(workspace), &kind.id, prompt, permission_mode, options);
-        let mode = self.start_mode(workspace);
+        let options = self.chosen_options(&composer, cx);
+        let grid = self.start_grid(cx);
+        let params = start_params(
+            Some(workspace),
+            &kind.id,
+            prompt,
+            permission_mode,
+            options,
+            grid,
+        );
+        let mode = self.start_mode(workspace, cx);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
             kind_name: kind.name,
@@ -743,14 +904,7 @@ impl Shell {
             .choice()
             .model
             .to_string();
-        let Some(declared) = self
-            .store
-            .read(cx)
-            .state()
-            .agent_kinds
-            .iter()
-            .find(|declared| declared.id == chosen)
-        else {
+        let Some(declared) = choice_kind(&self.store.read(cx).state().agent_kinds, &chosen) else {
             return;
         };
         let mode = start_choices(declared)
@@ -760,15 +914,14 @@ impl Shell {
         ui_state::remember_start_mode(cx, &kind, mode.as_deref());
     }
 
-    /// The model and effort `composer`'s picker chose for `kind`, sent only when the service offers them.
-    pub(super) fn chosen_options(
-        &self,
-        composer: &Entity<Composer>,
-        kind: &str,
-        cx: &App,
-    ) -> StartOptions {
-        let offered = self.store.read(cx).state().agent_options;
-        picked_options(composer.read(cx).picker().read(cx).state(), offered, kind)
+    /// The model and effort `composer`'s picker chose, sent only when the service offers them.
+    pub(super) fn chosen_options(&self, composer: &Entity<Composer>, cx: &App) -> StartOptions {
+        let state = self.store.read(cx).state();
+        picked_options(
+            composer.read(cx).picker().read(cx).state(),
+            state.agent_options,
+            &state.agent_kinds,
+        )
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
@@ -791,9 +944,8 @@ impl Shell {
         if installed.is_empty() {
             return Err(NO_AGENTS_INSTALLED.to_owned());
         }
-        let kind = installed
-            .into_iter()
-            .find(|kind| kind.id == chosen)
+        let kind = choice_kind(kinds, &chosen)
+            .and_then(|declared| installed.into_iter().find(|kind| kind.id == declared.id))
             .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
         // `session_kind_choices` lists only kinds that can start, so an unavailable kind is refused above.
         let shown = kinds
@@ -835,14 +987,8 @@ impl Shell {
             .choice()
             .model
             .to_string();
-        let picked = self
-            .store
-            .read(cx)
-            .state()
-            .agent_kinds
-            .iter()
-            .find(|kind| kind.id == chosen)
-            .and_then(|kind| {
+        let picked =
+            choice_kind(&self.store.read(cx).state().agent_kinds, &chosen).and_then(|kind| {
                 let mode = start_choices(kind).get(index)?.id.clone()?;
                 Some((kind.id.clone(), mode))
             });
@@ -863,9 +1009,9 @@ impl Shell {
         }
     }
 
-    /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
-    /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
-    /// back to the composer with its sentence.
+    /// The service's answer to a start. The session opens in the Canvas once the Sidebar lists it, and in
+    /// Terminal its terminal then takes the keyboard. A refusal gives the prompt back to the composer with its
+    /// sentence.
     pub(super) fn finish_start(
         &mut self,
         prompt: &str,
@@ -879,15 +1025,12 @@ impl Shell {
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
-                match mode {
-                    StartMode::Chat => self.model.open_started_session(session.id),
-                    StartMode::Terminal => {
-                        self.model.show_region(Region::WorkPanel);
-                        if let Some(terminal) = &session.terminal_id {
-                            self.reveal_terminal(&session.workspace_id, terminal, cx);
-                        }
-                    }
+                // Both arms open the started session in the Canvas (owner ruling 2026-11-25): the session the person
+                // started is what they see. A terminal session's terminal takes the keyboard once drawn.
+                if mode == StartMode::Terminal {
+                    self.focus_started_terminal = session.terminal_id.clone();
                 }
+                self.model.open_started_session(session.id);
             }
             Err(refusal) => composer.update(cx, |composer, cx| {
                 composer.set_draft(prompt, cx);

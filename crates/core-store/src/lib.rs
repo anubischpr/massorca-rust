@@ -2,6 +2,7 @@
 //! devices and vault rows, with versioned migrations and a backup taken before each migration.
 
 mod agent_accounts;
+mod agent_chat;
 mod agent_prompt_queue;
 mod agent_sessions;
 mod backup;
@@ -10,6 +11,7 @@ mod devices;
 mod error;
 mod migrations;
 mod projects;
+mod script_trust;
 mod secret_key_check;
 mod secrets;
 mod settings;
@@ -17,6 +19,7 @@ mod store;
 mod tasks;
 mod team_memory;
 mod team_projects;
+mod team_room;
 mod team_routines;
 mod teams;
 mod workspaces;
@@ -24,6 +27,9 @@ mod workspaces;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
+pub use agent_chat::{
+    ChatAppend, ChatItemRow, ChatJournalHead, NewChatItem, SessionRun, SessionRunType,
+};
 pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
 pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,
@@ -39,6 +45,7 @@ pub use store::Store;
 pub use tasks::{TaskDetails, TaskOrigin, TaskOutcome, TaskRow};
 pub use team_memory::TeamMemoryRow;
 pub use team_projects::TeamProjectRow;
+pub use team_room::TeamRoomMessageRow;
 pub use team_routines::{TeamRoutineRow, TeamRoutineRunRow};
 pub use teams::TeamRow;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};

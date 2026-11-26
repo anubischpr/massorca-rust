@@ -262,6 +262,7 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
             result: ImportResult::NotFound,
             account: None,
             reason: Some("none of the declared files is in the source".to_owned()),
+            updated: None,
         }))
         .expect("the shell waits");
     cx.run_until_parked();
@@ -281,6 +282,7 @@ fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothin
             result: ImportResult::Imported,
             account: Some(summary("acct-i", "Account", AccountState::SignedIn, true)),
             reason: None,
+            updated: None,
         }))
         .expect("the shell waits");
     cx.run_until_parked();

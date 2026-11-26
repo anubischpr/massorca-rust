@@ -106,7 +106,7 @@ pub fn expand(template: &str, home: Option<&Path>) -> Option<PathBuf> {
 
 /// The override variable `name` as a folder: set to a local absolute path that does not climb with `..`. A network or
 /// device path (`\\server`, `\\?\`, `//server`) counts as unset, so detection never reaches another machine.
-fn override_dir(env: EnvLookup<'_>, name: &str) -> Option<PathBuf> {
+pub(crate) fn override_dir(env: EnvLookup<'_>, name: &str) -> Option<PathBuf> {
     absolute_var(env, name).filter(|dir| {
         !remote_path(&dir.to_string_lossy())
             && !dir

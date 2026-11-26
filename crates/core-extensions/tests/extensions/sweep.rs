@@ -71,6 +71,23 @@ fn an_unreferenced_version_folder_is_removed_and_the_installed_one_stays_intact(
 }
 
 #[test]
+fn a_kept_previous_version_is_not_swept() {
+    let (s, path) = installed();
+    let kept = "pkgs/acme.kit/0.0.1-00000000";
+    leftover(&s, kept);
+    let mut lock = s.lock_json().expect("the lockfile");
+    lock["packages"][0]["previous"] = json!({
+        "version": "0.0.1", "source": { "kind": "dir", "ref": "x" },
+        "sha256": "00000000", "path": kept, "consent": "accepted-earlier"
+    });
+    write_lock(&s, &lock);
+
+    assert!(s.service.sweep_leftovers().expect("sweeps").is_empty());
+    assert!(s.exists(kept), "the rollback target stays");
+    assert!(s.exists(&path));
+}
+
+#[test]
 fn folders_any_entry_names_are_kept_even_disabled_or_duplicated() {
     let (s, path) = installed();
     let second = "pkgs/acme.kit/0.0.2-11111111";
