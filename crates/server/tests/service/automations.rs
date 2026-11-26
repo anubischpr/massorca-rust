@@ -8,6 +8,7 @@ use massorca_core_schedule::{ZoneSource, host_zone_used};
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
     self, Automation, AutomationCadence, AutomationCreateParams, AutomationRef,
+    AutomationUpdateParams,
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
@@ -31,6 +32,23 @@ fn create_params(project: &str, name: &str) -> AutomationCreateParams {
         zone: Some("UTC".to_owned()),
         grace_minutes: None,
         creation_key: None,
+    }
+}
+
+/// Update params that change nothing until a field is set.
+fn update_of(automation: &str) -> AutomationUpdateParams {
+    AutomationUpdateParams {
+        automation: automation.to_owned(),
+        project: None,
+        name: None,
+        prompt: None,
+        agent: None,
+        cadence: None,
+        time: None,
+        weekday: None,
+        cron: None,
+        zone: None,
+        grace_minutes: None,
     }
 }
 
@@ -252,6 +270,72 @@ async fn the_list_keeps_creation_order() {
 }
 
 #[tokio::test]
+async fn an_update_changes_only_the_fields_given_and_a_schedule_change_moves_the_next_run() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+    let created = client
+        .automation_create(&create_params("app", "Morning PRs"))
+        .await
+        .expect("create");
+
+    let renamed = client
+        .automation_update(&AutomationUpdateParams {
+            name: Some("Renamed".to_owned()),
+            ..update_of(&created.id)
+        })
+        .await
+        .expect("rename");
+    assert_eq!(renamed.name, "Renamed");
+    assert_eq!(renamed.time, created.time);
+    assert_eq!(renamed.next_run_at_ms, created.next_run_at_ms);
+
+    let moved = client
+        .automation_update(&AutomationUpdateParams {
+            time: Some("10:30".to_owned()),
+            ..update_of(&created.id)
+        })
+        .await
+        .expect("move the time");
+    assert_eq!(moved.time, "10:30");
+    assert_eq!(
+        moved.next_run_at_ms.expect("still enabled") % DAY_MS,
+        10 * 3_600_000 + 30 * 60_000
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn disable_clears_the_next_run_and_enable_schedules_one_from_now() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+    let created = client
+        .automation_create(&create_params("app", "Morning PRs"))
+        .await
+        .expect("create");
+
+    let disabled = client
+        .automation_disable(&reference(&created.id))
+        .await
+        .expect("disable");
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.next_run_at_ms, None);
+
+    let enabled = client
+        .automation_enable(&reference(&created.id))
+        .await
+        .expect("enable");
+    assert!(enabled.enabled);
+    let next = enabled.next_run_at_ms.expect("enabled again");
+    assert!(next > enabled.updated_at_ms, "the next run is after now");
+    assert_eq!(next % DAY_MS, NINE_AM_MS);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn removing_a_project_leaves_its_automation_without_a_project() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
@@ -307,6 +391,43 @@ async fn a_name_shared_by_two_automations_is_refused_until_one_is_named_by_id() 
         .await
         .expect("by id");
     assert_eq!(shown, first);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_unknown_automation_is_not_found_by_every_method() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let error = client
+        .automation_show(&reference("missing"))
+        .await
+        .expect_err("show");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
+    let error = client
+        .automation_update(&AutomationUpdateParams {
+            name: Some("x".to_owned()),
+            ..update_of("missing")
+        })
+        .await
+        .expect_err("update");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
+    let error = client
+        .automation_remove(&reference("missing"))
+        .await
+        .expect_err("remove");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
+    let error = client
+        .automation_enable(&reference("missing"))
+        .await
+        .expect_err("enable");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
+    let error = client
+        .automation_disable(&reference("missing"))
+        .await
+        .expect_err("disable");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
     stop(running).await;
 }
 

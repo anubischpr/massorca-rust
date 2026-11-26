@@ -1,10 +1,10 @@
-//! The `automation.*` handlers. Each reads or writes the store on the blocking pool. A create resolves its project the way
-//! `project.show` does, through the workspace domain (decision 0123).
+//! The `automation.*` handlers. Each reads or writes the store on the blocking pool. A create or an edit resolves its
+//! project the way `project.show` does, through the workspace domain (decision 0123).
 
 use massorca_core_store::{AutomationRow, StoreError, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::automations::{
-    Automation, AutomationCreateParams, AutomationList, AutomationRef,
+    Automation, AutomationCreateParams, AutomationList, AutomationRef, AutomationUpdateParams,
 };
 use massorca_protocol::{ErrorBody, codes};
 
@@ -81,6 +81,31 @@ pub(super) async fn create(
     .await
 }
 
+pub(super) async fn update(
+    ctx: RequestCtx,
+    params: AutomationUpdateParams,
+) -> Result<Automation, ErrorBody> {
+    let host = HostZone::read();
+    let domain = shared(&ctx);
+    blocking(&ctx, move |store, agents| {
+        let old = automation(store, &params.automation)?;
+        let now = now_ms();
+        let mut row = old.clone();
+        let schedule_moved = apply_edit(&mut row, &params, &domain, now)?;
+        let compiled = check(&row, agents, &host)?;
+        row.next_run_at = match (row.enabled, schedule_moved || old.next_run_at.is_none()) {
+            (false, _) => None,
+            (true, true) => next_run(&row, &compiled, now),
+            (true, false) => old.next_run_at,
+        };
+        if !store.update_automation(&row).map_err(store_error)? {
+            return Err(removed_meanwhile());
+        }
+        automation_view(store, &row, &host)
+    })
+    .await
+}
+
 pub(super) async fn remove(
     ctx: RequestCtx,
     params: AutomationRef,
@@ -94,6 +119,49 @@ pub(super) async fn remove(
         } else {
             Err(removed_meanwhile())
         }
+    })
+    .await
+}
+
+pub(super) async fn enable(
+    ctx: RequestCtx,
+    params: AutomationRef,
+) -> Result<Automation, ErrorBody> {
+    set_enabled(ctx, params, true).await
+}
+
+pub(super) async fn disable(
+    ctx: RequestCtx,
+    params: AutomationRef,
+) -> Result<Automation, ErrorBody> {
+    set_enabled(ctx, params, false).await
+}
+
+/// Enabling schedules the next run from now and checks the definition still holds; disabling clears the next run.
+async fn set_enabled(
+    ctx: RequestCtx,
+    params: AutomationRef,
+    enabled: bool,
+) -> Result<Automation, ErrorBody> {
+    let host = HostZone::read();
+    blocking(&ctx, move |store, agents| {
+        let mut row = automation(store, &params.automation)?;
+        if row.enabled == enabled {
+            return automation_view(store, &row, &host);
+        }
+        let now = now_ms();
+        row.enabled = enabled;
+        row.updated_at = now;
+        row.next_run_at = if enabled {
+            let compiled = check(&row, agents, &host)?;
+            next_run(&row, &compiled, now)
+        } else {
+            None
+        };
+        if !store.update_automation(&row).map_err(store_error)? {
+            return Err(removed_meanwhile());
+        }
+        automation_view(store, &row, &host)
     })
     .await
 }
@@ -133,6 +201,76 @@ fn new_row(
         created_at: now,
         updated_at: now,
     })
+}
+
+/// Applies the fields an edit gives. Returns whether the schedule moved (its cadence, time, weekday, cron expression or
+/// zone), which recomputes the next run.
+fn apply_edit(
+    row: &mut AutomationRow,
+    params: &AutomationUpdateParams,
+    domain: &Workspaces,
+    now: i64,
+) -> Result<bool, ErrorBody> {
+    let before = schedule_fields(row);
+    if let Some(selector) = params.project.as_deref() {
+        row.project_id = Some(project_of(domain, selector)?.0);
+    }
+    if let Some(name) = &params.name {
+        row.name = non_blank(name, "the automation name")?;
+    }
+    if let Some(prompt) = &params.prompt {
+        row.prompt = non_blank(prompt, "the automation prompt")?;
+    }
+    if let Some(agent) = &params.agent {
+        row.agent_kind = non_blank(agent, "the agent kind")?;
+    }
+    let cadence = match params.cadence {
+        Some(cadence) => cadence_name(cadence)?.to_owned(),
+        None => row.cadence.clone(),
+    };
+    let weekday = match params.weekday {
+        Some(day) => Some(weekday_name(day)?.to_owned()),
+        None => row.weekday.clone(),
+    };
+    let cron = match params.cron.as_deref() {
+        Some(text) => Some(text.trim().to_owned()),
+        None => row.cron.clone(),
+    };
+    let time = match params.time.as_deref() {
+        Some(text) => text.to_owned(),
+        None => row.time.clone(),
+    };
+    let (weekday, cron) = keep_for(&cadence, weekday, cron);
+    row.time = time_kept(&cadence, &time);
+    row.cadence = cadence;
+    row.weekday = weekday;
+    row.cron = cron;
+    if let Some(zone) = &params.zone {
+        row.zone = optional_text(Some(zone.clone()));
+    }
+    if params.grace_minutes.is_some() {
+        row.grace_minutes = check_grace(params.grace_minutes)?;
+    }
+    row.updated_at = now;
+    Ok(before != schedule_fields(row))
+}
+
+fn schedule_fields(
+    row: &AutomationRow,
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    (
+        row.cadence.clone(),
+        row.time.clone(),
+        row.weekday.clone(),
+        row.cron.clone(),
+        row.zone.clone(),
+    )
 }
 
 /// The project a selector names, as `project.show` resolves it: its id and its name.
