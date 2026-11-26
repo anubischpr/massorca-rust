@@ -91,11 +91,11 @@ machine.
 | `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Then one `modes:` line per kind that declares permission modes: each mode's id and label, marked `default` (the vendor CLI's own default), `bypass` (lifts the vendor's prompts or sandbox), `live` (switches in a running session) and `may fall back` (the vendor may start in another mode without failing). Problems follow. Then one `models:` line and one `efforts:` line for each kind that declares model choices or effort levels, listing the ids with the default marked (decision 0096). |
-| `agent start <KIND> [--workspace <WS>] [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [--model MODEL] [--effort EFFORT] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own; without `--workspace`, in a folder of its own in the conversations folder (see the notes below). `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
+| `agent start <KIND> [--workspace <WS>] [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [--model MODEL] [--effort EFFORT] [--chat] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own; without `--workspace`, in a folder of its own in the conversations folder (see the notes below). With `--chat` the run is a structured chat instead (`agent.chat.start`, see the notes below): no terminal, and no arguments after `--`. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS] [--archived]` | Lists agent sessions, newest first: execution, activity and title. Hidden (archived) sessions are listed only with `--archived`. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
-| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
+| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. For a chat session it sends TEXT as a message (receipt `sent_to_chat`); `--force` hands it to the agent while a turn runs, which runs it next. |
 | `agent queue add <SESSION> <TEXT>` | Queues TEXT behind the session's busy agent and prints the queued prompt (`waiting`, with its reason). A kind that reports no activity is refused with `agent.queue_unavailable`; past 100 queued prompts with `agent.queue_full`. |
 | `agent queue list <SESSION>` | Lists the session's queued prompts, head first, with their states and reasons. |
 | `agent queue edit <ID> <TEXT>` | Replaces the text of a waiting or failed queued prompt. A prompt being sent is refused with `agent.busy`. |
@@ -208,6 +208,14 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
   never detected, and never started. `--json` prints the `agent.kinds` result, where
   `installed` is deprecated and equals `detected`.
+- `agent start --chat` (decision 0101) starts the session as a structured chat: the service runs the kind's CLI with
+  piped streams, keeps its transcript, and answers its permission requests through `agent.chat.approval.answer`.
+  Only a kind with a `chat` block whose CLI version is in range can: `agent kinds --json` shows each kind's `chat`
+  (`supported`, and otherwise `reason`: `not_detected`, `version_unknown` or `version_outside_range`, with the probed
+  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x. Any other
+  kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
+  without `--chat` instead. `agent resume` of a chat session resumes it as a chat, `agent stop`, `agent status` and the
+  queue work as for a terminal session.
 - `agent start` without `--workspace` starts a session with no project (decision 0094). It
   runs in its own folder, named after the session, inside the conversations folder
   (`conversations.folder`, default `~/MassOrca/Conversations`, made on first use). The session
@@ -220,9 +228,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `request.invalid_params` naming the allowed ids. A resumed run keeps the kind's default model
   and effort.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
-  shell in between), with the first prompt as the kind declares. A workspace holds one live
-  session that is not `--read-only`; a second writing start fails with
-  `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
+  shell in between), with the first prompt as the kind declares. A worktree workspace holds one
+  live session that is not `--read-only`; a second writing start there fails with
+  `agent.workspace_busy`. A folder workspace takes several writing sessions (decision 0169), and each lists the
+  others that are live in `shared_folder_with`. A kind that is not installed fails with `agent.not_installed`.
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
@@ -249,8 +258,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
   session whose agent saved no conversation for its ref fails with `agent.resume_not_found`
   before any run starts (decision 0160); another
-  writing session in the workspace
-  fails with `agent.workspace_busy`.
+  writing session in the same worktree
+  fails with `agent.workspace_busy`; in a folder workspace it runs beside the others (decision 0169).
 - `agent status` shows, for an exited session that cannot resume, a line
   `resume: unavailable: REASON (CODE)`, for example
   `resume: unavailable: the agent saved no conversation for this session (agent.resume_not_found)`.
@@ -304,8 +313,7 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A writing child of a parent in
   a plain folder workspace runs in that folder, with no copy, and its `note` and
   `notes` say "This workspace has no Git, so the child works in this folder."; the
-  parent's delegation tree counts as one writer there, and any other writing start in the
-  folder still fails with `agent.workspace_busy` (decision 0161). A parent in a worktree with
+  folder takes several writers, so the child's writing start is not refused there (decisions 0161, 0169). A parent in a worktree with
   no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot

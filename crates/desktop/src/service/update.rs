@@ -49,7 +49,7 @@ pub enum StoreUpdate {
     /// Every agent session the service lists, after a connect. Replaces what was held.
     AgentsResync(Vec<AgentSession>),
     /// An agent session the service started or changed; keyed by its id.
-    AgentChanged(AgentSession),
+    AgentChanged(Box<AgentSession>),
     /// An agent session the service forgot.
     AgentGone(String),
     /// The agent kind chosen when this app created a workspace; kept until the workspace has a session (A97).
@@ -410,7 +410,7 @@ impl StoreState {
             }
             StoreUpdate::AgentChanged(session) => {
                 self.awaiting_session.remove(&session.workspace_id);
-                replace_by(&mut self.agents, session, |s| s.id.clone());
+                replace_by(&mut self.agents, *session, |s| s.id.clone());
                 self.agents.sort_by(agent_order);
             }
             StoreUpdate::WorkspaceKindChosen { workspace, kind } => {
@@ -692,6 +692,7 @@ pub(crate) mod fixtures {
             resume: None,
             delegation: None,
             notes: Vec::new(),
+            shared_folder_with: Vec::new(),
         }
     }
 
@@ -1095,9 +1096,12 @@ mod tests {
             at_ms: 11,
             seen_at_ms: None,
         });
-        state.apply(StoreUpdate::AgentChanged(working.clone()), now);
+        state.apply(StoreUpdate::AgentChanged(Box::new(working.clone())), now);
         assert_eq!(state.agents, vec![working]);
-        state.apply(StoreUpdate::AgentChanged(agent("s2", "w1", 20)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s2", "w1", 20))),
+            now,
+        );
         state.apply(StoreUpdate::AgentGone("s1".into()), now);
         state.apply(StoreUpdate::AgentGone("nope".into()), now);
         let ids: Vec<&str> = state.agents.iter().map(|s| s.id.as_str()).collect();
