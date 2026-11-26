@@ -303,6 +303,7 @@ impl TeamsState {
             brief: String::new(),
             link: None,
             link_saved: true,
+            code_source: None,
             tasks: Vec::new(),
         });
         Ok(id)
