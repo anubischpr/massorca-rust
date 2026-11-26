@@ -147,6 +147,8 @@ mod session_chat_tests;
 #[cfg(test)]
 mod session_menu_tests;
 #[cfg(test)]
+mod session_secret_card_tests;
+#[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
 mod settings_git_tests;

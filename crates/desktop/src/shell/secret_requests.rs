@@ -1,14 +1,18 @@
-//! Answers to the secret requests the vault page lists (decision 0071). A request is answered by storing a value in the Add
-//! dialog, with its name and scope set; by linking its name to a scope that already owns it; or by declining it. The value
-//! goes to the service once, as Add sends it. The request resolves at the service, and its card goes when the vault is
-//! read again.
+//! Answers to the secret requests the vault page lists and the cards of agent transcripts draw (decision 0071). A request is
+//! answered by storing a value in the Add dialog, with its name and scope set; by linking its name to a scope that already
+//! owns it; or by declining it. The value goes to the service once, as Add sends it. The request resolves at the service,
+//! and its card changes when the vault is read again.
 
-use gpui::Context;
+use gpui::{App, Context};
 use massorca_protocol::methods::secrets::{SecretDecline, SecretLink};
+use massorca_ui::components::secret_request_card::SecretAction;
 
 use super::Shell;
+use crate::model::navigation::Page;
 use crate::model::secret_form::refusal_sentence;
 use crate::model::secret_requests::{RequestRow, request_rows};
+use crate::model::settings_sections::SettingsSection;
+use crate::model::transcript_secret_cards::{SecretCard, session_secret_rows};
 use crate::service::Refusal;
 
 impl Shell {
@@ -75,6 +79,50 @@ impl Shell {
         self.request_notice = result
             .err()
             .map(|refusal| (id.to_owned(), refusal_sentence(&refusal, name)));
+        cx.notify();
+    }
+
+    /// The secret cards of session `session`'s transcript, from the requests the store holds. `agent` names the asker.
+    pub(super) fn session_secret_cards(
+        &self,
+        session: &str,
+        agent: &str,
+        cx: &App,
+    ) -> Vec<SecretCard> {
+        let state = self.store.read(cx).state();
+        let entering = self
+            .vault_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.request.as_deref());
+        session_secret_rows(
+            &state.secrets,
+            &state.projects,
+            session,
+            agent,
+            self.request_notice.as_ref(),
+            entering,
+        )
+    }
+
+    /// Answers a press on a secret card: Add and Retry open the Add dialog for request `id`, Decline declines it, and
+    /// Open vault opens the vault.
+    pub(super) fn secret_card_action(
+        &mut self,
+        id: &str,
+        action: SecretAction,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SecretAction::Add | SecretAction::Retry => self.open_request_secret(id, cx),
+            SecretAction::Decline => self.decline_request(id, cx),
+            SecretAction::OpenVault => self.open_vault(cx),
+        }
+    }
+
+    /// Opens Settings at its vault section, where the secrets are listed.
+    fn open_vault(&mut self, cx: &mut Context<Self>) {
+        self.model.open_page(Page::Settings);
+        self.settings.section = SettingsSection::Vault;
         cx.notify();
     }
 }

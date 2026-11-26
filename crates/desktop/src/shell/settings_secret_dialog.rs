@@ -45,6 +45,8 @@ pub(super) struct VaultDialog {
     pub(super) project_scopes: Vec<String>,
     /// Whether the scope is fixed: a rotation's is, and so is a request's, so no scope control can change it.
     pub(super) scope_locked: bool,
+    /// The request this add answers, by id, when it was opened for one: the transcript card shows it as entering.
+    pub(super) request: Option<String>,
     /// Keeps the select's choices reaching the dialog.
     _project_events: Option<Subscription>,
 }
@@ -174,6 +176,7 @@ impl Shell {
             project_select,
             project_scopes,
             scope_locked: request.is_some(),
+            request: request.map(|request| request.id.clone()),
             _project_events: project_events,
         });
         cx.notify();
@@ -198,6 +201,7 @@ impl Shell {
             project_select: None,
             project_scopes: Vec::new(),
             scope_locked: true,
+            request: None,
             _project_events: None,
         });
         cx.notify();

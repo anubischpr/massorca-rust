@@ -42,6 +42,7 @@ use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
+use crate::model::chat_transcript::ChatTranscript;
 use crate::model::pairing::now_ms;
 use crate::model::parent_wait::{child_wait, elapsed_words};
 use crate::model::permission_modes::{SessionModes, mode_to_set, session_modes};
@@ -531,20 +532,34 @@ impl Shell {
                 .and_then(|queues| queues.get(&id).cloned());
             let waiting = child_wait(&state.agents, &session);
             let shared_folder = shared_folder_notice(&session, &state.agents, &state.agent_kinds);
-            (session, state.agent_kinds.clone(), queue, waiting, shared_folder)
+            (
+                session,
+                state.agent_kinds.clone(),
+                queue,
+                waiting,
+                shared_folder,
+            )
         };
         // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
-        // terminal session draws one only where a test holds a transcript for it.
+        // terminal session draws one only where a test holds a transcript for it. The secret requests the agent asked
+        // for sit in the transcript by their time (X-CH-07).
+        let agent = kinds
+            .iter()
+            .find(|kind| kind.id == session.kind)
+            .map_or("The agent", |kind| kind.name.as_str());
+        let secrets = self.session_secret_cards(&id, agent, cx);
         let held = {
             let state = self.store.read(cx).state();
             self.chat_transcripts
                 .get(&id)
                 .or_else(|| state.chat.get(&id))
-                .map(|transcript| transcript_rows(transcript, &[]))
+                .map(|transcript| transcript_rows(transcript, &secrets))
         };
         let transcript = match held {
             Some(rows) => Some(rows),
-            None if !is_terminal_arm(&session) => Some(Vec::new()),
+            None if !is_terminal_arm(&session) => {
+                Some(transcript_rows(&ChatTranscript::default(), &secrets))
+            }
             None => None,
         };
         if let Some(terminal) = session.terminal_id.as_deref()
@@ -996,8 +1011,11 @@ impl Shell {
         action: TranscriptAction,
         cx: &mut Context<Self>,
     ) {
-        let TranscriptAction::Answer { request_id, answer } = action else {
-            return;
+        let (request_id, answer) = match action {
+            TranscriptAction::Answer { request_id, answer } => (request_id, answer),
+            TranscriptAction::Secret { request_id, action } => {
+                return self.secret_card_action(&request_id, action, cx);
+            }
         };
         let request_id = request_id.to_string();
         let Some(service) = self.service.clone() else {

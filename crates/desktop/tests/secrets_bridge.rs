@@ -5,13 +5,20 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
+use massorca_desktop::model::secret_requests::request_rows;
+use massorca_desktop::model::transcript_secret_cards::{SecretCard, session_secret_rows};
 use massorca_desktop::service::{
     Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
-use massorca_protocol::methods::secrets::{SecretLink, SecretName, SecretRemove, SecretSet};
+use massorca_protocol::methods::secrets::{
+    SecretDecline, SecretLink, SecretName, SecretRemove, SecretRequest, SecretRequestParams,
+    SecretSet,
+};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig, VaultOptions};
+use massorca_ui::components::secret_request_card::SecretState;
+use massorca_ui::components::transcript::{SecretRow, TranscriptRow};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -429,4 +436,95 @@ fn base_secret_name() -> massorca_protocol::methods::secrets::SecretName {
         scope: "project:demo".to_owned(),
         name: "SHARED_TOKEN".to_owned(),
     }
+}
+
+/// The request `id` as the store holds it, once the list has arrived.
+fn request_of<'a>(state: &'a StoreState, id: &str) -> Option<&'a SecretRequest> {
+    match &state.secrets.requests {
+        Some(Ok(requests)) => requests.iter().find(|request| request.id == id),
+        _ => None,
+    }
+}
+
+/// The card of request `id` among `cards`, if one is drawn.
+fn secret_of<'a>(cards: &'a [SecretCard], id: &str) -> Option<&'a SecretRow> {
+    cards.iter().find_map(|card| match &card.row {
+        TranscriptRow::Secret { secret, .. } if secret.request_id == id => Some(secret),
+        _ => None,
+    })
+}
+
+fn base_secret_request_params() -> SecretRequestParams {
+    SecretRequestParams {
+        scope: "global".to_owned(),
+        name: "OPENAI_API_KEY".to_owned(),
+        reason: "Calls the OpenAI API for the project.".to_owned(),
+        session: Some("s1".to_owned()),
+        agent_token: None,
+    }
+}
+
+fn base_secret_decline(request: &str) -> SecretDecline {
+    SecretDecline {
+        request: request.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn an_agent_request_is_drawn_in_its_session_until_it_is_answered() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the vault list", |s| {
+        s.connection.is_connected() && matches!(s.secrets.list, Some(Ok(_)))
+    })
+    .await;
+
+    // The agent asks through the vault's own call, with the session it runs in and no run token.
+    let client = client_for(home.path()).await;
+    let asked = client
+        .secret_request(&base_secret_request_params())
+        .await
+        .expect("the agent's request is opened");
+    until(&mut updates, &mut state, "the agent's request", |s| {
+        request_of(s, &asked.id).is_some()
+    })
+    .await;
+
+    let cards = session_secret_rows(&state.secrets, &[], "s1", "Claude Code", None, None);
+    let card = secret_of(&cards, &asked.id).expect("the session's card is drawn");
+    assert_eq!(card.name.as_ref(), "OPENAI_API_KEY");
+    assert_eq!(card.title.as_ref(), "Claude Code needs a secret");
+    assert_eq!(card.state, SecretState::Pending);
+    assert_eq!(cards[0].at_ms, asked.created_at_ms);
+    assert!(
+        session_secret_rows(&state.secrets, &[], "s2", "Claude Code", None, None).is_empty(),
+        "another session draws no card of this request"
+    );
+
+    // Declining goes through the same call the card's Decline sends; the card then settles as a row.
+    handle
+        .secret_decline(base_secret_decline(&asked.id))
+        .await
+        .expect("the request is declined");
+    until(&mut updates, &mut state, "the declined request", |s| {
+        request_of(s, &asked.id).is_some_and(|request| request.state == "declined")
+    })
+    .await;
+
+    let cards = session_secret_rows(&state.secrets, &[], "s1", "Claude Code", None, None);
+    assert_eq!(
+        secret_of(&cards, &asked.id).map(|secret| secret.state.clone()),
+        Some(SecretState::Declined)
+    );
+    assert!(
+        request_rows(&state.secrets, &[]).is_empty(),
+        "a declined request is no longer listed as pending"
+    );
+
+    drop(client);
+    drop(handle);
+    drop(bridge);
+    stop_service(service).await;
 }
