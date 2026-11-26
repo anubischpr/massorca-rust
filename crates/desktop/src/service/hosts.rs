@@ -3,6 +3,7 @@
 //! computer's service is doing; pairing and an SSH add open their own connection, then hand the host to its link.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use massorca_client::{
     Client, ClientError, DeviceRevocation, HostRecord, Hosts, default_device_name,
@@ -16,11 +17,12 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::pairing::Offer;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
 use super::live_hosts::LiveHosts;
 use super::refusal::{Refusal, sentence};
-use super::update::StoreUpdate;
+use super::update::{HostLink, StoreUpdate};
 
 /// Who this desktop says it is to a host it connects to.
 pub(super) fn peer() -> PeerInfo {
@@ -199,9 +201,10 @@ impl ServiceHandle {
     }
 }
 
-/// The device is revoked first and a failed revoke never stops the removal, as in `host remove`. The host's live link
-/// stops before the revoke, so the connection the revoke ends is not dialed again, and everything that borrowed it
-/// stops too. A removal that fails gives the host its link back.
+/// The device is revoked first and a failed revoke never stops the removal, as in `host remove`. The host's link keeps
+/// running through the revoke, so a refresh meanwhile finds it and starts no second one. Once the record is gone the
+/// hosts still listed are followed, which stops the removed host's link and everything that borrowed it. A removal
+/// that fails leaves the link as it was.
 async fn remove(
     profile: &Profile,
     name: &str,
@@ -210,7 +213,6 @@ async fn remove(
 ) -> Result<HostRemoval, Refusal> {
     let hosts = Hosts::of(profile);
     hosts.get(name).map_err(|error| Refusal::from(&error))?;
-    live.stop(name);
     let device = hosts.revoke_this_device(name, &peer()).await;
     let removed = match hosts.remove(name) {
         Ok(removed) => removed,
@@ -219,8 +221,19 @@ async fn remove(
             return Err(Refusal::from(&error));
         }
     };
-    if let Ok(records) = hosts.list() {
-        let _ = updates.send(StoreUpdate::HostsResync(records));
+    match hosts.list() {
+        Ok(records) => {
+            let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
+            live.follow(records.into_iter().map(|record| record.name));
+        }
+        Err(_) => {
+            // The hosts cannot be listed to follow, so the removed host's link stops here and its row says so.
+            live.stop(name);
+            let _ = updates.send(StoreUpdate::HostLinkChanged {
+                name: name.to_owned(),
+                link: HostLink::Failed("This computer forgot this host".to_owned()),
+            });
+        }
     }
     Ok(HostRemoval {
         host: name.to_owned(),
@@ -261,6 +274,40 @@ pub(super) fn follow_paired(
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
     live.follow(records.into_iter().map(|record| record.name));
+}
+
+/// How often the paired hosts are listed again while the bridge runs, so a host paired or removed through the
+/// `massorca host` CLI while the app runs is followed or dropped without opening Settings.
+const HOST_RELIST_EVERY: Duration = Duration::from_secs(30);
+
+/// Lists the paired hosts again every `HOST_RELIST_EVERY` while the bridge runs, as `follow_paired` does.
+pub(super) fn relist_hosts(
+    profile: Profile,
+    live: LiveHosts,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
+    relist_every(HOST_RELIST_EVERY, profile, live, updates);
+}
+
+/// Lists the paired hosts every `period`, from one period on: the bridge lists them once already at start.
+fn relist_every(
+    period: Duration,
+    profile: Profile,
+    live: LiveHosts,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
+    tokio::spawn(async move {
+        let first = tokio::time::Instant::now() + period;
+        let mut every = tokio::time::interval_at(first, period);
+        every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            if updates.is_closed() {
+                return;
+            }
+            follow_paired(&profile, &live, &updates);
+        }
+    });
 }
 
 /// Tells the store the hosts as they are now, and has the live link of `name` try again at once: it was just paired,
@@ -476,5 +523,36 @@ mod tests {
     fn no_bundled_program_is_offered_for_a_machine_massorca_does_not_run_on() {
         let folder = tempfile::tempdir().expect("a temporary folder");
         assert_eq!(bundled_program_in(folder.path(), "armv7l"), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_paired_while_the_app_runs_is_listed_and_followed_at_the_next_relist() {
+        let folder = tempfile::tempdir().expect("a temporary folder");
+        let home = folder.path().join("home");
+        massorca_profile::create_home(&home).expect("a private home");
+        let profile = Profile::resolve_with(Some(home), Some("default".to_owned()), |_| None)
+            .expect("the profile resolves");
+        let (updates, mut received) = mpsc::unbounded_channel();
+        let live = LiveHosts::new(&profile, updates.clone());
+        relist_every(HOST_RELIST_EVERY, profile.clone(), live.clone(), updates);
+
+        // The `massorca host` CLI pairs a host while the app is running.
+        let identity =
+            massorca_net::TlsIdentity::generate("massorca-desktop").expect("a device key");
+        let record = HostRecord {
+            name: "vps".to_owned(),
+            addresses: vec!["127.0.0.1:9".to_owned()],
+            ..crate::service::fixtures::base_host_record()
+        };
+        Hosts::of(&profile)
+            .add(&record, &identity)
+            .expect("the host is paired");
+
+        let relisted = received.recv().await.expect("the hosts are listed again");
+        assert!(
+            matches!(&relisted, StoreUpdate::HostsResync(records) if records.iter().any(|r| r.name == "vps")),
+            "{relisted:?}"
+        );
+        assert!(live.watch("vps").is_some(), "the new host is followed");
     }
 }

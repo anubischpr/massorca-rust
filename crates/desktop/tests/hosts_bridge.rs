@@ -495,6 +495,56 @@ async fn a_host_that_does_not_answer_is_still_forgotten_and_says_the_device_stay
 }
 
 #[tokio::test]
+async fn a_refresh_during_a_removal_does_not_bring_the_removed_host_back() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, mut client_updates, _state) =
+        paired_with(&server_handle).await;
+
+    // The host answers nothing from now on, so the revoke waits out its connect timeout during the removal.
+    let (_silent, address) = silent_address();
+    readdress(client_home.path(), "vps", vec![address]);
+    while client_updates.try_recv().is_ok() {}
+
+    let removing = client_handle.remove_host("vps".to_owned());
+    tokio::pin!(removing);
+    let refresh = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(refresh);
+    let mut refreshed = false;
+    // Updates sent while the removal runs are read and set aside: only what follows its answer is checked below.
+    let removal = loop {
+        tokio::select! {
+            outcome = &mut removing => break outcome,
+            () = &mut refresh, if !refreshed => {
+                refreshed = true;
+                client_handle.refresh_hosts();
+            }
+            _ = client_updates.recv() => {}
+        }
+    };
+    removal.expect("the host is removed");
+
+    // Once the removal has answered, nothing about the removed host arrives: its link and its follower are gone.
+    let quiet = tokio::time::sleep(Duration::from_secs(5));
+    tokio::pin!(quiet);
+    loop {
+        tokio::select! {
+            () = &mut quiet => break,
+            update = client_updates.recv() => {
+                let update = update.expect("the bridge is running");
+                assert!(!concerns_host(&update, "vps"), "{update:?}");
+            }
+        }
+    }
+    drop(client_bridge);
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
 async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
     let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
@@ -646,6 +696,15 @@ fn readdress(home: &Path, name: &str, addresses: Vec<String>) {
     hosts
         .add(&record, &identity)
         .expect("the new record is stored");
+}
+
+/// Whether an update is about host `name`: its link or its sessions.
+fn concerns_host(update: &StoreUpdate, name: &str) -> bool {
+    match update {
+        StoreUpdate::HostLinkChanged { name: host, .. } => host == name,
+        StoreUpdate::HostSessions(read) => read.host == name,
+        _ => false,
+    }
 }
 
 /// An address that accepts TCP and never answers TLS, so each try waits out the whole connect timeout.

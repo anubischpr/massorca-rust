@@ -706,6 +706,11 @@ impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
         hosts::follow_paired(&self.profile, &self.live_hosts, &self.updates);
+        hosts::relist_hosts(
+            self.profile.clone(),
+            self.live_hosts.clone(),
+            self.updates.clone(),
+        );
         let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
