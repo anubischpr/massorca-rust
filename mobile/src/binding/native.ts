@@ -12,6 +12,7 @@ import {
   offerSummary,
   protocolInfo,
   terminalEvent,
+  terminalSummary,
   whoAmI,
   workspaceSummary,
   type RustAgentEvent,
@@ -31,6 +32,7 @@ import type {
   OfferSummary,
   ProtocolInfo,
   TerminalEvent,
+  TerminalSummary,
   TerminalView,
   WhoAmI,
   Watch,
@@ -77,6 +79,10 @@ class NativeHost implements Host {
 
   workspaces(project?: string): Promise<WorkspaceSummary[]> {
     return guardAsync(async () => (await this.host.workspaces(project)).map(workspaceSummary));
+  }
+
+  terminals(workspace?: string): Promise<TerminalSummary[]> {
+    return guardAsync(async () => (await this.host.terminals(workspace)).map(terminalSummary));
   }
 
   gitStatus(workspace: string): Promise<GitStatusSummary> {

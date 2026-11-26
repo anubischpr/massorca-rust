@@ -53,6 +53,9 @@ pub fn massorca_in(home: &Path) -> Command {
     for name in CLEARED_ENV {
         command.env_remove(name);
     }
+    // Vendor programs are searched on the service's own `PATH` alone (decision 0092), so no test finds this machine's vendor
+    // CLIs through the registry's `Path`. A service started by this command inherits the setting.
+    command.env("MASSORCA_VENDOR_PATH", "process");
     // Services this command starts stop once this test process is gone, even when its sandbox never drops.
     command.env(PARENT_PID_ENV, std::process::id().to_string());
     // Each start logs its phases (service start phases), so a slow start in CI says where its time went.

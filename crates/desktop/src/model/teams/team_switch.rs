@@ -32,6 +32,9 @@ impl TeamPage {
             TeamPage::Memory(_) => TeamPage::Memory(team),
             TeamPage::Files(_) => TeamPage::Files(team),
             TeamPage::NewRoutine(_) => TeamPage::NewRoutine(team),
+            TeamPage::EditRoutine(_, _) | TeamPage::RoutineHistory(_, _) => {
+                TeamPage::Routines(team)
+            }
         }
     }
 }

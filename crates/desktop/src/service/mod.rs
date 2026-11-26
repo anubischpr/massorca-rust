@@ -19,6 +19,7 @@ mod refusal;
 mod secrets;
 mod skills;
 mod team_room;
+mod team_routines;
 mod teams;
 mod terminals;
 mod update;
@@ -44,10 +45,12 @@ pub use connection::{
 };
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
-pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+pub use extensions::{
+    ExtensionHistory, ExtensionsRead, HostListing, HostLists, HostMarketplaceRead, RollbackAnswer,
+};
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
-pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
+pub use hosts::{HostLoss, HostRemoval, SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
@@ -58,6 +61,8 @@ pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
 pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
+#[cfg(test)]
+pub(crate) use team_routines::RoutineCommand;
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};

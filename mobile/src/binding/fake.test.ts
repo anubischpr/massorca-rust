@@ -1,6 +1,6 @@
 import { FakeMassOrca } from './fake';
 import { errorCode, errorFromCode, isTransient } from './ffi-error';
-import { FfiException, type FfiError, type HostSummary } from './types';
+import { FfiException, type FfiError, type HostSummary, type TerminalSummary } from './types';
 
 const offer = 'fake-offer:example';
 
@@ -13,6 +13,21 @@ const home: HostSummary = {
   scopes: [],
   pairedAtMs: 1n,
 };
+
+function terminal(id: string, workspaceId: string): TerminalSummary {
+  return {
+    id,
+    workspaceId,
+    state: 'live',
+    title: undefined,
+    cols: 120,
+    rows: 40,
+    shell: 'zsh',
+    cwd: '/repos/ws-1',
+    createdAtMs: 1n,
+    holdsSecrets: false,
+  };
+}
 
 async function caught(promise: Promise<unknown>): Promise<FfiError> {
   try {
@@ -147,6 +162,24 @@ describe('FakeMassOrca', () => {
     const status = { branch: 'main', ahead: 1n, behind: undefined, operation: undefined, files: [], truncated: false };
     fake.setGitStatus(status);
     expect(await host.gitStatus('workspace-1')).toEqual(status);
+  });
+
+  it('lists the terminals of one workspace, or of every workspace, and records each call', async () => {
+    const fake = new FakeMassOrca({ hosts: [home], terminals: [terminal('t-1', 'ws-1'), terminal('t-2', 'ws-2')] });
+    const host = await fake.connect('home-pc');
+
+    expect((await host.terminals('ws-1')).map((t) => t.id)).toEqual(['t-1']);
+    expect((await host.terminals()).map((t) => t.id)).toEqual(['t-1', 't-2']);
+    expect(fake.calls.filter((call) => call === 'terminals')).toHaveLength(2);
+  });
+
+  it('fails the terminal list once with the scripted error, then lists again', async () => {
+    const fake = new FakeMassOrca({ hosts: [home], terminals: [terminal('t-1', 'ws-1')] });
+    fake.failNext('terminals', 'unreachable', 'home-pc is off');
+    const host = await fake.connect('home-pc');
+
+    expect(await caught(host.terminals('ws-1'))).toEqual({ tag: 'Unreachable', message: 'home-pc is off' });
+    expect((await host.terminals('ws-1')).map((t) => t.id)).toEqual(['t-1']);
   });
 });
 

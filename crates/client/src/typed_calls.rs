@@ -12,7 +12,8 @@ use massorca_protocol::methods::agents::{
     AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
     AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
     CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    CredentialsShown, GenerateTitleParams, GenerateTitleResult, ImportCandidates,
+    ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
@@ -269,8 +270,9 @@ impl Client {
     }
 
     /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
-    /// 0094). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
-    /// `agent-options/1`; a service that offers neither is refused before anything is sent.
+    /// 0094). A start with no workspace needs capability `agent-no-project/1`, one with a `model` or an `effort` needs
+    /// `agent-options/1`, and one with `fast` needs `agent-fast/1` (decision 0165); a service that offers none of them is
+    /// refused before anything is sent.
     pub async fn agent_start(
         &self,
         params: &AgentStartParams,
@@ -287,6 +289,13 @@ impl Client {
                 self.has_capability(capabilities::AGENT_OPTIONS),
                 capabilities::AGENT_OPTIONS,
                 "a model or an effort",
+            )?;
+        }
+        if params.fast.is_some() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_FAST),
+                capabilities::AGENT_FAST,
+                "fast mode",
             )?;
         }
         self.call(agents::START, params).await
@@ -701,6 +710,15 @@ impl Client {
         params: &AccountsCheckParams,
     ) -> Result<AccountSummary, ClientError> {
         self.call(agents::ACCOUNTS_CHECK, params).await
+    }
+
+    /// `agent.generate_title`: names a chat from its first prompt and reply, by one run of the kind's one-shot form
+    /// (capability `agent-title/1`, decision 0167).
+    pub async fn agent_generate_title(
+        &self,
+        params: &GenerateTitleParams,
+    ) -> Result<GenerateTitleResult, ClientError> {
+        self.call(agents::GENERATE_TITLE, params).await
     }
 }
 

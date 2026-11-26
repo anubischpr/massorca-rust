@@ -41,3 +41,10 @@ terminals (TERM-17). This decision brings it forward for vendor programs, becaus
 - Two registry reads happen per vendor lookup. Each is small.
 - A folder that only the registry lists is found and run without a restart.
 - A registry read that fails counts as no value, and the process `PATH` is used alone.
+
+## Amendment, 2026-11-25 (decision 0164)
+
+Agent launch now uses this search path too. Session start, resume and the kind listing resolve an agent's program with
+the host's search path (`VendorSearch::host`), so a launcher that only the registry's user `Path` lists is detected and
+starts. The deferral in the Decision above, "Agent launch does not use it yet", no longer applies. The run's own
+environment is unchanged.

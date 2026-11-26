@@ -258,7 +258,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "type": "object",
                 "properties": {
                     "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
-                    "admin": { "type": "boolean" }
+                    "admin": { "type": "boolean" },
+                    "addresses": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
+                }
+            }),
+        ),
+        command(
+            "pair.cancel",
+            "Retire a pending pairing offer before it expires",
+            "pairing.cancel",
+            json!({
+                "type": "object",
+                "properties": {
+                    "offer_id": { "type": "string" },
+                    "all": { "type": "boolean" }
                 }
             }),
         ),
@@ -915,6 +928,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "required": ["kind"],
                 "properties": {
                     "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.title",
+            "Name a chat from its first prompt and reply",
+            "agent.generate_title",
+            json!({
+                "type": "object",
+                "required": ["kind", "prompt"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "reply": { "type": "string" },
+                    "model": { "type": "string" },
                     "account": { "type": "string" }
                 }
             }),

@@ -3,8 +3,11 @@
 
 use massorca_protocol::methods::devices::{
     self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
-    NetworkStatus, PairingCreateParams, PairingCreated, WhoAmI,
+    NetworkStatus, PairingCancelParams, PairingCancelled, PairingCreateParams, PairingCreated,
+    WhoAmI,
 };
+
+use massorca_protocol::capabilities;
 
 use crate::client::Client;
 use crate::error::ClientError;
@@ -44,12 +47,34 @@ impl Client {
         self.call(devices::WHOAMI, &()).await
     }
 
-    /// `pairing.create`: an offer another device can redeem once, before it expires.
+    /// `pairing.create`: an offer another device can redeem once, before it expires. Given `addresses` are sent only
+    /// to a service offering `pairing-address/1`; an older one would ignore them and list its bound addresses.
     pub async fn pairing_create(
         &self,
         params: &PairingCreateParams,
     ) -> Result<PairingCreated, ClientError> {
+        if !params.addresses.is_empty() && !self.has_capability(capabilities::PAIRING_ADDRESS) {
+            return Err(ClientError::CapabilityMissing {
+                what: "pairing offer addresses".to_owned(),
+                capability: capabilities::PAIRING_ADDRESS.to_owned(),
+            });
+        }
         self.call(devices::PAIRING_CREATE, params).await
+    }
+
+    /// `pairing.cancel`: retires one pending offer, or every one, before it expires. Sent only to a service offering
+    /// `pairing-cancel/1`.
+    pub async fn pairing_cancel(
+        &self,
+        params: &PairingCancelParams,
+    ) -> Result<PairingCancelled, ClientError> {
+        if !self.has_capability(capabilities::PAIRING_CANCEL) {
+            return Err(ClientError::CapabilityMissing {
+                what: "retiring a pairing offer".to_owned(),
+                capability: capabilities::PAIRING_CANCEL.to_owned(),
+            });
+        }
+        self.call(devices::PAIRING_CANCEL, params).await
     }
 
     /// `network.status`: the listeners, the server pin, and how many devices and offers there are.

@@ -150,11 +150,26 @@ fn wait_for_text(sandbox: &Sandbox, terminal: &str, text: &str) {
     });
 }
 
-/// Delegates `prompt` to a writing child of `parent` and waits until the child is done; returns its id.
+/// Delegates `prompt` to a writing child of `parent`, titled so that its notice holds no command for the fake agent, and
+/// waits until the child is done and the parent has taken its notice (decision 0170); returns its id.
 fn finished_child(sandbox: &Sandbox, parent: &str, prompt: &str) -> String {
-    let child = id_of(&delegate(sandbox, parent, prompt, &[]));
+    let child = id_of(&delegate(sandbox, parent, prompt, &["--title", "Child"]));
     until(sandbox, &child, "done");
+    told(sandbox, parent, &child);
     child
+}
+
+/// Waits until `parent` has answered the notice that `child` finished (decision 0170): its last turn is done and its
+/// result, which the fake agent makes of the prompt, names the child.
+fn told(sandbox: &Sandbox, parent: &str, child: &str) {
+    eventually(&format!("{parent} told of {child}"), || {
+        let shown = sandbox.json_ok("default", &["agent", "status", parent]);
+        (shown["activity"]["state"] == "done"
+            && shown["result"]
+                .as_str()
+                .is_some_and(|result| result.contains(child)))
+        .then_some(())
+    });
 }
 
 #[test]
@@ -355,8 +370,11 @@ fn no_merge_and_no_prompt_each_skip_their_step() {
     assert_eq!(brought["merged"], true, "{brought}");
     assert_eq!(brought["prompt_delivered"], false, "{brought}");
     assert!(lead.join("second.txt").is_file());
+    // The parent's last turn is still the notice of the unprompted child: no bring-back prompt reached it.
     let shown = sandbox.json_ok("default", &["agent", "status", &parent]);
-    assert_eq!(shown["activity"]["state"], "idle", "{shown}");
+    assert_eq!(shown["activity"]["state"], "done", "{shown}");
+    let last = shown["result"].as_str().expect("the parent's result");
+    assert!(last.contains(&unprompted), "{shown}");
 
     let brought = sandbox.json_ok("default", &["agent", "bring-back", &unmerged, "--no-merge"]);
     assert_eq!(brought["merged"], false, "{brought}");
@@ -509,8 +527,14 @@ fn a_grandchild_is_started_under_its_child_and_comes_back_to_it_before_the_root(
     set_delegation_depth(&sandbox, 2);
     let (parent, _) = start_parent(&sandbox, "lead");
     let child = finished_child(&sandbox, &parent, "write:child.txt");
-    let grandchild = id_of(&delegate(&sandbox, &child, "write:deep.txt", &[]));
+    let grandchild = id_of(&delegate(
+        &sandbox,
+        &child,
+        "write:deep.txt",
+        &["--title", "Grandchild"],
+    ));
     let started = until(&sandbox, &grandchild, "done");
+    told(&sandbox, &child, &grandchild);
 
     assert_eq!(started["parent_id"], child.as_str(), "{started}");
     assert_eq!(

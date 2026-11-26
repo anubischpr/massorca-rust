@@ -4,10 +4,22 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::client::Client;
 use crate::error::ClientError;
 use crate::host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 use massorca_net::TlsIdentity;
 use massorca_profile::Profile;
+use massorca_protocol::methods::devices::DeviceRevokeParams;
+use massorca_protocol::{PeerInfo, codes};
+
+/// What became of this device on a host that is being forgotten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceRevocation {
+    /// The host revoked this device.
+    Revoked,
+    /// The host still lists this device as paired: it did not answer, or refused; the sentence says why.
+    NotRevoked(String),
+}
 
 const HOST_FILE: &str = "host.json";
 const KEY_FILE: &str = "device.key";
@@ -161,6 +173,42 @@ impl Hosts {
         }
         let leftover = hosts.remove_child_dir(name)?;
         Ok(HostRemoved { leftover })
+    }
+
+    /// Revokes this device on host `name` before it is forgotten, as `host remove` and the desktop do. Never fails:
+    /// a host that does not answer, or refuses, leaves the device paired there and says why, and can still be removed.
+    /// A host whose key changed is refused before anything is sent to it.
+    pub async fn revoke_this_device(&self, name: &str, peer: &PeerInfo) -> DeviceRevocation {
+        let record = match self.get(name) {
+            Ok(record) => record,
+            Err(error) => return DeviceRevocation::NotRevoked(error.to_string()),
+        };
+        let client = match Client::connect_host(self, name, peer).await {
+            Ok(client) => client,
+            Err(error) => return DeviceRevocation::NotRevoked(error.to_string()),
+        };
+        let params = DeviceRevokeParams {
+            device: record.device_id,
+        };
+        match client.device_revoke(&params).await {
+            Ok(_) => DeviceRevocation::Revoked,
+            // The service closes this device's connections as it revokes them, so the answer may never arrive.
+            Err(ClientError::Disconnected) => self.confirm_revoked(name, peer).await,
+            Err(error) => DeviceRevocation::NotRevoked(error.to_string()),
+        }
+    }
+
+    /// After a revoke that got no answer: a refusal with `auth.device_revoked` means it took effect.
+    async fn confirm_revoked(&self, name: &str, peer: &PeerInfo) -> DeviceRevocation {
+        match Client::connect_host(self, name, peer).await {
+            Ok(_) => DeviceRevocation::NotRevoked("the host still accepts this device".to_owned()),
+            Err(ClientError::Handshake { error, .. })
+                if error.code == codes::AUTH_DEVICE_REVOKED =>
+            {
+                DeviceRevocation::Revoked
+            }
+            Err(error) => DeviceRevocation::NotRevoked(error.to_string()),
+        }
     }
 
     /// Whether a host's files are there could not be read: nothing changes, and the message names the folder.
