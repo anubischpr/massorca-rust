@@ -1,8 +1,11 @@
 //! `massorca skills`: `installed` and `roots` (SKL-01) list what the agent tools and the registered projects keep on this
 //! host; `preview`, `place`, `unplace` and `managed` (SKL-02) copy a skill into the agents' folders and remove only the
-//! copies MassOrca placed. The service does the scans and the writes.
+//! copies MassOrca placed. The service does the scans and the writes. `bundled show` (SKL-04) prints the MassOrca skill the
+//! way this build renders it; it needs no service.
 
 use clap::Subcommand;
+use massorca_client::Client;
+use massorca_protocol::codes;
 use massorca_protocol::methods::skill_placement::{
     PlacementAgent, PlacementState, PlacementTopology, SkillPlaceParams, SkillPlacementResult,
     SkillUnplaceParams, SkillsManagedParams, SkillsManagedResult,
@@ -13,8 +16,9 @@ use massorca_protocol::methods::skills::{
 use serde::Serialize;
 
 use crate::connect::connect;
-use crate::error::CliError;
+use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::skill_guide::{SKILL_NAME, massorca_skill_text};
 use crate::target::Target;
 
 #[derive(Debug, Subcommand)]
@@ -31,6 +35,21 @@ pub enum SkillCommand {
     Unplace(UnplaceArgs),
     /// Lists the skills MassOrca placed on this host.
     Managed,
+    /// The skills MassOrca ships: show one, or install, refresh and remove it (SKL-04).
+    #[command(subcommand)]
+    Bundled(BundledCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BundledCommand {
+    /// Prints a bundled skill's text as this build renders it. The checked-in copy must equal it; no service is needed.
+    Show(BundledNameArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct BundledNameArgs {
+    /// The bundled skill's name.
+    pub name: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -87,7 +106,19 @@ pub async fn execute(
     command: SkillCommand,
     output: Output,
 ) -> Result<(), CliError> {
+    // Why: `bundled show` reads only this build, so it must not start or reach the service.
+    if let SkillCommand::Bundled(BundledCommand::Show(args)) = &command {
+        return show_bundled(&args.name, output);
+    }
     let client = connect(target, autostart).await?;
+    run_service_command(&client, command, output).await
+}
+
+async fn run_service_command(
+    client: &Client,
+    command: SkillCommand,
+    output: Output,
+) -> Result<(), CliError> {
     match command {
         SkillCommand::Installed => {
             let discovery = client
@@ -134,7 +165,33 @@ pub async fn execute(
                 .await?;
             output.success(&managed, &managed_lines(&managed));
         }
+        SkillCommand::Bundled(BundledCommand::Show(args)) => show_bundled(&args.name, output)?,
     }
+    Ok(())
+}
+
+/// The `bundled show` result: the skill's name and its text.
+#[derive(Serialize)]
+struct BundledText<'a> {
+    name: &'a str,
+    text: &'a str,
+}
+
+/// Prints the bundled skill's text as this build renders it: exactly the checked-in file, so the file can be regenerated
+/// from this command. Only the MassOrca skill is bundled.
+fn show_bundled(name: &str, output: Output) -> Result<(), CliError> {
+    if name != SKILL_NAME {
+        return Err(CliError::new(
+            codes::REQUEST_INVALID_PARAMS,
+            format!("no bundled skill is named {name:?}"),
+            exit::USAGE,
+        ));
+    }
+    let text = massorca_skill_text();
+    output.success(
+        &BundledText { name, text: &text },
+        &text.lines().map(str::to_owned).collect::<Vec<_>>(),
+    );
     Ok(())
 }
 
