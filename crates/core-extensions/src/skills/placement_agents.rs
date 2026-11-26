@@ -1,6 +1,8 @@
 //! The agent tools a skill can be placed for, and the folder each reads at global scope (pv96's
 //! `skill-install-providers.ts`). An agent that reads the canonical `.agents/skills` root needs no folder of its own.
 
+use super::discover::SkillSource;
+
 /// An agent tool a skill can be placed for. The ids match pv96's, so one id names one tool in both apps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlacementAgent {
@@ -70,4 +72,18 @@ impl PlacementAgent {
             PlacementAgent::Zcode => Some(&[".zcode", "skills"]),
         }
     }
+}
+
+/// The agents whose skill root exists on this host, in the order discovery lists them. An agent whose folder is missing is
+/// not installed here, so nothing is created for it.
+pub fn detected_agents(sources: &[SkillSource]) -> Vec<PlacementAgent> {
+    let mut agents = Vec::new();
+    for source in sources.iter().filter(|source| source.exists) {
+        if let Some(agent) = source.owner.as_deref().and_then(PlacementAgent::from_id)
+            && !agents.contains(&agent)
+        {
+            agents.push(agent);
+        }
+    }
+    agents
 }
