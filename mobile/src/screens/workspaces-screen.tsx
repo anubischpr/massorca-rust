@@ -3,11 +3,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { RefreshControl, SectionList, StyleSheet, Text, View } from 'react-native';
 
 import { FfiException, type Host, type WorkspaceSummary } from '../binding/types';
+import { ActionButton } from '../components/action-button';
 import { ConnectionBanner } from '../components/connection-banner';
 import { LoadingRows } from '../components/loading-rows';
 import { Overline } from '../components/overline';
 import { StatePage } from '../components/state-page';
 import { DETAILS, PAIR_AGAIN, RETRY, RETRY_NOW } from '../copy/connection';
+import { ROUTINES_ACTION } from '../copy/routines';
 import { LOADING_WORKSPACES, NO_WORKSPACES_LINE, NO_WORKSPACES_TITLE, ON_HOST, workspacesLoadFailed } from '../copy/workspaces';
 import type { RootStackParamList } from '../navigation/routes';
 import { connectionProblemOf } from '../state/connection-problem';
@@ -120,7 +122,6 @@ export function WorkspacesScreen({ navigation, route }: Props) {
             onOpen={() => navigation.navigate('Workspace', { host, workspace: item.id, noGit: item.noGit })}
           />
         )}
-        ListHeaderComponent={<Text style={[styles.caption, { color: palette['text.secondary'] }]}>{ON_HOST(host)}</Text>}
         refreshControl={<RefreshControl refreshing={false} onRefresh={reload} />}
         contentContainerStyle={styles.list}
       />
@@ -138,6 +139,10 @@ export function WorkspacesScreen({ navigation, route }: Props) {
           />
         </View>
       )}
+      <View style={styles.entries}>
+        <Text style={[styles.caption, { color: palette['text.secondary'] }]}>{ON_HOST(host)}</Text>
+        <ActionButton label={ROUTINES_ACTION} variant="ghost" onPress={() => navigation.navigate('Routines', { host })} />
+      </View>
       {body}
     </View>
   );
@@ -164,12 +169,17 @@ const styles = StyleSheet.create({
   banner: {
     padding: spacingTokens['space.4'],
   },
+  entries: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: spacingTokens['space.4'],
+    paddingRight: spacingTokens['space.2'],
+  },
   list: {
     paddingBottom: spacingTokens['space.4'],
   },
   caption: {
-    paddingHorizontal: spacingTokens['space.4'],
-    paddingBottom: spacingTokens['space.2'],
     fontSize: typeTokens['a-caption'].size,
     lineHeight: typeTokens['a-caption'].lineHeight,
   },

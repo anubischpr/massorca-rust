@@ -3,12 +3,14 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CONNECTION_LOG_TITLE } from '../copy/connection';
 import { TERMINAL_TITLE } from '../copy/terminal';
+import { ROUTINES_TITLE } from '../copy/routines';
 import { PROJECTS_TITLE, WORKSPACE_TITLE } from '../copy/workspaces';
 import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
 import { ConfirmPairingScreen } from '../screens/confirm-pairing-screen';
 import { ConnectionLogScreen } from '../screens/connection-log-screen';
 import { HomeScreen } from '../screens/home-screen';
 import { PairScreen } from '../screens/pair-screen';
+import { RoutinesScreen } from '../screens/routines-screen';
 import { ProtocolGateScreen } from '../screens/protocol-gate-screen';
 import { TerminalScreen } from '../screens/terminal-screen';
 import { WorkspaceScreen } from '../screens/workspace-screen';
@@ -27,6 +29,7 @@ export function AppNavigator() {
         <Stack.Screen name="ConfirmPairing" component={ConfirmPairingScreen} options={{ title: CONFIRM_TITLE }} />
         <Stack.Screen name="ProtocolGate" component={ProtocolGateScreen} options={{ title: 'Protocol check' }} />
         <Stack.Screen name="Workspaces" component={WorkspacesScreen} options={{ title: PROJECTS_TITLE }} />
+        <Stack.Screen name="Routines" component={RoutinesScreen} options={{ title: ROUTINES_TITLE }} />
         <Stack.Screen name="Terminal" options={{ title: TERMINAL_TITLE }}>
           {({ route, navigation }) => (
             <TerminalScreen
