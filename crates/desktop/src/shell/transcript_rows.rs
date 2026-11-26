@@ -69,7 +69,7 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
                 truncated: false,
             },
         },
-        wire::ChatItemBody::Plan { entries } => TranscriptRow::Plan {
+        wire::ChatItemBody::Plan { entries, .. } => TranscriptRow::Plan {
             id,
             plan: Rc::new(Plan {
                 steps: entries
@@ -83,6 +83,7 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
             path,
             patch,
             truncated,
+            ..
         } => TranscriptRow::Diff {
             id,
             diff: Rc::new(DiffModel::new(parse_patch(
@@ -236,6 +237,7 @@ mod tests {
             truncated: false,
             tool_use_id: None,
             can_always: true,
+            suggestions: Vec::new(),
             state,
             scope: None,
             settled_at_ms: None,
@@ -376,6 +378,7 @@ mod tests {
                             status: wire::PlanStatus::InProgress,
                         },
                     ],
+                    document: None,
                 },
             )],
             None,
@@ -469,6 +472,7 @@ mod tests {
                         text: "Read".to_owned(),
                         status: wire::PlanStatus::Unknown,
                     }],
+                    document: None,
                 },
             )],
             None,

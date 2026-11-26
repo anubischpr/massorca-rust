@@ -50,7 +50,7 @@ fn the_first_session_replaces_the_placeholder_row(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[("p1", "alpha")]);
     created_without_a_session(&rig, cx);
     rig.updates
-        .send(StoreUpdate::AgentChanged(agent("a1", "w2", 3)))
+        .send(StoreUpdate::AgentChanged(Box::new(agent("a1", "w2", 3))))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -63,7 +63,7 @@ fn a_workspace_whose_sessions_are_all_gone_has_no_row(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[("p1", "alpha")]);
     created_without_a_session(&rig, cx);
     rig.updates
-        .send(StoreUpdate::AgentChanged(agent("a1", "w2", 3)))
+        .send(StoreUpdate::AgentChanged(Box::new(agent("a1", "w2", 3))))
         .expect("the store listens");
     rig.updates
         .send(StoreUpdate::AgentGone("a1".into()))

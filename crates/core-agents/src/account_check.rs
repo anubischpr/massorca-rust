@@ -183,6 +183,7 @@ fn capture(pattern: Option<&str>, output: &str) -> Option<String> {
 
 /// What a run of a kind's program produced: its exit code (`None` when it did not finish) and its output, which is
 /// matched and never logged.
+#[derive(Clone)]
 pub(crate) struct RunOutput {
     pub(crate) exit: Option<i32>,
     pub(crate) output: String,
