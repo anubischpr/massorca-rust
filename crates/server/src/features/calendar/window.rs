@@ -8,7 +8,7 @@ use massorca_protocol::methods::calendar::{
 };
 use massorca_protocol::{ErrorBody, codes};
 
-use super::routine_runs;
+use super::{automation_runs, routine_runs};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -51,6 +51,9 @@ pub(super) fn read(
     let mut runs = Vec::new();
     if includes(params.kind, CalendarKind::Routine) {
         runs.extend(routine_runs::read(store, &window, host_zone.as_deref())?);
+    }
+    if includes(params.kind, CalendarKind::Automation) {
+        runs.extend(automation_runs::read(store, &window, host_zone.as_deref())?);
     }
     runs.sort_by(|a, b| {
         a.at_ms

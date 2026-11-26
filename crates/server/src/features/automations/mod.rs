@@ -3,8 +3,11 @@
 
 mod calls;
 mod definition;
+mod occurrences;
 mod selectors;
 mod view;
+
+pub(crate) use occurrences::upcoming_runs;
 
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::automations;

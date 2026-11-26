@@ -1,6 +1,7 @@
 //! `calendar.occurrences` (capability `calendar/1`, decision 0124): the runs of routines and automations in one window,
 //! and the done routine runs in it. Read-only, as the routine and automation lists are.
 
+mod automation_runs;
 mod routine_runs;
 mod window;
 
