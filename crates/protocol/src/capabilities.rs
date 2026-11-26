@@ -1,6 +1,8 @@
 //! Named, versioned feature groups. The server offers them in `welcome`; a client calls only the methods of offered groups.
 
 pub const SERVICE: &str = "service/1";
+/// Developer tools on the service's host: `service.tools` (PLAT-08, decision 0116).
+pub const SERVICE_TOOLS: &str = "service-tools/1";
 pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";

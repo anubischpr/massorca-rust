@@ -32,6 +32,15 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "service.tools",
+            "Show the git, forge CLI and shell tools on the service's host",
+            "service.tools",
+            json!({
+                "type": "object",
+                "properties": { "refresh": { "type": "boolean" } }
+            }),
+        ),
+        command(
             "agent-context",
             "List every command with its method, permission and parameters",
             "commands.describe",
