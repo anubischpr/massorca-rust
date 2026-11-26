@@ -144,12 +144,12 @@ async fn resolve(
     })
 }
 
-fn record(ctx: &RequestCtx) -> PlacementStore {
+pub(crate) fn record(ctx: &RequestCtx) -> PlacementStore {
     PlacementStore::new(ctx.state.profile.dir().join(RECORD[0]).join(RECORD[1]))
 }
 
 /// Runs one placement call on the blocking pool and maps its refusal to the protocol error.
-async fn run<T, F>(call: F) -> Result<T, ErrorBody>
+pub(crate) async fn run<T, F>(call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, PlacementError> + Send + 'static,
@@ -202,7 +202,9 @@ fn placement_error(error: PlacementError) -> ErrorBody {
     }
 }
 
-fn core_agents(agents: &[wire::PlacementAgent]) -> Result<Vec<core::PlacementAgent>, ErrorBody> {
+pub(crate) fn core_agents(
+    agents: &[wire::PlacementAgent],
+) -> Result<Vec<core::PlacementAgent>, ErrorBody> {
     agents
         .iter()
         .map(|agent| {
@@ -229,7 +231,7 @@ fn core_agents(agents: &[wire::PlacementAgent]) -> Result<Vec<core::PlacementAge
         .collect()
 }
 
-fn wire_agent(agent: core::PlacementAgent) -> wire::PlacementAgent {
+pub(crate) fn wire_agent(agent: core::PlacementAgent) -> wire::PlacementAgent {
     match agent {
         core::PlacementAgent::Codex => wire::PlacementAgent::Codex,
         core::PlacementAgent::Claude => wire::PlacementAgent::Claude,
@@ -277,7 +279,10 @@ fn path_text(path: &Path, show_paths: bool) -> Option<String> {
     show_paths.then(|| path.to_string_lossy().into_owned())
 }
 
-fn report_to_wire(report: &core::PlacementReport, show_paths: bool) -> wire::SkillPlacementResult {
+pub(crate) fn report_to_wire(
+    report: &core::PlacementReport,
+    show_paths: bool,
+) -> wire::SkillPlacementResult {
     wire::SkillPlacementResult {
         name: report.name.clone(),
         canonical_path: path_text(&report.canonical, show_paths),

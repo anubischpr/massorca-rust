@@ -21,6 +21,7 @@ mod secret_params;
 mod secret_refusals;
 mod secrets;
 mod service;
+mod skill_bundled;
 mod skill_placement;
 pub(crate) mod skills;
 mod teams;
@@ -74,6 +75,7 @@ pub(crate) fn register_core(
     handles.extend(extensions::register(registries)?);
     handles.extend(skills::register(registries)?);
     handles.extend(skill_placement::register(registries)?);
+    handles.extend(skill_bundled::register(registries)?);
     handles.extend(hosted_services::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
