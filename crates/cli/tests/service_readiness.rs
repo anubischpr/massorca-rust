@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::process::Stdio;
 
 use harness::{ChildGuard, Sandbox, eventually};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// A local port that nothing listens on, found by binding port 0 and releasing it.
 fn free_port() -> u16 {
@@ -138,4 +138,44 @@ fn text_readiness_line_names_the_profile_pid_and_endpoint() {
         !line.trim_start().starts_with('{'),
         "text mode is not JSON: {line}"
     );
+}
+
+#[test]
+fn readiness_record_names_its_schema_and_the_bound_and_advertised_endpoints() {
+    let sandbox = Sandbox::new();
+    let port = free_port();
+    let listen = format!("localhost:{port}");
+    let (_service, record, _line) = start_with_readiness(&sandbox, &["--listen", listen.as_str()]);
+
+    assert_eq!(record["schema"], "orca_server_ready");
+    assert_eq!(record["schema_version"], 1);
+    let bound = record["network"]["listeners"][0]["bound"].clone();
+    assert_eq!(record["bound_endpoints"], json!([bound]));
+    // The advertised list is what offers list: the bound listener, with no MagicDNS name on localhost.
+    assert_eq!(record["advertised_endpoints"], json!([bound]));
+}
+
+#[test]
+fn readiness_record_without_a_listener_has_no_endpoints_and_says_pairing_needs_one() {
+    let sandbox = Sandbox::new();
+    let (_service, record, _line) = start_with_readiness(&sandbox, &[]);
+
+    assert_eq!(record["schema"], "orca_server_ready");
+    assert_eq!(record["bound_endpoints"], json!([]));
+    assert_eq!(record["advertised_endpoints"], json!([]));
+    assert_eq!(record["pairing"]["available"], false);
+    let reason = record["pairing"]["reason"].as_str().expect("a reason");
+    assert!(reason.contains("--listen"), "guidance in: {reason}");
+    assert_eq!(record["pairing"]["pending_offers"], json!([]));
+}
+
+#[test]
+fn readiness_pairing_object_is_available_with_a_listener_and_offers_no_secret() {
+    let sandbox = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let (_service, record, _line) = start_with_readiness(&sandbox, &["--listen", listen.as_str()]);
+
+    assert_eq!(record["pairing"]["available"], true);
+    assert!(record["pairing"].get("reason").is_none());
+    assert_eq!(record["pairing"]["pending_offers"], json!([]));
 }

@@ -385,15 +385,31 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
 `service run` prints its readiness record once the service accepts connections, and only after its
-network listeners have settled (bound, or waiting with the reason). It is never printed earlier.
-In text mode it is a few lines: `service ready for profile <name> (pid <n>)`, `version <v>, protocol <p>`,
-`local endpoint: <path or pipe>`, then the listener table, `server pin` and `pending offers` when a
-network listener is on, or `no network listeners` when it is not. With `--json` it is one line on
-stdout: `{"ok":true,"result":{...}}`, where `result` holds the start identity (`profile`, `pid`,
-`version`, `protocol`, `started_at_ms`, `capabilities`), `endpoint` and, with a network listener,
-`network` (`listeners`, `server_pin`, `pending_offers`, a count). Pairing offers and their secrets
-are never printed; `server status` shows the same listeners and pin later. The service log goes to
-the profile's log files only unless `--log-stderr` is given.
+network listeners have made their first bind attempt (bound, or waiting with the reason). It is never
+printed earlier, and it is printed once per process. In text mode it is a few lines: `service ready for
+profile <name> (pid <n>)`, `version <v>, protocol <p>`, `local endpoint: <path or pipe>`, the listener
+table, `server pin`, `advertised endpoints`, `pending offers`, and `pairing: available` or
+`pairing: unavailable: <reason>`. With no network listener it says so instead.
+
+With `--json` it is one line on stdout, `{"ok":true,"result":{...}}`. `result` holds:
+
+- `schema` (`orca_server_ready`) and `schema_version` (`1`);
+- the start identity: `profile`, `pid`, `version`, `protocol`, `started_at_ms`, `capabilities`;
+- `endpoint`, the local socket path or named pipe;
+- `bound_endpoints` and `advertised_endpoints`, `host:port` lists: the bound listener addresses, and
+  what a pairing offer lists when it names no address (the bound listeners and their MagicDNS names).
+  Both are empty without a network listener;
+- `pairing`: `available`, `reason` when not available, and `pending_offers`, each
+  `{offer_id, expires_at_ms, scopes}`. Pending offers at readiness are normally none;
+- `network`, with a network listener only: `listeners`, `server_pin` (a public key fingerprint) and
+  `pending_offers` (a count).
+
+A pairing secret is never printed. Three fields of the startup contract are not in the record, because
+the service does not produce them: a runtime id, the managed-WSL reconciliation state, and terminal-daemon
+health. A web client URL and a pairing QR or URL are not produced either: no offer exists at startup, and
+an offer's secret is shown only when it is made. `server status` shows the same listeners and pin later.
+
+The service log goes to the profile's log files only unless `--log-stderr` is given.
 
 ### Hosts and pairing
 

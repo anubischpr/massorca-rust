@@ -1,5 +1,5 @@
 //! What a started service reports once it accepts connections: its local endpoint, and with a network listener, the
-//! listeners, the server pin and how many pairing offers are pending. Never an offer's secret.
+//! endpoints it binds and offers advertise, its server pin and its pending pairing offers. Never an offer's secret.
 
 use std::time::Instant;
 
@@ -17,23 +17,52 @@ pub struct Readiness {
     pub network: Option<NetworkReadiness>,
 }
 
-/// The network part of a readiness record: the same listener states and pin `devices.network_status` reports.
+/// The network part of a readiness record: the listener states and pin `devices.network_status` reports, the endpoints
+/// pairing offers advertise, and the pending offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkReadiness {
     pub listeners: Vec<ListenerInfo>,
     pub server_pin: String,
-    pub pending_offers: u32,
+    /// The addresses the listeners are bound to, `host:port`.
+    pub bound_endpoints: Vec<String>,
+    /// What an offer lists when it names no address: the bound listeners and their MagicDNS names.
+    pub advertised_endpoints: Vec<String>,
+    pub pending_offers: Vec<PendingOffer>,
+}
+
+/// A pending pairing offer: the id that names it, when it ends in wall-clock milliseconds, and its scopes. No secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingOffer {
+    pub offer_id: String,
+    pub expires_at_ms: i64,
+    pub scopes: Vec<String>,
 }
 
 impl Readiness {
     pub(crate) fn of(profile: &Profile, network: &NetworkState) -> Self {
         Self {
             local_endpoint: local_endpoint(profile),
-            network: network.server_pin.map(|pin| NetworkReadiness {
-                listeners: network.listener_infos(),
-                server_pin: pin.to_string(),
-                pending_offers: u32::try_from(network.pairing.pending(Instant::now()))
-                    .unwrap_or(u32::MAX),
+            network: network.server_pin.map(|pin| {
+                let listeners = network.listener_infos();
+                NetworkReadiness {
+                    bound_endpoints: listeners
+                        .iter()
+                        .filter_map(|listener| listener.bound.clone())
+                        .collect(),
+                    listeners,
+                    server_pin: pin.to_string(),
+                    advertised_endpoints: network.advertised_addresses(),
+                    pending_offers: network
+                        .pairing
+                        .pending_offers(Instant::now())
+                        .into_iter()
+                        .map(|offer| PendingOffer {
+                            offer_id: offer.offer_id,
+                            expires_at_ms: offer.expires_at_ms,
+                            scopes: offer.scopes.names(),
+                        })
+                        .collect(),
+                }
             }),
         }
     }
