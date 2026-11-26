@@ -4,10 +4,52 @@
 mod harness;
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use harness::{ChildGuard, Sandbox, eventually, single_document, with_json};
 use serde_json::Value;
+
+/// The log command for a host installed over SSH: the same unit the install wrote, read through the same target.
+const SSH_LOGS: &str = "ssh vps journalctl --user -u massorca.service -n 100 --no-pager";
+
+/// Marks paired host `name` of the `client` profile as installed over SSH at `target`, the way `host add-ssh` does.
+fn mark_installed_over_ssh(client: &Sandbox, name: &str, target: &str) {
+    let path = client
+        .profile_dir("client")
+        .join("hosts")
+        .join(name)
+        .join("install.json");
+    std::fs::write(path, format!(r#"{{"ssh_target":"{target}"}}"#)).expect("the marker is written");
+}
+
+/// A fake `ssh` first on PATH that leaves a marker file when run; returns the marker's path.
+fn fake_ssh_on_path(client: &Sandbox) -> PathBuf {
+    let dir = client.home().join("fake-bin");
+    std::fs::create_dir_all(&dir).expect("the fake bin folder");
+    let marker = client.home().join("ssh-was-run");
+    #[cfg(windows)]
+    {
+        let script = format!("@echo ran>> \"{}\"\r\n", marker.display());
+        std::fs::write(dir.join("ssh.bat"), script).expect("the fake ssh");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!("#!/bin/sh\necho ran >> \"{}\"\n", marker.display());
+        let path = dir.join("ssh");
+        std::fs::write(&path, script).expect("the fake ssh");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the fake ssh is executable");
+    }
+    let mut paths = vec![dir];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let joined = std::env::join_paths(paths).expect("a PATH");
+    client.set_env("PATH", &joined.to_string_lossy());
+    marker
+}
 
 const CHECKS: [&str; 8] = [
     "record", "address", "port", "identity", "protocol", "paired", "service", "latency",
@@ -239,4 +281,58 @@ fn host_status_output_is_unchanged_by_the_self_test() {
     let stdout = String::from_utf8_lossy(&outcome.get_output().stdout).into_owned();
     assert!(stdout.starts_with("srv: connected, server "), "{stdout:?}");
     assert!(stdout.contains(", scopes "), "{stdout:?}");
+}
+
+#[test]
+fn a_failed_self_test_of_an_ssh_installed_host_names_the_journal_command() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let service = start_server(&server, "server", &listen);
+    pair(&server, "server", &client, "srv");
+    mark_installed_over_ssh(&client, "srv", "vps");
+    stop_server(&server, "server", service);
+
+    let (document, code) = self_test_json(&client, "srv");
+    assert_ne!(code, Some(0), "{document}");
+    assert_eq!(document["error"]["data"]["logs"], SSH_LOGS, "{document}");
+
+    let outcome = client.run("client", &["host", "self-test", "srv"]);
+    let stdout = String::from_utf8_lossy(&outcome.get_output().stdout).into_owned();
+    let last = stdout.lines().last().expect("a report line");
+    assert_eq!(last, format!("logs: {SSH_LOGS}"), "{stdout:?}");
+}
+
+#[test]
+fn a_failed_self_test_of_a_host_not_installed_over_ssh_has_no_logs_line() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let service = start_server(&server, "server", &listen);
+    pair(&server, "server", &client, "srv");
+    stop_server(&server, "server", service);
+
+    let (document, code) = self_test_json(&client, "srv");
+    assert_ne!(code, Some(0), "{document}");
+    assert!(document["error"]["data"]["logs"].is_null(), "{document}");
+    let outcome = client.run("client", &["host", "self-test", "srv"]);
+    let stdout = String::from_utf8_lossy(&outcome.get_output().stdout).into_owned();
+    assert!(!stdout.contains("logs:"), "{stdout:?}");
+}
+
+#[test]
+fn the_self_test_never_starts_ssh() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let service = start_server(&server, "server", &listen);
+    pair(&server, "server", &client, "srv");
+    mark_installed_over_ssh(&client, "srv", "vps");
+    let marker = fake_ssh_on_path(&client);
+
+    let _ = self_test_json(&client, "srv");
+    stop_server(&server, "server", service);
+    let (document, _) = self_test_json(&client, "srv");
+    assert_eq!(document["error"]["data"]["logs"], SSH_LOGS, "{document}");
+    assert!(!marker.exists(), "ssh was started");
 }

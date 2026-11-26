@@ -4,7 +4,8 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use massorca_client::{Client, ClientError, HostRecord, Hosts, Welcome};
+use massorca_client::{Client, ClientError, HostRecord, Hosts, SshInstall, Welcome};
+use massorca_core_remote::bootstrap::UNIT_NAME;
 use massorca_net::Pin;
 use massorca_profile::Profile;
 use massorca_protocol::codes;
@@ -43,13 +44,37 @@ pub struct SelfTestReport {
     pub name: String,
     pub passed: bool,
     pub checks: Vec<Check>,
+    /// The command that reads the host's service log, when a check failed on a host installed over SSH.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<String>,
+}
+
+/// The command that prints the service log of an SSH-installed host, through the target and `ssh` options its install used.
+fn journal_command(install: &SshInstall) -> String {
+    let mut words = vec!["ssh".to_owned()];
+    words.extend(install.ssh_args.iter().cloned());
+    words.push(install.ssh_target.clone());
+    words.push(format!(
+        "journalctl --user -u {UNIT_NAME} -n 100 --no-pager"
+    ));
+    words.join(" ")
 }
 
 /// Runs the self-test of host `name` and prints its report; a failing host fails the command with the report in its data.
 pub async fn execute(profile: &Profile, name: &str, output: Output) -> Result<(), CliError> {
     let hosts = Hosts::of(profile);
-    let report = run(&hosts, name).await;
-    let lines: Vec<String> = report.checks.iter().map(line).collect();
+    let mut report = run(&hosts, name).await;
+    if !report.passed {
+        report.logs = hosts
+            .ssh_install(name)
+            .ok()
+            .flatten()
+            .map(|install| journal_command(&install));
+    }
+    let mut lines: Vec<String> = report.checks.iter().map(line).collect();
+    if let Some(command) = &report.logs {
+        lines.push(format!("logs: {command}"));
+    }
     if report.passed {
         output.success(&report, &lines);
         return Ok(());
@@ -384,6 +409,7 @@ fn finish(name: &str, mut ran: Vec<Check>) -> SelfTestReport {
         name: name.to_owned(),
         passed,
         checks,
+        logs: None,
     }
 }
 
