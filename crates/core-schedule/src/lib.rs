@@ -36,11 +36,13 @@
 mod claim;
 mod cron;
 mod occurrence;
+mod occurrence_window;
 mod schedule;
 mod zone;
 
 pub use claim::{ClaimDecision, MAX_COUNTED_SKIPS, decide_claim, next_run_from};
 pub use cron::{CronSchedule, MAX_CRON_EXPRESSION_LEN};
 pub use occurrence::{CompiledSchedule, MAX_CRON_SEARCH_DAYS, MAX_SEARCH_DAYS};
+pub use occurrence_window::{WallClock, occurrences_between, wall_clock_in};
 pub use schedule::{Cadence, MAX_ZONE_NAME_LEN, Schedule, ScheduleError, Weekday};
 pub use zone::{ZoneSource, host_zone_used};
