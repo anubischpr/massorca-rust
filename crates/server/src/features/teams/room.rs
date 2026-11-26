@@ -1,7 +1,8 @@
 //! `team.room_list` and `team.room_post` (capability `team-room/1`, decision 0102): a team's Conference room. A
 //! person's line becomes a task for one bot, which starts at once; the bot answers in the room, and posts again when the
 //! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead, and a line
-//! no bot can be picked for gets a choice card (decision 0121, `room_card`).
+//! no bot can be picked for gets a choice card (decision 0121, `room_card`). A line that replies to another keeps it as
+//! its context (decision 0122, `room_quote`).
 
 use std::cell::Cell;
 
@@ -36,6 +37,7 @@ use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
 use super::task_start::{Changes, publish_changes, start_task};
 use super::{blocking, invalid, non_blank, selectors, store_error, task_state};
+use super::room_quote;
 
 /// The longest room line, in Unicode scalar values.
 const MAX_TEXT_CHARS: usize = 4000;
@@ -115,7 +117,7 @@ impl Start {
 /// Who posts a line: a person, a bot a person names, or the agent run of a bot's own task.
 enum Poster {
     Person {
-        to: Option<String>,
+        asked: Box<PersonAsk>,
         start: Start,
     },
     Bot(String),
@@ -144,7 +146,10 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
             Some(bot) => Poster::Bot(bot),
             // Only a person's line starts a task, so only it needs the workspaces root and the vault grant.
             None => Poster::Person {
-                to: params.to.clone(),
+                asked: Box::new(PersonAsk {
+                    to: params.to.clone(),
+                    reply_to: params.reply_to.clone(),
+                }),
                 start: Start {
                     workspaces: for_mutation(&ctx).await?,
                     grant: secret_grant(&ctx),
@@ -165,15 +170,9 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
             Poster::Agent { session, bot } => {
                 vec![agent_line(store, &team, &session, bot.as_deref(), text)?]
             }
-            Poster::Person { to, start } => person_line(
-                store,
-                agents,
-                start,
-                &team,
-                to.as_deref(),
-                text,
-                &mut changes,
-            )?,
+            Poster::Person { asked, start } => {
+                person_line(store, agents, start, &team, &asked, text, &mut changes)?
+            }
         };
         let messages = views(store, agents, &team, &rows)?;
         Ok((team.id, changes, messages))
@@ -227,16 +226,23 @@ fn agent_line(
     insert_line(store, team, Some(&own), text, Some(task.id))
 }
 
+/// What a person's line asks for besides its text: the bot it goes to when it names none, and the line it replies to.
+struct PersonAsk {
+    to: Option<String>,
+    reply_to: Option<String>,
+}
+
 /// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the only bot), starts
 /// the task and stores the bot's answer. A line that asks for a day and a time becomes that bot's one-time routine
-/// instead, unless the routine is refused. A line no bot can be picked for gets a choice card.
+/// instead, unless the routine is refused. A line no bot can be picked for gets a choice card. A line that replies to a
+/// bot's line goes to that bot unless it names another, and its task keeps the quoted line.
 /// A team without bots refuses the line and stores nothing.
 fn person_line(
     store: &Store,
     agents: &Agents,
     start: Start,
     team: &TeamRow,
-    to: Option<&str>,
+    asked: &PersonAsk,
     text: String,
     changes: &mut Changes,
 ) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
@@ -244,8 +250,19 @@ fn person_line(
     if bots.is_empty() {
         return Err(ErrorBody::new(codes::TASK_NO_BOT, NO_BOTS));
     }
-    let to = to.map(|to| selectors::bot(store, team, to)).transpose()?;
-    match addressed_bot(&bots, &text, to.as_ref()) {
+    let to = asked
+        .to
+        .as_deref()
+        .map(|to| selectors::bot(store, team, to))
+        .transpose()?;
+    let quoted = asked
+        .reply_to
+        .as_deref()
+        .map(|id| room_quote::quoted_line(store, team, id))
+        .transpose()?;
+    // A task asked in reply to a bot's line goes to that bot unless the line names another.
+    let receiver = room_quote::replied_bot(&bots, quoted.as_ref()).or(to.as_ref());
+    match addressed_bot(&bots, &text, receiver) {
         Some(bot) => deliver(
             &Room {
                 store,
@@ -257,6 +274,8 @@ fn person_line(
             start,
             bot,
             Request {
+                context: quoted.as_ref().map(|line| room_quote::context(line, &bots)),
+                reply_to: quoted.map(|line| line.id),
                 text,
                 posted: false,
             },
@@ -276,10 +295,30 @@ pub(super) struct Room<'a> {
     pub(super) saved: &'a Cell<bool>,
 }
 
-/// A person's request: its text, and whether its line is in the room already (a choice card's answer).
+/// A person's request: its text, whether its line is in the room already (a choice card's answer), the line it replies
+/// to, and what its task keeps of that line.
 pub(super) struct Request {
     pub(super) text: String,
     pub(super) posted: bool,
+    pub(super) reply_to: Option<String>,
+    pub(super) context: Option<String>,
+}
+
+impl Request {
+    /// The request's line as the person posted it.
+    fn line(&self, team: &TeamRow) -> TeamRoomMessageRow {
+        let mut line = new_line(team, None, self.text.clone(), None);
+        line.reply_to = self.reply_to.clone();
+        line
+    }
+
+    /// A task's body: the line, then the quoted line it replies to.
+    fn body(&self) -> String {
+        match &self.context {
+            Some(context) => format!("{}\n\n{context}", self.text),
+            None => self.text.clone(),
+        }
+    }
 }
 
 /// Makes `request` `bot`'s one-time routine when it asks for a day and a time, else `bot`'s task, started unless
@@ -322,7 +361,7 @@ pub(super) fn deliver(
         TaskCreateParams {
             team: team.id.clone(),
             title: title.clone(),
-            body: Some(request.text.clone()),
+            body: Some(request.body()),
             bot: Some(bot.id.clone()),
             project: None,
             origin: Some(TaskOrigin::Room),
@@ -332,7 +371,9 @@ pub(super) fn deliver(
     let mut lines = Vec::new();
     // Stored once the task is, so a refused task leaves no line without an answer.
     if !request.posted {
-        lines.push(insert_line(store, team, None, request.text, None)?);
+        let line = request.line(team);
+        insert_row(store, &line)?;
+        lines.push(line);
     }
     if !start.at_once {
         let answer = format!("Added to the Board, not started: {title}");
@@ -408,7 +449,9 @@ fn schedule_line(
     saved.set(true);
     let mut lines = Vec::new();
     if !request.posted {
-        lines.push(insert_line(store, team, None, text.clone(), None)?);
+        let line = request.line(team);
+        insert_row(store, &line)?;
+        lines.push(line);
     }
     let mut answer = new_line(
         team,
@@ -440,9 +483,19 @@ pub(super) fn addressed_bot<'a>(
     text: &str,
     to: Option<&'a BotRow>,
 ) -> Option<&'a BotRow> {
+    mentioned_bot(bots, text)
+        .or(to)
+        .or_else(|| bots.iter().find(|bot| bot.lead))
+        .or(match bots {
+            [only] => Some(only),
+            _ => None,
+        })
+}
+
+/// The bot a line names with `@name` at the start of a word; the longest name wins.
+fn mentioned_bot<'a>(bots: &'a [BotRow], text: &str) -> Option<&'a BotRow> {
     let lower = text.to_lowercase();
-    let mentioned = bots
-        .iter()
+    bots.iter()
         .filter(|bot| {
             let mention = format!("@{}", bot.name.to_lowercase());
             lower.match_indices(&mention).any(|(at, _)| {
@@ -452,14 +505,7 @@ pub(super) fn addressed_bot<'a>(
                     && after.is_none_or(|next| !next.is_alphanumeric())
             })
         })
-        .max_by_key(|bot| bot.name.chars().count());
-    mentioned
-        .or(to)
-        .or_else(|| bots.iter().find(|bot| bot.lead))
-        .or(match bots {
-            [only] => Some(only),
-            _ => None,
-        })
+        .max_by_key(|bot| bot.name.chars().count())
 }
 
 /// The task title a line makes: its first line that is not blank without the `@name` of the team's bots, cut to 80
@@ -533,8 +579,13 @@ pub(super) fn insert_line(
     task_id: Option<String>,
 ) -> Result<TeamRoomMessageRow, ErrorBody> {
     let row = new_line(team, bot, text, task_id);
-    store.insert_team_room_message(&row).map_err(store_error)?;
+    insert_row(store, &row)?;
     Ok(row)
+}
+
+/// Stores a line made with `new_line`.
+pub(super) fn insert_row(store: &Store, row: &TeamRoomMessageRow) -> Result<(), ErrorBody> {
+    store.insert_team_room_message(row).map_err(store_error)
 }
 
 /// One line of `team`'s room, not yet stored.
@@ -587,6 +638,13 @@ pub(super) fn views(
                 },
                 None => None,
             };
+            let quoted = match row.reply_to.as_deref() {
+                Some(id) => store
+                    .get_team_room_message(id)
+                    .map_err(store_error)?
+                    .map(|line| room_quote::quote(&line, &bots)),
+                None => None,
+            };
             Ok(TeamRoomMessage {
                 id: row.id.clone(),
                 team_id: row.team_id.clone(),
@@ -605,8 +663,8 @@ pub(super) fn views(
                 task,
                 routine,
                 card: card_view(row),
-                reply_to: None,
-                quoted: None,
+                reply_to: row.reply_to.clone(),
+                quoted,
                 created_at_ms: row.created_at,
             })
         })
@@ -811,6 +869,8 @@ mod tests {
         let request = Request {
             text: text.clone(),
             posted: false,
+            reply_to: None,
+            context: None,
         };
         let lines = schedule_line(&store, &team, &bots, mara, &request, asked)
             .unwrap()
@@ -864,6 +924,8 @@ mod tests {
         let request = Request {
             text,
             posted: false,
+            reply_to: None,
+            context: None,
         };
         let refused = schedule_line(&store, &team, &bots, &bots[0], &request, asked).unwrap();
         assert_eq!(refused, None, "a moment already past");

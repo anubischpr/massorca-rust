@@ -303,7 +303,12 @@ fn make(
                 bots: &bots,
                 saved,
             };
-            let request = Request { text, posted: true };
+            let request = Request {
+                text,
+                posted: true,
+                reply_to: None,
+                context: None,
+            };
             Ok(Made {
                 lines: deliver(&room, start, &bot, request, changes)?,
                 other_team: None,

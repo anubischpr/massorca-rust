@@ -1,7 +1,8 @@
 //! The Conference room over the wire: a person's line that names a day and a time becomes a one-time routine of its
 //! bot, with the bot's answer about it (decision 0121), and a line with start off waits in Todo. None of these lines
 //! starts an agent; a refused routine, which becomes a task, is covered by the CLI tests with the fake agent. A line
-//! no bot can be picked for gets a choice card, answered once.
+//! no bot can be picked for gets a choice card, answered once. A reply to a person's line stays a task that keeps the
+//! quoted line (decision 0122); a conversation, which starts a bot's reply run, is covered by the CLI tests.
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
@@ -401,5 +402,60 @@ async fn a_lead_a_mention_or_an_only_bot_still_take_a_line_with_no_card() {
     let only = client.team_room_post(&solo).await.expect("team.room_post");
     assert_eq!(only.messages[1].bot_name.as_deref(), Some("Iris"));
     assert!(only.messages[1].card.is_none());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_reply_to_a_persons_line_stays_a_task_and_keeps_the_quoted_line() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    team_with_bots(&client).await;
+
+    let first = client
+        .team_room_post(&held("The login page is slow"))
+        .await
+        .expect("team.room_post");
+    let quoted = first.messages[0].id.clone();
+    let mut reply = held("@Mara profile it");
+    reply.reply_to = Some(quoted.clone());
+    let posted = client.team_room_post(&reply).await.expect("team.room_post");
+    let [person, answer] = posted.messages.as_slice() else {
+        panic!("a line and its answer: {posted:?}");
+    };
+    assert_eq!(person.reply_to.as_deref(), Some(quoted.as_str()));
+    let quote = person.quoted.as_ref().expect("the line shows its quote");
+    assert_eq!(
+        (quote.author, quote.text.as_str()),
+        (RoomAuthor::Person, "The login page is slow")
+    );
+    assert_eq!(answer.bot_name.as_deref(), Some("Mara"));
+    let task = answer.task.as_ref().expect("a reply to a person is a task");
+    assert_eq!(task.title, "profile it");
+    assert_eq!(
+        task.body,
+        "@Mara profile it
+
+In reply to Person: The login page is slow"
+    );
+
+    let unknown = client
+        .team_room_post(&{
+            let mut params = held("And this?");
+            params.reply_to = Some("no-line".to_owned());
+            params
+        })
+        .await
+        .expect_err("a reply to no line of the room");
+    assert_eq!(remote_code(&unknown), codes::TEAM_ROOM_LINE_NOT_FOUND);
+    let room = client
+        .team_room_list(&TeamRoomListParams {
+            team: "alpha".to_owned(),
+            limit: None,
+        })
+        .await
+        .expect("team.room_list");
+    assert_eq!(room.messages.len(), 4, "the refused line is not stored");
+    assert!(room.typing.is_empty(), "no bot works on a held task");
     stop(running).await;
 }

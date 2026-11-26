@@ -6,6 +6,7 @@ mod bot;
 mod memory;
 mod room;
 mod room_card;
+mod room_quote;
 mod room_schedule;
 mod routine_run;
 mod routine_timer;
