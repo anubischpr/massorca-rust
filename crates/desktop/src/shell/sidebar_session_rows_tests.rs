@@ -195,8 +195,8 @@ fn paired_host(name: &str) -> HostRecord {
         pin: "sha256:test".to_owned(),
         device_id: "device".to_owned(),
         device_name: "desk".to_owned(),
-        scopes: Vec::new(),
         paired_at_ms: 0,
+        ..crate::service::fixtures::base_host_record()
     }
 }
 

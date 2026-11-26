@@ -20,6 +20,9 @@ mod pairing;
 mod pairing_qr;
 mod palette;
 mod path_field;
+mod preflight_banner;
+mod project_icon;
+mod project_mark;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;
@@ -120,6 +123,8 @@ mod marketplace_accounts_tests;
 mod pairing_tests;
 #[cfg(test)]
 mod path_field_tests;
+#[cfg(test)]
+mod preflight_banner_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
@@ -227,6 +232,8 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
+    /// The start heading's project icon popover, while it is open (decision 0091).
+    project_icon: Option<crate::model::project_icon::ProjectIconPopover>,
     /// The start page with no workspace's choice: a project or "No project"; `None` stands for the first project.
     home_project: Option<ProjectChoice>,
     /// The Advanced section of the start page with no workspace: its fields and open state.
@@ -654,6 +661,7 @@ impl Shell {
             debug_page: None,
             start_composers: HashMap::new(),
             start_pending: None,
+            project_icon: None,
             home_project: None,
             home_details,
             path_picker: path_field::system_picker(),
@@ -921,11 +929,19 @@ impl Render for Shell {
         self.sync_source_control(window, cx);
         let connected = self.store.read(cx).state().connection.is_connected();
         // The start page's composer is created before the frames below borrow the Shell's fields.
+        self.project_icon = self
+            .project_icon
+            .take()
+            .and_then(|popover| popover.while_shown(&self.model.canvas()));
         let start = self.model.selected_workspace().and_then(|id| {
             crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
         });
         let start = start.map(|page| {
             let composer = self.start_composer(&page.id, cx);
+            let project_icon = self
+                .project_icon
+                .clone()
+                .filter(|popover| popover.project == page.project_id);
             let starting = self
                 .start_pending
                 .as_ref()
@@ -940,6 +956,7 @@ impl Render for Shell {
                 connected,
                 starting,
                 mode,
+                project_icon,
             }
         });
         let home = (self.model.canvas()
@@ -1065,6 +1082,10 @@ impl Render for Shell {
             .service_notice
             .as_ref()
             .map(|notice| service_banner::service_banner(notice, &shell));
+        let preflight = self
+            .model
+            .preflight()
+            .map(|notice| preflight_banner::preflight_banner(notice, &shell));
         let theme_banner = self
             .theme_notice
             .as_deref()
@@ -1103,6 +1124,7 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
+                    .when_some(preflight, |el, banner| el.child(banner))
                     .when_some(theme_banner, |el, banner| el.child(banner))
                     .when_some(host_remove_banner, |el, banner| el.child(banner))
                     .child(canvas)

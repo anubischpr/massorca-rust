@@ -361,9 +361,7 @@ mod tests {
 
     fn empty_discovery() -> SkillDiscovery {
         SkillDiscovery {
-            skills: Vec::new(),
-            sources: Vec::new(),
-            scanned_at: 1,
+            ..crate::service::fixtures::base_skill_discovery()
         }
     }
 

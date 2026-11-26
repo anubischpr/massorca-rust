@@ -1,7 +1,7 @@
 //! Opening an unread session tells the service it was seen (WS-33). A scripted handle shows what was sent.
 
 use gpui::{TestAppContext, VisualTestContext};
-use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+use massorca_protocol::methods::agents::{Activity, ActivityState, Outcome};
 use massorca_ui::tokens::{TYPE_BODY, TYPE_BODY_STRONG};
 
 use super::service_tests::{Rig, click, rig};
@@ -14,9 +14,9 @@ fn activity(state: ActivityState, seen_at_ms: Option<i64>) -> Activity {
     Activity {
         state,
         outcome: (state == ActivityState::Done).then_some(Outcome::Success),
-        source: ActivitySource::Hook,
         at_ms: 7,
         seen_at_ms,
+        ..crate::service::fixtures::base_activity()
     }
 }
 
