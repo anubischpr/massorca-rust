@@ -7,6 +7,7 @@ mod agent_chat;
 mod agent_forget;
 mod agent_queue;
 mod agents;
+mod automations;
 mod bridge;
 mod connection;
 mod extensions;
