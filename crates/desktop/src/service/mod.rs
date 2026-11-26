@@ -8,9 +8,12 @@ mod agent_forget;
 mod agent_queue;
 mod agents;
 mod bridge;
+mod chat;
 mod connection;
 mod extensions;
 mod git;
+mod host_sessions;
+mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
@@ -26,6 +29,10 @@ mod update;
 mod workspace_create;
 
 #[cfg(test)]
+mod chat_calls_tests;
+#[cfg(test)]
+mod chat_tests;
+#[cfg(test)]
 mod git_tests;
 #[cfg(test)]
 mod secrets_tests;
@@ -39,6 +46,9 @@ pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
+#[cfg(test)]
+pub(crate) use chat::ChatCommand;
+pub use chat::StartedSession;
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
@@ -48,6 +58,10 @@ pub(crate) use extensions::ExtensionCommand;
 pub use extensions::{
     ExtensionHistory, ExtensionsRead, HostListing, HostLists, HostMarketplaceRead, RollbackAnswer,
 };
+pub use host_sessions::{HostAgents, HostSessions, HostSessionsRead};
+#[cfg(test)]
+pub(crate) use host_terminal::{HostAttach, HostWrite};
+pub use host_terminal::{HostTerminal, HostTerminalItem, HostWriter};
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
 pub use hosts::{HostLoss, HostRemoval, SshAdded, SshFailed, SshHost, bundled_program};

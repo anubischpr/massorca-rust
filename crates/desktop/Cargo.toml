@@ -31,7 +31,15 @@ tracing-subscriber.workspace = true
 [build-dependencies]
 embed-resource.workspace = true
 
+# The fake agent of the CLI crate's tests, built here too so the chat bridge test can start it. The CLI crate's own
+# source is compiled, not copied.
+[[example]]
+name = "massorca-fake-agent"
+path = "../cli/src/bin/fake_agent.rs"
+
 [dev-dependencies]
+# The service the chat bridge test starts carries the test-only version probe allow list; a release build does not.
+massorca-core-agents = { workspace = true, features = ["test-hooks"] }
 massorca-process.workspace = true
 massorca-server.workspace = true
 tempfile.workspace = true

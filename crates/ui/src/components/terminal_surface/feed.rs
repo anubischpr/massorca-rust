@@ -18,12 +18,12 @@ use alacritty_terminal::term::{
 };
 use alacritty_terminal::vte::ansi::Processor;
 
+use crate::text_preferences;
+
 mod snapshot;
 
 pub use snapshot::{RenderCell, RenderCursor, RenderSnapshot};
 
-/// Scrollback kept per terminal: the default of the desktop setting.
-const SCROLLBACK_LINES: usize = 10_000;
 /// The service's size limits (decision 0033), so a resize cannot ask for more.
 pub const MAX_COLUMNS: usize = 1000;
 /// The service's line limit (decision 0033).
@@ -98,6 +98,8 @@ pub struct TerminalFeed {
     parser: Processor,
     reports: Arc<Mutex<Reports>>,
     size: Size,
+    /// The scrollback the emulator keeps now, as the settings set it.
+    scrollback: usize,
     next_offset: Option<u64>,
     pending: Option<Pending>,
     exit: Option<Exit>,
@@ -108,11 +110,13 @@ impl TerminalFeed {
     pub fn new(cols: u16, rows: u16) -> Self {
         let reports = Arc::default();
         let size = Size::clamped(cols, rows);
+        let scrollback = text_preferences::scrollback_lines();
         Self {
-            term: new_term(size, &reports),
+            term: new_term(size, &reports, scrollback),
             parser: Processor::new(),
             reports,
             size,
+            scrollback,
             next_offset: None,
             pending: None,
             exit: None,
@@ -255,6 +259,7 @@ impl TerminalFeed {
         }
         // `offset <= next < end`: the bytes before `next` are already in the emulator.
         let already = (next - offset) as usize;
+        self.follow_scrollback();
         self.parser.advance(&mut self.term, &bytes[already..]);
         self.next_offset = Some(end);
         Ok(FeedOutcome::Applied)
@@ -282,8 +287,18 @@ impl TerminalFeed {
     /// Starts a fresh emulator at `size`: the state a snapshot redraws onto.
     fn reset(&mut self, size: Size) {
         self.size = size;
-        self.term = new_term(size, &self.reports);
+        self.scrollback = text_preferences::scrollback_lines();
+        self.term = new_term(size, &self.reports, self.scrollback);
         self.parser = Processor::new();
+    }
+
+    /// Takes the scrollback the settings hold; a change reaches the emulator with the next output.
+    fn follow_scrollback(&mut self) {
+        let rows = text_preferences::scrollback_lines();
+        if rows != self.scrollback {
+            self.scrollback = rows;
+            self.term.set_options(scrollback_config(rows));
+        }
     }
 
     fn resize(&mut self, size: Size) {
@@ -310,12 +325,19 @@ impl fmt::Debug for TerminalFeed {
     }
 }
 
-fn new_term(size: Size, reports: &Arc<Mutex<Reports>>) -> Term<Listener> {
-    let config = Config {
-        scrolling_history: SCROLLBACK_LINES,
+fn new_term(size: Size, reports: &Arc<Mutex<Reports>>, scrollback: usize) -> Term<Listener> {
+    Term::new(
+        scrollback_config(scrollback),
+        &size,
+        Listener(Arc::clone(reports)),
+    )
+}
+
+fn scrollback_config(rows: usize) -> Config {
+    Config {
+        scrolling_history: rows,
         ..Config::default()
-    };
-    Term::new(config, &size, Listener(Arc::clone(reports)))
+    }
 }
 
 /// The grid size the emulator is built for, within the service's limits.
