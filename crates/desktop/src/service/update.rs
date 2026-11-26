@@ -154,6 +154,12 @@ pub enum HostLink {
     },
     /// Not reachable; the sentence says why.
     Unreachable(String),
+    /// Out of contact and retried by itself: attempt `attempt` runs at `retry_at`. The host may still be running.
+    Reconnecting {
+        reason: String,
+        attempt: u32,
+        retry_at: Instant,
+    },
     /// The host no longer accepts this computer's device: pair again.
     SignInNeeded(String),
     /// The host speaks another protocol version than this app.
