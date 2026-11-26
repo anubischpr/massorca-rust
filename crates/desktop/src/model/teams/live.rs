@@ -3,11 +3,14 @@
 
 use massorca_protocol::methods::agents::AgentKind;
 use massorca_protocol::methods::tasks::Column as WireColumn;
-use massorca_protocol::methods::teams::{Board, Bot as WireBot};
+use massorca_protocol::methods::teams::{
+    Board, Bot as WireBot, Routine as WireRoutine, RoutineCadence, RoutineWeekday as WireWeekday,
+};
 
 use super::state::TeamsState;
 use super::types::{
-    Bot, BotId, Column, HostChoice, Project, ProjectId, Task, TaskId, Team, TeamId,
+    Bot, BotId, Cadence, Column, HostChoice, Project, ProjectId, Routine, RoutineId, Task, TaskId,
+    Team, TeamId, Weekday,
 };
 use crate::model::agent_kinds::kind_unavailable_reason;
 use crate::model::shell::{Agent, HostReach};
@@ -61,7 +64,11 @@ fn live_team(ids: &TeamIds, host: &str, record: &TeamRecord, kinds: &[AgentKind]
             .iter()
             .filter_map(|project| live_project(ids, project))
             .collect(),
-        routines: Vec::new(),
+        routines: record
+            .routines
+            .iter()
+            .filter_map(|routine| live_routine(ids, host, routine))
+            .collect(),
         addresses: Vec::new(),
         memory: Vec::new(),
         files: Vec::new(),
@@ -80,6 +87,51 @@ fn live_bot(ids: &TeamIds, bot: &WireBot, kinds: &[AgentKind]) -> Option<Bot> {
         effort: bot.effort.clone(),
         kind_unavailable: kind_unavailable_reason(kinds, &bot.kind),
     })
+}
+
+/// A routine of a team as the page draws it; `None` when its id is not numbered or its schedule is unknown here.
+fn live_routine(ids: &TeamIds, host: &str, routine: &WireRoutine) -> Option<Routine> {
+    Some(Routine {
+        id: RoutineId(ids.get(&routine.id)?),
+        name: routine.name.clone(),
+        instruction: routine.prompt.clone(),
+        cadence: cadence_of(routine)?,
+        time: routine.time.clone(),
+        bot: routine
+            .bot_id
+            .as_deref()
+            .and_then(|bot| ids.get(bot))
+            .map(BotId),
+        host: host.to_owned(),
+        enabled: !routine.paused,
+        last_run: None,
+        run_date: routine.run_date.clone(),
+        next_run_at_ms: routine.next_run_at_ms,
+    })
+}
+
+/// The schedule a service routine names; a cadence or day this build does not know draws nothing.
+fn cadence_of(routine: &WireRoutine) -> Option<Cadence> {
+    match routine.cadence {
+        RoutineCadence::Daily => Some(Cadence::Daily),
+        RoutineCadence::Weekly => weekday_of(routine.weekday?).map(Cadence::Weekly),
+        RoutineCadence::Monthly => routine.month_day.map(Cadence::Monthly),
+        RoutineCadence::Once => Some(Cadence::Once),
+        RoutineCadence::Unknown => None,
+    }
+}
+
+fn weekday_of(day: WireWeekday) -> Option<Weekday> {
+    match day {
+        WireWeekday::Monday => Some(Weekday::Monday),
+        WireWeekday::Tuesday => Some(Weekday::Tuesday),
+        WireWeekday::Wednesday => Some(Weekday::Wednesday),
+        WireWeekday::Thursday => Some(Weekday::Thursday),
+        WireWeekday::Friday => Some(Weekday::Friday),
+        WireWeekday::Saturday => Some(Weekday::Saturday),
+        WireWeekday::Sunday => Some(Weekday::Sunday),
+        WireWeekday::Unknown => None,
+    }
 }
 
 /// A project of a team as the page draws it, with the cards of its own Board; `None` when its id is not numbered.
@@ -210,6 +262,7 @@ mod tests {
             },
             bots: Vec::new(),
             projects: Vec::new(),
+            routines: Vec::new(),
         }
     }
 
@@ -448,6 +501,90 @@ mod tests {
         let project = &view.teams()[0].projects[0];
         assert!(!project.link_saved);
         assert_eq!(project.link, None);
+    }
+
+    fn wire_routine(id: &str, cadence: RoutineCadence) -> WireRoutine {
+        WireRoutine {
+            id: id.into(),
+            team_id: "t1".into(),
+            bot_id: Some("b1".into()),
+            name: "Morning digest".into(),
+            prompt: "Summarize the board".into(),
+            cadence,
+            time: "09:00".into(),
+            weekday: None,
+            month_day: None,
+            run_date: None,
+            zone: None,
+            zone_used: None,
+            paused: false,
+            starts_as_admin: false,
+            next_run_at_ms: None,
+            created_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn a_routine_the_service_reads_keeps_its_schedule_bot_and_next_run() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].bots = vec![wire_bot("b1", "Mara", "claude")];
+        records[0].routines = vec![WireRoutine {
+            weekday: Some(WireWeekday::Monday),
+            next_run_at_ms: Some(1_700_000_000_000),
+            ..wire_routine("r1", RoutineCadence::Weekly)
+        }];
+        let view = live_teams(&numbered(&records), "VPS", &records, &[]);
+        let team = &view.teams()[0];
+        let routine = &team.routines[0];
+        assert_eq!(routine.name, "Morning digest");
+        assert_eq!(routine.instruction, "Summarize the board");
+        assert_eq!(routine.cadence, Cadence::Weekly(Weekday::Monday));
+        assert_eq!(routine.time, "09:00");
+        assert_eq!(routine.host, "VPS");
+        assert!(routine.enabled);
+        assert_eq!(routine.next_run_at_ms, Some(1_700_000_000_000));
+        let bot = routine.bot.expect("the routine names its bot");
+        assert_eq!(team.bot(bot).map(|bot| bot.name.as_str()), Some("Mara"));
+    }
+
+    #[test]
+    fn a_paused_routine_reads_as_disabled_and_a_once_routine_keeps_its_date() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].routines = vec![
+            WireRoutine {
+                paused: true,
+                ..wire_routine("r1", RoutineCadence::Daily)
+            },
+            WireRoutine {
+                run_date: Some("2026-12-01".into()),
+                ..wire_routine("r2", RoutineCadence::Once)
+            },
+        ];
+        let view = live_teams(&numbered(&records), "This PC", &records, &[]);
+        let routines = &view.teams()[0].routines;
+        assert!(!routines[0].enabled);
+        assert_eq!(routines[1].cadence, Cadence::Once);
+        assert_eq!(routines[1].run_date.as_deref(), Some("2026-12-01"));
+    }
+
+    #[test]
+    fn a_routine_on_a_cadence_or_weekday_this_build_does_not_know_is_left_out() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].routines = vec![
+            wire_routine("r1", RoutineCadence::Unknown),
+            WireRoutine {
+                weekday: Some(WireWeekday::Unknown),
+                ..wire_routine("r2", RoutineCadence::Weekly)
+            },
+            wire_routine("r3", RoutineCadence::Daily),
+        ];
+        let view = live_teams(&numbered(&records), "This PC", &records, &[]);
+        let cadences: Vec<Cadence> = view.teams()[0]
+            .routines
+            .iter()
+            .map(|routine| routine.cadence)
+            .collect();
+        assert_eq!(cadences, [Cadence::Daily]);
     }
 
     fn wire_bot(id: &str, name: &str, kind: &str) -> WireBot {
