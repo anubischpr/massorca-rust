@@ -106,6 +106,8 @@ pub struct ModelPicker {
     slider_focus: FocusHandle,
     slider_track: TriggerBounds,
     effort_move: Option<EffortMove>,
+    /// When the top level was first shown with the popover open; the top effects fade in from it.
+    top_since: Option<Instant>,
     trigger_bounds: TriggerBounds,
     search: Entity<TextField>,
     _search_events: Subscription,
@@ -152,6 +154,7 @@ impl ModelPicker {
             slider_focus: cx.focus_handle().tab_stop(true),
             slider_track: TriggerBounds::default(),
             effort_move: None,
+            top_since: None,
             trigger_bounds: TriggerBounds::default(),
             search,
             _search_events: search_events,
@@ -272,6 +275,11 @@ impl Render for ModelPicker {
         };
         let open = self.open;
         let reduced = cx.reduce_motion();
+        let top_shown = open && self.top_level_shown();
+        self.top_since = match (top_shown, self.top_since) {
+            (false, _) => None,
+            (true, since) => since.or_else(|| Some(Instant::now())),
+        };
         let moving = self.effort_move.is_some_and(|moved| {
             reasoning_slider::effects::move_running(moved.started.elapsed().as_secs_f32(), reduced)
         });
@@ -818,19 +826,42 @@ mod tests {
 
     #[gpui::test]
     fn only_the_top_level_draws_the_glow(cx: &mut TestAppContext) {
+        use super::reasoning_slider::effects::HALO_RINGS;
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        assert_eq!(
+            super::reasoning_slider::painted_halo_rings(),
+            0,
+            "Medium is not the top level"
+        );
+        click(cx, "reasoning-level-3");
+        assert_eq!(
+            super::reasoning_slider::painted_halo_rings(),
+            HALO_RINGS,
+            "Max is the top level"
+        );
+        click(cx, "reasoning-level-0");
+        assert_eq!(super::reasoning_slider::painted_halo_rings(), 0);
+    }
+
+    #[gpui::test]
+    fn the_top_effects_start_their_fade_when_the_top_level_is_shown(cx: &mut TestAppContext) {
         let (picker, cx) = picker_in(cx);
         open_and_draw(&picker, cx);
         assert!(
-            cx.debug_bounds("reasoning-halo").is_none(),
+            picker.read_with(cx, |picker, _| picker.top_since.is_none()),
             "Medium is not the top level"
         );
         click(cx, "reasoning-level-3");
         assert!(
-            cx.debug_bounds("reasoning-halo").is_some(),
-            "Max is the top level"
+            picker.read_with(cx, |picker, _| picker.top_since.is_some()),
+            "Max starts the fade"
         );
         click(cx, "reasoning-level-0");
-        assert!(cx.debug_bounds("reasoning-halo").is_none());
+        assert!(
+            picker.read_with(cx, |picker, _| picker.top_since.is_none()),
+            "leaving the top level ends the fade"
+        );
     }
 
     #[gpui::test]
@@ -871,5 +902,49 @@ mod tests {
             picker.read_with(cx, |picker, _| picker.effort_move.is_none()),
             "reduced motion jumps to the new stop"
         );
+    }
+
+    #[gpui::test]
+    fn the_track_paints_no_border_so_its_drawing_covers_the_whole_track(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        let track = cx
+            .debug_bounds("reasoning-slider")
+            .expect("the track is drawn");
+        let paint = cx
+            .debug_bounds("reasoning-paint")
+            .expect("the track paints");
+        assert_eq!(
+            paint.origin.x, track.origin.x,
+            "no border insets the painted track on the left"
+        );
+        assert_eq!(
+            paint.size.width, track.size.width,
+            "no border insets the painted track on the right"
+        );
+        assert_eq!(
+            paint.size.height, track.size.height,
+            "no border insets the painted track at the top or bottom"
+        );
+    }
+
+    #[gpui::test]
+    fn the_thumb_centre_sits_on_the_track_axis_at_100_125_and_150_percent(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        click(cx, "reasoning-level-3");
+        for scale in [1.0, 1.25, 1.5] {
+            cx.simulate_scale_factor_change(scale);
+            draw(cx);
+            let track = cx
+                .debug_bounds("reasoning-slider")
+                .expect("the track is drawn");
+            let thumb = super::reasoning_slider::painted_thumb().expect("the thumb is painted");
+            let offset = (f32::from(thumb.center().x) - f32::from(track.center().x)).abs();
+            assert!(
+                offset <= 0.01,
+                "at {scale}x the thumb centre is {offset} px off the track axis"
+            );
+        }
     }
 }

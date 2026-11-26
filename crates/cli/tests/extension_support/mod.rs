@@ -10,6 +10,7 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 use assert_cmd::assert::Assert;
+use massorca_process::test_executable::copy_executable;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::write::SimpleFileOptions;
@@ -61,7 +62,7 @@ fn bin_with_npm() -> tempfile::TempDir {
     let bin = tempfile::tempdir().expect("a bin folder");
     for program in VENDOR_PROGRAMS {
         let name = format!("{program}{}", std::env::consts::EXE_SUFFIX);
-        fs::copy(fake_vendor(), bin.path().join(name))
+        copy_executable(fake_vendor(), bin.path().join(name))
             .expect("the fake vendor is copied as a package manager");
     }
     bin
@@ -190,7 +191,7 @@ impl Host {
 
     /// Puts a copy of the fake vendor program on the service's `PATH` under the name of a CLI.
     pub fn put_cli(&self, binary: &str) {
-        fs::copy(fake_vendor(), self.cli_path(binary)).expect("the fake CLI is copied");
+        copy_executable(fake_vendor(), self.cli_path(binary)).expect("the fake CLI is copied");
     }
 
     pub fn cli_path(&self, binary: &str) -> PathBuf {

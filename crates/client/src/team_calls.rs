@@ -6,15 +6,16 @@ use massorca_protocol::methods::tasks::{
     TaskUpdateParams,
 };
 use massorca_protocol::methods::team_room::{
-    self, TeamRoomList, TeamRoomListParams, TeamRoomPostParams, TeamRoomPosted,
+    self, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
+    TeamRoomPostParams, TeamRoomPosted,
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
     Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
     RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams, TeamList, TeamMemoryAddParams,
     TeamMemoryLine, TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
-    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
-    TeamRef, TeamRemoveParams, TeamUpdateParams,
+    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectShowParams,
+    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -98,6 +99,14 @@ impl Client {
         self.call(teams::PROJECT_REMOVE, params).await
     }
 
+    /// `team.project_show`: one project of a team, by id or exact name.
+    pub async fn team_project_show(
+        &self,
+        params: &TeamProjectShowParams,
+    ) -> Result<TeamProject, ClientError> {
+        self.call(teams::PROJECT_SHOW, params).await
+    }
+
     /// `team.board`: a team's Board, or one project's, in four columns.
     pub async fn team_board(&self, params: &BoardParams) -> Result<Board, ClientError> {
         self.call(teams::BOARD, params).await
@@ -117,6 +126,14 @@ impl Client {
         params: &TeamRoomPostParams,
     ) -> Result<TeamRoomPosted, ClientError> {
         self.call(team_room::ROOM_POST, params).await
+    }
+
+    /// `team.room_answer`: answers a room's choice card once (decision 0121).
+    pub async fn team_room_answer(
+        &self,
+        params: &TeamRoomAnswerParams,
+    ) -> Result<TeamRoomAnswered, ClientError> {
+        self.call(team_room::ROOM_ANSWER, params).await
     }
 
     /// `team.memory_list`: a team's memory lines, or one bot's, newest first.

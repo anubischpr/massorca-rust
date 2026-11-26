@@ -440,7 +440,8 @@ fn a_finished_agent_that_reports_failure_latches_failure_into_its_task() {
     sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
 }
 
-/// Adds `path` as a Workspaces project (`--folder` for a plain folder) and team project `name` linked to it.
+/// Adds `path` as a Workspaces project (`--folder` for a plain folder) and team project `name` linked to it, with the
+/// team's Workspaces on.
 fn link_source(sandbox: &Sandbox, path: &Path, folder: bool, name: &str) {
     let text = path.to_string_lossy().into_owned();
     let mut args = vec!["project", "add", text.as_str()];
@@ -448,6 +449,11 @@ fn link_source(sandbox: &Sandbox, path: &Path, folder: bool, name: &str) {
         args.push("--folder");
     }
     sandbox.json_ok("default", &args);
+    // Linking a project to code needs the team's Workspaces option (decision 0120).
+    sandbox.json_ok(
+        "default",
+        &["team", "update", "alpha", "--workspaces", "true"],
+    );
     sandbox.json_ok(
         "default",
         &[

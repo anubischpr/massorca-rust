@@ -7,10 +7,11 @@ use super::marketplace::MarketplaceSnapshot;
 use super::navigation::{Mode, Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
 use super::palette_recent::RecentActions;
+use super::preflight::PreflightNotice;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::remote_sessions::{RemoteSessions, remote_row, session_tree_rows};
-use super::shell::{ShellSnapshot, find_session};
+use super::shell::{SessionRow, ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, TreeRow, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
 use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
@@ -32,6 +33,8 @@ pub struct ShellModel {
     remote_sessions: Vec<(String, RemoteSessions)>,
     /// The remote session the Canvas shows, as (host, session id); None while a session of This PC or none is open.
     open_remote: Option<(String, String)>,
+    /// Whether the Sidebar lists archived sessions too (Show archived, decision 0163); off until the person asks.
+    show_archived: bool,
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
@@ -58,6 +61,8 @@ pub struct ShellModel {
     terminal_selection: TerminalSelection,
     /// A session a start has begun; it opens once the Sidebar lists it.
     pending_session: Option<String>,
+    /// The preflight notice the person dismissed on this connection; a lost link or a different problem clears it.
+    preflight_dismissed: Option<PreflightNotice>,
 }
 
 impl ShellModel {
@@ -70,6 +75,7 @@ impl ShellModel {
             remote_hosts: Vec::new(),
             remote_sessions: Vec::new(),
             open_remote: None,
+            show_archived: false,
             teams: TeamsState::unavailable(),
             marketplace: MarketplaceSnapshot::default(),
             marketplace_query: String::new(),
@@ -82,6 +88,7 @@ impl ShellModel {
             selected_workspace: None,
             terminal_selection: TerminalSelection::default(),
             pending_session: None,
+            preflight_dismissed: None,
         }
     }
 
@@ -102,6 +109,10 @@ impl ShellModel {
             snapshot.active_session = Some(id);
         }
         self.snapshot = snapshot;
+        if self.snapshot.preflight.is_none() {
+            // No notice (a lost link, or git fixed) clears the dismissal, so the next connection shows it again if it holds.
+            self.preflight_dismissed = None;
+        }
         self.open_pending_session();
     }
 
@@ -249,7 +260,10 @@ impl ShellModel {
 
     /// What the Sidebar lists in the current mode.
     pub fn sidebar(&self) -> SidebarContent {
-        let mut content = sidebar_content(&self.snapshot, self.navigation.mode);
+        let visible =
+            (!self.show_archived).then(|| crate::model::sidebar::without_archived(&self.snapshot));
+        let snapshot = visible.as_ref().unwrap_or(&self.snapshot);
+        let mut content = sidebar_content(snapshot, self.navigation.mode);
         if let SidebarContent::Workspaces { tree, .. } = &mut content {
             let active = self.snapshot.active_session.as_deref();
             for (name, state) in &self.remote_hosts {
@@ -268,6 +282,16 @@ impl ShellModel {
             }
         }
         content
+    }
+
+    /// Whether the Sidebar lists archived sessions too (decision 0163).
+    pub fn show_archived(&self) -> bool {
+        self.show_archived
+    }
+
+    /// Shows or hides archived sessions in the Sidebar.
+    pub fn set_show_archived(&mut self, show: bool) {
+        self.show_archived = show;
     }
 
     /// The Sidebar toggle: shows or hides the Sidebar, inline or as the overlay.
@@ -373,6 +397,41 @@ impl ShellModel {
     /// The workspace the Sidebar or the start page chose, if any.
     pub fn selected_workspace(&self) -> Option<&str> {
         self.selected_workspace.as_deref()
+    }
+
+    /// The workspace the Title bar's actions act on: the open session's, else the one the start page shows. A
+    /// remote session runs on its host, so none.
+    pub fn current_workspace(&self) -> Option<&str> {
+        if self.open_remote.is_some() {
+            return None;
+        }
+        match self.open_session_row() {
+            Some(session) => Some(session.workspace_id.as_str()),
+            None => self.selected_workspace(),
+        }
+    }
+
+    /// The open session of this window's service. A remote session is never this one, even while an earlier
+    /// session's id is still held.
+    pub fn open_session_row(&self) -> Option<&SessionRow> {
+        if self.open_remote.is_some() {
+            return None;
+        }
+        let id = self.snapshot.active_session.as_deref()?;
+        find_session(&self.snapshot.projects, id)
+    }
+
+    /// The preflight notice the Canvas shows: the service's, unless the person dismissed it on this connection.
+    pub fn preflight(&self) -> Option<&PreflightNotice> {
+        self.snapshot
+            .preflight
+            .as_ref()
+            .filter(|notice| self.preflight_dismissed.as_ref() != Some(*notice))
+    }
+
+    /// Hides the preflight notice for this connection.
+    pub fn dismiss_preflight(&mut self) {
+        self.preflight_dismissed = self.snapshot.preflight.clone();
     }
 
     /// A click on a workspace opens its start page, leaving any full page first (D-WS-01).

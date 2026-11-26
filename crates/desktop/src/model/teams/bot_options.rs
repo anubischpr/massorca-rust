@@ -167,9 +167,8 @@ mod tests {
         KindModelChoice {
             id: id.into(),
             label: label.into(),
-            default: false,
             efforts: efforts.map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
-            fast: false,
+            ..crate::service::fixtures::base_kind_model_choice()
         }
     }
 

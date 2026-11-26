@@ -1,4 +1,5 @@
-//! The built-in catalogue, embedded in the binary: the first-party agent packages under `packages/agents/`. Installing
+//! The built-in catalogue, embedded in the binary: the first-party agent packages under `packages/agents/` and the tool
+//! packages under `packages/tools/`. Installing
 //! one copies it from here and downloads nothing.
 
 use std::collections::BTreeMap;
@@ -55,11 +56,31 @@ macro_rules! agent_package {
     };
 }
 
-static ENTRIES: [CatalogueEntry; 4] = [
+/// A tool package: one manifest naming its host program (decision 0151).
+macro_rules! tool_package {
+    ($id:literal) => {
+        CatalogueEntry {
+            id: concat!("massorca.", $id),
+            files: &[(
+                "extension.json",
+                include_bytes!(concat!(
+                    "../../../packages/tools/massorca.",
+                    $id,
+                    "/extension.json"
+                )),
+            )],
+        }
+    };
+}
+
+static ENTRIES: [CatalogueEntry; 7] = [
     agent_package!("claude", "claude"),
     agent_package!("codex", "codex"),
     agent_package!("antigravity", "antigravity"),
     agent_package!("gentle-shell", "gentle-shell"),
+    tool_package!("git"),
+    tool_package!("gh"),
+    tool_package!("node"),
 ];
 
 /// Every catalogue entry, in display order.
@@ -190,12 +211,7 @@ mod tests {
         for entry in entries() {
             let bytes = entry.file("extension.json").expect("manifest");
             let loaded = manifest::load(bytes).expect("valid");
-            for cli in loaded
-                .contributes
-                .agent_adapters
-                .iter()
-                .filter_map(|adapter| adapter.cli.as_ref())
-            {
+            for (_, cli) in loaded.program_clis() {
                 for step in cli.install.iter().chain(&cli.uninstall) {
                     if let [shell, flag, script] = step.command.as_slice()
                         && matches!(shell.as_str(), "bash" | "sh")

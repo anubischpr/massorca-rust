@@ -143,6 +143,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Creates, edits, lists, shows, removes, enables and disables scheduled automations (decision 0123).
+    Automations {
+        #[command(subcommand)]
+        command: crate::automations::AutomationsCommand,
+    },
+    /// Lists the runs of routines and automations in a window of days, on the shared schedule (decision 0124).
+    Calendar(crate::calendar::CalendarArgs),
     /// Installs, lists, enables, disables and removes extensions, such as the agent packages.
     #[command(visible_alias = "ext")]
     Extension {
@@ -163,7 +170,7 @@ pub enum Commands {
 
 #[derive(Debug, Subcommand)]
 pub enum ServiceCommand {
-    /// Runs the service in this process until it is stopped.
+    /// Runs the service in this process until it is stopped. Prints its readiness record once it accepts connections.
     Run(RunArgs),
     /// Shows whether the service is running. Never starts it.
     Status,
@@ -507,7 +514,8 @@ pub enum PairCommand {
 #[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
 pub struct PairCancelArgs {
     /// The offer id `pair offer` printed.
-    #[arg(value_name = "OFFER-ID")]
+    // Ids are base64url and may start with '-'.
+    #[arg(value_name = "OFFER-ID", allow_hyphen_values = true)]
     pub offer_id: Option<String>,
     /// Retires every pending offer of the service.
     #[arg(long)]
@@ -590,6 +598,17 @@ pub enum HostCommand {
     /// Connects to one host, or to every host, and reports whether it answers.
     Status {
         /// Host name. Without it, every host is checked.
+        name: Option<String>,
+        /// Keeps a connection to each host open and prints its state each time it changes, reconnecting by itself,
+        /// until interrupted.
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Checks one paired host step by step (address, port, key, protocol, pairing, service, round trip) and names
+    /// the step that fails and how to fix it. Without a name, checks this computer's own service. Exit code 0 only
+    /// when every check passes.
+    SelfTest {
+        /// Host name. Without it, this computer's own service is checked.
         name: Option<String>,
     },
     /// Lists the online Tailscale peers, and which of them run massorca.

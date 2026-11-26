@@ -111,10 +111,8 @@ pub fn load(source: &Source, pinned: Option<&str>) -> Result<LoadedPackage, Erro
     }
     if !matches!(source, Source::Catalogue(_))
         && manifest
-            .contributes
-            .agent_adapters
-            .iter()
-            .any(|adapter| adapter.cli.as_ref().is_some_and(declares_vendor_commands))
+            .program_clis()
+            .any(|(_, cli)| declares_vendor_commands(cli))
     {
         // A vendor command is run on the host; only the built-in catalogue may name one (0062, V1).
         return Err(Error::VendorCommandRefused {

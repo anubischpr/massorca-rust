@@ -4,7 +4,8 @@ use massorca_protocol::methods::extensions::{
     self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
     ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionLog,
     ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams, ProgramUpdateParams,
+    ProgramUpdateReview, ProgramUpdated,
 };
 
 use crate::client::Client;
@@ -73,6 +74,29 @@ impl Client {
         params: &ExtensionRollbackParams,
     ) -> Result<ExtensionInstalled, ClientError> {
         self.call(extensions::ROLLBACK, params).await
+    }
+
+    /// `extensions.program_update_review`: what updating a host program would run (decision 0151). Changes nothing.
+    pub async fn extension_program_update_review(
+        &self,
+        id: &str,
+        program: &str,
+    ) -> Result<ProgramUpdateReview, ClientError> {
+        let params = ProgramUpdateParams {
+            id: id.to_owned(),
+            program: program.to_owned(),
+            consent: None,
+            agent_token: None,
+        };
+        self.call(extensions::PROGRAM_UPDATE_REVIEW, &params).await
+    }
+
+    /// `extensions.program_update`: runs the reviewed vendor update of a host program the package installed.
+    pub async fn extension_program_update(
+        &self,
+        params: &ProgramUpdateParams,
+    ) -> Result<ProgramUpdated, ClientError> {
+        self.call(extensions::PROGRAM_UPDATE, params).await
     }
 
     /// `extensions.log`: the recent runs of a package, oldest first.

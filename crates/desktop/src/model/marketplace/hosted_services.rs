@@ -159,11 +159,7 @@ mod tests {
             name: service.to_uppercase(),
             state,
             source,
-            account: None,
-            base_url: None,
-            updated_at_ms: None,
-            cli_installed: None,
-            detail: None,
+            ..crate::service::fixtures::base_service_status()
         }
     }
 

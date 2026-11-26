@@ -7,7 +7,9 @@ mod agent_chat;
 mod agent_forget;
 mod agent_queue;
 mod agents;
+mod automations;
 mod bridge;
+mod calendar;
 mod chat;
 mod connection;
 mod extensions;
@@ -17,6 +19,7 @@ mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
+mod live_hosts;
 mod quit;
 mod refusal;
 mod secrets;
@@ -46,6 +49,7 @@ pub(crate) use agent_queue::QueueCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
+pub use calendar::CAPABILITY_MISSING;
 #[cfg(test)]
 pub(crate) use chat::ChatCommand;
 pub use chat::StartedSession;
@@ -71,10 +75,10 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
-pub use skills::{SkillsListing, SkillsRead};
+pub use skills::{PlacementAnswer, PlacementCall, PlacementOutcome, SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
-pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
+pub use team_room::{NO_CARDS, NO_ROOM, TeamRoomRead, TeamRooms};
 #[cfg(test)]
 pub(crate) use team_routines::RoutineCommand;
 #[cfg(test)]

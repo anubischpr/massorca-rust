@@ -7,6 +7,8 @@
   "prompt": { "mode": "argv", "separator": false, "paste": "plain", "submit": "\r" },
   "session_ref": { "learn": "thread-id" },
   "resume": ["resume", "{ref}"],
+  "fork": ["fork", "{ref}"],
+  "chat": { "adapter": "codex-app-server", "min_version": "0.172.0", "max_major": 0 },
   "status": {
     "mechanism": "codex-notify",
     "events": { "turn-complete": "done" }

@@ -21,6 +21,8 @@ pub struct DeclaredModel {
     pub default_effort: usize,
     /// Whether the picker preselects this model.
     pub default: bool,
+    /// Whether the model takes fast mode at start (decision 0165).
+    pub fast: bool,
 }
 
 fn level(levels: &[KindEffortLevel], id: &str) -> Option<DeclaredEffort> {
@@ -77,6 +79,7 @@ pub fn declared_models(kind: &AgentKind) -> Vec<DeclaredModel> {
                 efforts,
                 default_effort,
                 default: choice.default,
+                fast: choice.fast,
             }
         })
         .collect()
@@ -130,7 +133,7 @@ mod tests {
             label: label.into(),
             default,
             efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
-            fast: false,
+            ..crate::service::fixtures::base_kind_model_choice()
         }
     }
 
@@ -219,7 +222,7 @@ mod tests {
         let mut kind = claude();
         kind.effort = Some(KindEffort {
             levels: vec![level("xhigh", "Ultra")],
-            default: None,
+            ..crate::service::fixtures::base_kind_effort()
         });
         kind.model = Some(KindModel {
             choices: vec![choice("opus", "Opus", true, Some(&["xhigh", "turbo"]))],

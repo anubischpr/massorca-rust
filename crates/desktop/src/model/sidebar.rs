@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use super::navigation::{Mode, Page};
+use super::project_icon::ProjectGlyph;
 use super::service_view::LOCAL_HOST;
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
 use super::workspace_flow::NO_PROJECT_LABEL;
@@ -37,8 +38,8 @@ pub enum TreeRow {
         /// The project's id, for collapsing it.
         id: String,
         name: String,
-        /// The project's emoji icon, drawn before its name.
-        emoji: Option<String>,
+        /// The icon drawn before the name (decision 0091).
+        icon: ProjectGlyph,
         /// The owner or org shown after the name, when the project has one (A10).
         owner: Option<String>,
         /// A folder that is not a Git repository: its row shows the No Git marker (WS-02).
@@ -162,12 +163,27 @@ pub fn sidebar_content(snapshot: &ShellSnapshot, mode: Mode) -> SidebarContent {
     }
 }
 
-/// A project row's label: its emoji before its name, when it has one.
-pub fn project_label(name: &str, emoji: Option<&str>) -> String {
-    match emoji {
-        Some(emoji) => format!("{emoji} {name}"),
-        None => name.to_owned(),
+/// The snapshot without its archived sessions and the children under them: what the Sidebar lists while Show archived
+/// is off (decision 0163).
+pub fn without_archived(snapshot: &ShellSnapshot) -> ShellSnapshot {
+    let mut visible = snapshot.clone();
+    for project in &mut visible.projects {
+        for host in &mut project.hosts {
+            host.sessions = unarchived(&host.sessions);
+        }
     }
+    visible
+}
+
+fn unarchived(sessions: &[SessionRow]) -> Vec<SessionRow> {
+    sessions
+        .iter()
+        .filter(|session| !session.archived)
+        .map(|session| SessionRow {
+            children: unarchived(&session.children),
+            ..session.clone()
+        })
+        .collect()
 }
 
 /// The row tooltip of a session: "branch · worktree path", the path alone for a folder (A97).
@@ -199,7 +215,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
         rows.push(TreeRow::Project {
             id: project.id.clone(),
             name: project.name.clone(),
-            emoji: project.emoji.clone(),
+            icon: project.icon.clone(),
             owner: project.owner.clone(),
             plain_folder: project.plain_folder,
             expanded: true,
@@ -242,7 +258,7 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
             TreeRow::Project {
                 id,
                 name,
-                emoji,
+                icon,
                 owner,
                 plain_folder,
                 ..
@@ -252,7 +268,7 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
                 out.push(TreeRow::Project {
                     id,
                     name,
-                    emoji,
+                    icon,
                     owner,
                     plain_folder,
                     expanded,
@@ -322,12 +338,14 @@ mod tests {
             agent: Agent::Claude,
             state: AgentState::Idle,
             workspace_id: "w".into(),
+            terminal_id: None,
             branch: Some("feat/x".into()),
             path: Some("D:/w".into()),
             place: None,
             own_worktree: false,
             can_bring_back: false,
             unread: false,
+            archived: false,
             children: Vec::new(),
         }
     }
@@ -370,6 +388,7 @@ mod tests {
             prototypes: 0,
             service_status: None,
             service_notice: None,
+            preflight: None,
         }
     }
 
@@ -408,7 +427,7 @@ mod tests {
             TreeRow::Project {
                 id: "massorca-rust".into(),
                 name: "massorca-rust".into(),
-                emoji: None,
+                icon: ProjectGlyph::Folder,
                 owner: None,
                 plain_folder: false,
                 expanded: true,
@@ -536,11 +555,11 @@ mod tests {
     }
 
     #[test]
-    fn a_project_row_takes_its_emoji_into_its_label() {
+    fn a_project_row_carries_its_icon() {
         let groups = vec![ProjectGroup {
             id: "massorca".into(),
             name: "massorca".into(),
-            emoji: Some("🚀".into()),
+            icon: ProjectGlyph::Emoji("🚀".into()),
             owner: None,
             plain_folder: false,
             hosts: Vec::new(),
@@ -550,14 +569,12 @@ mod tests {
             TreeRow::Project {
                 id: "massorca".into(),
                 name: "massorca".into(),
-                emoji: Some("🚀".into()),
+                icon: ProjectGlyph::Emoji("🚀".into()),
                 owner: None,
                 plain_folder: false,
                 expanded: true,
             }
         );
-        assert_eq!(project_label("massorca", Some("🚀")), "🚀 massorca");
-        assert_eq!(project_label("massorca", None), "massorca");
     }
 
     #[test]
@@ -565,7 +582,7 @@ mod tests {
         let empty = ProjectGroup {
             id: NO_PROJECT_LABEL.into(),
             name: NO_PROJECT_LABEL.into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![host_with(Vec::new(), HostReach::Connected)],
@@ -588,7 +605,7 @@ mod tests {
         let rows = tree_of(&snapshot_of(vec![ProjectGroup {
             id: "p".into(),
             name: "p".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![host],
@@ -614,7 +631,7 @@ mod tests {
         let rows = tree_of(&snapshot_of(vec![ProjectGroup {
             id: "p".into(),
             name: "p".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![
@@ -639,7 +656,7 @@ mod tests {
         let rows = tree_of(&snapshot_of(vec![ProjectGroup {
             id: "p".into(),
             name: "p".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![host],
@@ -657,7 +674,7 @@ mod tests {
         let group = ProjectGroup {
             id: NO_PROJECT_LABEL.into(),
             name: NO_PROJECT_LABEL.into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![host],
@@ -671,7 +688,7 @@ mod tests {
         let groups = vec![ProjectGroup {
             id: "oppm".into(),
             name: "oppm".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: Some("acme".into()),
             plain_folder: false,
             hosts: Vec::new(),
@@ -694,7 +711,7 @@ mod tests {
         let folder = ProjectGroup {
             id: "notes".into(),
             name: "notes".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: true,
             hosts: Vec::new(),
@@ -725,7 +742,7 @@ mod tests {
         let snapshot = snapshot_of(vec![ProjectGroup {
             id: "p".into(),
             name: "p".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![host_with(sessions, HostReach::Connected)],
