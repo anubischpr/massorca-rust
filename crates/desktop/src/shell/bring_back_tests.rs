@@ -4,9 +4,7 @@
 
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, BringBackResult, Outcome,
-};
+use massorca_protocol::methods::agents::{Activity, ActivityState, BringBackResult, Outcome};
 
 use super::bring_back::{confirm_body, result_lines};
 use super::service_tests::{Rig, click, draw, rig};
@@ -23,9 +21,8 @@ fn finished_child(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     child.activity = Some(Activity {
         state: ActivityState::Done,
         outcome: Some(Outcome::Success),
-        source: ActivitySource::Hook,
         at_ms: 5,
-        seen_at_ms: None,
+        ..crate::service::fixtures::base_activity()
     });
     rig.updates
         .send(StoreUpdate::WorkspaceChanged(workspace(
@@ -105,10 +102,8 @@ fn a_finished_child_is_brought_back_once_confirmed_and_a_refusal_keeps_the_confi
     reply
         .send(Ok(BringBackResult {
             child: agent("c", "w1", 20),
-            merged: true,
             merge_commit: Some("abc1234".to_owned()),
-            prompt_delivered: true,
-            note: None,
+            ..crate::service::fixtures::base_bring_back_result()
         }))
         .expect("the shell waits");
     cx.run_until_parked();
@@ -146,9 +141,9 @@ fn the_merge_and_tell_choices_are_sent_and_the_service_note_stays_until_done(
         .send(Ok(BringBackResult {
             child: agent("c", "w1", 20),
             merged: false,
-            merge_commit: None,
             prompt_delivered: false,
             note: Some("the parent's run is not live, so no prompt was sent".to_owned()),
+            ..crate::service::fixtures::base_bring_back_result()
         }))
         .expect("the shell waits");
     cx.run_until_parked();
@@ -190,10 +185,8 @@ fn a_bring_back_that_does_not_merge_says_so_in_its_confirm() {
 fn the_answer_says_what_the_merge_did_and_whether_the_parent_was_told() {
     let merged = BringBackResult {
         child: agent("c", "w1", 20),
-        merged: true,
         merge_commit: Some("abc1234def5678".to_owned()),
-        prompt_delivered: true,
-        note: None,
+        ..crate::service::fixtures::base_bring_back_result()
     };
     assert_eq!(
         result_lines(&merged),

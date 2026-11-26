@@ -19,11 +19,8 @@ fn status(service: &str, state: ServiceState, source: ServiceSource) -> ServiceS
         name: service.to_owned(),
         state,
         source,
-        account: None,
-        base_url: None,
-        updated_at_ms: None,
         cli_installed: Some(true),
-        detail: None,
+        ..crate::service::fixtures::base_service_status()
     }
 }
 

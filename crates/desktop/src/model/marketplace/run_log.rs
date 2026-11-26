@@ -143,12 +143,11 @@ mod tests {
         to: Option<&str>,
     ) -> ExtensionRun {
         ExtensionRun {
-            at_ms: 1_700_000_000_000,
             action,
             from_version: from.map(str::to_owned),
             to_version: to.map(str::to_owned),
             outcome,
-            output: Vec::new(),
+            ..crate::service::fixtures::base_extension_run()
         }
     }
 
