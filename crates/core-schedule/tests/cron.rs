@@ -103,6 +103,12 @@ fn an_expression_that_can_never_occur_is_refused() {
 }
 
 #[test]
+fn a_gap_no_search_can_bridge_is_refused_although_the_expression_occurs() {
+    // 29 February that is a Sunday recurs decades apart, so a search from some dates would find no run in reach.
+    assert_eq!(refusal("0 0 29 2 */7"), ScheduleError::CronGapTooLong);
+}
+
+#[test]
 fn a_leap_day_is_accepted_and_found_across_the_century_gap() {
     assert_eq!(
         next("0 0 29 2 *", Some("UTC"), "2026-03-01T00:00:00Z"),
