@@ -94,8 +94,14 @@ pub(super) async fn update(
         let mut row = old.clone();
         let schedule_moved = apply_edit(&mut row, &params, &domain, now)?;
         let compiled = check(&row, agents, &host)?;
-        let recompute = !row.enabled || schedule_moved || old.next_run_at.is_none();
-        let written = write_edit(store, &row, recompute.then_some(&compiled), now)?;
+        let next = if !row.enabled {
+            NextRun::Clear
+        } else if schedule_moved || old.next_run_at.is_none() {
+            NextRun::From(&compiled)
+        } else {
+            NextRun::Keep
+        };
+        let written = write_edit(store, &row, next, &mut now_ms)?;
         automation_view(store, &written, &host)
     })
     .await
@@ -132,7 +138,6 @@ pub(super) async fn disable(
     set_enabled(ctx, params, false).await
 }
 
-/// Enabling schedules the next run from now and checks the definition still holds; disabling clears the next run.
 async fn set_enabled(
     ctx: RequestCtx,
     params: AutomationRef,
@@ -140,31 +145,56 @@ async fn set_enabled(
 ) -> Result<Automation, ErrorBody> {
     let host = HostZone::read();
     blocking(&ctx, move |store, agents| {
-        let mut row = automation(store, &params.automation)?;
-        if row.enabled == enabled {
-            return automation_view(store, &row, &host);
-        }
-        let now = now_ms();
-        row.enabled = enabled;
-        row.updated_at = now;
-        let compiled = check(&row, agents, &host)?;
-        let written = write_edit(store, &row, Some(&compiled), now)?;
+        let row = automation(store, &params.automation)?;
+        let written = switch(store, row, enabled, &mut now_ms, |row| {
+            check(row, agents, &host)
+        })?;
         automation_view(store, &written, &host)
     })
     .await
 }
 
+/// Enabling checks the definition still holds and schedules the next run from now; disabling checks nothing, so an
+/// automation whose agent kind or zone is no longer accepted can still be switched off, and clears the next run.
+fn switch(
+    store: &Store,
+    mut row: AutomationRow,
+    enabled: bool,
+    clock: &mut dyn FnMut() -> i64,
+    check: impl FnOnce(&AutomationRow) -> Result<CompiledSchedule, ErrorBody>,
+) -> Result<AutomationRow, ErrorBody> {
+    if row.enabled == enabled {
+        return Ok(row);
+    }
+    row.enabled = enabled;
+    row.updated_at = clock();
+    if !enabled {
+        return write_edit(store, &row, NextRun::Clear, clock);
+    }
+    let compiled = check(&row)?;
+    write_edit(store, &row, NextRun::From(&compiled), clock)
+}
+
+/// What an edit does with the stored next run.
+enum NextRun<'a> {
+    Keep,
+    Clear,
+    /// The next occurrence of this schedule after the time of the write.
+    From(&'a CompiledSchedule),
+}
+
 /// Tries of the next-run compare-and-swap before an edit gives up; each miss means a claim moved it meanwhile.
 const NEXT_RUN_ATTEMPTS: usize = 5;
 
-/// Writes an edit's definition, never its next or last run. With `recompute`, it then moves the next run from `now`
-/// by a compare-and-swap on the stored next run, read again on each miss, so a claim made between the edit's read and
-/// its write is never undone and its occurrence never runs twice. Returns the automation as stored.
+/// Writes an edit's definition, never its next or last run, then moves the next run as `next` says by a
+/// compare-and-swap on the stored next run. Each try reads the stored row, then the clock, so its target is after any
+/// claim it saw, and a claim made after its read makes the swap miss and try again: a claimed occurrence is never
+/// scheduled again. Returns the automation as stored.
 fn write_edit(
     store: &Store,
     row: &AutomationRow,
-    recompute: Option<&CompiledSchedule>,
-    now: i64,
+    next: NextRun<'_>,
+    clock: &mut dyn FnMut() -> i64,
 ) -> Result<AutomationRow, ErrorBody> {
     if !store
         .update_automation_definition(row)
@@ -172,12 +202,15 @@ fn write_edit(
     {
         return Err(removed_meanwhile());
     }
-    let Some(compiled) = recompute else {
+    if matches!(next, NextRun::Keep) {
         return stored_row(store, &row.id);
-    };
-    let target = next_run(row, compiled, now);
+    }
     for _ in 0..NEXT_RUN_ATTEMPTS {
         let stored = stored_row(store, &row.id)?;
+        let target = match next {
+            NextRun::From(compiled) => next_run(row, compiled, clock()),
+            NextRun::Keep | NextRun::Clear => None,
+        };
         if store
             .set_automation_next_run_if(&row.id, stored.next_run_at, target)
             .map_err(store_error)?
@@ -322,9 +355,11 @@ fn removed_meanwhile() -> ErrorBody {
 mod tests {
     use massorca_core_store::{AutomationRow, ProjectKind, ProjectRow, Store, new_id};
 
+    use massorca_protocol::{ErrorBody, codes};
+
     use super::super::definition::compile;
     use super::super::timer::tick;
-    use super::write_edit;
+    use super::{NextRun, switch, write_edit};
 
     const MINUTE: i64 = 60_000;
     const DAY: i64 = 24 * 60 * MINUTE;
@@ -390,7 +425,7 @@ mod tests {
             ..read
         };
 
-        let written = write_edit(&store, &edited, None, now).unwrap();
+        let written = write_edit(&store, &edited, NextRun::Keep, &mut || now).unwrap();
 
         assert_eq!(written.prompt, "Summarise the merged pull requests");
         assert_eq!(written.next_run_at, Some(DUE + DAY));
@@ -409,7 +444,7 @@ mod tests {
         };
         let compiled = compile(&edited).unwrap();
 
-        let written = write_edit(&store, &edited, Some(&compiled), now).unwrap();
+        let written = write_edit(&store, &edited, NextRun::From(&compiled), &mut || now).unwrap();
 
         assert_eq!(written.next_run_at, Some(DUE + 30 * MINUTE));
         assert_eq!(claims(&store, now), 0);
@@ -419,6 +454,48 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn a_schedule_edit_read_just_before_a_claim_targets_after_the_claim_and_does_not_run_it_again()
+    {
+        let (store, read) = store_with_due_automation();
+        // The edit read the row at 08:59:59.990, a weekday; the timer claims 09:00 at 09:00:00.400; the edit writes at
+        // 09:00:00.500 and must not schedule 09:00 again.
+        let edited = AutomationRow {
+            cadence: "weekdays".to_owned(),
+            ..read
+        };
+        let compiled = compile(&edited).unwrap();
+        assert_eq!(claims(&store, DUE + 400), 1);
+
+        let written =
+            write_edit(&store, &edited, NextRun::From(&compiled), &mut || DUE + 500).unwrap();
+
+        assert_eq!(written.next_run_at, Some(DUE + DAY), "Thursday 09:00");
+        assert_eq!(claims(&store, DUE + 600), 0);
+    }
+
+    #[test]
+    fn disabling_skips_the_definition_check_and_enabling_keeps_it() {
+        let (store, row) = store_with_due_automation();
+        let refused = |_: &AutomationRow| {
+            Err(ErrorBody::new(
+                codes::AGENT_KIND_NOT_FOUND,
+                "no agent kind claude",
+            ))
+        };
+
+        let disabled = switch(&store, row, false, &mut || DUE, refused).unwrap();
+
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.next_run_at, None);
+        let error = switch(&store, disabled, true, &mut || DUE, refused).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_KIND_NOT_FOUND);
+        assert!(
+            !store.list_automations().unwrap()[0].enabled,
+            "the refused enable wrote nothing"
         );
     }
 }
