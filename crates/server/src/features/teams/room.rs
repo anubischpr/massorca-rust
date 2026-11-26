@@ -1,8 +1,8 @@
 //! `team.room_list` and `team.room_post` (capability `team-room/1`, decision 0102): a team's Conference room. A
 //! person's line becomes a task for one bot, which starts at once; the bot answers in the room, and posts again when the
 //! task ends (see `task_outcome`). A line that names a day and a time becomes a one-time routine instead, and a line
-//! no bot can be picked for gets a choice card (decision 0121, `room_card`). A line that replies to another keeps it as
-//! its context (decision 0122, `room_quote`).
+//! no bot can be picked for gets a choice card (decision 0121, `room_card`). A line that asks, or answers a bot's line,
+//! is a conversation one bot answers once (decision 0122, `room_reply`).
 
 use std::cell::Cell;
 
@@ -32,12 +32,13 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::room_card::{self, card_lines, card_view};
+use super::room_reply::{self, Conversation};
 use super::room_schedule::{Moment, scheduled_moment};
 use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
 use super::task_start::{Changes, publish_changes, start_task};
 use super::{blocking, invalid, non_blank, selectors, store_error, task_state};
-use super::room_quote;
+use super::{room_quote, room_reply_end};
 
 /// The longest room line, in Unicode scalar values.
 const MAX_TEXT_CHARS: usize = 4000;
@@ -149,6 +150,7 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
                 asked: Box::new(PersonAsk {
                     to: params.to.clone(),
                     reply_to: params.reply_to.clone(),
+                    ask: params.ask,
                 }),
                 start: Start {
                     workspaces: for_mutation(&ctx).await?,
@@ -189,8 +191,8 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
     Ok(TeamRoomPosted { messages })
 }
 
-/// A line from the agent run of `session`: it posts as the bot of the team's task that run works on, and naming any
-/// other bot is refused.
+/// A line from the agent run of `session`: it posts as the bot of the team's task that run works on, or as the bot of
+/// the conversation it answers (once), and naming any other bot is refused.
 fn agent_line(
     store: &Store,
     team: &TeamRow,
@@ -204,11 +206,14 @@ fn agent_line(
             format!("this agent run works on no task of team {}", team.name),
         )
     };
-    let task = store
+    let Some(task) = store
         .find_task_by_session(session)
         .map_err(store_error)?
         .filter(|task| task.team_id == team.id)
-        .ok_or_else(not_a_bot)?;
+    else {
+        return room_reply_end::bot_answer(store, team, session, named, &text)?
+            .ok_or_else(not_a_bot);
+    };
     let own = task
         .bot_id
         .as_deref()
@@ -226,16 +231,18 @@ fn agent_line(
     insert_line(store, team, Some(&own), text, Some(task.id))
 }
 
-/// What a person's line asks for besides its text: the bot it goes to when it names none, and the line it replies to.
+/// What a person's line asks for besides its text: the bot it goes to when it names none, the line it replies to, and
+/// whether it asks without making a task.
 struct PersonAsk {
     to: Option<String>,
     reply_to: Option<String>,
+    ask: Option<bool>,
 }
 
 /// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the only bot), starts
 /// the task and stores the bot's answer. A line that asks for a day and a time becomes that bot's one-time routine
-/// instead, unless the routine is refused. A line no bot can be picked for gets a choice card. A line that replies to a
-/// bot's line goes to that bot unless it names another, and its task keeps the quoted line.
+/// instead, unless the routine is refused. A line no bot can be picked for gets a choice card. A line that asks, or
+/// answers a bot's line, is a conversation instead: one bot answers it and no task is made.
 /// A team without bots refuses the line and stores nothing.
 fn person_line(
     store: &Store,
@@ -260,6 +267,22 @@ fn person_line(
         .as_deref()
         .map(|id| room_quote::quoted_line(store, team, id))
         .transpose()?;
+    if room_reply::is_conversation(asked.ask, quoted.as_ref()) {
+        let bot = room_reply::answering_bot(
+            &bots,
+            mentioned_bot(&bots, &text),
+            quoted.as_ref(),
+            to.as_ref(),
+        );
+        let room = Conversation {
+            store,
+            agents,
+            workspaces: &start.workspaces,
+            team,
+            bots: &bots,
+        };
+        return room_reply::converse(&room, bot, text, quoted.as_ref(), changes);
+    }
     // A task asked in reply to a bot's line goes to that bot unless the line names another.
     let receiver = room_quote::replied_bot(&bots, quoted.as_ref()).or(to.as_ref());
     match addressed_bot(&bots, &text, receiver) {
