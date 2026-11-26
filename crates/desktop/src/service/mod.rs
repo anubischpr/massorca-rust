@@ -60,7 +60,7 @@ pub(crate) use secrets::SecretCommand;
 pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
-pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
+pub use team_room::{NO_CARDS, NO_ROOM, TeamRoomRead, TeamRooms};
 #[cfg(test)]
 pub(crate) use team_routines::RoutineCommand;
 #[cfg(test)]

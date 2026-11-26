@@ -9,7 +9,9 @@ use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
-use massorca_protocol::methods::team_room::{TeamRoomListParams, TeamRoomPostParams};
+use massorca_protocol::methods::team_room::{
+    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomPostParams,
+};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
     TeamCreateParams, TeamProjectAddParams, TeamRef, TeamRemoveParams,
@@ -17,12 +19,13 @@ use massorca_protocol::methods::teams::{
 use std::collections::HashSet;
 
 use crate::connect::connect;
-use crate::error::CliError;
+use crate::error::{CliError, exit};
 use crate::output::Output;
 use massorca_protocol::methods::teams::{
     BotUpdateParams, TeamMemoryAddParams, TeamMemoryListParams, TeamMemoryRemoveParams,
     TeamProjectRemoveParams, TeamProjectUpdateParams, TeamUpdateParams,
 };
+use massorca_protocol::{capabilities, codes};
 
 #[derive(Debug, Subcommand)]
 pub enum TeamCommand {
@@ -253,8 +256,16 @@ pub enum TeamRoomCommand {
         limit: Option<u32>,
     },
     /// Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with
-    /// @name, else --to, else the lead, else the first bot, and the task starts. With --bot, that bot posts the line.
-    /// Inside an agent run, the line is posted as the bot of the run's own task, and naming another bot is refused.
+    /// @name, else --to, else the lead, else the only bot, and the task starts unless --no-start. With several bots and
+    /// none of those, the room answers with a choice card instead (see `team room answer`). The task's title is
+    /// the line's first line without the @name of the team's bots, cut to 80 characters. A person's line that names one
+    /// day (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any
+    /// time in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a
+    /// routine the host refuses leaves it a task. With --bot, that bot posts the line.
+    /// Inside an agent run, the line is posted as the bot of the run's own task or reply, and naming another bot is
+    /// refused. With --ask, or --reply-to a bot's line, the line is a conversation instead: one bot (the one it names,
+    /// else the one it replies to, else --to, else the lead, else the first) answers it once in the room, in at most
+    /// 1,200 characters, and no task is made. `team room list` shows who is typing.
     Post {
         /// Team id or name.
         team: String,
@@ -266,6 +277,28 @@ pub enum TeamRoomCommand {
         /// The bot a person's line goes to when it names none: id or name within the team.
         #[arg(long, value_name = "BOT", conflicts_with = "bot")]
         to: Option<String>,
+        /// Leave a person's task in Todo instead of starting it.
+        #[arg(long, conflicts_with = "bot")]
+        no_start: bool,
+        /// The line this one replies to: its id from `team room list --json`. A reply keeps the quoted line as its context.
+        #[arg(long, value_name = "MESSAGE", conflicts_with = "bot")]
+        reply_to: Option<String>,
+        /// Ask a bot without making a task.
+        #[arg(long, conflicts_with_all = ["bot", "task", "no_start"])]
+        ask: bool,
+        /// Make a reply to a bot's line a task instead of a conversation.
+        #[arg(long, conflicts_with = "bot", requires = "reply_to")]
+        task: bool,
+    },
+    /// Answers a choice card once: `bot:<id>` gives the request to that bot, `team:<id>` puts it in another team's
+    /// Todo, and `todo` keeps it in this team's Todo with no bot. `team room list` prints each card's choices.
+    Answer {
+        /// Team id or name.
+        team: String,
+        /// The card's line id.
+        message: String,
+        /// One of the card's choices.
+        choice: String,
     },
 }
 
@@ -649,11 +682,12 @@ async fn run_room(
             let room = client
                 .team_room_list(&TeamRoomListParams { team, limit })
                 .await?;
-            let lines = if room.messages.is_empty() {
+            let mut lines = if room.messages.is_empty() {
                 vec!["no lines".to_owned()]
             } else {
                 text::room_lines(&room.messages)
             };
+            lines.extend(text::typing_line(&room.typing));
             output.success(&room, &lines);
         }
         TeamRoomCommand::Post {
@@ -661,7 +695,24 @@ async fn run_room(
             text,
             bot,
             to,
+            no_start,
+            reply_to,
+            ask,
+            task,
         } => {
+            // An older host ignores both and makes a task, so they need a host that answers in the room.
+            if (ask || reply_to.is_some())
+                && !client.has_capability(capabilities::TEAM_ROOM_REPLIES)
+            {
+                return Err(CliError::new(
+                    codes::CAPABILITY_NOT_NEGOTIATED,
+                    format!(
+                        "this service does not offer {}, so it cannot answer in the room; update MassOrca on the host",
+                        capabilities::TEAM_ROOM_REPLIES
+                    ),
+                    exit::ERROR,
+                ));
+            }
             // Inside an agent run, the run's session and token bind the line to the bot of that run's task.
             let (session, agent_token) = agent_run();
             let posted = client
@@ -672,9 +723,32 @@ async fn run_room(
                     to,
                     session,
                     agent_token,
+                    start: no_start.then_some(false),
+                    reply_to,
+                    ask: if ask {
+                        Some(true)
+                    } else {
+                        task.then_some(false)
+                    },
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));
+        }
+        TeamRoomCommand::Answer {
+            team,
+            message,
+            choice,
+        } => {
+            let answered = client
+                .team_room_answer(&TeamRoomAnswerParams {
+                    team,
+                    message,
+                    choice,
+                })
+                .await?;
+            let mut lines = text::room_lines(std::slice::from_ref(&answered.card));
+            lines.extend(text::room_lines(&answered.messages));
+            output.success(&answered, &lines);
         }
     }
     Ok(())

@@ -145,6 +145,9 @@ const ERROR_CODES: &[(&str, &str)] = &[
         "team.routine_run_interrupted",
     ),
     (codes::TEAM_ROUTINE_CHANGED, "team.routine_changed"),
+    (codes::TEAM_ROOM_CARD_NOT_FOUND, "team.room_card_not_found"),
+    (codes::TEAM_ROOM_CARD_ANSWERED, "team.room_card_answered"),
+    (codes::TEAM_ROOM_LINE_NOT_FOUND, "team.room_line_not_found"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
@@ -191,4 +194,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
     assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
+    assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");
 }

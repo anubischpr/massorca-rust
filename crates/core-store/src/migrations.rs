@@ -585,6 +585,33 @@ CREATE TABLE script_trust (
 "#,
         foreign_keys_off: false,
     },
+    // A room line about the one-time routine it scheduled (decision 0121); the routine's removal keeps the line.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN routine_id TEXT REFERENCES team_routines(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that is a choice card, with its options and the answer it got once (decision 0121).
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN card TEXT;
+ALTER TABLE team_room_messages ADD COLUMN card_answer TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that replies to another, and a person's conversation line with its bot, reply run and reply state
+    // (decision 0122). A removed line or bot keeps the reply, unlinked.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN reply_to TEXT REFERENCES team_room_messages(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_session TEXT;
+ALTER TABLE team_room_messages ADD COLUMN reply_state TEXT CHECK(reply_state IN ('open','answered','closed'));
+CREATE INDEX team_room_by_reply_session ON team_room_messages(reply_session);
+"#,
+        foreign_keys_off: false,
+    },
     // A bot's skills (decision 0120): skill names in the order chosen; a bot's removal removes them.
     Migration {
         sql: r#"
