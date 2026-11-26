@@ -157,23 +157,14 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
         project: project.to_owned(),
         name: name.to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
+        ..base_workspace_create_params()
     }
 }
 
 fn remove_params(workspace: &str) -> WorkspaceRemoveParams {
     WorkspaceRemoveParams {
         workspace: workspace.to_owned(),
-        force: false,
-        discard_ignored: false,
-        forget_orphan: false,
-        allow_failed_archive: false,
+        ..base_workspace_remove_params()
     }
 }
 
@@ -477,4 +468,30 @@ async fn a_setting_changed_by_another_client_reaches_the_store_through_the_chang
     drop(other);
     drop(bridge);
     stop_service(service).await;
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    }
+}
+
+/// Every `WorkspaceRemoveParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_remove_params() -> massorca_protocol::methods::workspaces::WorkspaceRemoveParams {
+    massorca_protocol::methods::workspaces::WorkspaceRemoveParams {
+        workspace: String::new(),
+        force: false,
+        discard_ignored: false,
+        forget_orphan: false,
+        allow_failed_archive: false,
+    }
 }

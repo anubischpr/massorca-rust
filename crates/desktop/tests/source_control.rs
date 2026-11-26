@@ -138,13 +138,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
         .workspace_create(&WorkspaceCreateParams {
             project: project.id.clone(),
             name: "feature".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created");
@@ -592,4 +586,19 @@ async fn a_reconnect_re_establishes_the_watch_with_one_subscription_per_workspac
     );
 
     session.stop().await;
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    }
 }

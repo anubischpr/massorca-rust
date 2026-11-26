@@ -453,14 +453,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     handle
         .create_workspace(WorkspaceCreateParams {
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created")
@@ -731,7 +724,9 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
         "a session with no project adds no visible project: {projects:?}"
     );
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -829,13 +824,7 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     let params = WorkspaceCreateParams {
         project: project.id.clone(),
         name: "notes".to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
+        ..base_workspace_create_params()
     };
     let first_workspace = handle
         .create_workspace(params.clone())
@@ -849,7 +838,9 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
         .await
         .expect("the client connects");
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -960,4 +951,24 @@ fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartPa
         effort: None,
         fast: None,
     }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    }
+}
+
+/// Every `WorkspaceListParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_list_params() -> massorca_protocol::methods::workspaces::WorkspaceListParams {
+    massorca_protocol::methods::workspaces::WorkspaceListParams { project: None }
 }

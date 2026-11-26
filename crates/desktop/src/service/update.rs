@@ -1169,6 +1169,36 @@ pub(crate) mod fixtures {
             credential_files: Vec::new(),
         }
     }
+
+    /// Every `Project` field at its usual value; tests override the fields they vary.
+    pub fn base_project() -> massorca_protocol::methods::projects::Project {
+        massorca_protocol::methods::projects::Project {
+            id: String::new(),
+            kind: massorca_protocol::methods::projects::ProjectKind::Git,
+            path: String::new(),
+            name: String::new(),
+            workspaces_root: String::new(),
+            added_at_ms: 1,
+            base_ref: None,
+            icon: None,
+        }
+    }
+
+    /// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+    pub fn base_workspace_create_params()
+    -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+            project: "p1".to_owned(),
+            name: String::new(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: false,
+            path: None,
+            request_id: None,
+            no_setup: false,
+        }
+    }
 }
 
 #[cfg(test)]

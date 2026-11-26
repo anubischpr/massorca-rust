@@ -178,13 +178,7 @@ fn workspace_params(project: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
         project: project.to_owned(),
         name: "terminal".to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
+        ..base_workspace_create_params()
     }
 }
 
@@ -532,4 +526,19 @@ async fn the_work_panel_strip_follows_the_store_and_closing_asks_by_status() {
     assert_eq!(strip.selected, None);
 
     stop_service(service).await;
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    }
 }

@@ -71,15 +71,8 @@ mod tests {
 
     fn params(name: &str) -> WorkspaceCreateParams {
         WorkspaceCreateParams {
-            project: "p1".to_owned(),
             name: name.to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..crate::service::fixtures::base_workspace_create_params()
         }
     }
 

@@ -187,14 +187,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     handle
         .create_workspace(WorkspaceCreateParams {
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created")
@@ -345,13 +338,7 @@ async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() 
         .create_workspace(WorkspaceCreateParams {
             project: workspace.project_id.clone(),
             name: "second".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the second workspace is created");
@@ -443,5 +430,20 @@ fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartPa
         model: None,
         effort: None,
         fast: None,
+    }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
     }
 }
