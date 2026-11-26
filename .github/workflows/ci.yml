@@ -293,6 +293,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6.4.1
         with:
           gradle-version: 8.14.3
+      # Robolectric downloads its android-all jar from Maven Central while the tests run, outside Gradle's
+      # resolution and cache; keep it across runs, keyed on the build file that pins Robolectric and the SDK.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('mobile/android/bindings-test/build.gradle') }}
       - name: Generate the Kotlin bindings, start a server and run the JVM tests
         run: scripts/ci/kotlin-bindings-test.sh
 
