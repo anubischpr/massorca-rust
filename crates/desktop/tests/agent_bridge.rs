@@ -983,3 +983,70 @@ fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAdd
         icon: None,
     }
 }
+
+#[tokio::test]
+async fn a_writing_child_in_the_parent_worktree_reaches_the_store_with_its_parent_link() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the declared kind is listed once the bridge connects");
+
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let parent = start_fake(&handle, &workspace.id).await;
+    let delegated = handle
+        .agent_delegate(massorca_protocol::methods::agents::AgentDelegateParams {
+            parent: parent.id.clone(),
+            kind: Some("fake".to_owned()),
+            read_only: false,
+            same_workspace: true,
+            ..base_agent_delegate_params()
+        })
+        .await
+        .expect("the writing child starts in the parent's worktree");
+    let child = delegated.session;
+    assert_eq!(child.workspace_id, parent.workspace_id);
+    assert_eq!(child.parent_id.as_deref(), Some(parent.id.as_str()));
+    assert!(!child.read_only, "a writing child holds the parent");
+
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentChanged(changed) =
+                updates.recv().await.expect("the bridge is alive")
+                && changed.id == child.id
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the child reaches the store with its parent link");
+
+    for terminal in [child.terminal_id.clone(), parent.terminal_id.clone()]
+        .into_iter()
+        .flatten()
+    {
+        handle
+            .close_terminal(&terminal)
+            .await
+            .expect("the session's terminal closes");
+    }
+    drop(bridge);
+    stop_service(service).await;
+}

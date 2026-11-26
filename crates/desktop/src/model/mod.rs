@@ -22,6 +22,7 @@ pub mod navigation;
 pub mod pairing;
 pub mod palette;
 pub mod palette_recent;
+pub mod parent_wait;
 pub mod permission_modes;
 pub mod preflight;
 pub mod project_add;

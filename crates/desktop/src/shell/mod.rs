@@ -30,6 +30,7 @@ mod remote_terminal;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
+mod session_child_wait;
 mod session_grid;
 mod session_view;
 mod settings;
