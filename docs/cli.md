@@ -34,7 +34,7 @@ machine.
 
 | Command | What it does |
 |---|---|
-| `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
+| `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. Prints a readiness record once it accepts connections (see below). |
 | `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
 | `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
@@ -384,9 +384,16 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   could not finish (`homes/.KIND.old-...`) refuses the next import with
   `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
-`service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
-With `--json` it prints the start document on stdout, and the service log goes to the
-profile's log files only unless `--log-stderr` is given.
+`service run` prints its readiness record once the service accepts connections, and only after its
+network listeners have settled (bound, or waiting with the reason). It is never printed earlier.
+In text mode it is a few lines: `service ready for profile <name> (pid <n>)`, `version <v>, protocol <p>`,
+`local endpoint: <path or pipe>`, then the listener table, `server pin` and `pending offers` when a
+network listener is on, or `no network listeners` when it is not. With `--json` it is one line on
+stdout: `{"ok":true,"result":{...}}`, where `result` holds the start identity (`profile`, `pid`,
+`version`, `protocol`, `started_at_ms`, `capabilities`), `endpoint` and, with a network listener,
+`network` (`listeners`, `server_pin`, `pending_offers`, a count). Pairing offers and their secrets
+are never printed; `server status` shows the same listeners and pin later. The service log goes to
+the profile's log files only unless `--log-stderr` is given.
 
 ### Hosts and pairing
 

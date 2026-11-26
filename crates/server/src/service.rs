@@ -44,6 +44,7 @@ use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
 use crate::kind_packages::{ExtensionKindPackages, prepare_builtin_agents};
 use crate::network::{self, NetworkConfig};
+use crate::readiness::Readiness;
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
 use crate::start_timing::StartTimings;
@@ -455,6 +456,18 @@ pub struct RunningService {
 }
 
 impl RunningService {
+    /// Waits until the network listeners have made their first bind attempt, then reads the readiness record. `None` when
+    /// shutdown is requested first, so a service that is stopping reports nothing as ready.
+    pub async fn ready(&self) -> Option<Readiness> {
+        tokio::select! {
+            biased;
+            () = self.shutdown.listener_closed() => None,
+            () = self.state.network.wait_settled() => {
+                Some(Readiness::of(&self.state.profile, &self.state.network))
+            }
+        }
+    }
+
     /// What `service.info` reports.
     pub fn info(&self) -> ServiceInfo {
         features::info_of(&self.state)

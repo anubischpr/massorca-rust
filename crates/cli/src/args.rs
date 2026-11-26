@@ -163,7 +163,7 @@ pub enum Commands {
 
 #[derive(Debug, Subcommand)]
 pub enum ServiceCommand {
-    /// Runs the service in this process until it is stopped.
+    /// Runs the service in this process until it is stopped. Prints its readiness record once it accepts connections.
     Run(RunArgs),
     /// Shows whether the service is running. Never starts it.
     Status,
