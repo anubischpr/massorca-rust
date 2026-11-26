@@ -477,23 +477,3 @@ async fn a_setting_changed_by_another_client_reaches_the_store_through_the_chang
     drop(bridge);
     stop_service(service).await;
 }
-
-#[tokio::test]
-async fn the_git_the_service_reports_on_connect_reaches_the_store() {
-    let home = temp_home();
-    let service = start_service(home.path()).await;
-    let (bridge, _handle, mut updates) = bridge_for(home.path());
-    let mut state = StoreState::default();
-    until(
-        &mut updates,
-        &mut state,
-        "the git the service reports",
-        |s| s.connection.is_connected() && s.service_git.is_some(),
-    )
-    .await;
-    // The desktop shows the service's own report, the one `service.info` gives every client.
-    assert_eq!(state.service_git, service.info().git);
-
-    drop(bridge);
-    stop_service(service).await;
-}

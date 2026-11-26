@@ -1,39 +1,38 @@
-//! The startup preflight: a tool the service reports missing or too old, named once after connect (PLAT-08). The service
-//! reports git only (`service.info`), so git is the one tool checked. The GitHub, GitLab, Bitbucket, Azure DevOps and
-//! Gitea CLIs, the shells and the agent CLIs are not reported, so they are not checked here.
+//! The startup preflight notice (PLAT-08): this computer's git when it is missing or too old, shown above the Canvas
+//! after connect. The state and the words come from the Git row of Settings (GIT-01, `git_availability`), so the notice
+//! and the row name the same thing the same way. This file only picks which states reach the Canvas.
 
-use massorca_protocol::methods::service::GitStatus;
+use massorca_protocol::methods::service::GitStatus as ServiceGitStatus;
 
-/// The git baseline the service enforces, as its missing-git message names it (core-git's `GitVersion::BASELINE`).
-const GIT_BASELINE: &str = "2.25.0";
+use super::git_availability::{GitState, git_row};
+use crate::service::Refusal;
 
-/// A notice above the Canvas about a tool that needs attention: what is wrong and what to do about it.
+/// A notice above the Canvas: the Git row's state word as its title, and its sentence as the message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreflightNotice {
     pub title: String,
     pub message: String,
 }
 
-/// The notice for the host's git while connected. None when git is present, when the probe could not run it (nothing
-/// is known to be wrong), and when the service reports no git at all.
-pub fn preflight_notice(connected: bool, git: Option<&GitStatus>) -> Option<PreflightNotice> {
+/// The notice for this computer's git while connected. Only a git that is missing or below the baseline reaches the
+/// Canvas; present, unknown, unreported, refused and not yet answered git stay in Settings.
+pub fn preflight_notice(
+    connected: bool,
+    answer: Option<&Result<Option<ServiceGitStatus>, Refusal>>,
+) -> Option<PreflightNotice> {
     if !connected {
         return None;
     }
-    match git? {
-        GitStatus::Missing => Some(PreflightNotice {
-            title: "Git is not installed".to_owned(),
-            message: format!(
-                "MassOrca needs Git {GIT_BASELINE} or newer. Install Git, or set MASSORCA_GIT to its path, then restart the service to check again."
-            ),
+    let row = git_row(answer);
+    match row.state {
+        GitState::Missing | GitState::TooOld { .. } => Some(PreflightNotice {
+            title: row.word,
+            message: row.detail,
         }),
-        GitStatus::TooOld { version, required } => Some(PreflightNotice {
-            title: format!("Git {version} is too old"),
-            message: format!(
-                "MassOrca needs Git {required} or newer. Update Git, then restart the service to check again."
-            ),
-        }),
-        GitStatus::Present { .. } | GitStatus::Unknown { .. } => None,
+        GitState::NotChecked
+        | GitState::Present { .. }
+        | GitState::Unknown { .. }
+        | GitState::Unreported => None,
     }
 }
 
@@ -45,15 +44,15 @@ mod tests {
 
     fn missing() -> PreflightNotice {
         PreflightNotice {
-            title: "Git is not installed".to_owned(),
-            message: "install".to_owned(),
+            title: "Not installed".to_owned(),
+            message: "Install Git, then restart MassOrca to check again.".to_owned(),
         }
     }
 
     fn too_old() -> PreflightNotice {
         PreflightNotice {
-            title: "Git 2.20.1 is too old".to_owned(),
-            message: "update".to_owned(),
+            title: "Too old".to_owned(),
+            message: "Upgrade Git, then restart MassOrca to check again.".to_owned(),
         }
     }
 
@@ -64,56 +63,57 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_git_is_named_with_what_to_do() {
-        let notice = preflight_notice(true, Some(&GitStatus::Missing)).expect("a notice");
-        assert_eq!(notice.title, "Git is not installed");
+    fn a_missing_git_reaches_the_canvas_with_the_settings_row_words() {
+        let answer = Ok(Some(ServiceGitStatus::Missing));
+        let notice = preflight_notice(true, Some(&answer)).expect("a notice");
+        let row = git_row(Some(&answer));
+        assert_eq!(notice.title, row.word);
+        assert_eq!(notice.message, row.detail);
+        assert_eq!(notice.title, "Not installed");
         assert!(
-            notice.message.contains("2.25.0 or newer"),
-            "{}",
-            notice.message
-        );
-        assert!(
-            notice.message.contains("MASSORCA_GIT"),
+            notice.message.contains("restart MassOrca"),
             "{}",
             notice.message
         );
     }
 
     #[test]
-    fn a_too_old_git_names_its_version_and_the_one_required() {
-        let git = GitStatus::TooOld {
+    fn a_too_old_git_reaches_the_canvas_and_names_both_versions() {
+        let answer = Ok(Some(ServiceGitStatus::TooOld {
             version: "2.20.1".to_owned(),
             required: "2.25.0".to_owned(),
-        };
-        let notice = preflight_notice(true, Some(&git)).expect("a notice");
-        assert_eq!(notice.title, "Git 2.20.1 is too old");
+        }));
+        let notice = preflight_notice(true, Some(&answer)).expect("a notice");
+        assert_eq!(notice.title, "Too old");
+        assert!(notice.message.contains("2.20.1"), "{}", notice.message);
+        assert!(notice.message.contains("2.25.0"), "{}", notice.message);
         assert!(
-            notice.message.contains("2.25.0 or newer"),
+            notice.message.contains("restart MassOrca"),
             "{}",
             notice.message
         );
     }
 
     #[test]
-    fn present_unknown_and_unreported_git_draw_no_notice() {
-        let present = GitStatus::Present {
+    fn present_unknown_unreported_refused_and_unanswered_git_draw_no_notice() {
+        let present = Ok(Some(ServiceGitStatus::Present {
             version: "2.49.0".to_owned(),
-        };
-        let unknown = GitStatus::Unknown {
+        }));
+        let unknown = Ok(Some(ServiceGitStatus::Unknown {
             reason: "timed out".to_owned(),
-        };
+        }));
+        let refused = Err(Refusal::unavailable("the service went away"));
         assert_eq!(preflight_notice(true, Some(&present)), None);
         assert_eq!(preflight_notice(true, Some(&unknown)), None);
-        assert_eq!(
-            preflight_notice(true, None),
-            None,
-            "a service that predates git"
-        );
+        assert_eq!(preflight_notice(true, Some(&Ok(None))), None, "unreported");
+        assert_eq!(preflight_notice(true, Some(&refused)), None, "refused");
+        assert_eq!(preflight_notice(true, None), None, "not checked yet");
     }
 
     #[test]
     fn nothing_is_named_while_the_link_is_down() {
-        assert_eq!(preflight_notice(false, Some(&GitStatus::Missing)), None);
+        let answer = Ok(Some(ServiceGitStatus::Missing));
+        assert_eq!(preflight_notice(false, Some(&answer)), None);
     }
 
     #[test]

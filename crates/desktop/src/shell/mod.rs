@@ -134,6 +134,8 @@ mod session_menu_tests;
 #[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
+mod settings_git_tests;
+#[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
 mod sidebar_session_rows_tests;
@@ -930,6 +932,10 @@ impl Render for Shell {
             requests: {
                 let state = self.store.read(cx).state();
                 crate::model::secret_requests::request_rows(&state.secrets, &state.projects)
+            },
+            git: {
+                let state = self.store.read(cx).state();
+                crate::model::git_availability::git_row(state.service_git.as_ref())
             },
             request_notice: self.request_notice.clone(),
         };

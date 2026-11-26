@@ -35,8 +35,6 @@ use crate::model::chat_transcript::ChatTranscript;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreUpdate {
     Connection(ConnectionState),
-    /// The host's git as `service.info` reported it on this connection; None when the service reports none.
-    ServiceGit(Option<ServiceGitStatus>),
     /// Every project and workspace, after a connect or an overflow. Replaces what was held.
     Resync {
         projects: Vec<Project>,
@@ -113,6 +111,8 @@ pub enum StoreUpdate {
     Devices(Result<Vec<DeviceInfo>, Refusal>),
     /// The listeners and counts of this computer's service, after a read.
     Network(Result<NetworkStatus, Refusal>),
+    /// This computer's service's Git, read on each connect; `Ok(None)` from a service that predates the report.
+    ServiceGit(Result<Option<ServiceGitStatus>, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
     /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
@@ -257,9 +257,6 @@ pub struct StoreState {
     pub agents_answered: bool,
     /// When the link last stopped being connected, while it is not.
     pub down_since: Option<Instant>,
-    /// The host's git as `service.info` reported it on this connection; None while not connected, and for a service
-    /// that predates the field.
-    pub service_git: Option<ServiceGitStatus>,
     /// The git state of each workspace the store holds, by workspace id.
     pub git: BTreeMap<String, WorkspaceGit>,
     /// Every team with its Board, once a read answered; `None` while the service cannot list them.
@@ -276,6 +273,8 @@ pub struct StoreState {
     pub devices: Option<Result<Vec<DeviceInfo>, Refusal>>,
     /// This computer's listeners and counts, once read.
     pub network: Option<Result<NetworkStatus, Refusal>>,
+    /// What this computer's service said about Git on the last connect; `None` until that read answered.
+    pub service_git: Option<Result<Option<ServiceGitStatus>, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
     /// The number of the newest extension read applied; an older late answer changes nothing.
@@ -333,7 +332,6 @@ impl Default for StoreState {
             loaded: false,
             agents_answered: false,
             down_since: None,
-            service_git: None,
             git: BTreeMap::new(),
             teams: None,
             team_read: 0,
@@ -342,6 +340,7 @@ impl Default for StoreState {
             hosts: Vec::new(),
             devices: None,
             network: None,
+            service_git: None,
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
@@ -379,11 +378,9 @@ impl StoreState {
                 if !state.is_connected() {
                     self.teams = None;
                     self.extensions = None;
-                    self.service_git = None;
                 }
                 self.connection = state;
             }
-            StoreUpdate::ServiceGit(git) => self.service_git = git,
             StoreUpdate::Resync {
                 projects,
                 workspaces,
@@ -526,6 +523,7 @@ impl StoreState {
             }
             StoreUpdate::Devices(result) => self.devices = Some(result),
             StoreUpdate::Network(result) => self.network = Some(result),
+            StoreUpdate::ServiceGit(result) => self.service_git = Some(result),
             StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
                 self.secrets.status = Some(result);
             }
@@ -1194,26 +1192,6 @@ mod tests {
     }
 
     #[test]
-    fn the_service_git_is_kept_while_connected_and_cleared_when_the_link_drops() {
-        let mut state = StoreState::default();
-        let t0 = Instant::now();
-        let up = ConnectionState::Connected {
-            server: "s".into(),
-            version: "1".into(),
-        };
-        state.apply(StoreUpdate::Connection(up), t0);
-        assert_eq!(state.service_git, None, "not read yet");
-        state.apply(StoreUpdate::ServiceGit(Some(ServiceGitStatus::Missing)), t0);
-        assert_eq!(state.service_git, Some(ServiceGitStatus::Missing));
-        let down = ConnectionState::Reconnecting {
-            attempt: 1,
-            retry_at: t0,
-        };
-        state.apply(StoreUpdate::Connection(down), t0);
-        assert_eq!(state.service_git, None, "a lost link reports no git");
-    }
-
-    #[test]
     fn a_stale_teams_read_never_replaces_a_newer_one() {
         let mut state = StoreState::default();
         let read = |number, name: &str| TeamsRead {
@@ -1352,6 +1330,25 @@ mod tests {
         );
         assert_eq!(state.devices, Some(Err(Refusal::unavailable("gone"))));
         assert_eq!(state.network, None);
+    }
+
+    #[test]
+    fn this_computers_git_answer_replaces_the_one_held() {
+        let mut state = StoreState::default();
+        assert_eq!(state.service_git, None);
+        let present = ServiceGitStatus::Present {
+            version: "2.49.0".to_owned(),
+        };
+        state.apply(
+            StoreUpdate::ServiceGit(Ok(Some(present.clone()))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Ok(Some(present))));
+        state.apply(
+            StoreUpdate::ServiceGit(Err(Refusal::unavailable("gone"))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Err(Refusal::unavailable("gone"))));
     }
 
     #[test]
