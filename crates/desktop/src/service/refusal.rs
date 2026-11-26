@@ -326,12 +326,7 @@ mod tests {
         ));
         assert!(matches!(
             Refusal::from(&ClientError::ServerIdentityMismatch(Box::new(
-                massorca_client::IdentityMismatch {
-                    host: "vps".into(),
-                    trusted_from: massorca_client::TrustedFrom::Pairing,
-                    expected: "sha256:old".into(),
-                    actual: Some("sha256:new".into()),
-                }
+                massorca_client::IdentityMismatch { trusted_from: massorca_client::TrustedFrom::Pairing, actual: Some("sha256:new".into()), ..crate::service::fixtures::base_identity_mismatch() }
             ))),
             Refusal::Failed { code, message }
                 if code == "host.identity_mismatch" && message.contains("Pairing page")
@@ -342,10 +337,8 @@ mod tests {
     fn a_changed_host_key_names_both_keys_and_offers_remove_host() {
         let refusal = Refusal::from(&ClientError::ServerIdentityMismatch(Box::new(
             IdentityMismatch {
-                host: "vps".into(),
-                trusted_from: TrustedFrom::Pairing,
-                expected: "sha256:old".into(),
                 actual: Some("sha256:new".into()),
+                ..crate::service::fixtures::base_identity_mismatch()
             },
         )));
         let message = refusal.message();

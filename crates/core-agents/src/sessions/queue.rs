@@ -272,6 +272,7 @@ impl Drop for UnfinishedDelivery {
 struct Delivery {
     session: String,
     item: String,
+    text: String,
     target: Target,
 }
 
@@ -421,6 +422,7 @@ impl Agents {
         Ok(Delivery {
             session: item.session_id.clone(),
             item: item.id.clone(),
+            text: item.text.clone(),
             target: Target::Terminal {
                 terminal,
                 bytes: prompt::input_bytes(typed, run.prompt.paste, &run.prompt.submit),
@@ -451,6 +453,7 @@ impl Agents {
         Ok(Delivery {
             session: item.session_id.clone(),
             item: item.id.clone(),
+            text: item.text.clone(),
             target: Target::Chat {
                 text: item.text.clone(),
                 files,
@@ -526,6 +529,10 @@ impl Agents {
             }
         };
         self.finish_delivery(&delivery.session, &delivery.item, written.clone(), true);
+        // A queued prompt is the person's, so it reaches the prompt listener like a typed one (decision 0118).
+        if written.is_ok() {
+            self.announce_prompt(&delivery.session, &delivery.text);
+        }
         written
     }
 

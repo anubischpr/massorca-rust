@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use massorca_core_store::now_ms;
 use massorca_protocol::methods::devices::Secret;
 use massorca_protocol::{ErrorBody, codes};
 use ring::digest::{SHA256, digest};
@@ -32,7 +33,9 @@ struct PendingOffer {
     /// Names the offer for retiring it; not a credential.
     id: String,
     secret_hash: [u8; 32],
+    /// Decides expiry; the wall-clock `expires_at_ms` is only reported.
     expires_at: Instant,
+    expires_at_ms: i64,
     scopes: Scopes,
 }
 
@@ -99,6 +102,15 @@ impl Drop for Reservation<'_> {
 pub(crate) struct Minted {
     pub(crate) id: String,
     pub(crate) secret: Secret,
+    pub(crate) expires_at_ms: i64,
+}
+
+/// A pending offer as the service reports it: what names it and when it ends, never its secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingOfferInfo {
+    pub(crate) offer_id: String,
+    pub(crate) expires_at_ms: i64,
+    pub(crate) scopes: Scopes,
 }
 
 #[derive(Default)]
@@ -143,15 +155,19 @@ impl Pairing {
             .map_err(|_| ErrorBody::new(codes::INTERNAL, "no randomness for a pairing secret"))?;
         let secret = URL_SAFE_NO_PAD.encode(bytes);
         let id = URL_SAFE_NO_PAD.encode(id);
+        let expires_at_ms =
+            now_ms().saturating_add(i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX));
         inner.offers.push(PendingOffer {
             id: id.clone(),
             secret_hash: hash(&secret),
             expires_at: now + ttl,
+            expires_at_ms,
             scopes,
         });
         Ok(Minted {
             id,
             secret: Secret::new(secret),
+            expires_at_ms,
         })
     }
 
@@ -238,11 +254,21 @@ impl Pairing {
 
     /// Offers that can still be used.
     pub(crate) fn pending(&self, now: Instant) -> usize {
+        self.pending_offers(now).len()
+    }
+
+    /// The offers that can still be used, with their ids, wall-clock expiry and scopes.
+    pub(crate) fn pending_offers(&self, now: Instant) -> Vec<PendingOfferInfo> {
         self.lock()
             .offers
             .iter()
             .filter(|offer| offer.expires_at > now)
-            .count()
+            .map(|offer| PendingOfferInfo {
+                offer_id: offer.id.clone(),
+                expires_at_ms: offer.expires_at_ms,
+                scopes: offer.scopes,
+            })
+            .collect()
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -495,6 +521,29 @@ mod tests {
         assert_eq!(pairing.cancel_all(later), 2);
         assert_eq!(pairing.pending(later), 0);
         assert_eq!(pairing.cancel_all(later), 0);
+    }
+
+    #[test]
+    fn a_pending_offer_lists_its_id_expiry_and_scopes_but_no_secret() {
+        let pairing = Pairing::default();
+        let now = Instant::now();
+        let before = now_ms();
+        let minted = pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        let listed = pairing.pending_offers(now);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].offer_id, minted.id);
+        assert_eq!(listed[0].expires_at_ms, minted.expires_at_ms);
+        assert_eq!(listed[0].scopes, Scopes::ADMIN);
+        let ttl_ms = i64::try_from(DEFAULT_TTL.as_millis()).unwrap();
+        assert!(
+            (before + ttl_ms..=now_ms() + ttl_ms).contains(&minted.expires_at_ms),
+            "the wall-clock expiry is the creation time plus the ttl"
+        );
+        assert!(!format!("{listed:?}").contains(minted.secret.expose()));
+        assert!(
+            pairing.pending_offers(now + DEFAULT_TTL).is_empty(),
+            "the Instant decides expiry, so an expired offer is not listed"
+        );
     }
 
     #[test]

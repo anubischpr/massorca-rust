@@ -270,15 +270,8 @@ async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_
     let refusal = handle
         .agent_delegate(AgentDelegateParams {
             parent: parent.clone(),
-            prompt: "look".to_owned(),
-            kind: None,
-            name: None,
-            title: None,
-            read_only: true,
-            same_workspace: false,
-            token: None,
             request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
-            permission_mode: None,
+            ..base_agent_delegate_params()
         })
         .await
         .expect_err("a parent the service does not have is refused");
@@ -323,9 +316,7 @@ async fn a_bring_back_the_service_refuses_arrives_with_its_code_and_a_plain_sent
     let refusal = handle
         .agent_bring_back(AgentBringBackParams {
             child: child.clone(),
-            merge: true,
-            prompt: true,
-            token: None,
+            ..base_agent_bring_back_params()
         })
         .await
         .expect_err("a session the service does not have is refused");
@@ -449,29 +440,19 @@ async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_i
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: repo_dir
                 .parent()
                 .map(|parent| parent.join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
-            unique_name: false,
-            name_generated: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created")
@@ -481,19 +462,10 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
 fn fake_start_params(workspace: &str) -> AgentStartParams {
     AgentStartParams {
         workspace: Some(workspace.to_owned()),
-        kind: "fake".to_owned(),
-        prompt: None,
-        args: Vec::new(),
         env: BTreeMap::new(),
-        read_only: false,
-        title: None,
         cols: Some(100),
         rows: Some(30),
-        request_id: None,
-        permission_mode: None,
-        model: None,
-        effort: None,
-        fast: None,
+        ..base_agent_start_params()
     }
 }
 
@@ -650,8 +622,7 @@ async fn a_prompt_reaches_the_session_terminal_and_stop_ends_the_run() {
         .agent_prompt(AgentPromptParams {
             session: session.id.clone(),
             text: line.to_owned(),
-            force: false,
-            attachments: Vec::new(),
+            ..base_agent_prompt_params()
         })
         .await
         .expect("the prompt is typed into the session");
@@ -722,20 +693,10 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
 
     let session = handle
         .agent_start(AgentStartParams {
-            workspace: None,
-            kind: "fake".to_owned(),
-            prompt: None,
-            args: Vec::new(),
             env: BTreeMap::new(),
-            read_only: false,
-            title: None,
             cols: Some(100),
             rows: Some(30),
-            request_id: None,
-            permission_mode: None,
-            model: None,
-            fast: None,
-            effort: None,
+            ..base_agent_start_params()
         })
         .await
         .expect("the service starts a session with no workspace");
@@ -762,7 +723,9 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
         "a session with no project adds no visible project: {projects:?}"
     );
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -849,26 +812,17 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     .expect("the bridge connects and lists the fake kind");
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the folder project is added");
     let params = WorkspaceCreateParams {
         project: project.id.clone(),
         name: "notes".to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
-        unique_name: false,
-        name_generated: false,
+        ..base_workspace_create_params()
     };
     let first_workspace = handle
         .create_workspace(params.clone())
@@ -882,7 +836,9 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
         .await
         .expect("the client connects");
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -938,4 +894,93 @@ async fn a_worktree_keeps_refusing_a_second_writer_while_the_first_runs() {
     assert_eq!(beside.code(), Some(codes::AGENT_WORKSPACE_BUSY));
     drop(bridge);
     stop_service(service).await;
+}
+
+/// Every `AgentBringBackParams` field at its usual value; tests override the fields they vary.
+fn base_agent_bring_back_params() -> massorca_protocol::methods::agents::AgentBringBackParams {
+    massorca_protocol::methods::agents::AgentBringBackParams {
+        child: String::new(),
+        merge: true,
+        prompt: true,
+        token: None,
+    }
+}
+
+/// Every `AgentDelegateParams` field at its usual value; tests override the fields they vary.
+fn base_agent_delegate_params() -> massorca_protocol::methods::agents::AgentDelegateParams {
+    massorca_protocol::methods::agents::AgentDelegateParams {
+        parent: String::new(),
+        prompt: "look".to_owned(),
+        kind: None,
+        name: None,
+        title: None,
+        read_only: true,
+        same_workspace: false,
+        token: None,
+        request_id: None,
+        permission_mode: None,
+    }
+}
+
+/// Every `AgentPromptParams` field at its usual value; tests override the fields they vary.
+fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPromptParams {
+    massorca_protocol::methods::agents::AgentPromptParams {
+        session: String::new(),
+        text: "again".to_owned(),
+        force: false,
+        attachments: Vec::new(),
+    }
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
+    }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+    }
+}
+
+/// Every `WorkspaceListParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_list_params() -> massorca_protocol::methods::workspaces::WorkspaceListParams {
+    massorca_protocol::methods::workspaces::WorkspaceListParams { project: None }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

@@ -2,7 +2,7 @@
 //! and Close window goes without a call to the service. With nothing at stake the window closes at once.
 
 use gpui::{TestAppContext, VisualContext, VisualTestContext};
-use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, AgentSession};
+use massorca_protocol::methods::agents::{Activity, AgentSession};
 
 use super::close_confirm::sessions_line;
 use super::service_tests::{Rig, click, draw, rig};
@@ -14,11 +14,8 @@ use crate::service::fixtures::agent;
 fn working(id: &str) -> AgentSession {
     let mut session = agent(id, "w1", 10);
     session.activity = Some(Activity {
-        state: ActivityState::Working,
-        outcome: None,
-        source: ActivitySource::Hook,
         at_ms: 5,
-        seen_at_ms: None,
+        ..crate::service::fixtures::base_activity()
     });
     session
 }

@@ -11,7 +11,9 @@ use gpui::{
 };
 
 use super::ModelPicker;
-use super::reasoning_slider::effects::{clock_seconds, move_progress};
+use super::reasoning_slider::effects::{
+    clock_seconds, effects_fade_seconds, fade_progress, halo_fade_seconds, move_progress,
+};
 use super::reasoning_slider::{
     ReasoningSlider, brand_colours, has_slider, is_top_level, name_colour,
 };
@@ -504,6 +506,11 @@ impl ModelPicker {
         let name = name_colour(brand, p.surface.overlay);
         let agent = self.state.current_kind().label();
         let reduced = cx.reduce_motion();
+        // The top effects fade in from when the top level was first shown with the popover open.
+        let shown_for = self
+            .top_since
+            .map_or(0.0, |since| since.elapsed().as_secs_f32());
+        let effects_fade = fade_progress(shown_for, effects_fade_seconds(), reduced);
         let picker = cx.entity();
         let slider = ReasoningSlider {
             id: "model-picker-reasoning-slider".into(),
@@ -522,6 +529,8 @@ impl ModelPicker {
             progress: self.effort_move.map_or(1.0, |moved| {
                 move_progress(moved.started.elapsed().as_secs_f32(), reduced)
             }),
+            effects_fade,
+            halo_fade: fade_progress(shown_for, halo_fade_seconds(), reduced),
         };
         let level = div()
             .flex()
@@ -539,6 +548,7 @@ impl ModelPicker {
                     svg()
                         .path(IconName::Sparkles.path())
                         .size(px(SPARKLE_SIZE))
+                        .opacity(effects_fade)
                         .flex_none()
                         .text_color(name),
                 )

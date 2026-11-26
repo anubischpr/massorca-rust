@@ -1348,17 +1348,12 @@ fn kind_name(kind: &str, kinds: &[AgentKind]) -> String {
 mod tests {
     use super::*;
     use crate::service::fixtures::{agent, agent_kind};
-    use massorca_protocol::methods::agents::{
-        Activity, ActivitySource, ActivityState, PackageState,
-    };
+    use massorca_protocol::methods::agents::{Activity, ActivityState, PackageState};
 
     fn activity(state: ActivityState) -> Activity {
         Activity {
             state,
-            outcome: None,
-            source: ActivitySource::Hook,
-            at_ms: 1,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         }
     }
 

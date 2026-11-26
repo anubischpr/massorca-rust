@@ -248,27 +248,17 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
 
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: Some(temp.path().join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
     let workspace = handle
         .create_workspace(WorkspaceCreateParams {
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
-            unique_name: false,
-            name_generated: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created");
@@ -280,20 +270,13 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
                 workspace: Some(workspace.id),
                 kind: "fakeclaude".to_owned(),
                 prompt: Some("say hello".to_owned()),
-                args: Vec::new(),
                 env: BTreeMap::from([(
                     "FAKE_CLAUDE_SCRIPT".to_owned(),
                     script_path.display().to_string(),
                 )]),
-                read_only: false,
-                title: None,
                 cols: Some(120),
                 rows: Some(40),
-                request_id: None,
-                permission_mode: None,
-                model: None,
-                effort: None,
-                fast: None,
+                ..base_agent_start_params()
             },
             true,
         )
@@ -344,11 +327,9 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let answered = handle
         .agent_chat_answer(ChatApprovalAnswerParams {
             session: session.clone(),
-            request_id: "r-1".to_owned(),
-            decision: ApprovalDecision::Allow,
             scope: Some(ApprovalScope::Always),
-            message: None,
             seq: Some(seq),
+            ..base_chat_approval_answer_params()
         })
         .await
         .expect("the answer is accepted");
@@ -360,11 +341,9 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let again = handle
         .agent_chat_answer(ChatApprovalAnswerParams {
             session: session.clone(),
-            request_id: "r-1".to_owned(),
             decision: ApprovalDecision::Deny,
-            scope: None,
-            message: None,
             seq: Some(seq),
+            ..base_chat_approval_answer_params()
         })
         .await
         .expect_err("a second answer is refused");
@@ -382,9 +361,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let receipt = handle
         .agent_prompt(AgentPromptParams {
             session: session.clone(),
-            text: "again".to_owned(),
-            force: false,
-            attachments: Vec::new(),
+            ..base_agent_prompt_params()
         })
         .await
         .expect("the prompt is accepted");
@@ -430,4 +407,75 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+}
+
+/// Every `ChatApprovalAnswerParams` field at its usual value; tests override the fields they vary.
+fn base_chat_approval_answer_params() -> massorca_protocol::methods::chat::ChatApprovalAnswerParams
+{
+    massorca_protocol::methods::chat::ChatApprovalAnswerParams {
+        session: String::new(),
+        request_id: "r-1".to_owned(),
+        decision: massorca_protocol::methods::chat::ApprovalDecision::Allow,
+        scope: None,
+        message: None,
+        seq: None,
+    }
+}
+
+/// Every `AgentPromptParams` field at its usual value; tests override the fields they vary.
+fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPromptParams {
+    massorca_protocol::methods::agents::AgentPromptParams {
+        session: String::new(),
+        text: "again".to_owned(),
+        force: false,
+        attachments: Vec::new(),
+    }
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
+    }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

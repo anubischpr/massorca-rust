@@ -514,15 +514,27 @@ fn prints_text() -> bool {
 
 /// The one-shot form of a chat title (decision 0167): `-p <prompt> [--fake-mode <mode>]` prints one reply and exits. The
 /// mode says what it prints: `say:<text>` prints `<text>`, `exit:<code>` exits with that code and prints nothing, `empty`
-/// prints nothing and exits 0, `hang` never ends. Without a mode it prints `Fake title`. It writes the report first.
+/// prints nothing and exits 0, `hang` never ends, `fail-then-say:<text>` exits 1 on the first run and prints `<text>` on a
+/// later one (a run is later when its report already exists). Without a mode it prints `Fake title`. It writes the report first.
 fn oneshot() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let mode = args
         .windows(2)
         .find(|pair| pair[0] == "--fake-mode")
         .map_or("say:Fake title", |pair| pair[1].as_str());
-    if let Some(report) = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty()) {
+    let report = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty());
+    let later_run = report
+        .as_deref()
+        .is_some_and(|path| Path::new(path).exists());
+    if let Some(report) = report {
         write_oneshot_report(Path::new(&report), &args);
+    }
+    if let Some(text) = mode.strip_prefix("fail-then-say:") {
+        if !later_run {
+            return ExitCode::from(1);
+        }
+        reply(text);
+        return ExitCode::SUCCESS;
     }
     if let Some(text) = mode.strip_prefix("say:") {
         reply(text);
