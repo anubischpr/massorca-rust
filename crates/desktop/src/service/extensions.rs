@@ -20,6 +20,7 @@ use massorca_protocol::methods::extensions::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 use super::teams::Sequence;
 use super::update::StoreUpdate;
@@ -58,7 +59,7 @@ pub enum RollbackAnswer {
     },
 }
 
-/// A paired host's agent kinds and extension lists, read together on the host's own connection.
+/// A paired host's agent kinds and extension lists, read together on the host's live connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostLists {
     /// The agent kinds the host declares, as `agent.kinds` lists them.
@@ -120,7 +121,7 @@ fn lists_of(
     })
 }
 
-/// A paired host's answer to the Marketplace reads, taken on the host's own connection.
+/// A paired host's answer to the Marketplace reads, taken on the host's live connection.
 async fn host_listing(client: &Client) -> HostListing {
     if !has_extensions(&client.welcome().capabilities) {
         return HostListing::UpdateNeeded;
@@ -148,15 +149,15 @@ pub(super) fn connect_listing(error: &ClientError) -> HostListing {
     }
 }
 
-/// Reads a paired host's lists on its own connection; the answer is a store update tagged with `request`.
+/// Reads a paired host's lists on its live connection; the answer is a store update tagged with `request`.
 pub(super) fn spawn_host_read(
-    profile: Profile,
+    live: LiveHosts,
     host: String,
     request: u64,
     updates: mpsc::UnboundedSender<StoreUpdate>,
 ) {
     tokio::spawn(async move {
-        let listing = match connect_host(&profile, &host).await {
+        let listing = match live.client(&host).await {
             Ok(client) => host_listing(&client).await,
             Err(error) => connect_listing(&error),
         };
@@ -171,7 +172,7 @@ pub(super) fn spawn_host_read(
 /// Runs one Marketplace call on a paired host on its own task. A write answers its caller, then the host's lists are read
 /// again; a read that changes nothing sends no store update.
 pub(super) fn spawn_host_call(
-    profile: Profile,
+    live: LiveHosts,
     host: String,
     request: u64,
     command: ExtensionCommand,
@@ -184,7 +185,7 @@ pub(super) fn spawn_host_call(
             | ExtensionCommand::Log { .. }
     );
     tokio::spawn(async move {
-        let listing = match connect_host(&profile, &host).await {
+        let listing = match live.client(&host).await {
             Ok(client) => {
                 answer_host_call(&client, command).await;
                 if !changes {
@@ -193,7 +194,7 @@ pub(super) fn spawn_host_call(
                 host_listing(&client).await
             }
             Err(error) => {
-                refuse_while_down(command, Refusal::from(&error));
+                refuse_while_down(command, Refusal::from(&*error));
                 if !changes {
                     return;
                 }

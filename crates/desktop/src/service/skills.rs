@@ -2,13 +2,13 @@
 //! connection, the way its Marketplace lists are read. The newest answer per host is kept.
 
 use massorca_client::Client;
-use massorca_profile::Profile;
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::skills::{SkillDiscovery, SkillsDiscoverParams};
 use tokio::sync::mpsc;
 
 use super::bridge::{Command, ServiceHandle};
-use super::extensions::{HostListing, connect_host, connect_listing, predates};
+use super::extensions::{HostListing, connect_listing, predates};
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
 
@@ -36,7 +36,7 @@ impl ServiceHandle {
         self.send(Command::Skills { request, refresh });
     }
 
-    /// Discovers a paired host's skills on its own connection; the answer arrives tagged with `request`.
+    /// Discovers a paired host's skills on its live connection; the answer arrives tagged with `request`.
     pub fn read_host_skills(&self, host: String, request: u64, refresh: bool) {
         self.send(Command::HostSkills {
             host,
@@ -88,16 +88,16 @@ pub(super) fn spawn_read(
     });
 }
 
-/// Discovers a paired host's skills on the host's own connection, as its Marketplace lists are read.
+/// Discovers a paired host's skills on the host's live connection, as its Marketplace lists are read.
 pub(super) fn spawn_host_read(
-    profile: Profile,
+    live: LiveHosts,
     host: String,
     request: u64,
     refresh: bool,
     updates: mpsc::UnboundedSender<StoreUpdate>,
 ) {
     tokio::spawn(async move {
-        let listing = match connect_host(&profile, &host).await {
+        let listing = match live.client(&host).await {
             Ok(client) => discover(&client, refresh).await,
             Err(error) => match connect_listing(&error) {
                 HostListing::Refused(refusal) => SkillsListing::Refused(refusal),

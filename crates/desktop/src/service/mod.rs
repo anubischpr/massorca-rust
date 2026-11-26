@@ -17,6 +17,7 @@ mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
+mod live_hosts;
 mod quit;
 mod refusal;
 mod secrets;
