@@ -156,6 +156,12 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Shell for new terminals; empty uses the host default.",
         ),
         (
+            "terminal.theme",
+            Choice(&["system", "dark", "light"]),
+            json!("system"),
+            "Terminal colour palette: system, dark or light. Stored only; terminals do not read it yet.",
+        ),
+        (
             "browser.home",
             String,
             json!("about:blank"),
@@ -238,6 +244,8 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
 mod tests {
     use std::collections::HashSet;
 
+    use serde_json::json;
+
     use super::core_settings;
     use crate::names;
 
@@ -248,7 +256,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let settings = core_settings(root);
-        assert_eq!(settings.len(), 32);
+        assert_eq!(settings.len(), 33);
         let mut keys = HashSet::new();
         for decl in &settings {
             assert!(
@@ -263,5 +271,19 @@ mod tests {
             );
             assert_eq!(decl.check(&decl.default), None, "{} default fits", decl.key);
         }
+    }
+
+    #[test]
+    fn terminal_theme_is_a_choice_that_defaults_to_system() {
+        let settings = core_settings(String::new());
+        let theme = settings
+            .iter()
+            .find(|decl| decl.key == "terminal.theme")
+            .expect("terminal.theme is declared");
+        assert_eq!(theme.default, json!("system"));
+        for choice in ["system", "dark", "light"] {
+            assert_eq!(theme.check(&json!(choice)), None, "{choice} is accepted");
+        }
+        assert!(theme.check(&json!("purple")).is_some());
     }
 }
