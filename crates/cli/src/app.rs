@@ -239,6 +239,10 @@ fn service_command(
             let target = globals.target()?;
             block_on(control::info(&target, globals.autostart, output))
         }
+        ServiceCommand::Tools { refresh } => {
+            let target = globals.target()?;
+            block_on(control::tools(&target, globals.autostart, refresh, output))
+        }
         ServiceCommand::Stop => {
             globals.local_only("service stop")?;
             block_on(control::stop(&globals.profile()?, output))
@@ -267,6 +271,10 @@ fn pair_command(globals: &Globals, command: PairCommand, output: Output) -> Resu
         PairCommand::Offer(args) => {
             let target = globals.target()?;
             block_on(pair::offer(&target, globals.autostart, &args, output))
+        }
+        PairCommand::Cancel(args) => {
+            let target = globals.target()?;
+            block_on(pair::cancel(&target, globals.autostart, &args, output))
         }
         PairCommand::Accept(args) => {
             globals.local_only("pair accept")?;

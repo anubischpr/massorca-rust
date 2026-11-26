@@ -15,7 +15,7 @@ Inventory IDs: D-EX-01 (extension browser, the Marketplace page), D-EX-03 (exten
 - "Adds" line: chips (Badge, `radius.sm`, `size.control.compact`) for what it contributes, with an icon each: "Rail item", "3 commands", "Theme", "Status item", "Settings". At most two rows; the rest becomes "+3".
 - Footer row: state on the left, action on the right.
   - Catalog: primary button "Review and install" (the permission review comes first, A12). A host chip "Installs on VPS" appears when more than one host exists.
-  - Installed: Switch labelled "Enabled", a ghost "Settings" button (when the extension has a settings section), and a More icon button (menu: Roll back, View log, Remove).
+  - Installed (Discover and Updates): Switch labelled "Enabled", a ghost "Settings" button (when the extension has a settings section), and a More icon button, which opens the item page. In Marketplace > Installed the extension is a row instead, with its own menu (ExtensionManagerRow.md).
   - Update available: Badge "Update 1.5.0" (`status.info.bg`, `status.info.fg`, info glyph) and a secondary button "Update".
 - Mode chips: when an extension works in only one mode, "Workspaces" or "Bot Teams" appears as a chip; both modes show none.
 
@@ -24,8 +24,8 @@ Inventory IDs: D-EX-01 (extension browser, the Marketplace page), D-EX-03 (exten
 | Variant | Footer |
 |---|---|
 | Catalog | "Review and install" |
-| Installed, enabled | Switch on, Settings, More |
-| Installed, disabled | Switch off, name in `text.secondary`, chip "Disabled", More |
+| Installed, enabled (Discover, Updates) | Switch on, Settings, More |
+| Installed, disabled (Discover, Updates) | Switch off, name in `text.secondary`, chip "Disabled", More |
 | Update available | Update badge and button |
 | Installing | A 4 px Progress bar and "Installing, 40%", Cancel |
 | Error | `status.danger.fg` octagon-alert, "Failed to start", "View log" |
@@ -52,7 +52,7 @@ Density affects only the footer button height (24, 28, 32). Card padding does no
 
 ## Behaviour (handoff)
 
-- **Keyboard.** The card is a list item, not a tab stop. Tab visits, in order: the name link, the primary control (Install, Switch or Update), Settings, More. The card grid is roving: arrow keys move between cards, and Tab moves between the controls inside a card and out of the grid (8.3). Enter or Space on the card, or on its name link, opens the item page; Space toggles a focused Switch; Enter on More opens its menu.
+- **Keyboard.** The card is a list item, not a tab stop. Tab visits, in order: the name link, the primary control (Install, Switch or Update), Settings, More. The card grid is roving: arrow keys move between cards, and Tab moves between the controls inside a card and out of the grid (8.3). Enter or Space on the card, or on its name link, opens the item page; Space toggles a focused Switch; Enter on More opens the item page.
 - **Focus order.** Row by row, left to right, within the page.
 - **Pointer.** Click anywhere on the card's body, its name or its icon to open the item page. The controls keep their own press: the Switch, Install, Update, Settings, Cancel, View log and More do not also open the page. Hover shows the whole-card fill. Switch toggles apply on release and confirm from the host before the Switch settles.
 - **Enable and disable.** Disable keeps the files. Remove and Roll back open the confirm dialog (X-DLG-01), the destructive variant for Remove ("Remove Acme Metrics? Its settings are deleted."). New extensions are enabled at once after install (A13).

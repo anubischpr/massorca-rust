@@ -41,7 +41,7 @@ pub use error::profile_refusal;
 pub use handshake::Welcome;
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
-pub use hosts::Hosts;
+pub use hosts::{DeviceRevocation, Hosts};
 pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
 #[cfg(feature = "local")]
 pub use options::{Autostart, ConnectOptions};

@@ -1,8 +1,10 @@
 //! The "Add a project" form as plain state (decision 0028): the path typed, whether the call is out,
-//! and where a refusal shows. The service picks the project's name and kind.
+//! where a refusal shows, and the warning for a folder that is not a Git repository (WS-31). The service
+//! picks the project's name.
 
-use massorca_protocol::methods::projects::ProjectAddParams;
+use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 
+use crate::model::workspace_flow::{DialogCopy, DialogKind};
 use crate::service::Refusal;
 
 /// The project menu's last row, which opens the dialog (A38).
@@ -11,7 +13,22 @@ pub const ADD_PROJECT_LABEL: &str = "Add a project\u{2026}";
 /// The project menu's caption when the host has no project yet (A38).
 pub const NO_PROJECTS_LABEL: &str = "No projects on This PC yet";
 
-/// The form's state: the typed path, and where a refusal is shown.
+/// The warning before a folder that is not a Git repository is added (WS-31): what it loses, and the
+/// action that adds it without Git. "Initialize Git" is left out until the service can run git init.
+pub fn plain_folder_copy() -> DialogCopy {
+    DialogCopy {
+        kind: DialogKind::Confirm,
+        title: "This folder is not a Git repository".to_owned(),
+        body: "Add it as a plain folder and work in it as it is.".to_owned(),
+        loss: vec![
+            "Worktrees, branches and Source control need Git.".to_owned(),
+            "Child sessions run in this folder, not in their own worktrees.".to_owned(),
+        ],
+        action: "Continue without Git",
+    }
+}
+
+/// The form's state: the typed path, where a refusal is shown, and the folder the warning is about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AddProjectForm {
     pub path: String,
@@ -20,6 +37,8 @@ pub struct AddProjectForm {
     pub path_error: Option<String>,
     /// Any other refusal, shown in the dialog.
     pub error: Option<String>,
+    /// A folder that is not a Git repository, held until the person continues without Git or cancels.
+    pub plain_folder: Option<String>,
 }
 
 impl AddProjectForm {
@@ -52,6 +71,30 @@ impl AddProjectForm {
             Refusal::PathProblem { message } => self.path_error = Some(message.clone()),
             other => self.error = Some(other.message()),
         }
+    }
+
+    /// The service found `path` is not a Git repository: nothing is added until the person decides (WS-31).
+    pub fn hold_plain_folder(&mut self, path: String) {
+        self.busy = false;
+        self.plain_folder = Some(path);
+    }
+
+    /// Cancel on the warning: nothing is added, and the path stays in the field.
+    pub fn cancel_plain_folder(&mut self) {
+        self.plain_folder = None;
+    }
+
+    /// Continue without Git: the `project.add` params that register the held folder as a plain folder.
+    pub fn continue_without_git(&mut self) -> Option<ProjectAddParams> {
+        let path = self.plain_folder.take()?;
+        self.begin();
+        Some(ProjectAddParams {
+            icon: None,
+            path,
+            name: None,
+            kind: Some(ProjectKind::Folder),
+            workspaces_root: None,
+        })
     }
 }
 
@@ -115,5 +158,46 @@ mod tests {
             Some("The service cannot be reached right now.")
         );
         assert_eq!(form.path_error, None);
+    }
+
+    #[test]
+    fn a_plain_folder_is_added_as_a_folder_only_on_continue() {
+        let mut form = AddProjectForm {
+            path: "/notes".into(),
+            ..AddProjectForm::default()
+        };
+        form.begin();
+        form.hold_plain_folder("/notes".into());
+        assert!(!form.busy, "the add waits for the warning");
+        assert_eq!(form.plain_folder.as_deref(), Some("/notes"));
+        let params = form
+            .continue_without_git()
+            .expect("the held folder is added");
+        assert_eq!(params.path, "/notes");
+        assert_eq!(params.kind, Some(ProjectKind::Folder));
+        assert!(form.busy, "the call is out");
+        assert_eq!(form.plain_folder, None);
+    }
+
+    #[test]
+    fn cancelling_the_warning_adds_nothing_and_keeps_the_path() {
+        let mut form = AddProjectForm {
+            path: "/notes".into(),
+            ..AddProjectForm::default()
+        };
+        form.begin();
+        form.hold_plain_folder("/notes".into());
+        form.cancel_plain_folder();
+        assert_eq!(form.plain_folder, None);
+        assert_eq!(form.path, "/notes");
+        assert!(form.params().is_some(), "the form can be sent again");
+    }
+
+    #[test]
+    fn the_warning_names_what_a_folder_loses_and_what_continue_does() {
+        let copy = plain_folder_copy();
+        assert_eq!(copy.title, "This folder is not a Git repository");
+        assert_eq!(copy.action, "Continue without Git");
+        assert_eq!(copy.loss.len(), 2, "two losses are named");
     }
 }

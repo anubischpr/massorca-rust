@@ -73,6 +73,9 @@ runs in CI and in the Jest test `src/terminal/terminal-asset.test.ts`.
   library), `src/NativeMassorcaMobile.ts` (the codegen spec of that install call). The typecheck and Jest need them.
 - **Written by the build and ignored:** `cpp/`, `ios/`, `MassorcaMobile.podspec`, `android/CMakeLists.txt`,
   `android/cpp-adapter.cpp`, `android/src/main/` (the Kotlin glue), `android/app/src/main/jniLibs/` (the Rust libraries).
+- **Committed native glue:** `android/app/app-modules.cmake` and `android/app/app-modules/CMakeLists.txt`. `app/build.gradle`
+  passes the first to CMake, which builds React Native's app library `libappmodules.so` next to ubrn's library. Without it
+  the app aborts at its first import (`PlatformConstants` is missing). Keep them when the native build is regenerated.
 
 Build the Rust library for both ABIs and write the output (needs the Rust toolchain of `rust-toolchain.toml`,
 `cargo-ndk` 4.1.2 and the Android NDK in `ANDROID_NDK_HOME`):
@@ -116,9 +119,10 @@ wrong key. CI runs `scripts/ci/kotlin-bindings-test.sh` (needs `uniffi-bindgen` 
   has only been checked by the TypeScript side. The `android-apk` job is the first real build.
 - **Device name:** every phone calls itself "Android phone" to its hosts (`src/binding/index.ts`). A per-device name
   needs a choice from the owner.
-- **Terminal entry point:** the binding has no terminal list yet (`terminal.list` exists in the client crate but
-  `client-ffi` does not export it, and the agent sessions carry no terminal id). The terminal screen takes its terminal
-  id from its route, so nothing opens it until the binding exposes that id.
+- **Starting a terminal:** the binding lists a workspace's terminals but has no terminal create, so the workspace's
+  Terminal view opens the one live terminal, or lists the ones that exist. It cannot start one.
 - **Not checked on a device:** the terminal page runs in the WebView only under Jest (a double). Key sequences, the
   Ctrl key, resizing and the WebView's file URL need a run on a phone or an emulator.
-- Emulator flows (A11) and the phone validation (A12) are not started.
+- Emulator flow (A11): the `android-emulator` job in `.github/workflows/ci.yml` runs `.maestro/pairing-home-workspaces.yaml`
+  (screens 1, 2 and 4) against a massorca service on the runner, reached at `10.0.2.2`. Screen 6 waits for the terminal
+  entry point above. The phone validation (A12) is not started.

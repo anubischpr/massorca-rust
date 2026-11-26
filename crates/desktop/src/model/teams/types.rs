@@ -99,6 +99,10 @@ pub struct Bot {
     pub role: String,
     /// The service's id of the agent kind the bot runs on, such as `claude`.
     pub kind: String,
+    /// The model the bot runs on; `None` leaves it to the bot's job.
+    pub model: Option<String>,
+    /// The effort the bot runs at; `None` leaves it to the bot's job.
+    pub effort: Option<String>,
     /// The agent the bot runs as; `None` when the service does not say which one.
     pub agent: Option<Agent>,
     /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.
@@ -166,6 +170,8 @@ pub enum Cadence {
     Weekly(Weekday),
     /// The day of the month, from 1 to 28.
     Monthly(u8),
+    /// One run on the routine's `run_date`.
+    Once,
 }
 
 impl Cadence {
@@ -176,6 +182,7 @@ impl Cadence {
             Cadence::Weekdays => format!("Every weekday at {time}"),
             Cadence::Weekly(day) => format!("Every {} at {time}", day.name()),
             Cadence::Monthly(day) => format!("On day {day} of every month at {time}"),
+            Cadence::Once => format!("Once at {time}"),
         }
     }
 }
@@ -211,6 +218,10 @@ pub struct Routine {
     pub host: String,
     pub enabled: bool,
     pub last_run: Option<RunOutcome>,
+    /// The date, `YYYY-MM-DD`, of a once routine.
+    pub run_date: Option<String>,
+    /// The next run in UTC epoch milliseconds; absent while paused or once a one-time run has passed.
+    pub next_run_at_ms: Option<i64>,
 }
 
 /// A web address that starts a task in the team. The address carries a token, so only its

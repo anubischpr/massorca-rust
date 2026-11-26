@@ -13,7 +13,7 @@ use massorca_core_terminal::TerminalError;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     ActivityState, AgentQueueList, MAX_DELIVERED_REQUEST_IDS, MAX_QUEUED_PROMPTS,
-    QUEUE_REASON_ASKING, QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY,
+    QUEUE_REASON_ASKING, QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY, QUEUE_REASON_CHILD_WRITING,
     QUEUE_REASON_PAUSED_STOPPED, QueueState, QueuedPrompt,
 };
 use massorca_protocol::methods::chat::RunType;
@@ -187,11 +187,18 @@ impl Agents {
             .activity
             .as_ref()
             .is_some_and(|activity| activity.state == ActivityState::Waiting);
+        let held = if asking {
+            Some(QUEUE_REASON_ASKING)
+        } else if self.writing_child(live, &self.reload(session)?).is_some() {
+            Some(QUEUE_REASON_CHILD_WRITING)
+        } else {
+            None
+        };
         let rows = self.store().list_queued_prompts(session)?;
         Ok(rows
             .iter()
             .enumerate()
-            .map(|(index, row)| queued_item(row, &rows[..index], asking))
+            .map(|(index, row)| queued_item(row, &rows[..index], held))
             .collect())
     }
 
@@ -333,6 +340,13 @@ impl Agents {
         {
             return None;
         }
+        // The parent waits while its writing child works in its workspace (decision 0170).
+        if self
+            .writing_child(&live, &self.reload(session).ok()?)
+            .is_some()
+        {
+            return None;
+        }
         // A chat run takes the head once no turn runs; its journal records `working` while one does (decision 0101).
         if let Some(chat) = self.chat_run(session) {
             if state == Some(ActivityState::Working) {
@@ -361,6 +375,7 @@ impl Agents {
             .set_queued_prompt_state(&item.id, QueuedState::Sending, None, now_ms())?;
         self.notify(Change::Queue(item.session_id.clone()));
         run.typed_since_report = run.prompt.has_status;
+        run.finished = false;
         run.delivering = true;
         Ok(Delivery {
             session: item.session_id.clone(),
@@ -589,10 +604,15 @@ fn sending_refusal(id: &str) -> AgentError {
     )
 }
 
-/// The wire view of one prompt. `ahead` holds the prompts before it in the queue; `asking` says its agent is asking the
-/// person something. A waiting prompt's reason is its own pause, else the failure or pause of a prompt ahead, else
-/// whether the agent asks or is busy (decision 0084).
-fn queued_item(row: &QueuedPromptRow, ahead: &[QueuedPromptRow], asking: bool) -> QueuedPrompt {
+/// The wire view of one prompt. `ahead` holds the prompts before it in the queue; `held` says why the whole queue holds,
+/// when it does: the agent asks the person something, or a writing child works in its workspace (decision 0170). A
+/// waiting prompt's reason is its own pause, else the failure or pause of a prompt ahead, else `held`, else busy
+/// (decision 0084).
+fn queued_item(
+    row: &QueuedPromptRow,
+    ahead: &[QueuedPromptRow],
+    held: Option<&str>,
+) -> QueuedPrompt {
     let (state, reason) = match row.state {
         QueuedState::Failed => (QueueState::Failed, row.reason.clone()),
         QueuedState::Sending => (QueueState::Sending, None),
@@ -603,8 +623,8 @@ fn queued_item(row: &QueuedPromptRow, ahead: &[QueuedPromptRow], asking: bool) -
                 QUEUE_REASON_BEHIND_FAILED.to_owned()
             } else if let Some(pause) = ahead.iter().find_map(|item| item.reason.clone()) {
                 pause
-            } else if asking {
-                QUEUE_REASON_ASKING.to_owned()
+            } else if let Some(held) = held {
+                held.to_owned()
             } else {
                 QUEUE_REASON_BUSY.to_owned()
             };
@@ -1211,6 +1231,7 @@ mod tests {
             typed_since_report,
             switching: false,
             delivering: true,
+            finished: false,
             account: None,
         }
     }

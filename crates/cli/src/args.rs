@@ -178,6 +178,12 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Shows the git, forge CLI and shell tools on the service's host. Works with --host.
+    Tools {
+        /// Detects the tools again instead of answering from the service's last detection.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
     /// The local trace logs of the profile.
@@ -477,6 +483,19 @@ pub enum PairCommand {
     Offer(PairOfferArgs),
     /// Pairs this computer with the server of an offer, and stores the server as a host.
     Accept(PairAcceptArgs),
+    /// Retires a pending offer before it expires, so a code that leaked no longer pairs.
+    Cancel(PairCancelArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
+pub struct PairCancelArgs {
+    /// The offer id `pair offer` printed.
+    #[arg(value_name = "OFFER-ID")]
+    pub offer_id: Option<String>,
+    /// Retires every pending offer of the service.
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -490,6 +509,14 @@ pub struct PairOfferArgs {
     /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
     #[arg(long, value_name = "SECS")]
     pub ttl: Option<u32>,
+    /// Address the new device dials, in place of the addresses the service is bound to; repeatable or
+    /// comma-separated, at most 8. HOST takes the listener's port. Use it behind NAT, in a container or for an
+    /// emulator (10.0.2.2 reaches the computer running an Android emulator).
+    #[arg(long = "address", value_name = "HOST[:PORT]", value_delimiter = ',')]
+    pub addresses: Vec<String>,
+    /// Leaves out the QR code printed after the offer in text output.
+    #[arg(long)]
+    pub no_qr: bool,
 }
 
 #[derive(Debug, Args)]

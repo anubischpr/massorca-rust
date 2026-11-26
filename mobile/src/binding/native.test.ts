@@ -40,6 +40,32 @@ const workspaceRecord: Rust.WorkspaceSummary = {
   missing: false,
 };
 
+const terminalRecord: Rust.TerminalSummary = {
+  id: 'term-1',
+  workspaceId: 'ws-1',
+  state: 'live',
+  title: 'build',
+  cols: 120,
+  rows: 40,
+  shell: 'zsh',
+  cwd: '/work/massorca',
+  createdAtMs: 9n,
+  holdsSecrets: false,
+};
+
+const exitedRecord: Rust.TerminalSummary = {
+  id: 'term-2',
+  workspaceId: 'ws-1',
+  state: 'exited',
+  title: undefined,
+  cols: 80,
+  rows: 24,
+  shell: 'bash',
+  cwd: '/work/massorca',
+  createdAtMs: 3n,
+  holdsSecrets: true,
+};
+
 const gitStatusRecord: Rust.GitStatusSummary = {
   branch: 'main',
   ahead: 2n,
@@ -172,6 +198,7 @@ class ScriptedTerminal implements RustTerminalView {
 
 class FakeHost implements RustHost {
   readonly workspaceArgs: (string | undefined)[] = [];
+  readonly terminalArgs: (string | undefined)[] = [];
   readonly gitStatusArgs: string[] = [];
   readonly gitWatchArgs: string[] = [];
   readonly agentWatchArgs: (string | undefined)[] = [];
@@ -205,6 +232,12 @@ class FakeHost implements RustHost {
     this.failures.check('workspaces');
     this.workspaceArgs.push(project);
     return [workspaceRecord];
+  }
+
+  async terminals(workspace: string | undefined): Promise<Rust.TerminalSummary[]> {
+    this.failures.check('terminals');
+    this.terminalArgs.push(workspace);
+    return [terminalRecord, exitedRecord];
   }
 
   async gitStatus(workspace: string): Promise<Rust.GitStatusSummary> {
@@ -403,6 +436,50 @@ describe('createNativeBinding', () => {
       truncated: false,
     });
     expect(client.host.gitStatusArgs).toEqual(['ws-1']);
+  });
+
+  it('lists the terminals of one workspace, or of every workspace, with their state and title', async () => {
+    const { binding, client } = harness();
+    const host = await binding.connect('home-pc');
+
+    expect(await host.terminals('ws-1')).toEqual([
+      {
+        id: 'term-1',
+        workspaceId: 'ws-1',
+        state: 'live',
+        title: 'build',
+        cols: 120,
+        rows: 40,
+        shell: 'zsh',
+        cwd: '/work/massorca',
+        createdAtMs: 9n,
+        holdsSecrets: false,
+      },
+      {
+        id: 'term-2',
+        workspaceId: 'ws-1',
+        state: 'exited',
+        title: undefined,
+        cols: 80,
+        rows: 24,
+        shell: 'bash',
+        cwd: '/work/massorca',
+        createdAtMs: 3n,
+        holdsSecrets: true,
+      },
+    ]);
+    await host.terminals();
+    expect(client.host.terminalArgs).toEqual(['ws-1', undefined]);
+  });
+
+  it('reports a failed terminal list as the app error', async () => {
+    const { binding, failures } = harness();
+    failures.fail('terminals', generated('Unreachable', { message: 'home-pc is off' }));
+    const host = await binding.connect('home-pc');
+
+    await expect(host.terminals('ws-1')).rejects.toMatchObject({
+      error: { tag: 'Unreachable', message: 'home-pc is off' },
+    });
   });
 
   it('turns every agent event into the app shape and ends the watch with null', async () => {

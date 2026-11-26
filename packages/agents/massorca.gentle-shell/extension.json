@@ -20,16 +20,16 @@
         "binary": "gentle-shell",
         "verify": ["gentle-shell", "--version"],
         "source": "https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md",
-        "sourceChecked": "2026-11-22",
+        "sourceChecked": "2026-11-25",
         "install": [
           { "os": "windows", "command": ["npm", "install", "-g", "gentle-pi"] },
           { "os": "linux", "command": ["npm", "install", "-g", "gentle-pi"] },
           { "os": "macos", "command": ["npm", "install", "-g", "gentle-pi"] }
         ],
         "uninstall": [
-          { "os": "windows", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
-          { "os": "linux", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
-          { "os": "macos", "command": ["npm", "uninstall", "-g", "gentle-pi"] }
+          { "os": "windows", "command": ["gentle-shell", "self-uninstall", "--yes"] },
+          { "os": "linux", "command": ["gentle-shell", "self-uninstall", "--yes"] },
+          { "os": "macos", "command": ["gentle-shell", "self-uninstall", "--yes"] }
         ]
       }
     }]

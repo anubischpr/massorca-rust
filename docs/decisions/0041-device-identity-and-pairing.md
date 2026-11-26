@@ -65,6 +65,14 @@ continues as that device. The client stores the host (0046).
   the owner chose (copy and paste, SSH output, later a QR code). There is no
   second approval prompt in this phase.
 
+*Added on 2026-11-25 (SRV-06, SRV-07):* the owner may give the addresses an
+offer lists (`addresses` on `pairing.create`, `pair offer --address`), for a
+device that reaches this computer through NAT, a container or an emulator;
+services offer it as `pairing-address/1`. An offer has an id, which is not a
+credential, and `pairing.cancel` retires a pending offer before it expires
+(`pairing-cancel/1`, `pair cancel`). The CLI and the desktop show the offer as
+a QR code as well as text; the QR code holds the same `mop1.` string.
+
 **Every later connection.** `hello` carries `auth: {"method":"device"}`. The
 server looks up the client certificate's key hash: unknown is
 `auth.unknown_device`, revoked is `auth.device_revoked`, and a network
