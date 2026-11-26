@@ -200,6 +200,10 @@ pub struct ModelDecl {
     /// Launch arguments with `{value}` exactly once, as `["-m", "{value}"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
+    /// The slash command that switches a running session to a model, with `{value}` once, such as `/model {value}`
+    /// (decision 0171). Absent, a model change waits for the session's next resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
     /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<ModelChoiceDecl>,
@@ -234,6 +238,15 @@ pub enum ListingFormat {
     Lines,
     /// A stream-json `control_response` whose `models` lists the CLI's picker rows.
     ClaudeControl,
+}
+
+impl ModelDecl {
+    /// The live command that switches a running session to `value`, when the kind declares one (decision 0171).
+    pub(crate) fn live_text(&self, value: &str) -> Option<String> {
+        self.live
+            .as_deref()
+            .map(|live| live.replace(VALUE_PLACEHOLDER, value))
+    }
 }
 
 /// One model a kind's picker offers.
@@ -482,6 +495,24 @@ fn launch_args(flag: Option<&str>, args: Option<&[String]>, value: &str) -> Vec<
             .collect(),
         (None, None) => Vec::new(),
     }
+}
+
+/// Longest `live` command a `model` may declare.
+const MAX_LIVE_COMMAND_LEN: usize = 64;
+
+/// Whether `live` is a slash command that takes a model's value once, such as `/model {value}` (decision 0171): a slash
+/// and a name of letters, digits and dashes, one [`VALUE_PLACEHOLDER`], no control character, at most
+/// [`MAX_LIVE_COMMAND_LEN`] bytes.
+fn live_command_ok(live: &str) -> bool {
+    let name = live.split(' ').next().unwrap_or_default();
+    live.len() <= MAX_LIVE_COMMAND_LEN
+        && name.len() >= 2
+        && name.starts_with('/')
+        && name[1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && live.matches(VALUE_PLACEHOLDER).count() == 1
+        && !live.chars().any(char::is_control)
 }
 
 /// Refuses a `model` or an `effort` value the format rule does not accept (decision 0094).
@@ -1180,6 +1211,13 @@ impl KindDecl {
     /// and at most one default.
     fn model_problems(&self, problems: &mut Vec<String>) {
         let Some(model) = &self.model else { return };
+        if let Some(live) = &model.live
+            && !live_command_ok(live)
+        {
+            problems.push(format!(
+                "model.live {live:?} must be a slash command that takes {VALUE_PLACEHOLDER} once, such as /model {VALUE_PLACEHOLDER}"
+            ));
+        }
         launch_problems(
             "model",
             model.flag.as_deref(),
@@ -3547,6 +3585,45 @@ mod fast_tests {
                 ("haiku", false)
             ]
         );
+    }
+
+    #[test]
+    fn claude_declares_the_live_model_command_with_the_value_once() {
+        let claude = claude();
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let model = claude.model.as_ref().expect("claude takes a model");
+        assert_eq!(model.live.as_deref(), Some("/model {value}"));
+    }
+
+    #[test]
+    fn a_live_model_command_is_a_slash_command_that_takes_the_value_once() {
+        let model = |live: &str| {
+            json!({
+                "flag": "--model", "live": live,
+                "choices": [{ "id": "opus", "label": "Opus" }]
+            })
+        };
+        assert!(
+            problems_with(serde_json::Value::Null, model("/model {value}"))
+                .iter()
+                .all(|problem| !problem.contains("model.live")),
+            "a slash command with the value once is accepted"
+        );
+        for live in [
+            "model {value}",
+            "/model",
+            "/model {value} {value}",
+            "/ {value}",
+            "/mo\u{7}del {value}",
+        ] {
+            let problems = problems_with(serde_json::Value::Null, model(live));
+            assert!(
+                problems
+                    .iter()
+                    .any(|problem| problem.contains("model.live")),
+                "{live:?} is refused: {problems:?}"
+            );
+        }
     }
 
     #[test]
