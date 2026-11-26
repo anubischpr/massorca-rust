@@ -37,19 +37,20 @@ Inventory ID: X-AG-02. The access mode picker (D-AG-04) is the Composer's own ac
 - **Reasoning slider (A98, approved 2026-11-25; artboard `ws-reasoning-slider`).** It replaces the list of effort rows. The column is 216 px wide and 304 px high, with padding 8 px top, 12 px sides and 10 px bottom; the popup does not grow.
   - **Level name:** 8 px under the header, the selected level in `title` (16 / 24 / 600). Its colour is the agent brand colour that reads best on the surface (see Colour). At the top level a 14 px Lucide `sparkles` glyph (stroke, `currentColor`) follows it; its paths are in the artboard `ws-reasoning-slider` (`data-icon="lucide:sparkles"`).
   - **Agent and model:** "Claude · Opus 5.5" in `caption`, `text.tertiary`.
-  - **Bar:** 10 px below the name, a vertical track 28 px wide, filling the rest of the column (about 208 px), radius `radius.full`. Track: `surface.sunken` with a 1 px inner `border.subtle`. It is a slider (`role="slider"`, vertical) with one tab stop.
+  - **Bar:** 10 px below the name, a vertical track 28 px wide, filling the rest of the column (about 208 px), radius `radius.full`. Track: `surface.sunken` with no border (owner, 2026-11-25). It is a slider (`role="slider"`, vertical) with one tab stop.
   - **Stops:** one per declared level, 2 to 5. The first and last sit 14 px from the bar ends, the rest evenly between. The spacing is computed from the track height that the 304 px column leaves, not fixed. Each stop is a 4 px dot in `text.tertiary` at 45 percent; stops at or below the selected one turn white at 70 percent.
   - **Fill:** from the bottom to the selected stop plus 14 px, radius `radius.full`. Linear gradient from bottom to top: the agent's first brand colour to its second.
-  - **Thumb:** a 22 px circle centred on the selected stop, fill `slider.thumb`, a 1 px ring (`border.default` at 50 percent) and `shadow.e1`.
+  - **Thumb:** a 22 px circle centred exactly on the track's vertical axis (3 px from each side of the 28 px track) and on the selected stop, fill `slider.thumb`, a 1 px ring (`border.default` at 50 percent) and `shadow.e1`.
   - **Labels:** the level names to the right of the bar, 14 px from it, centred on their stops, in `body` `text.tertiary`; the selected one in `body-strong` `text.primary`. Each label is a click target.
   - **No slider:** a model with no levels or one level shows "This model has no reasoning levels" (`body-sm`, `text.tertiary`).
   - **Colour:** the brand colours are the agent package's `listing.banner.colors` (first and second), the same values its Marketplace banner uses: Claude #D97757 to #B5532F, Codex #4B5563 to #9CA3AF, Antigravity #4285F4 to #34A853, Gentle Shell #FF2E8A to #FF8CC2. An agent that declares one colour uses it at both ends; one that declares none uses `accent.default` to `accent.fg`. The level name takes whichever of the two colours has the higher contrast on `surface.overlay`.
   - **Below the top level:** the gradient fill only. No particles and no glow.
   - **Top level (the last stop):**
     - **Particles:** 46 white dots inside the fill, radius 0.7 to 2 px, rising 4 to 14 px per second, twinkling between 35 and 100 percent opacity on 2.6 to 7.9 s cycles; a dot that leaves the top re-enters at the bottom.
-    - **Glow:** a halo 6 px outside the bar, the second brand colour at 55 percent, blurred 6 px.
+    - **Glow:** a halo 6 px outside the bar, the second brand colour at 55 percent, blurred 6 px. It follows the bar's rounded outline (radius 20 px), never a rectangle.
     - **Thumb ring:** 4 px, the second brand colour at 45 percent, plus a 16 px glow in that colour.
     - **Shimmer:** a 46 px band of white at 55 percent (transparent at both ends) climbs the fill from bottom to top every 1.6 s, `ease.linear`, repeating while the picker is open.
+    - **Clipping (owner, 2026-11-25):** the particles and the shimmer band are drawn only inside the fill, clipped to its rounded shape (`radius.full`), including while the band enters at the bottom and leaves at the top. No square corner shows at any point of the animation. In GPUI, mask the effects layer to the fill's rounded rectangle, not to its bounds.
     - **Sparkle:** the `sparkles` glyph fades in next to the level name.
     - **Fades:** the effects fade in over `duration.moderate` (200 ms) and the halo over `duration.slow` (300 ms).
   - **Motion:** after a change, the thumb and the fill move to the new stop in one bounded transition, `duration.slider-move` (220 ms) with `ease.standard`. Below the top level nothing loops: no particles, no shimmer and no other repeating animation run. The only looping animations are the particles and the shimmer at the top level.
@@ -59,7 +60,7 @@ Inventory ID: X-AG-02. The access mode picker (D-AG-04) is the Composer's own ac
     - Below the top level nothing changes.
   - **Input:** click or drag anywhere on the bar snaps to the nearest stop; a click on a label selects it. None of these closes the popover. Up and Right raise the level, Down and Left lower it, Home and End jump to the ends, Page Up and Page Down jump to the ends. The value text is "Medium, 2 of 5".
   - **Tokens:**
-    - Existing: `surface.sunken`, `border.subtle`, `border.default`, `radius.full`, `shadow.e1`, `title`, `body`, `body-strong`, `caption`, `text.primary`, `text.tertiary`, `accent.default`, `accent.fg`, `duration.moderate`, `duration.slow`, `ease.standard`, `ease.linear`.
+    - Existing: `surface.sunken`, `border.default`, `radius.full`, `shadow.e1`, `title`, `body`, `body-strong`, `caption`, `text.primary`, `text.tertiary`, `accent.default`, `accent.fg`, `duration.moderate`, `duration.slow`, `ease.standard`, `ease.linear`.
     - New (not yet in tokens.json; added by the session that builds it): `size.reasoning-slider.track` = 28 px, `size.reasoning-slider.thumb` = 22 px, `slider.thumb` = #f4f4f7 dark / #ffffff light, `duration.slider-shimmer` = 1600 ms, and `duration.slider-move` = 220 ms (no existing duration is 220 ms; `duration.moderate` is 200 ms).
   - **Android:** the same column inside the Model picker sheet. The bar is 32 dp wide, the thumb 26 dp, the stop spacing computed from the bar height as on desktop, and the labels in `body` (14 sp). The colours and effects are the same.
 

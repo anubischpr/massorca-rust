@@ -24,9 +24,10 @@ impl Workspaces {
         }
         let _guard = self.lock_mutations();
         let mut row = self.resolve_workspace(&params.workspace)?;
-        let name = match &params.name {
-            Some(typed) => names::clean_workspace_name(typed)?,
-            None => row.name.clone(),
+        // A name a person typed is theirs, so it is never renamed for them again.
+        let (name, name_generated) = match &params.name {
+            Some(typed) => (names::clean_workspace_name(typed)?, false),
+            None => (row.name.clone(), row.name_generated),
         };
         let comment = match params.comment {
             Some(text) if text.is_empty() => None,
@@ -34,10 +35,11 @@ impl Workspaces {
             None => row.comment.clone(),
         };
         self.store
-            .update_workspace(&row.id, &name, comment.as_deref())
+            .update_workspace(&row.id, &name, comment.as_deref(), name_generated)
             .map_err(refused_write)?;
         row.name = name;
         row.comment = comment;
+        row.name_generated = name_generated;
         Ok(views::workspace(&row))
     }
 }

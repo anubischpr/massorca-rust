@@ -267,6 +267,8 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created");

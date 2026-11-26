@@ -49,6 +49,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         base_refresh: None,
         comment: row.comment.clone(),
         setup: None,
+        name_generated: row.name_generated,
     }
 }
 

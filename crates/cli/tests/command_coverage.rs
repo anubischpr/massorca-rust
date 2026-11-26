@@ -190,6 +190,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "workspace.create",
             "workspace.current",
             "workspace.list",
+            "workspace.rename",
             "workspace.rm",
             "workspace.show",
             "workspace.update",

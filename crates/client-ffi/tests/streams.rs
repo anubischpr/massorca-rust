@@ -68,8 +68,10 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
                     existing_branch: false,
                     refresh_base: false,
                     no_setup: false,
+                    unique_name: false,
                     path: None,
                     request_id: None,
+                    name_generated: false,
                 },
             )
             .await
@@ -110,8 +112,10 @@ fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
                     existing_branch: false,
                     refresh_base: false,
                     no_setup: false,
+                    unique_name: false,
                     path: None,
                     request_id: None,
+                    name_generated: false,
                 },
             )
             .await

@@ -202,7 +202,7 @@ impl Git {
     }
 
     /// The short name of the branch checked out in `dir`; `None` when HEAD is detached.
-    pub(crate) fn current_branch(&self, dir: &Path) -> Result<Option<String>, GitError> {
+    pub fn current_branch(&self, dir: &Path) -> Result<Option<String>, GitError> {
         let captured = self.run(Some(dir), ["symbolic-ref", "-q", "HEAD"])?;
         match captured.exit_code() {
             Some(0) => Ok(captured
