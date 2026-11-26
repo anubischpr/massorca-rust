@@ -112,17 +112,16 @@ pub(in crate::shell) fn project_page(
     let link_section = section("Link to a Workspaces project", &theme)
         .child(link_control)
         .child(note(link_note, &theme));
-    let (code_enabled, code_note) = code_state(team_data.workspaces);
     let code_control = code_control(
         shell,
         team,
         project,
         code_index(project_data.code_source),
-        code_enabled,
+        team_data.workspaces,
     );
     let code_section = section("Code source", &theme)
         .child(code_control)
-        .child(note(code_note, &theme));
+        .child(note(code_note(team_data.workspaces), &theme));
     div()
         .id("project-page")
         .flex()
@@ -197,23 +196,30 @@ pub(super) fn code_index(source: Option<CodeSource>) -> usize {
         .unwrap_or(0)
 }
 
-/// The code source control, None first. A team with Workspaces off disables it, as the link control is.
+/// The code source control, None first. With Workspaces off only None can be picked, so a recorded source can still be
+/// cleared; each kind keeps the reason as its tooltip (decision 0126).
 fn code_control(
     shell: &WeakEntity<Shell>,
     team: TeamId,
     project: ProjectId,
     selected: usize,
-    enabled: bool,
+    workspaces: bool,
 ) -> impl IntoElement {
     let segments = CODE_CHOICES
-        .map(CodeSource::label)
-        .into_iter()
-        .map(Segment::text)
+        .iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let segment = Segment::text(choice.label());
+            if code_choice_enabled(workspaces, index) {
+                segment
+            } else {
+                segment.disabled(true).tooltip(WORKSPACES_OFF)
+            }
+        })
         .collect();
     let shell = shell.clone();
     SegmentedControl::new("project-code-source", "Code source", segments)
         .selected(selected)
-        .disabled(!enabled)
         .on_change(move |index, _, cx| {
             let Some(source) = CODE_CHOICES.get(index).copied() else {
                 return;
@@ -224,15 +230,17 @@ fn code_control(
         })
 }
 
-/// Whether the code source control can be used, and the sentence under it (decision 0126).
-fn code_state(workspaces: bool) -> (bool, &'static str) {
+/// Whether a choice of the code source control can be picked: None always, the kinds only with Workspaces on.
+fn code_choice_enabled(workspaces: bool, index: usize) -> bool {
+    workspaces || index == 0
+}
+
+/// The sentence under the code source control: why the kinds are off, or what recording one does.
+fn code_note(workspaces: bool) -> &'static str {
     if workspaces {
-        (
-            true,
-            "Records where the code is. Nothing is cloned or created.",
-        )
+        "Records where the code is. Nothing is cloned or created."
     } else {
-        (false, WORKSPACES_OFF)
+        WORKSPACES_OFF
     }
 }
 
@@ -433,9 +441,13 @@ mod tests {
     }
 
     #[test]
-    fn the_code_source_control_is_off_with_the_reason_when_workspaces_is_off() {
-        assert_eq!(code_state(false), (false, WORKSPACES_OFF));
-        assert!(code_state(true).0);
+    fn with_workspaces_off_only_none_stays_pickable_and_the_kinds_say_why() {
+        assert!(code_choice_enabled(false, 0));
+        assert!(!code_choice_enabled(false, 1));
+        assert!(!code_choice_enabled(false, 2));
+        assert!(code_choice_enabled(true, 1));
+        assert_eq!(code_note(false), WORKSPACES_OFF);
+        assert!(code_note(true).starts_with("Records where the code is"));
     }
 
     #[test]
