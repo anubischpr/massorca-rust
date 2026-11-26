@@ -47,9 +47,11 @@ fn listeners_hear_every_removal_and_stop_once_dropped() {
         let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
         s.install(&source, false).expect("installs");
         let log = heard.clone();
-        let listener = s.service.register_remove_listener("points", move |removed| {
-            log.lock().expect("heard").push(removed.id.clone());
-        });
+        let listener = s
+            .service
+            .register_remove_listener("points", move |removed| {
+                log.lock().expect("heard").push(removed.id.clone());
+            });
         s.service
             .remove("acme.kit", delete_agent_homes, false, None)
             .expect("removes");

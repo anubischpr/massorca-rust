@@ -39,6 +39,7 @@ use crate::activity::Activity;
 use crate::context::{AppState, Registries};
 use crate::error::ServiceError;
 use crate::event_bus::EventBus;
+use crate::extension_points::{ExtensionPoints, sync_extension_points};
 use crate::features;
 use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
@@ -305,6 +306,18 @@ impl Service {
         .await
         .map_err(io::Error::other)?;
         timings.mark("built-in agents");
+        // Registered before the first sync, so a removal in between still drops its owner (decision 0153).
+        let extension_points = Arc::new(ExtensionPoints::default());
+        let dropped = Arc::clone(&extension_points);
+        let points_listener =
+            extensions.register_remove_listener("extension-points", move |removed| {
+                dropped.drop_owner(&removed.id);
+            });
+        let (synced, packages) = (Arc::clone(&extension_points), Arc::clone(&extensions));
+        tokio::task::spawn_blocking(move || sync_extension_points(&synced, &packages))
+            .await
+            .map_err(io::Error::other)?;
+        timings.mark("extension points");
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         let (chat_changes, _) = broadcast::channel(CHAT_CHANGES_CAPACITY);
@@ -331,6 +344,8 @@ impl Service {
             skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
             _kind_cleanup: kind_cleanup,
+            extension_points,
+            _points_listener: points_listener,
             network: network_state,
             server: PeerInfo {
                 name: server_name,

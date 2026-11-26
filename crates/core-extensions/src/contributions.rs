@@ -3,7 +3,8 @@
 
 use std::path::PathBuf;
 
-use massorca_ext_package::manifest::Manifest;
+pub use massorca_ext_package::manifest::Manifest;
+pub use massorca_ext_package::manifest::contributes::Contributes;
 
 use crate::catalogue::is_unvouched_first_party;
 use crate::error::Error;
