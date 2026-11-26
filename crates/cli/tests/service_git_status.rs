@@ -5,6 +5,7 @@ mod harness;
 use std::path::{Path, PathBuf};
 
 use harness::Sandbox;
+use massorca_process::test_executable::write_executable;
 use predicates::str::contains;
 
 /// A stand-in `git` that prints `version_line`; the service runs it through `MASSORCA_GIT`.
@@ -16,14 +17,7 @@ fn stand_in_git(dir: &Path, version_line: &str) -> PathBuf {
         binary
     } else {
         let binary = dir.join("git");
-        std::fs::write(&binary, format!("#!/bin/sh\necho '{version_line}'\n"))
-            .expect("write the stand-in git");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
-                .expect("make the stand-in git executable");
-        }
+        write_executable(&binary, &format!("#!/bin/sh\necho '{version_line}'\n"));
         binary
     }
 }
