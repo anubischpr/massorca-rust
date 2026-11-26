@@ -204,6 +204,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             permission_mode: None,
             model: None,
             effort: None,
+            fast: None,
         })
         .await
         .expect("the session starts")
@@ -258,6 +259,7 @@ async fn pair() -> Pair {
     let offer = server_handle
         .create_offer(PairingCreateParams {
             ttl_secs: None,
+            addresses: Vec::new(),
             admin: false,
             standard: false,
         })

@@ -110,6 +110,8 @@ pub struct ProjectGroup {
     pub icon: crate::model::project_icon::ProjectGlyph,
     /// The owner or org of the project's remote, drawn after its name (A10); None until the protocol carries one.
     pub owner: Option<String>,
+    /// A folder that is not a Git repository: its row shows the No Git marker (WS-02).
+    pub plain_folder: bool,
     pub hosts: Vec<HostGroup>,
 }
 

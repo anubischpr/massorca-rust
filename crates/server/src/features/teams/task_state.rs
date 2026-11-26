@@ -223,6 +223,7 @@ mod tests {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
         }

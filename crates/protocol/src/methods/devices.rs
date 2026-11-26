@@ -12,6 +12,8 @@ pub const FORGET: &str = "device.forget";
 pub const GRANT: &str = "device.grant";
 pub const WHOAMI: &str = "device.whoami";
 pub const PAIRING_CREATE: &str = "pairing.create";
+/// Retires pending offers before they expire (device-admin; `pairing-cancel/1`).
+pub const PAIRING_CANCEL: &str = "pairing.cancel";
 pub const NETWORK_STATUS: &str = "network.status";
 
 /// Permission classes a device may hold, as they appear on the wire.
@@ -101,6 +103,11 @@ pub struct PairingCreateParams {
     /// Advanced: a reduced offer, `read` and `workspace` only. Without it the new device gets every scope.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub standard: bool,
+    /// Addresses the offer lists instead of the bound listeners, for a phone or client behind NAT, in a container or an
+    /// emulator: `host`, `host:port`, an IP literal (IPv6 in brackets with a port), or a `wss://` or `https://` URL. A
+    /// value without a port takes the listener's port. Only services offering `pairing-address/1` read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +124,24 @@ pub struct PairingCreated {
     pub scopes: Vec<String>,
     pub addresses: Vec<String>,
     pub server_pin: String,
+    /// Names the offer for `pairing.cancel`; it is not a credential. Absent from services before `pairing-cancel/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+}
+
+/// Which pending offers to retire: the one `offer_id` names, or every one with `all`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingCancelParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingCancelled {
+    /// How many pending offers were retired.
+    pub cancelled: u32,
 }
 
 /// One network listener of the service.

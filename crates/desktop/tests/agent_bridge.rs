@@ -275,6 +275,7 @@ async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_
             name: None,
             title: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
             permission_mode: None,
@@ -490,6 +491,7 @@ fn fake_start_params(workspace: &str) -> AgentStartParams {
         permission_mode: None,
         model: None,
         effort: None,
+        fast: None,
     }
 }
 
@@ -729,6 +731,7 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         })
         .await

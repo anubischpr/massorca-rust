@@ -130,6 +130,7 @@ mod tests {
             label: label.into(),
             default,
             efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
+            fast: false,
         }
     }
 

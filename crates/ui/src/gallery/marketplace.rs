@@ -1,5 +1,5 @@
-//! Gallery stories for the Marketplace components: the item header, the invocation banner, the
-//! account list, the account sign-in dialog and the danger zone.
+//! Gallery stories for the Marketplace components: the item header, the extension manager row, the invocation
+//! banner, the account list, the account sign-in dialog and the danger zone.
 
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
@@ -11,13 +11,21 @@ use crate::components::account_sign_in_dialog::{AccountSignInDialog, SignInStage
 use crate::components::agent_icon::AgentKind;
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::danger_zone::DangerZone;
+use crate::components::extension_card::ExtensionState;
+use crate::components::extension_manager_row::ExtensionManagerRow;
 use crate::components::invocation_banner::{BannerFill, InvocationBanner};
 use crate::components::marketplace_item_header::MarketplaceItemHeader;
 use crate::icon::IconName;
-use crate::tokens::{Color, SPACE_4, SPACE_6};
+use crate::theme::ActiveTheme;
+use crate::tokens::{Color, RADIUS_LG, SPACE_4, SPACE_6};
 
 pub fn stories() -> Vec<Story> {
     vec![
+        Story {
+            name: "Extension manager row",
+            spec: "ExtensionManagerRow.md",
+            render: manager_rows,
+        },
         Story {
             name: "Marketplace item header",
             spec: "ExtensionCard.md",
@@ -44,6 +52,70 @@ pub fn stories() -> Vec<Story> {
             render: danger_zone,
         },
     ]
+}
+
+/// The Installed list's group card with one row per state: enabled, an update waiting, disabled, installing, failed.
+fn manager_rows(_: &mut Window, cx: &mut App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = theme.palette;
+    let row = |key: &'static str, name: &'static str, state: ExtensionState, word: &'static str| {
+        ExtensionManagerRow::new(key, name, state)
+            .publisher("MassOrca extras")
+            .version("1.2.0")
+            .contribution("Sidebar section")
+            .status_word(word)
+            .icon(IconName::Puzzle)
+    };
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(RADIUS_LG))
+        .border_1()
+        .border_color(p.border.default)
+        .bg(p.surface.raised)
+        .overflow_hidden()
+        .child(row(
+            "gallery-enabled",
+            "Workspace board",
+            ExtensionState::Installed {
+                enabled: true,
+                update: None,
+            },
+            "Enabled",
+        ))
+        .child(row(
+            "gallery-update",
+            "Model usage panel",
+            ExtensionState::Installed {
+                enabled: true,
+                update: Some("2.1.0".into()),
+            },
+            "Update available 2.1.0",
+        ))
+        .child(row(
+            "gallery-disabled",
+            "Quick notes",
+            ExtensionState::Installed {
+                enabled: false,
+                update: None,
+            },
+            "Disabled",
+        ))
+        .child(row(
+            "gallery-installing",
+            "Installing extension",
+            ExtensionState::Installing { percent: 40 },
+            "Installing, 40%",
+        ))
+        .child(row(
+            "gallery-failed",
+            "Log tail",
+            ExtensionState::Failed {
+                reason: "The CLI did not start".into(),
+            },
+            "Failed to start",
+        ))
+        .into_any_element()
 }
 
 fn item_header(_: &mut Window, cx: &mut App) -> AnyElement {

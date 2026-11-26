@@ -70,6 +70,8 @@ pub enum StoreUpdate {
     AgentSeenOffered(bool),
     /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
     AgentNoProjectOffered(bool),
+    /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
+    AgentImportDetectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -296,6 +298,8 @@ pub struct StoreState {
     pub agent_seen: bool,
     /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
     pub agent_no_project: bool,
+    /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
+    pub agent_import_detect: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -351,6 +355,7 @@ impl Default for StoreState {
             agent_queues: None,
             agent_seen: false,
             agent_no_project: false,
+            agent_import_detect: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
@@ -462,6 +467,7 @@ impl StoreState {
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
+            StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
@@ -753,6 +759,7 @@ pub(crate) mod fixtures {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
         }
@@ -784,6 +791,7 @@ pub(crate) mod fixtures {
             default_permission_mode: None,
             chat: None,
             model: None,
+            fast: None,
             effort: None,
         }
     }
@@ -840,6 +848,7 @@ pub(crate) mod fixtures {
             },
             bots: Vec::new(),
             projects: Vec::new(),
+            routines: Vec::new(),
         }
     }
 

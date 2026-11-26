@@ -150,3 +150,12 @@ method applies.
 - The package copies of the four kind files under `packages/agents/` change with the core copies, byte for byte (0062);
   their content hash changes with them.
 - A vendor that adds or renames a mode needs a declaration change; an undeclared mode can still be passed after `--`.
+
+## Amendment, 2026-11-25 (decision 0164)
+
+The `claude` Manual mode keeps its id `default`, but its launch value is chosen from the installed CLI's `--help`. The
+mode declares `launch_values: ["default", "manual"]` and `args: ["--permission-mode", "{value}"]`. At launch it passes
+the first of those spellings that the help lists for `--permission-mode`, and `default` when the help lists neither or
+cannot be read. Claude Code 2.1.330 lists `manual` and not `default`, so on that CLI Manual launches with
+`--permission-mode manual`. The table above names the spelling the mode had before this amendment. The label, the vendor
+default and the other modes are unchanged.

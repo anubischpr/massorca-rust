@@ -169,6 +169,7 @@ fn start_with_caller_env(sandbox: &Sandbox, env: BTreeMap<String, String>) -> St
                 request_id: None,
                 permission_mode: None,
                 model: None,
+                fast: None,
                 effort: None,
             })
             .await
