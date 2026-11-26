@@ -157,6 +157,8 @@ fn an_ended_session_offers_delete_after_a_divider_once_the_service_offers_it(
             item(SessionMenuId::CopyPath),
             item(SessionMenuId::OpenFolder),
             item(SessionMenuId::RevealInWorkPanel),
+            item(SessionMenuId::Rename),
+            item(SessionMenuId::Archive),
             SessionMenuRow::Divider,
             item(SessionMenuId::Delete),
         ]
@@ -320,4 +322,89 @@ fn a_dirty_worktree_asks_to_discard_and_then_retries_with_force(cx: &mut TestApp
     reply.send(Ok(ended_s1())).expect("the shell listens");
     cx.run_until_parked();
     assert_eq!(delete_title(&rig, cx), None);
+}
+
+fn rename_call(script: &mut Script) -> Option<(String, String)> {
+    while let Some(command) = script.next() {
+        if let Command::AgentRename { session, title, .. } = command {
+            return Some((session, title));
+        }
+    }
+    None
+}
+
+fn archive_call(script: &mut Script) -> Option<(String, bool)> {
+    while let Some(command) = script.next() {
+        if let Command::AgentArchive {
+            session, archived, ..
+        } = command
+        {
+            return Some((session, archived));
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn an_archived_session_offers_unarchive_in_place_of_archive(cx: &mut TestAppContext) {
+    setup(cx);
+    let mut archived = ended_s1();
+    archived.archived = true;
+    let (rig, cx) = session_rig(cx, kinds(), vec![archived]);
+    offer_archive(&rig, cx);
+    assert_eq!(
+        open_menu(&rig, cx, Some("s1"), true),
+        [
+            item(SessionMenuId::CopyPath),
+            item(SessionMenuId::OpenFolder),
+            item(SessionMenuId::RevealInWorkPanel),
+            item(SessionMenuId::Rename),
+            item(SessionMenuId::Unarchive),
+            SessionMenuRow::Divider,
+            item(SessionMenuId::Delete),
+        ]
+    );
+}
+
+#[gpui::test]
+fn rename_opens_an_inline_editor_and_enter_sends_agent_rename(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Rename, cx);
+    });
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-rename-s1").is_some(),
+        "the session's row becomes a title editor"
+    );
+    cx.simulate_input("Fix login v2");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        rename_call(&mut rig.script),
+        Some(("s1".to_owned(), "Fix login v2".to_owned()))
+    );
+}
+
+#[gpui::test]
+fn archive_and_unarchive_send_agent_archive_with_the_flag(cx: &mut TestAppContext) {
+    setup(cx);
+    let (mut rig, cx) = session_rig(cx, kinds(), vec![ended_s1()]);
+    offer_archive(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Archive, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(archive_call(&mut rig.script), Some(("s1".to_owned(), true)));
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_session_action(Some("s1"), "w1", SessionMenuId::Unarchive, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        archive_call(&mut rig.script),
+        Some(("s1".to_owned(), false))
+    );
 }

@@ -41,8 +41,8 @@ const REASONING_COLUMN_HEIGHT: f32 = 304.0;
 /// The sparkles glyph that marks the top level, in px.
 const SPARKLE_SIZE: f32 = 14.0;
 
-/// Why Fast is off for a model that offers none, when the service gave no reason of its own.
-const NO_FAST_MODEL: &str = "This model has no Fast mode.";
+/// Why Fast is off for a model that offers none, when neither the service nor its agent gave a reason.
+const NO_FAST_MODEL: &str = "This model does not support fast mode.";
 
 /// What one model row shows.
 struct ModelRow {
@@ -68,7 +68,8 @@ impl ModelPicker {
         cx.notify();
     }
 
-    pub(super) fn set_speed(&mut self, fast: bool, cx: &mut Context<Self>) {
+    /// Chooses Standard or Fast speed; Fast takes effect only on a model that offers it.
+    pub fn set_speed(&mut self, fast: bool, cx: &mut Context<Self>) {
         if self.state.set_fast(fast) {
             self.emit_change(cx);
         }
@@ -581,9 +582,16 @@ impl ModelPicker {
         let supports_fast = self.state.current_model().is_some_and(|model| model.fast);
         let mut fast_segment = Segment::icon_text(IconName::Zap, "Fast").disabled(!supports_fast);
         if !supports_fast {
+            // The service's reason for every model wins, then the model's own (its agent's), then the default.
             let reason = self
                 .state
                 .fast_reason()
+                .cloned()
+                .or_else(|| {
+                    self.state
+                        .current_model()
+                        .and_then(|model| model.fast_reason.clone())
+                })
                 .map_or_else(|| NO_FAST_MODEL.to_owned(), |reason| reason.to_string());
             fast_segment = fast_segment.tooltip(reason);
         }

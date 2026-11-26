@@ -82,6 +82,10 @@ pub enum StoreUpdate {
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
     WorkspaceRenameOffered(bool),
+    /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
+    GitSyncOffered(bool),
+    /// Whether the service offers `projects/1`: Remove project and the project's base branch.
+    ProjectEditsOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Whether the service offers host program updates (`extensions-programs/1`, decision 0151).
@@ -320,6 +324,10 @@ pub struct StoreState {
     pub workspace_unique_name: bool,
     /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
     pub workspace_rename: bool,
+    /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
+    pub git_sync: bool,
+    /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
+    pub project_edits: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Whether the service offers `extensions-programs/1`; without it no tool shows Update.
@@ -376,6 +384,8 @@ impl Default for StoreState {
             agent_fast: false,
             workspace_unique_name: false,
             workspace_rename: false,
+            git_sync: false,
+            project_edits: false,
             agent_archive: false,
             program_update: false,
             agent_kind_chat: BTreeMap::new(),
@@ -492,6 +502,8 @@ impl StoreState {
                 self.workspace_unique_name = offered;
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
+            StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
+            StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::ProgramUpdateOffered(offered) => self.program_update = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
@@ -1256,6 +1268,17 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// A push answer for `feat/scm` with the outcome given. Tests set `upstream_set` when they need it.
+    pub fn git_pushed(
+        outcome: massorca_protocol::methods::git::remote::PushOutcome,
+    ) -> massorca_protocol::methods::git::remote::GitPushed {
+        massorca_protocol::methods::git::remote::GitPushed {
+            remote_branch: "feat/scm".into(),
+            outcome,
+            upstream_set: false,
+        }
+    }
+
     /// Every `BranchState` field at its usual value; tests override the fields they vary.
     pub fn base_branch_state() -> massorca_protocol::methods::git::status::BranchState {
         massorca_protocol::methods::git::status::BranchState {
@@ -1291,6 +1314,16 @@ pub(crate) mod fixtures {
             old_size: None,
             new_size: None,
             submodule: None,
+        }
+    }
+
+    /// Every `SubmodulePointer` field at its usual value; tests override the fields they vary.
+    pub fn base_submodule_pointer() -> massorca_protocol::methods::git::diff::SubmodulePointer {
+        massorca_protocol::methods::git::diff::SubmodulePointer {
+            old_commit: Some("1111111aaaaaaa".to_owned()),
+            new_commit: Some("2222222bbbbbbb".to_owned()),
+            dirty: Some(false),
+            summary: "Subproject commit 1111111aaaaaaa..2222222bbbbbbb".to_owned(),
         }
     }
 
@@ -1806,6 +1839,14 @@ pub(crate) mod fixtures {
             scope: "project:p1".to_owned(),
             name: "OPENAI_API_KEY".to_owned(),
             from_scope: "global".to_owned(),
+        }
+    }
+
+    /// Every `SecretName` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_name() -> massorca_protocol::methods::secrets::SecretName {
+        massorca_protocol::methods::secrets::SecretName {
+            scope: "project:p1".to_owned(),
+            name: "OPENAI_API_KEY".to_owned(),
         }
     }
 

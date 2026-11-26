@@ -15,9 +15,14 @@ use massorca_profile::Profile;
 use massorca_protocol::methods::git::commit::GitCommitParams;
 use massorca_protocol::methods::git::diff::GitDiffFileParams;
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitPullParams, GitPulled, GitPushParams, PullMode, PushOutcome,
+};
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::git::{ChangeKind, LineCounts};
-use massorca_protocol::methods::projects::ProjectAddParams;
+use massorca_protocol::methods::projects::{
+    ProjectAddParams, ProjectRemoveParams, ProjectSetBaseParams,
+};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
@@ -657,4 +662,218 @@ fn base_line_counts() -> massorca_protocol::methods::git::LineCounts {
         removed: 0,
         binary: false,
     }
+}
+
+fn push_params(workspace: &str) -> GitPushParams {
+    GitPushParams {
+        workspace: workspace.to_owned(),
+        remote: None,
+        force_with_lease: None,
+        timeout_ms: None,
+    }
+}
+
+fn fetch_params(workspace: &str) -> GitFetchParams {
+    GitFetchParams {
+        workspace: workspace.to_owned(),
+        remote: None,
+        all: false,
+        timeout_ms: None,
+    }
+}
+
+fn pull_params(workspace: &str) -> GitPullParams {
+    GitPullParams {
+        workspace: workspace.to_owned(),
+        mode: PullMode::Merge,
+        timeout_ms: None,
+    }
+}
+
+/// Fetch, pull and push reach a local remote through the service. The push creates the branch on origin
+/// and sets it as the upstream; a commit pushed from another clone is fetched, then pulled in.
+#[tokio::test]
+async fn fetch_pull_and_push_reach_a_local_remote_through_the_service() {
+    let home = temp_home();
+    let (mut session, worktree) = Session::start(&home).await;
+    let id = session.id().to_owned();
+    session.handle.git_watch(&id);
+    session
+        .until("the status", |s| status(s, &id).is_some())
+        .await;
+    let branch = status(&session.state, &id)
+        .and_then(|st| st.branch.head)
+        .expect("the worktree is on a branch");
+
+    let remote = home.path().join("remote.git");
+    std::fs::create_dir_all(&remote).expect("the remote folder");
+    git(&remote, &["init", "--bare", "-q"]);
+    let remote_url = remote.display().to_string();
+    git(&worktree, &["remote", "add", "origin", &remote_url]);
+
+    let pushed = session
+        .handle
+        .git_push(push_params(&id))
+        .await
+        .expect("the push succeeds");
+    assert_eq!(pushed.outcome, PushOutcome::Created);
+    assert!(pushed.upstream_set, "the first push sets the upstream");
+
+    let other = home.path().join("other");
+    let other_url = other.display().to_string();
+    git(
+        home.path(),
+        &["clone", "-q", "--branch", &branch, &remote_url, &other_url],
+    );
+    std::fs::write(other.join("remote.txt"), "from another clone\n").expect("a file");
+    git(&other, &["add", "remote.txt"]);
+    git(&other, &["commit", "-q", "-m", "elsewhere"]);
+    git(&other, &["push", "-q", "origin", &branch]);
+
+    let fetched = session
+        .handle
+        .git_fetch(fetch_params(&id))
+        .await
+        .expect("the fetch succeeds");
+    assert!(
+        !fetched.updated.is_empty(),
+        "the fetch reports the branch that moved"
+    );
+
+    let pulled = session
+        .handle
+        .git_pull(pull_params(&id))
+        .await
+        .expect("the pull succeeds");
+    assert!(
+        matches!(pulled, GitPulled::FastForwarded { .. }),
+        "the worktree was only behind: {pulled:?}"
+    );
+    assert!(
+        worktree.join("remote.txt").exists(),
+        "the pulled file is in the worktree"
+    );
+    session.stop().await;
+}
+
+fn remove_params(project: &str, forget_workspaces: bool) -> ProjectRemoveParams {
+    ProjectRemoveParams {
+        project: project.to_owned(),
+        forget_workspaces,
+    }
+}
+
+/// A project with workspace records is refused until its waiver forgets them; the worktree stays on disk.
+#[tokio::test]
+async fn removing_a_project_with_workspaces_waits_for_the_forget_waiver() {
+    let home = temp_home();
+    let (session, worktree) = Session::start(&home).await;
+    let project = session.workspace.project_id.clone();
+
+    let refused = session
+        .handle
+        .remove_project(remove_params(&project, false))
+        .await;
+    let Err(refusal) = refused else {
+        panic!("a project with workspaces is refused");
+    };
+    assert_eq!(refusal.code(), Some(codes::PROJECT_HAS_WORKSPACES));
+
+    let removed = session
+        .handle
+        .remove_project(remove_params(&project, true))
+        .await
+        .expect("the waiver removes the project");
+    assert_eq!(removed.id, project);
+    assert!(worktree.exists(), "the worktree stays on disk");
+    session.stop().await;
+}
+
+fn set_base_params(project: &str, base: Option<String>) -> ProjectSetBaseParams {
+    ProjectSetBaseParams {
+        project: project.to_owned(),
+        base,
+    }
+}
+
+/// The base branch is set to a branch the repository has, then cleared, both through the service.
+#[tokio::test]
+async fn the_base_branch_is_set_and_cleared_through_the_service() {
+    let home = temp_home();
+    let (mut session, _worktree) = Session::start(&home).await;
+    let id = session.id().to_owned();
+    session.handle.git_watch(&id);
+    session
+        .until("the status", |s| status(s, &id).is_some())
+        .await;
+    let branch = status(&session.state, &id)
+        .and_then(|st| st.branch.head)
+        .expect("the worktree is on a branch");
+    let project = session.workspace.project_id.clone();
+
+    let set = session
+        .handle
+        .set_project_base(set_base_params(&project, Some(branch.clone())))
+        .await
+        .expect("the base is set");
+    assert_eq!(set.base_ref, Some(branch));
+
+    let cleared = session
+        .handle
+        .set_project_base(set_base_params(&project, None))
+        .await
+        .expect("the base is cleared");
+    assert_eq!(cleared.base_ref, None);
+    session.stop().await;
+}
+
+#[tokio::test]
+async fn a_moved_submodule_pointer_reaches_the_diff_with_both_commits() {
+    let home = temp_home();
+    let (session, worktree) = Session::start(&home).await;
+    let sub = home.path().with_file_name("sub");
+    repo(&sub);
+    let sub_path = sub.to_str().expect("a UTF-8 path");
+    git(
+        &worktree,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            sub_path,
+            "sub",
+        ],
+    );
+    git(&worktree, &["commit", "-q", "-m", "add the submodule"]);
+    git(
+        &worktree.join("sub"),
+        &["commit", "-q", "--allow-empty", "-m", "move the pointer"],
+    );
+
+    let diff = session
+        .handle
+        .git_diff_file(GitDiffFileParams {
+            workspace: session.id().to_owned(),
+            path: "sub".into(),
+            ..base_git_diff_file_params()
+        })
+        .await
+        .expect("the pointer diff is read");
+    let pointer = diff
+        .submodule
+        .expect("the pointer is named, not left as an empty diff");
+    assert!(diff.patch.is_none(), "a pointer carries no patch text");
+    assert_ne!(pointer.old_commit, pointer.new_commit, "the pointer moved");
+    assert_eq!(
+        pointer.dirty,
+        Some(false),
+        "the submodule's checkout is clean"
+    );
+    assert!(
+        pointer.summary.starts_with("Subproject commit "),
+        "{}",
+        pointer.summary
+    );
+    session.stop().await;
 }
