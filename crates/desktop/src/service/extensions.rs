@@ -15,7 +15,8 @@ use massorca_protocol::methods::extensions::{
     ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
     ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionLog, ExtensionRemoveParams,
     ExtensionRemoved, ExtensionReview, ExtensionRollbackParams, ExtensionRun,
-    ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionSetEnabledParams, ExtensionUpdateParams, ProgramUpdateParams, ProgramUpdateReview,
+    ProgramUpdated,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -181,6 +182,7 @@ pub(super) fn spawn_host_call(
         command,
         ExtensionCommand::Inspect { .. }
             | ExtensionCommand::Asset { .. }
+            | ExtensionCommand::ReviewProgramUpdate { .. }
             | ExtensionCommand::Log { .. }
     );
     tokio::spawn(async move {
@@ -238,6 +240,16 @@ async fn answer_host_call(client: &Client, command: ExtensionCommand) {
             .await;
             let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
         }
+        ExtensionCommand::ReviewProgramUpdate { params, reply } => {
+            let result = client
+                .extension_program_update_review(&params.id, &params.program)
+                .await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::UpdateProgram { params, reply } => {
+            let result = client.extension_program_update(&params).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
         ExtensionCommand::Rollback { params, reply } => {
             let result = rollback_answer(client.extension_rollback(&params).await);
             let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
@@ -277,6 +289,16 @@ pub(crate) enum ExtensionCommand {
     Update {
         params: ExtensionUpdateParams,
         reply: oneshot::Sender<Result<ExtensionInstalled, Refusal>>,
+    },
+    /// `extensions.program_update_review`: what updating a host program runs (decision 0151). Changes nothing.
+    ReviewProgramUpdate {
+        params: ProgramUpdateParams,
+        reply: oneshot::Sender<Result<ProgramUpdateReview, Refusal>>,
+    },
+    /// `extensions.program_update`: runs the reviewed vendor update of a host program the package installed.
+    UpdateProgram {
+        params: ProgramUpdateParams,
+        reply: oneshot::Sender<Result<ProgramUpdated, Refusal>>,
     },
     /// `extensions.rollback`: restores the version an update replaced. Without consent it answers with the consent needed.
     Rollback {
@@ -411,6 +433,33 @@ impl ServiceHandle {
         params: ExtensionUpdateParams,
     ) -> Result<ExtensionInstalled, Refusal> {
         self.ask(|reply| Command::Extension(ExtensionCommand::Update { params, reply }))
+            .await
+    }
+
+    /// `extensions.program_update_review`: what updating a host program would run. Nothing changes on the service.
+    pub async fn review_program_update(
+        &self,
+        id: String,
+        program: String,
+    ) -> Result<ProgramUpdateReview, Refusal> {
+        let params = ProgramUpdateParams {
+            id,
+            program,
+            consent: None,
+            agent_token: None,
+        };
+        self.ask(|reply| {
+            Command::Extension(ExtensionCommand::ReviewProgramUpdate { params, reply })
+        })
+        .await
+    }
+
+    /// `extensions.program_update`, with the consent of its review. The lists are read again after the answer.
+    pub async fn update_program(
+        &self,
+        params: ProgramUpdateParams,
+    ) -> Result<ProgramUpdated, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::UpdateProgram { params, reply }))
             .await
     }
 
@@ -564,6 +613,21 @@ pub(super) fn spawn_call(
                 client.extension_update(&params).await
             });
         }
+        ExtensionCommand::ReviewProgramUpdate { params, reply } => {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .extension_program_update_review(&params.id, &params.program)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        ExtensionCommand::UpdateProgram { params, reply } => {
+            write(client, updates, reads, reply, move |client| async move {
+                client.extension_program_update(&params).await
+            });
+        }
         ExtensionCommand::Remove { params, reply } => {
             write(client, updates, reads, reply, move |client| async move {
                 let call = &client;
@@ -638,6 +702,12 @@ pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         ExtensionCommand::Update { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::ReviewProgramUpdate { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::UpdateProgram { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         ExtensionCommand::Rollback { reply, .. } => {
@@ -716,9 +786,7 @@ mod tests {
     fn removed() -> ExtensionRemoved {
         ExtensionRemoved {
             id: "massorca.codex".to_owned(),
-            version: "1.0.0".to_owned(),
-            failures: Vec::new(),
-            cli: Vec::new(),
+            ..crate::service::fixtures::base_extension_removed()
         }
     }
 

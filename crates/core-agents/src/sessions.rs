@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use crate::credentials;
 use crate::fast_mode;
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
-    now_ms,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, SessionDetails, SessionOrigin, Store,
+    StoreError, StoredActivity, new_id, now_ms,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
@@ -27,8 +27,9 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
-    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind, ResumeState, SessionFast,
+    AgentOptionsSet, AgentSession, AgentSetOptionsParams, AgentStartParams, Execution,
+    MAX_HOOK_PAYLOAD_BYTES, MAX_PREVIEW_CHARS, ModeApplied, ModeSource, OptionApplied,
+    OptionsApplied, PromptReceipt, ReceiptKind, ResumeState, SessionFast, SessionMeta,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -51,16 +52,20 @@ use crate::provided_env::{
 };
 use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
+use crate::run_notes;
+use crate::session_options::{self, ChosenOptions};
 use crate::status::{self, HookRules};
 
 mod archive;
 mod chat;
 mod delegation;
+mod fork;
 mod queue;
 
 pub use chat::ChatOpened;
 use chat::{ChatRun, RunStart, Started};
 use delegation::DelegationView;
+use fork::ForkFrom;
 
 pub use delegation::{
     DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING,
@@ -69,6 +74,10 @@ pub use delegation::{
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long a typed live command holds non-forced input and the queue, when no accepted hook report ends the hold first. A
+/// slash command may send no report at all, so the hold must end by itself (decision 0171).
+pub const TYPED_COMMAND_SETTLE: Duration = Duration::from_secs(2);
 
 /// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
@@ -120,6 +129,36 @@ pub enum Change {
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
 pub type Listener = Box<dyn Fn(Change) + Send + Sync>;
+
+/// A prompt of the person that reached a session's run (decision 0118). It holds the text, so it is never printed.
+pub struct PromptDelivered {
+    /// The session the prompt reached.
+    pub session: String,
+    /// Its workspace.
+    pub workspace: String,
+    /// Its kind.
+    pub kind: String,
+    /// Whether it is a delegated child, which never names a workspace.
+    pub child: bool,
+    /// The prompt's text.
+    pub text: String,
+}
+
+/// Prints every field but the text, which is replaced by its length, as a queued prompt is.
+impl std::fmt::Debug for PromptDelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptDelivered")
+            .field("session", &self.session)
+            .field("workspace", &self.workspace)
+            .field("kind", &self.kind)
+            .field("child", &self.child)
+            .field("text", &format_args!("{} bytes", self.text.len()))
+            .finish()
+    }
+}
+
+/// Receives every prompt of the person once it is written. Called outside the status lock, so it must not block.
+pub type PromptListener = Box<dyn Fn(PromptDelivered) + Send + Sync>;
 
 /// Shortest id prefix a session selector may be.
 pub const MIN_SELECTOR_PREFIX: usize = 8;
@@ -233,9 +272,11 @@ impl From<LaunchError> for AgentError {
     fn from(error: LaunchError) -> Self {
         let code = match error {
             LaunchError::PromptTooLong
+            | LaunchError::ShimPromptTooLong
             | LaunchError::PromptHasNul
             | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
+            LaunchError::NotForkable => codes::AGENT_FORK_UNAVAILABLE,
             LaunchError::ReservedName(_) => codes::AGENT_SECRETS_UNAVAILABLE,
             LaunchError::DangerousCallerEnv(_) => codes::REQUEST_INVALID_PARAMS,
         };
@@ -288,6 +329,7 @@ struct Inner {
     /// held in memory only.
     status: Mutex<LiveRuns>,
     listener: OnceLock<Listener>,
+    prompt_listener: OnceLock<PromptListener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
     /// The accounts a call is working on: sign-ins still open, and removals (decision 0059). See `accounts`.
@@ -302,6 +344,13 @@ struct Inner {
     found_transcripts: resume_state::FoundTranscripts,
     /// The model listings the service keeps (decision 0166), held in memory.
     models: crate::model_catalog::ModelCache,
+    /// The fast mode `agent.set_options` chose for each session, which its next resume launches with (decision 0171). The
+    /// model and the effort are stored with the session (decision 0168); fast mode has no column, so it is held here, in
+    /// memory: the service forgets it when it stops.
+    chosen_fast: Mutex<HashMap<String, bool>>,
+    /// The options each live run started with, updated by its live changes (decision 0171): a change is checked against them
+    /// while the run is live. A stopped session is checked against what its next run keeps, which is stored instead.
+    started: Mutex<HashMap<String, ChosenOptions>>,
     /// How long a model listing may run before it is stopped (decision 0166).
     listing_timeout: Duration,
     /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
@@ -330,6 +379,9 @@ pub(crate) struct LiveRun {
     /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
     /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
     typed_since_report: bool,
+    /// A typed live command holds non-forced input (prompts, live changes, the queue) until this instant, unless an accepted
+    /// hook report ends the hold first. A slash command may send no report at all (decision 0171).
+    settle_until: Option<Instant>,
     /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
     /// two writes never interleave in the terminal.
     switching: bool,
@@ -404,12 +456,15 @@ impl Agents {
                 config,
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
+                prompt_listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
                 models: crate::model_catalog::ModelCache::default(),
+                chosen_fast: Mutex::new(HashMap::new()),
+                started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
                     std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
                         .ok()
@@ -434,6 +489,28 @@ impl Agents {
     /// Sets the receiver of every status change. Only the first call takes effect.
     pub fn set_listener(&self, listener: Listener) {
         let _ = self.inner.listener.set(listener);
+    }
+
+    /// Sets the receiver of every prompt of the person (decision 0118). Only the first call takes effect.
+    pub fn set_prompt_listener(&self, listener: PromptListener) {
+        let _ = self.inner.prompt_listener.set(listener);
+    }
+
+    /// Tells the prompt listener that the person's prompt reached `session`. A session that cannot be read is not told.
+    pub(crate) fn announce_prompt(&self, session: &str, text: &str) {
+        let Some(listener) = self.inner.prompt_listener.get() else {
+            return;
+        };
+        let Ok(row) = self.reload(session) else {
+            return;
+        };
+        listener(PromptDelivered {
+            session: row.id,
+            workspace: row.workspace_id,
+            kind: row.kind,
+            child: row.parent_id.is_some(),
+            text: text.to_owned(),
+        });
     }
 
     pub(crate) fn notify(&self, change: Change) {
@@ -588,7 +665,7 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
-        self.start_session_as(params, parent, grant, RunStart::Terminal)
+        self.start_session_as(params, parent, grant, RunStart::Terminal, None)
     }
 
     /// [`Self::start_session`], with the run in a terminal or as a chat (decision 0101). A chat's first prompt goes to
@@ -599,9 +676,12 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
         run: RunStart,
+        fork: Option<&ForkFrom>,
     ) -> Result<AgentSession, AgentError> {
         let chat = matches!(run, RunStart::Chat(_));
-        let parent_holds = parent.is_some_and(|parent| parent.holds_secrets);
+        // A fork's conversation is a copy of its source's, so it holds what the source holds (decision 0168).
+        let parent_holds = parent.is_some_and(|parent| parent.holds_secrets)
+            || fork.is_some_and(|fork| fork.holds_secrets);
         let parent_id = parent.map(|parent| parent.id.clone());
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
@@ -695,9 +775,15 @@ impl Agents {
             program: &program,
             session_id: &session_id,
             token: &token,
-            run: Run::First {
-                prompt: params.prompt.as_deref().filter(|_| !chat),
-                new_ref: &new_ref,
+            run: match fork {
+                Some(fork) => Run::Fork {
+                    prompt: params.prompt.as_deref(),
+                    source_ref: &fork.source_ref,
+                },
+                None => Run::First {
+                    prompt: params.prompt.as_deref().filter(|_| !chat),
+                    new_ref: &new_ref,
+                },
             },
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
@@ -717,6 +803,10 @@ impl Agents {
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        run_notes::record(
+            &run_dir,
+            fork.map(|fork| fork.notes.as_slice()).unwrap_or_default(),
+        );
         fast_mode::record(&run_dir, fast.is_some());
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
@@ -737,6 +827,7 @@ impl Agents {
                     pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -750,6 +841,11 @@ impl Agents {
             rows: params.rows.unwrap_or(DEFAULT_ROWS),
         };
         let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
+        let origin = SessionOrigin {
+            model: params.model.clone(),
+            effort: params.effort.clone(),
+            forked_from: fork.map(|fork| fork.source_id.clone()),
+        };
         let started = match run {
             RunStart::Terminal => self
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
@@ -788,12 +884,13 @@ impl Agents {
             retained: false,
             released_at: None,
         };
-        let inserted = match &started {
-            Started::Terminal(_) => self.store().insert_agent_session(&row),
-            Started::Chat(chat_run) => self
-                .store()
-                .insert_chat_agent_session(&row, &chat_run.run_id),
+        let chat_run = match &started {
+            Started::Terminal(_) => None,
+            Started::Chat(chat_run) => Some(chat_run.run_id.as_str()),
         };
+        let inserted = self
+            .store()
+            .insert_agent_session_with_origin(&row, &origin, chat_run);
         if let Err(error) = inserted {
             live.remove(&session_id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -841,6 +938,15 @@ impl Agents {
             }
         };
         session.secrets_withheld = withheld(grant);
+        // Noted only once the start has succeeded, so a start that failed leaves no options behind (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: params.model.clone(),
+                effort: params.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -999,8 +1105,21 @@ impl Agents {
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
         let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
-        // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
-        // are not kept with the session (docs/architecture/agents.md).
+        // What the session records is kept (decision 0168): the model and the effort it names, where the kind still takes
+        // them. The fast mode is the one `agent.set_options` chose for it (decision 0171).
+        let origin = self
+            .store()
+            .agent_session_origin(&row.id)?
+            .unwrap_or_default();
+        let kept = kept_options(&decl, &origin);
+        let chosen_fast = lock(&self.inner.chosen_fast)
+            .get(&row.id)
+            .copied()
+            .unwrap_or(false);
+        let mode_args = [mode.args.clone(), kept.args.clone()].concat();
+        let fast = decl.fast_for(kept.model.as_deref(), chosen_fast)?;
+        // Besides those options, a resumed run takes the kind's resume arguments only: the caller's arguments and
+        // environment of the first start are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
@@ -1013,21 +1132,30 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
-            mode_args: &mode.args,
+            mode_args: &mode_args,
             caller_args: &[],
             provided_env: &provided,
             holds_secrets,
             caller_env: &no_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
-            // A resume takes no fast mode: the start's choice is not kept with the session (decision 0165).
-            fast: None,
+            // A resume takes the fast mode `agent.set_options` chose for the session, if any (decisions 0165, 0171).
+            fast,
         })?;
+        // The record names what the run uses from now on (decision 0168); a plan that fails leaves it as it was.
+        if kept.model != origin.model || kept.effort != origin.effort {
+            self.store().set_agent_session_options(
+                &row.id,
+                kept.model.as_deref(),
+                kept.effort.as_deref(),
+            )?;
+        }
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
-        fast_mode::record(&run_dir, false);
+        run_notes::record(&run_dir, &kept.notes);
+        fast_mode::record(&run_dir, fast.is_some());
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1047,6 +1175,7 @@ impl Agents {
                     pending: None,
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -1136,6 +1265,15 @@ impl Agents {
             }
         }
         session.secrets_withheld = withheld(grant);
+        // Noted only once the resume has succeeded (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: kept.model.clone(),
+                effort: kept.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -1247,6 +1385,7 @@ impl Agents {
             row.result.take()
         };
         let learned = report.learned_ref.filter(|_| row.agent_ref.is_none());
+        let learned = self.kept_learned_ref(&row, learned)?;
         self.store().set_agent_session_status(
             &row.id,
             Some(&report.activity),
@@ -1263,6 +1402,8 @@ impl Agents {
         let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            // Any accepted report ends a settle window early (decision 0171).
+            run.settle_until = None;
             match row
                 .activity
                 .as_ref()
@@ -1353,13 +1494,29 @@ impl Agents {
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
+        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses)?;
+        // Only the person's prompts are announced: a system prompt, such as a delegated child's report, is not work.
+        if lift_queue_pauses {
+            self.announce_prompt(&row.id, text);
+        }
+        Ok(receipt)
+    }
+
+    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does.
+    fn type_prompt(
+        &self,
+        row: &AgentSessionRow,
+        text: &str,
+        force: bool,
+        lift_queue_pauses: bool,
+    ) -> Result<PromptReceipt, AgentError> {
         // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
         // writing child as a terminal one does (decision 0170).
         if self.run_type_of(&row.id)? == RunType::Chat {
-            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), &row) {
+            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), row) {
                 return Err(child_writing(&row.id, &child));
             }
-            return self.chat_prompt(&row, text, force, lift_queue_pauses);
+            return self.chat_prompt(row, text, force, lift_queue_pauses);
         }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.
@@ -1513,6 +1670,180 @@ impl Agents {
         })
     }
 
+    /// Changes a session's model, effort or fast mode (decision 0171). A model or fast mode the kind declares a live command
+    /// for is typed into a live run once the agent is ready; every other change, and every change to a session whose run is
+    /// not live, waits for the session's next resume. The values are checked before anything is typed or stored.
+    pub fn set_options(
+        &self,
+        request: &AgentSetOptionsParams,
+    ) -> Result<AgentOptionsSet, AgentError> {
+        let row = self.resolve(&request.session)?;
+        let decl = self.declared_kind(&row.kind)?;
+        let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // Planned under the status lock, where the run's liveness and recorded fast mode are read, so two calls never plan
+        // the same toggle. The text is typed outside the lock, as a prompt is, because the write can wait for the agent.
+        let mut live = lock(&self.inner.status);
+        let row = self.reload(&row.id)?;
+        let session = self.view_with(&mut live, row)?;
+        let running = live.contains_key(&session.id) && session.terminal_id.is_some();
+        let recorded_fast = fast_mode::of_run(&run_dir).is_some();
+        let chosen = self.chosen_of(&session.id)?;
+        let started = self.started_of(&session.id);
+        let plan = session_options::plan(
+            &decl,
+            &session.id,
+            request,
+            &started,
+            &chosen,
+            running,
+            recorded_fast,
+        )?;
+        let typing = if plan.typed.is_empty() {
+            None
+        } else {
+            let terminal = session.terminal_id.clone().unwrap_or_default();
+            let Some(run) = live.get_mut(&session.id) else {
+                return Err(not_live(&session.id));
+            };
+            let state = session.activity.as_ref().map(|activity| activity.state);
+            if let Some(refusal) = input_refusal(run, &session.id, state, false) {
+                return Err(refusal);
+            }
+            run.switching = true;
+            let bytes: Vec<Vec<u8>> = plan
+                .typed
+                .iter()
+                .map(|text| prompt::input_bytes(text, PasteMode::Plain, &run.prompt.submit))
+                .collect();
+            Some((terminal, bytes))
+        };
+        drop(live);
+        if let Some((terminal, bytes)) = typing {
+            // The commands are typed in turn. The run stays marked as switching until the writes are done, whatever their
+            // outcome, and the queue may go on after them (decision 0084, D3).
+            let written: Result<(), TerminalError> = bytes
+                .iter()
+                .try_for_each(|bytes| self.inner.config.terminals.input(&terminal, bytes));
+            if written.is_ok() {
+                // Recorded before the run is free again, so the next call and the queue see what was typed.
+                if let Some(on) = plan.fast_typed {
+                    fast_mode::record(&run_dir, on);
+                }
+                self.note_typed(&session.id, &plan, request);
+            }
+            self.end_switching(&session.id);
+            self.drain_queue(&session.id);
+            if let Err(error) = written {
+                return Err(match error {
+                    TerminalError::Exited | TerminalError::NotFound => not_live(&session.id),
+                    other => AgentError::from(other),
+                });
+            }
+        }
+        let changed = plan.applied != OptionsApplied::default();
+        {
+            // One read and one write under the lock, so what another call stored meanwhile survives (decision 0171): the
+            // requested fields are written to the stored columns, and the fast mode is kept in memory.
+            let mut chosen_fast = lock(&self.inner.chosen_fast);
+            let origin = self
+                .store()
+                .agent_session_origin(&session.id)?
+                .unwrap_or_default();
+            let current = ChosenOptions {
+                model: origin.model,
+                effort: origin.effort,
+                fast: chosen_fast.get(&session.id).copied(),
+            };
+            let merged = session_options::merged(current, request, &plan.chosen);
+            self.store().set_agent_session_options(
+                &session.id,
+                merged.model.as_deref(),
+                merged.effort.as_deref(),
+            )?;
+            match merged.fast {
+                Some(on) => chosen_fast.insert(session.id.clone(), on),
+                None => chosen_fast.remove(&session.id),
+            };
+        }
+        let mut live = lock(&self.inner.status);
+        let session = self.view_with(&mut live, self.reload(&session.id)?)?;
+        if changed {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        Ok(AgentOptionsSet {
+            applied: plan.applied,
+            session,
+        })
+    }
+
+    /// Records what a live change typed (decision 0171): its settle window, and the options the run now runs with.
+    fn note_typed(&self, id: &str, plan: &session_options::Plan, request: &AgentSetOptionsParams) {
+        self.settle_after_typed(id);
+        let mut started = lock(&self.inner.started);
+        let entry = started.entry(id.to_owned()).or_default();
+        if plan.applied.model == Some(OptionApplied::Live) {
+            entry.model = request.model.clone();
+        }
+        if let Some(on) = plan.fast_typed {
+            entry.fast = Some(on);
+        }
+    }
+
+    /// Starts the settle window of a typed live command (decision 0171): until it ends, non-forced prompts, live changes and
+    /// the queue wait. A timer ends the window when no report does, and then drains the queue it held.
+    fn settle_after_typed(&self, id: &str) {
+        let until = Instant::now() + TYPED_COMMAND_SETTLE;
+        if let Some(run) = lock(&self.inner.status).get_mut(id) {
+            run.settle_until = Some(until);
+        }
+        let weak = Arc::downgrade(&self.inner);
+        let id = id.to_owned();
+        thread::spawn(move || {
+            thread::sleep(until.saturating_duration_since(Instant::now()));
+            if let Some(inner) = weak.upgrade() {
+                Agents { inner }.end_settle(&id, until);
+            }
+        });
+    }
+
+    /// Ends the settle window `until`, if no report ended it first, and drains the queue it held (decision 0171).
+    fn end_settle(&self, id: &str, until: Instant) {
+        let ended = match lock(&self.inner.status).get_mut(id) {
+            Some(run) if run.settle_until == Some(until) => {
+                run.settle_until = None;
+                true
+            }
+            _ => false,
+        };
+        if ended {
+            self.drain_queue(id);
+        }
+    }
+
+    /// The options session `id`'s live run started with, as its live changes have moved them (decision 0171).
+    fn started_of(&self, id: &str) -> ChosenOptions {
+        lock(&self.inner.started)
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Records the options a run of session `id` started with (decision 0171).
+    fn note_started(&self, id: &str, options: ChosenOptions) {
+        lock(&self.inner.started).insert(id.to_owned(), options);
+    }
+
+    /// What session `id`'s next run keeps (decisions 0168, 0171): the model and effort of its stored columns, and the fast
+    /// mode `agent.set_options` chose for it.
+    fn chosen_of(&self, id: &str) -> Result<ChosenOptions, AgentError> {
+        let origin = self.store().agent_session_origin(id)?.unwrap_or_default();
+        Ok(ChosenOptions {
+            model: origin.model,
+            effort: origin.effort,
+            fast: lock(&self.inner.chosen_fast).get(id).copied(),
+        })
+    }
+
     /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
     /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
     pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
@@ -1587,18 +1918,30 @@ impl Agents {
 
     /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
     /// session is checked on its own: one that fails is logged, by its id and error code only, and the sweep goes on.
+    /// A first input it drops is noted on its run and sent to watchers with the record (decision 0168).
     pub fn sweep(&self) {
         let mut live = lock(&self.inner.status);
-        for id in expire_first_prompts(&mut live, Instant::now()) {
+        let dropped = expire_first_prompts(&mut live, Instant::now());
+        for id in &dropped {
             tracing::warn!(
                 session = %id,
                 "the first input was dropped: the agent reported no idle state in time"
             );
+            run_notes::append(
+                &paths::run_dir(self.profile_dir(), id),
+                &first_input_dropped_note(),
+            );
         }
         let ids: Vec<String> = live.keys().cloned().collect();
         for id in ids {
+            // Only a dropped input's record is read in full: the sweep runs every tick and reads the execution alone.
+            let notify = dropped.contains(&id);
             let checked = match self.store().get_agent_session(&id) {
-                Ok(Some(row)) => self.view_with(&mut live, row).map(drop),
+                Ok(Some(row)) => self.view_in(&mut live, row, None, notify).map(|session| {
+                    if notify {
+                        self.notify(Change::Updated(Box::new(session)));
+                    }
+                }),
                 Ok(None) => {
                     live.remove(&id);
                     Ok(())
@@ -1625,7 +1968,7 @@ impl Agents {
             .map(|row| {
                 let mut live = lock(&self.inner.status);
                 let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
-                self.view_in(&mut live, row, Some(&catalog))
+                self.view_in(&mut live, row, Some(&catalog), true)
             })
             .collect()
     }
@@ -1710,6 +2053,8 @@ impl Agents {
         }
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
+        lock(&self.inner.chosen_fast).remove(&session.id);
+        lock(&self.inner.started).remove(&session.id);
         self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -2059,29 +2404,39 @@ impl Agents {
         live: &mut LiveRuns,
         row: AgentSessionRow,
     ) -> Result<AgentSession, AgentError> {
-        self.view_in(live, row, None)
+        self.view_in(live, row, None, true)
     }
 
-    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one.
+    /// [`Self::view_with`], reading the kind from `catalog` when the caller loaded one. `full` also reads what a caller
+    /// shows beside the record: the start options, lineage, branch and preview, and the notes of the run (decision 0168).
+    /// The exit sweep passes `false` on every tick and reads the execution alone.
     fn view_in(
         &self,
         live: &mut LiveRuns,
         mut row: AgentSessionRow,
         catalog: Option<&Catalog>,
+        full: bool,
     ) -> Result<AgentSession, AgentError> {
         let run = self.run_of(&row)?;
         let execution = self.execution_in(live, &mut row, run)?;
         let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
         let placement = self.delegation_view(&row);
-        let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
+        // The archived flag and the folder writers are read for the views a caller sees; the sweep reads the execution alone.
+        let archived = full && self.store().agent_session_archived_at(&row.id)?.is_some();
         let fast = self.fast_of(&row.id);
-        let shared_folder_with = if execution.state == TerminalState::Exited {
+        let shared_folder_with = if !full || execution.state == TerminalState::Exited {
             Vec::new()
         } else {
             self.shared_folder_with(live, &row)?
         };
         let mut session = record(row, execution, resume, placement, run, archived, fast);
         session.shared_folder_with = shared_folder_with;
+        if full {
+            let run_dir = paths::run_dir(self.profile_dir(), &session.id);
+            session.notes.extend(run_notes::read(&run_dir));
+            let details = self.store().agent_session_details(&session.id)?;
+            with_details(&mut session, details.unwrap_or_default());
+        }
         Ok(session)
     }
 
@@ -2163,6 +2518,37 @@ impl Agents {
             .get_workspace(&row.workspace_id)?
             .is_some_and(|workspace| workspace.kind == massorca_core_store::WorkspaceKind::Folder);
         Ok(if folder { others } else { Vec::new() })
+    }
+
+    /// The learned ref of a run, unless it is the ref of the session's fork source: a fork that kept its source's ref would
+    /// resume the source's transcript, so the ref is dropped and the fork keeps none (decision 0168).
+    fn kept_learned_ref(
+        &self,
+        row: &AgentSessionRow,
+        learned: Option<String>,
+    ) -> Result<Option<String>, AgentError> {
+        let Some(learned) = learned else {
+            return Ok(None);
+        };
+        let Some(source) = self
+            .store()
+            .agent_session_origin(&row.id)?
+            .and_then(|origin| origin.forked_from)
+        else {
+            return Ok(Some(learned));
+        };
+        let source_ref = self
+            .store()
+            .get_agent_session(&source)?
+            .and_then(|source| source.agent_ref);
+        if source_ref.as_deref() == Some(learned.as_str()) {
+            tracing::warn!(
+                session = %row.id,
+                "a fork reported its source's agent ref, which is not kept"
+            );
+            return Ok(None);
+        }
+        Ok(Some(learned))
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -2345,6 +2731,7 @@ fn record(
         notes: placement.notes,
         fast,
         shared_folder_with: Vec::new(),
+        meta: Default::default(),
     }
 }
 
@@ -2356,6 +2743,91 @@ fn keeps_one_writer(kind: WorkspaceKind) -> bool {
         WorkspaceKind::Worktree | WorkspaceKind::Unknown => true,
         WorkspaceKind::Folder => false,
     }
+}
+
+/// What a resume or a fork passes again of the model and the effort `origin` names (decision 0168): the ones the kind
+/// still takes, and a note for each one it no longer takes, which the run records. A model is kept when
+/// [`KindDecl::takes_model`] accepts it; an effort when the kind's effort flag accepts it for the kept model.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct KeptOptions {
+    model: Option<String>,
+    effort: Option<String>,
+    /// The launch arguments of the kept model and effort, the model's first.
+    args: Vec<String>,
+    notes: Vec<String>,
+}
+
+fn kept_options(decl: &KindDecl, origin: &SessionOrigin) -> KeptOptions {
+    let mut kept = KeptOptions::default();
+    if let Some(model) = origin.model.as_deref() {
+        if decl.takes_model(model) {
+            kept.model = Some(model.to_owned());
+        } else {
+            kept.notes.push(format!(
+                "The model {model} is no longer accepted by {}, so this run did not use it.",
+                decl.name
+            ));
+        }
+    }
+    if let Some(effort) = origin.effort.as_deref() {
+        if decl
+            .option_args(kept.model.as_deref(), Some(effort))
+            .is_ok()
+        {
+            kept.effort = Some(effort.to_owned());
+        } else {
+            kept.notes.push(format!(
+                "The effort {effort} is no longer accepted by {}, so this run did not use it.",
+                decl.name
+            ));
+        }
+    }
+    // Each kept option passed its own check above, so the arguments of both build.
+    kept.args = decl
+        .option_args(kept.model.as_deref(), kept.effort.as_deref())
+        .unwrap_or_default();
+    kept
+}
+
+/// The note a run records once its first input was dropped (decision 0168).
+fn first_input_dropped_note() -> String {
+    format!(
+        "The first input was dropped: the agent reported no idle state within {} seconds.",
+        FIRST_PROMPT_WAIT.as_secs()
+    )
+}
+
+/// Sets what a session view shows beside its row (decision 0168): its start options, its lineage, its workspace's
+/// branch, and a preview, which is a chat's newest message or a terminal session's result.
+fn with_details(session: &mut AgentSession, details: SessionDetails) {
+    let source = match session.run {
+        RunType::Chat => details.last_message,
+        _ => session.result.clone(),
+    };
+    session.meta = SessionMeta {
+        model: details.origin.model,
+        effort: details.origin.effort,
+        branch: details.branch,
+        preview: source.as_deref().and_then(preview_of),
+        forked_from: details.origin.forked_from,
+    };
+}
+
+/// At most [`MAX_PREVIEW_CHARS`] characters of `text`, its line breaks and runs of white space made single spaces;
+/// `None` when nothing is left.
+fn preview_of(text: &str) -> Option<String> {
+    let mut preview = String::new();
+    for word in text.split_whitespace() {
+        if !preview.is_empty() {
+            preview.push(' ');
+        }
+        preview.push_str(word);
+        if preview.chars().count() >= MAX_PREVIEW_CHARS {
+            break;
+        }
+    }
+    let preview: String = preview.chars().take(MAX_PREVIEW_CHARS).collect();
+    (!preview.is_empty()).then_some(preview)
 }
 
 /// Why `run` takes no input now, if it does not (decisions 0058, 0083): a mode switch is being typed into it, whatever
@@ -2378,6 +2850,15 @@ fn input_refusal(
             codes::AGENT_BUSY,
             format!(
                 "session {session} is switching its permission mode; try again once the switch is typed"
+            ),
+        ));
+    }
+    // A typed live command holds non-forced input for its settle window (decision 0171). `force` and `send_now` pass.
+    if !force && run.settle_until.is_some_and(|until| Instant::now() < until) {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "session {session} is settling after a typed command: try again in a moment, or use force"
             ),
         ));
     }
@@ -2423,7 +2904,7 @@ fn withheld(grant: SecretGrant) -> Option<String> {
 }
 
 /// The refusal for a resume the session cannot make (0054).
-fn resume_unavailable(session: &str, reason: &str) -> AgentError {
+pub(crate) fn resume_unavailable(session: &str, reason: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_RESUME_UNAVAILABLE,
         format!("session {session} cannot resume: {reason}"),
@@ -2466,10 +2947,20 @@ fn expire_first_prompts(live: &mut LiveRuns, now: Instant) -> Vec<String> {
     expired
 }
 
-/// Sweeps every [`SWEEP_INTERVAL`] until the service is gone.
+/// The period of the background sweep. Unit tests call [`Agents::sweep`] themselves, so their background sweep waits a
+/// minute: a test that runs longer than one tick on a loaded machine would otherwise lose a live run it is still using.
+fn sweep_interval() -> Duration {
+    if cfg!(test) {
+        Duration::from_secs(60)
+    } else {
+        SWEEP_INTERVAL
+    }
+}
+
+/// Sweeps every [`SWEEP_INTERVAL`] (see [`sweep_interval`]) until the service is gone.
 fn sweep_loop(service: &Weak<Inner>) {
     loop {
-        thread::sleep(SWEEP_INTERVAL);
+        thread::sleep(sweep_interval());
         let Some(inner) = service.upgrade() else {
             return;
         };
@@ -2818,6 +3309,7 @@ pub(crate) mod tests {
             pending: None,
             pending_switch: None,
             typed_since_report: false,
+            settle_until: None,
             switching,
             delivering: false,
             finished: false,
@@ -2835,6 +3327,20 @@ pub(crate) mod tests {
         assert!(
             input_refusal(&run(false), "s", working, true).is_none(),
             "force types anyway"
+        );
+        // A typed live command settles the run for its window (decision 0171): unforced input waits, forced input goes
+        // through, and a window that has ended refuses nothing.
+        let mut settling = run(false);
+        settling.settle_until = Some(Instant::now() + Duration::from_secs(3600));
+        assert!(input_refusal(&settling, "s", idle, false).is_some());
+        assert!(
+            input_refusal(&settling, "s", idle, true).is_none(),
+            "force goes through"
+        );
+        settling.settle_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(
+            input_refusal(&settling, "s", idle, false).is_none(),
+            "an ended window refuses nothing"
         );
     }
 
@@ -2858,6 +3364,7 @@ pub(crate) mod tests {
                 due,
             }),
             typed_since_report: false,
+            settle_until: None,
             switching: false,
             delivering: false,
             finished: false,
@@ -2877,6 +3384,147 @@ pub(crate) mod tests {
         assert!(
             live["late"].pending_switch.is_none(),
             "a held mode switch expires with the prompt"
+        );
+    }
+
+    /// A first input the exit sweep drops is noted on its run, where a session view reads it (decision 0168).
+    #[test]
+    fn a_dropped_first_input_is_noted_on_its_run() {
+        let (agents, _workspace_id, profile) = service();
+        lock(&agents.inner.status).insert(
+            "late".to_owned(),
+            LiveRun {
+                token: "t".to_owned(),
+                rules: HookRules::default(),
+                prompt: PromptRules {
+                    has_status: true,
+                    paste: PasteMode::Plain,
+                    submit: "\r".to_owned(),
+                },
+                pending: Some(PendingPrompt {
+                    text: "later".to_owned(),
+                    due: Instant::now(),
+                }),
+                pending_switch: None,
+                typed_since_report: false,
+                settle_until: None,
+                switching: false,
+                delivering: false,
+                finished: false,
+                account: None,
+            },
+        );
+        // A live run's directory exists: the start made it.
+        std::fs::create_dir_all(paths::run_dir(profile.path(), "late")).unwrap();
+        agents.sweep();
+        assert_eq!(
+            run_notes::read(&paths::run_dir(profile.path(), "late")),
+            [first_input_dropped_note()]
+        );
+    }
+
+    /// A resume or a fork passes again the stored model and effort the kind still takes, and notes each one it does not
+    /// (decision 0168). A model is left out when the kind's choices no longer list it; an effort when the effort levels,
+    /// or the kept model's own efforts, no longer list it.
+    #[test]
+    fn a_resume_or_fork_keeps_the_options_the_kind_still_takes_and_notes_the_rest() {
+        let decl = KindDecl::from_json(
+            &json!({
+                "id": "fake",
+                "name": "Fake",
+                "program": ["fake"],
+                "model": { "flag": "--model", "choices": [
+                    { "id": "kept", "label": "Kept", "efforts": ["low"] },
+                    { "id": "other", "label": "Other" }
+                ] },
+                "effort": { "flag": "--effort", "levels": [
+                    { "id": "low", "label": "Low" },
+                    { "id": "high", "label": "High" }
+                ] }
+            })
+            .to_string(),
+        )
+        .expect("parses");
+        let origin = |model: &str, effort: &str| SessionOrigin {
+            model: Some(model.to_owned()),
+            effort: Some(effort.to_owned()),
+            forked_from: None,
+        };
+        let note = |what: &str, value: &str| {
+            format!("The {what} {value} is no longer accepted by Fake, so this run did not use it.")
+        };
+
+        assert_eq!(
+            kept_options(&decl, &origin("other", "low")),
+            KeptOptions {
+                model: Some("other".to_owned()),
+                effort: Some("low".to_owned()),
+                args: ["--model", "other", "--effort", "low"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                notes: Vec::new(),
+            }
+        );
+        assert_eq!(
+            kept_options(&decl, &origin("retired", "high")),
+            KeptOptions {
+                model: None,
+                effort: Some("high".to_owned()),
+                args: ["--effort", "high"].map(str::to_owned).to_vec(),
+                notes: vec![note("model", "retired")],
+            },
+            "a model no choice lists is left out, and the effort is kept"
+        );
+        assert_eq!(
+            kept_options(&decl, &origin("kept", "high")).notes,
+            vec![note("effort", "high")],
+            "the kept model lists only low"
+        );
+    }
+
+    /// A fork's learned ref is dropped when it is its source's, so a fork never binds to the source's transcript; any
+    /// other ref is kept, and so is any ref of a session that is no fork (decision 0168).
+    #[test]
+    fn a_fork_never_keeps_the_ref_of_its_source() {
+        use super::release_tests::exited_row;
+        let (agents, workspace_id, _profile) = service();
+        let mut source = exited_row(&workspace_id, "terminal-source");
+        source.agent_ref = Some("ref-source".to_owned());
+        agents
+            .store()
+            .insert_agent_session_with_origin(&source, &SessionOrigin::default(), None)
+            .unwrap();
+        let fork = exited_row(&workspace_id, "terminal-fork");
+        agents
+            .store()
+            .insert_agent_session_with_origin(
+                &fork,
+                &SessionOrigin {
+                    forked_from: Some(source.id.clone()),
+                    ..SessionOrigin::default()
+                },
+                None,
+            )
+            .unwrap();
+        let fork = agents.store().get_agent_session(&fork.id).unwrap().unwrap();
+        let learned = |text: &str| Some(text.to_owned());
+
+        assert_eq!(
+            agents
+                .kept_learned_ref(&fork, learned("ref-source"))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            agents.kept_learned_ref(&fork, learned("ref-fork")).unwrap(),
+            learned("ref-fork")
+        );
+        assert_eq!(
+            agents
+                .kept_learned_ref(&source, learned("ref-source"))
+                .unwrap(),
+            learned("ref-source"),
+            "a session that is no fork keeps its ref"
         );
     }
 
@@ -2950,6 +3598,7 @@ pub(crate) mod tests {
                 pending: None,
                 pending_switch: None,
                 typed_since_report: false,
+                settle_until: None,
                 switching: false,
                 delivering: false,
                 finished: false,
@@ -3010,7 +3659,7 @@ mod release_tests {
     use super::*;
 
     /// An exited session of `workspace` whose terminal is `terminal`, which the terminal manager may not know.
-    fn exited_row(workspace: &str, terminal: &str) -> AgentSessionRow {
+    pub(super) fn exited_row(workspace: &str, terminal: &str) -> AgentSessionRow {
         AgentSessionRow {
             id: new_id(),
             kind: "fake".to_owned(),
@@ -3207,5 +3856,28 @@ mod not_enabled_tests {
             .startable_kind("gentle-shell")
             .expect("it starts on its launcher");
         assert!(is_launcher(&program.to_string_lossy()), "{program:?}");
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn a_preview_is_one_line_of_at_most_its_limit_and_absent_when_blank() {
+        assert_eq!(
+            preview_of("  done:\n  all   good \n"),
+            Some("done: all good".to_owned())
+        );
+        assert_eq!(preview_of(" \n\t "), None);
+        let long = "word ".repeat(100);
+        let preview = preview_of(&long).unwrap();
+        assert_eq!(preview.chars().count(), MAX_PREVIEW_CHARS);
+        assert!(long.starts_with(&preview));
+        let wide = "é".repeat(MAX_PREVIEW_CHARS + 5);
+        assert_eq!(
+            preview_of(&wide).unwrap().chars().count(),
+            MAX_PREVIEW_CHARS
+        );
     }
 }

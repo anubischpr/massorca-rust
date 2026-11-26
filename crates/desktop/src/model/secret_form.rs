@@ -261,7 +261,6 @@ pub fn refusal_sentence(refusal: &Refusal, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use massorca_protocol::ErrorBody;
-    use massorca_protocol::methods::projects::ProjectKind;
 
     use super::*;
     use crate::service::Refusal;
@@ -270,14 +269,11 @@ mod tests {
 
     fn project(id: &str, name: &str) -> Project {
         Project {
-            icon: None,
             id: id.into(),
-            kind: ProjectKind::Git,
             path: format!("/repos/{name}"),
             name: name.into(),
             workspaces_root: format!("/repos/{name}-worktrees"),
-            added_at_ms: 1,
-            base_ref: None,
+            ..crate::service::fixtures::base_project()
         }
     }
 

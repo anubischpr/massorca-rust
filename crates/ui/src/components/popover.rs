@@ -27,6 +27,8 @@ use std::rc::Rc;
 const ANCHOR_GAP: f32 = SPACE_2;
 /// Height after which long content scrolls inside the panel, header fixed (Popover.md).
 pub const BODY_MAX_HEIGHT: f32 = 360.0;
+/// The project icon popover's width (A41, decision 0091): 296 px, between the token caps.
+pub const PROJECT_ICON_POPOVER_WIDTH: f32 = 296.0;
 /// How far the panel travels while it fades in (Popover.md: 4 px).
 const ENTER_TRAVEL: f32 = SPACE_1;
 
@@ -64,6 +66,8 @@ pub enum PopoverWidth {
     /// Any other content (360 px).
     #[default]
     Large,
+    /// The project icon popover (A41, decision 0091): 296 px.
+    Project,
 }
 
 impl PopoverWidth {
@@ -72,6 +76,7 @@ impl PopoverWidth {
             Self::Small => LAYOUT_POPOVER_WIDTH_SM,
             Self::Medium => LAYOUT_POPOVER_WIDTH_MD,
             Self::Large => LAYOUT_POPOVER_WIDTH_LG,
+            Self::Project => PROJECT_ICON_POPOVER_WIDTH,
         }
     }
 }

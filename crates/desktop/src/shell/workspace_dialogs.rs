@@ -2,6 +2,7 @@
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
+use super::project_mark::project_mark;
 use std::path::Path;
 
 use super::Shell;
@@ -50,12 +51,12 @@ pub(super) fn project_menu(
         choices.push(None);
     }
     for row in project_menu_rows(projects) {
-        entries.push(
-            MenuItem::new(row.label.clone())
-                .icon(icon_of(row.icon))
-                .checked(chosen == Some(&row.choice))
-                .into(),
-        );
+        let item = MenuItem::new(row.label.clone()).checked(chosen == Some(&row.choice));
+        let item = match row.glyph {
+            Some(glyph) => item.leading_element(move || project_mark(&glyph)),
+            None => item.icon(icon_of(row.icon)),
+        };
+        entries.push(item.into());
         choices.push(Some(ProjectMenuChoice::Project(row.choice)));
     }
     entries.push(MenuEntry::Separator);
@@ -104,6 +105,11 @@ pub(super) enum MenuTarget {
     StartProject(Vec<Option<ProjectMenuChoice>>),
     /// The project menu of the start page with no workspace: chosen to create the workspace in.
     HomeProject(Vec<Option<ProjectMenuChoice>>),
+    /// A Marketplace item card's More menu: the item and its rows.
+    MarketplaceItem {
+        item: crate::model::marketplace::MarketplaceItemId,
+        rows: Vec<crate::model::marketplace::ItemMenuId>,
+    },
 }
 
 #[derive(Debug)]
@@ -708,6 +714,11 @@ impl Shell {
                 // A row that is off, such as "No project" before the service offers it, stands for nothing.
                 None => {}
             },
+            MenuTarget::MarketplaceItem { item, rows } => {
+                if let Some(action) = rows.get(row).copied() {
+                    self.run_item_menu(item, action, cx);
+                }
+            }
         }
     }
 

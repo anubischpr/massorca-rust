@@ -133,16 +133,8 @@ mod tests {
             id: id.to_owned(),
             workspace_id: workspace.to_owned(),
             state,
-            title: None,
-            cols: 80,
-            rows: 24,
-            pid: None,
-            shell: "/bin/zsh".to_owned(),
             cwd: "/repos/oppm".to_owned(),
-            created_at_ms: 1,
-            exit: None,
-            holds_secrets: false,
-            git_credential_guard: false,
+            ..crate::service::fixtures::base_terminal()
         }
     }
 
@@ -150,9 +142,8 @@ mod tests {
         terminal.state = TerminalState::Exited;
         terminal.exit = Some(TerminalExit {
             code,
-            signal: None,
             reason,
-            at_ms: 2,
+            ..crate::service::fixtures::base_terminal_exit()
         });
         terminal
     }
