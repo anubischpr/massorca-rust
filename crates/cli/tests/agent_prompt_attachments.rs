@@ -30,11 +30,20 @@ fn status() -> Value {
 
 /// Declares the kind `fake-mention`: the fake agent, typed prompts, and a mention template for a file (decision 0172).
 fn declare_mention_kind(sandbox: &Sandbox) {
+    declare_kind(
+        sandbox,
+        "fake-mention",
+        json!({ "mode": "argv", "mention": "@{path}" }),
+    );
+}
+
+/// Declares the kind `id`: the fake agent with the `prompt` block given and the fake status table.
+fn declare_kind(sandbox: &Sandbox, id: &str, prompt: Value) {
     let kind = json!({
-        "id": "fake-mention",
+        "id": id,
         "name": "Fake agent that names files",
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
-        "prompt": { "mode": "argv", "mention": "@{path}" },
+        "prompt": prompt,
         "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
         "resume": ["--resume", "{ref}"],
         "status": status()
@@ -42,7 +51,7 @@ fn declare_mention_kind(sandbox: &Sandbox) {
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
     sandbox.prepare_profile("default");
     std::fs::create_dir_all(&dir).expect("create the kinds directory");
-    std::fs::write(dir.join("fake-mention.json"), kind.to_string()).expect("write a kind file");
+    std::fs::write(dir.join(format!("{id}.json")), kind.to_string()).expect("write a kind file");
 }
 
 /// A sandbox with the `fake-mention` kind and a folder workspace `main` whose folder holds `a.txt` and `shot.png`.
@@ -64,10 +73,12 @@ fn terminal_sandbox() -> Sandbox {
 
 /// Starts a `fake-mention` session in `main` and waits until its agent is ready; returns the session id.
 fn start(sandbox: &Sandbox) -> String {
-    let started = sandbox.json_ok(
-        "default",
-        &["agent", "start", "fake-mention", "--workspace", "main"],
-    );
+    start_kind(sandbox, "fake-mention")
+}
+
+/// Starts a session of `kind` in `main` and waits until its agent is ready; returns the session id.
+fn start_kind(sandbox: &Sandbox, kind: &str) -> String {
+    let started = sandbox.json_ok("default", &["agent", "start", kind, "--workspace", "main"]);
     let session = started["id"].as_str().expect("a session id").to_owned();
     until(sandbox, &session, "idle");
     session
@@ -133,6 +144,74 @@ fn a_file_is_named_in_the_text_a_terminal_run_types() {
         .stdout(contains("handed to the terminal"));
     let done = until(&sandbox, &session, "done");
     assert_eq!(done["result"], "done: look @a.txt", "{done}");
+}
+
+#[test]
+fn a_kind_without_a_mention_template_types_the_paths_on_the_prompt_line() {
+    let sandbox = terminal_sandbox();
+    // No template, and plain paste mode: a line break would be typed as an Enter.
+    declare_kind(
+        &sandbox,
+        "fake-plain",
+        json!({ "mode": "argv", "paste": "plain" }),
+    );
+    let session = start_kind(&sandbox, "fake-plain");
+    sandbox
+        .run(
+            "default",
+            &["agent", "prompt", &session, "look", "--attach", "a.txt"],
+        )
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: look (attached: a.txt)", "{done}");
+}
+
+#[test]
+fn an_attachment_path_with_a_line_break_is_refused() {
+    let sandbox = terminal_sandbox();
+    let session = start(&sandbox);
+    assert_eq!(
+        error_code(
+            &sandbox,
+            &[
+                "agent",
+                "prompt",
+                &session,
+                "look",
+                "--attach",
+                "a.txt\nsecond line"
+            ]
+        ),
+        "agent.attachment_invalid"
+    );
+    let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+    assert_eq!(shown["activity"]["state"], "idle", "{shown}");
+}
+
+#[test]
+fn a_chat_prompt_whose_mentions_go_over_the_prompt_limit_is_refused() {
+    let (sandbox, _logs) = chat_sandbox(
+        &[
+            await_input("user"),
+            frame(json!({ "type": "system", "subtype": "init", "claude_code_version": "2.1.330" })),
+            result(true),
+        ],
+        &[],
+        &[],
+    );
+    std::fs::write(sandbox.home().join("notes").join("a.txt"), "a").expect("a text file");
+    let session = start_chat(&sandbox, "say hello");
+    // The text fits the 8 KiB limit on its own; the mention of the file takes it over.
+    let text = "x".repeat(8 * 1024 - 4);
+    assert_eq!(
+        error_code(
+            &sandbox,
+            &[
+                "agent", "prompt", &session, &text, "--force", "--attach", "a.txt"
+            ]
+        ),
+        "agent.prompt_invalid"
+    );
 }
 
 #[test]

@@ -2,6 +2,8 @@
 //! when a prompt is sent and again when a queued prompt is typed. A terminal run types a mention for each file; a chat run
 //! mentions its text files the same way.
 
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use massorca_core_workspace::{FileRefusal, regular_file_inside};
@@ -26,6 +28,10 @@ const IMAGE_TYPES: &[(&str, &str)] = &[
     ("gif", "image/gif"),
     ("webp", "image/webp"),
 ];
+
+/// Why a terminal run refuses a prompt that names an image (decision 0172).
+pub const TERMINAL_IMAGE_REFUSAL: &str =
+    "a terminal run takes no images; attach text files, or use a chat session";
 
 /// Image formats that no run takes, so a prompt naming one is refused (decision 0172).
 const REFUSED_IMAGE_EXTENSIONS: &[&str] = &["avif", "bmp", "heic", "heif", "ico", "tif", "tiff"];
@@ -66,8 +72,17 @@ pub fn resolve(root: &Path, names: &[String]) -> Result<Vec<Attachment>, AgentEr
 }
 
 fn resolve_one(root: &Path, name: &str) -> Result<Attachment, AgentError> {
+    // A control character would break the composed text: a newline typed in plain paste mode is an Enter, which would
+    // submit part of the prompt, or type a line of its own.
+    if has_control(name) {
+        return Err(invalid(name, CONTROL));
+    }
     let file =
         regular_file_inside(root, name).map_err(|refusal| invalid(name, refusal_text(refusal)))?;
+    // The name the file is mentioned by is the one its link reaches, which the person did not type.
+    if has_control(&file.relative) {
+        return Err(invalid(name, CONTROL));
+    }
     let kind = kind_of(&file.path, name)?;
     let bytes = std::fs::metadata(&file.path)
         .map_err(|_| invalid(name, "cannot be read"))?
@@ -87,6 +102,14 @@ fn resolve_one(root: &Path, name: &str) -> Result<Attachment, AgentError> {
         path: file.path,
         kind,
     })
+}
+
+/// The reason of a path that holds a control character.
+const CONTROL: &str = "has a control character in its path";
+
+/// Whether `text` holds a control character: C0 (newline, carriage return and tab included), DEL or C1.
+fn has_control(text: &str) -> bool {
+    text.chars().any(char::is_control)
 }
 
 fn refusal_text(refusal: FileRefusal) -> &'static str {
@@ -138,7 +161,9 @@ pub fn refuse_images(files: &[Attachment], reason: &str) -> Result<(), AgentErro
 
 /// The prompt text with the files named (decision 0172): the text, then a mention for each file that is not an image. A
 /// kind with a `mention` template names each file by it, `{path}` standing for the file's path (`@{path}` for Claude).
-/// A kind without one gets the plain paths, one to a line. Images are never named in the text.
+/// A kind without one gets the plain paths on the same line, `text (attached: a.txt, b/c.md)`: such a kind may type in
+/// plain paste mode, where a line break is an Enter. [`resolve`] refuses a path with a control character, so the
+/// mentions add no line break. Images are never named in the text.
 pub fn with_mentions(text: &str, mention: Option<&str>, files: &[Attachment]) -> String {
     let named: Vec<&str> = files
         .iter()
@@ -157,7 +182,7 @@ pub fn with_mentions(text: &str, mention: Option<&str>, files: &[Attachment]) ->
                 .collect::<Vec<String>>()
                 .join(" "),
         ),
-        None => ("\n", named.join("\n")),
+        None => (" ", format!("(attached: {})", named.join(", "))),
     };
     if text.is_empty() {
         mentions
@@ -166,14 +191,128 @@ pub fn with_mentions(text: &str, mention: Option<&str>, files: &[Attachment]) ->
     }
 }
 
-/// The bytes of an image, base64 encoded for an image block (decision 0172). The file is read when the prompt is sent, and
-/// checked against the image cap again, since it may have grown since it was named.
+/// The bytes of an image, base64 encoded for an image block (decision 0172). The file is read when the prompt is sent,
+/// through one handle: it must still be the regular file its check found, at the same canonical path, and no larger than
+/// the image cap, since it may have changed since it was named.
 pub fn image_data(file: &Attachment) -> Result<String, AgentError> {
-    let bytes = std::fs::read(&file.path).map_err(|_| invalid(&file.relative, "cannot be read"))?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_IMAGE_BYTES {
-        return Err(invalid(&file.relative, "is over the image size limit"));
-    }
+    let bytes = read_checked(&file.path, MAX_IMAGE_BYTES)
+        .map_err(|reason| invalid(&file.relative, reason))?;
     Ok(base64(&bytes))
+}
+
+/// The bytes of the file at `path`, the canonical path its containment check found, read through one handle. The handle
+/// is opened without following a final link and without blocking on a FIFO. It must be a regular file and still the
+/// file at `path` (its final path on Windows, its device and inode on Unix), checked before anything is read, and it is
+/// read through `cap + 1` bytes at most, so a file over the cap is refused without being read whole.
+fn read_checked(path: &Path, cap: u64) -> Result<Vec<u8>, &'static str> {
+    const UNREADABLE: &str = "cannot be read";
+    const OVER: &str = "is over the image size limit";
+    let file = open_no_follow(path).map_err(|_| UNREADABLE)?;
+    let meta = file.metadata().map_err(|_| UNREADABLE)?;
+    if crate::credentials::not_regular(&meta).is_err() {
+        return Err("is not a regular file");
+    }
+    if !handle_is_at(&file, &meta, path) {
+        return Err("is outside the session's workspace");
+    }
+    if meta.len() > cap {
+        return Err(OVER);
+    }
+    let mut bytes = Vec::new();
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| UNREADABLE)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > cap {
+        return Err(OVER);
+    }
+    Ok(bytes)
+}
+
+/// Opens for reading without following a final link: `O_NOFOLLOW` on Unix, with `O_NONBLOCK` so a FIFO put in the
+/// file's place never blocks the open; `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, which opens a reparse point itself.
+fn open_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+/// Whether the open `file` is the file at the canonical `path`: the final path the handle reports is `path`. A folder
+/// of the path swapped for a junction after the check gives the handle another final path.
+#[cfg(windows)]
+fn handle_is_at(file: &File, _meta: &std::fs::Metadata, path: &Path) -> bool {
+    final_path(file).is_some_and(|reached| reached == path)
+}
+
+/// Whether the open `file` is the file at the canonical `path`: the path still resolves to itself, so no link was put
+/// in it, and it names the device and inode of the handle.
+#[cfg(unix)]
+fn handle_is_at(_file: &File, meta: &std::fs::Metadata, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::canonicalize(path).is_ok_and(|resolved| resolved == path)
+        && std::fs::metadata(path).is_ok_and(|at| at.dev() == meta.dev() && at.ino() == meta.ino())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn handle_is_at(_file: &File, _meta: &std::fs::Metadata, _path: &Path) -> bool {
+    false
+}
+
+/// The final path of an open file, from `GetFinalPathNameByHandleW`, in the spelling `dunce::canonicalize` gives: the
+/// `\\?\` prefix is dropped from a drive path. None when it cannot be read, or when it is not a drive path (a UNC or a
+/// device path), which no canonical workspace file path is.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn final_path(file: &File) -> Option<PathBuf> {
+    use std::ffi::{OsString, c_void};
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFinalPathNameByHandleW(
+            file: *mut c_void,
+            path: *mut u16,
+            length: u32,
+            flags: u32,
+        ) -> u32;
+    }
+    // FILE_NAME_NORMALIZED | VOLUME_NAME_DOS, the form std's canonicalize asks for.
+    const FLAGS: u32 = 0;
+    let mut buffer = vec![0u16; 512];
+    loop {
+        let capacity = u32::try_from(buffer.len()).ok()?;
+        // SAFETY: the handle is the open file's own and stays valid while `file` lives; the buffer holds `capacity`
+        // u16s, and the call writes at most that many.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(file.as_raw_handle(), buffer.as_mut_ptr(), capacity, FLAGS)
+        };
+        let length = usize::try_from(length).ok()?;
+        if length == 0 {
+            return None;
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            break;
+        }
+        // The buffer was too small: the length is the size needed, its terminating null included.
+        buffer.resize(length, 0);
+    }
+    let text = OsString::from_wide(&buffer).into_string().ok()?;
+    let drive = text.strip_prefix(r"\\?\")?;
+    let bytes = drive.as_bytes();
+    (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\')
+        .then(|| PathBuf::from(drive))
 }
 
 /// Standard base64 with padding (RFC 4648), the encoding of an image block.
@@ -361,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mention_template_names_each_file_and_a_kind_without_one_lists_the_paths() {
+    fn a_mention_template_names_each_file_and_a_kind_without_one_lists_the_paths_on_the_line() {
         let file = |relative: &str| Attachment {
             relative: relative.to_owned(),
             path: PathBuf::from(relative),
@@ -373,7 +512,13 @@ mod tests {
             "look @a.txt @b/c.md"
         );
         assert_eq!(with_mentions("", Some("@{path}"), &files), "@a.txt @b/c.md");
-        assert_eq!(with_mentions("look", None, &files), "look\na.txt\nb/c.md");
+        let plain = with_mentions("look", None, &files);
+        assert_eq!(plain, "look (attached: a.txt, b/c.md)");
+        assert!(
+            !plain.contains('\n'),
+            "no line break: a plain paste types each as an Enter"
+        );
+        assert_eq!(with_mentions("", None, &files), "(attached: a.txt, b/c.md)");
         let image = Attachment {
             relative: "shot.png".to_owned(),
             path: PathBuf::from("shot.png"),
@@ -386,5 +531,103 @@ mod tests {
             "look",
             "an image is not named in the text"
         );
+    }
+
+    #[test]
+    fn a_path_with_a_control_character_is_refused() {
+        let root = workspace(&[("a.txt", 1)]);
+        for name in [
+            "a\nb.txt",
+            "a\rb.txt",
+            "a\tb.txt",
+            "a\u{7f}.txt",
+            "a\u{85}b.txt",
+        ] {
+            let error = refused(root.path(), &[name]);
+            assert_eq!(error.code, codes::AGENT_ATTACHMENT_INVALID, "{name:?}");
+            assert!(
+                error.message.contains("control character"),
+                "{name:?}: {}",
+                error.message
+            );
+            assert_eq!(error.data, Some(json!({ "path": name })));
+        }
+    }
+
+    /// Links the directory `link` to `target`: a junction on Windows, which needs no privilege, and a symlink elsewhere.
+    fn link_directory(target: &Path, link: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            massorca_process::command("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(link)
+                .arg(target)
+                .output()
+                .is_ok_and(|output| output.status.success())
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    #[test]
+    fn an_image_whose_folder_becomes_a_link_out_after_its_check_is_not_read() {
+        let root = workspace(&[("shots/a.png", 4)]);
+        let elsewhere = workspace(&[("a.png", 6)]);
+        let file = resolve(root.path(), &names(&["shots/a.png"]))
+            .expect("inside")
+            .remove(0);
+        fs::rename(root.path().join("shots"), root.path().join("old")).expect("move the folder");
+        assert!(
+            link_directory(elsewhere.path(), &root.path().join("shots")),
+            "a junction or symlink can be made"
+        );
+        assert!(
+            root.path().join("shots").join("a.png").is_file(),
+            "the link resolves"
+        );
+        let error = image_data(&file).expect_err("refused");
+        assert_eq!(error.code, codes::AGENT_ATTACHMENT_INVALID);
+        assert_eq!(error.data, Some(json!({ "path": "shots/a.png" })));
+    }
+
+    #[test]
+    fn an_image_that_became_a_folder_or_grew_over_the_cap_after_its_check_is_refused() {
+        let root = workspace(&[("dir.png", 4), ("grow.png", 4)]);
+        let files = resolve(root.path(), &names(&["dir.png", "grow.png"])).expect("inside");
+        fs::remove_file(root.path().join("dir.png")).expect("remove");
+        fs::create_dir(root.path().join("dir.png")).expect("folder");
+        assert_eq!(
+            image_data(&files[0]).expect_err("a folder").code,
+            codes::AGENT_ATTACHMENT_INVALID
+        );
+        fs::write(
+            root.path().join("grow.png"),
+            vec![b'x'; MAX_IMAGE_BYTES as usize + 1],
+        )
+        .expect("grow");
+        let error = image_data(&files[1]).expect_err("over the cap");
+        assert!(error.message.contains("size limit"), "{}", error.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_image_replaced_by_a_fifo_is_refused_without_blocking() {
+        let root = workspace(&[("pipe.png", 4)]);
+        let file = resolve(root.path(), &names(&["pipe.png"]))
+            .expect("inside")
+            .remove(0);
+        let path = root.path().join("pipe.png");
+        fs::remove_file(&path).expect("remove");
+        let made = massorca_process::command("mkfifo")
+            .arg(&path)
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(made, "a FIFO can be made");
+        let error = image_data(&file).expect_err("a FIFO");
+        assert_eq!(error.code, codes::AGENT_ATTACHMENT_INVALID);
     }
 }

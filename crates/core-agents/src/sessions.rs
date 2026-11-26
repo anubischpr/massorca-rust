@@ -1483,10 +1483,7 @@ impl Agents {
         let workspace = self.inner.config.workspaces.show_workspace(workspace_id)?;
         let files = attachments::resolve(Path::new(&workspace.path), names)?;
         if !chat {
-            attachments::refuse_images(
-                &files,
-                "a terminal run takes no images; attach text files, or use a chat session",
-            )?;
+            attachments::refuse_images(&files, attachments::TERMINAL_IMAGE_REFUSAL)?;
         }
         Ok(files)
     }

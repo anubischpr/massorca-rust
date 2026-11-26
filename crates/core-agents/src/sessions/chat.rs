@@ -295,6 +295,8 @@ impl Agents {
         force: bool,
     ) -> Result<usize, AgentError> {
         let typed = attachments::with_mentions(text, run.mention.as_deref(), files);
+        // The mentions may take the text over the prompt limit, as on a terminal run (decision 0172).
+        crate::launch::check_prompt(&typed)?;
         let bytes = Self::chat_message(run, &typed, files)?;
         let mut refused = false;
         self.change_journal(session, |writer| {
