@@ -1,7 +1,7 @@
-# Screens 1, 2 and 4 of the Android app (decision 0080, task A11), run by the android-emulator job in ci.yml against a
-# massorca service on the runner, which the emulator reaches at 10.0.2.2. MASSORCA_PAIRING_OFFER is made by the job and
-# passed with -e; it is never printed.
-# Screen 6 (the terminal) is not in this flow: the app has no way to open it yet (mobile/README.md, "Terminal entry point").
+# Screens 1, 2, 4 and 6 of the Android app (decision 0080, task A11), run by the android-emulator job in ci.yml against a
+# massorca service on the runner, which the emulator reaches at 10.0.2.2. The job makes the pairing offer and starts one
+# shell in the e2e-folder workspace (scripts/ci/start-massorca-service.sh). MASSORCA_PAIRING_OFFER is passed with -e and
+# is never printed.
 appId: dev.massorca.app
 ---
 - launchApp:
@@ -31,4 +31,21 @@ appId: dev.massorca.app
     timeout: 60000
 - extendedWaitUntil:
     visible: "e2e-folder, No Git"
+    timeout: 60000
+# The workspace opens on its Changes view. Its Terminal view opens the workspace's only live terminal at once.
+- tapOn: "e2e-folder, No Git"
+- tapOn:
+    id: "workspace-view-terminal"
+# Screen 6: the shell's prompt shows once the terminal page is ready and attached. Until then the input takes no text.
+- extendedWaitUntil:
+    visible: '.*\$.*'
+    timeout: 120000
+- tapOn:
+    id: "terminal-input"
+# The shell prints marker6 and the typed line reads ma''rker6, so the assertion can only match the output.
+- inputText: "echo ma''rker6"
+# Enter on the keyboard submits the line. The send button can sit under the keyboard, so it is not tapped.
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: ".*marker6.*"
     timeout: 60000

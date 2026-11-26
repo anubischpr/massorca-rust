@@ -130,7 +130,7 @@ mod tests {
             label: label.into(),
             default,
             efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
-            fast: false,
+            ..crate::service::fixtures::base_kind_model_choice()
         }
     }
 
@@ -219,7 +219,7 @@ mod tests {
         let mut kind = claude();
         kind.effort = Some(KindEffort {
             levels: vec![level("xhigh", "Ultra")],
-            default: None,
+            ..crate::service::fixtures::base_kind_effort()
         });
         kind.model = Some(KindModel {
             choices: vec![choice("opus", "Opus", true, Some(&["xhigh", "turbo"]))],

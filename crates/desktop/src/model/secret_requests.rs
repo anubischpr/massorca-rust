@@ -79,11 +79,8 @@ mod tests {
             id: id.to_owned(),
             scope: scope.to_owned(),
             name: name.to_owned(),
-            reason: "the agent needs it to call the API".to_owned(),
             session: session.map(str::to_owned),
-            state: "pending".to_owned(),
-            created_at_ms: 1,
-            resolved_at_ms: None,
+            ..crate::service::fixtures::base_secret_request()
         }
     }
 
@@ -92,11 +89,7 @@ mod tests {
             scope: scope.to_owned(),
             name: name.to_owned(),
             owner_scope: scope.to_owned(),
-            linked: false,
-            linked_scopes: Vec::new(),
-            created_at_ms: 1,
-            rotated_at_ms: 1,
-            used_at_ms: None,
+            ..crate::service::fixtures::base_secret_entry()
         }
     }
 

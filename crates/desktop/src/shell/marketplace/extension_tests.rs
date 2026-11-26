@@ -14,9 +14,9 @@ use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionLog,
-    ExtensionRemoved, ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionRunOutcome,
-    ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind,
-    SourceRef, UninstallEffects,
+    ExtensionRemoved, ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionState,
+    InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
+    UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -32,20 +32,12 @@ pub(super) fn catalogue_package() -> ExtensionItem {
         state: ExtensionState::Available,
         installed: None,
         listing: Listing {
-            logo: None,
             category: "extensions".to_owned(),
-            developer: None,
-            mention: None,
-            banner: None,
-            connections: Vec::new(),
-            website: None,
-            privacy: None,
-            terms: None,
+            ..crate::service::fixtures::base_listing()
         },
         permissions: Vec::new(),
         risk: Risk {
-            level: RiskLevel::Low,
-            reasons: Vec::new(),
+            ..crate::service::fixtures::base_risk()
         },
         readme: None,
         agents: Vec::new(),
@@ -53,14 +45,7 @@ pub(super) fn catalogue_package() -> ExtensionItem {
         detected: None,
         settings: Vec::new(),
         uninstall: UninstallEffects {
-            package_files: true,
-            storage: false,
-            settings: Vec::new(),
-            secret_names: Vec::new(),
-            secrets_unscoped: false,
-            connections: Vec::new(),
-            cli_binaries: Vec::new(),
-            offered_agent_homes: Vec::new(),
+            ..crate::service::fixtures::base_uninstall_effects()
         },
         problem: None,
     }
@@ -71,7 +56,6 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
     ExtensionReview {
         id: "acme.notes".to_owned(),
         name: "Notes".to_owned(),
-        version: "1.0.0".to_owned(),
         publisher: "acme".to_owned(),
         description: "Keeps notes beside the workspace.".to_owned(),
         source: SourceRef {
@@ -80,23 +64,18 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
         },
         sha256: "0123abcd".to_owned(),
         permissions: vec![Permission {
-            kind: "files:read".to_owned(),
             reason: "Reads the notes.".to_owned(),
-            scope: None,
+            ..crate::service::fixtures::base_permission()
         }],
         risk: Risk {
             level: RiskLevel::Medium,
-            reasons: Vec::new(),
+            ..crate::service::fixtures::base_risk()
         },
         listing: catalogue_package().listing,
-        kinds: Vec::new(),
-        mcp_servers: Vec::new(),
         cli: if runs_installer {
             vec![CliPlan {
                 agent: "notes".to_owned(),
                 binary: Some("notes".to_owned()),
-                verify: None,
-                uninstall: None,
                 state: CliPlanState::WillRun {
                     command: vec![
                         "npm".to_owned(),
@@ -106,12 +85,14 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
                     ],
                     runs_package_scripts: true,
                 },
+                ..crate::service::fixtures::base_cli_plan()
             }]
         } else {
             Vec::new()
         },
         runs_installer,
         consent: CONSENT.to_owned(),
+        ..crate::service::fixtures::base_extension_review()
     }
 }
 
@@ -164,14 +145,12 @@ fn installed_package(enabled: bool) -> ExtensionItem {
         ExtensionState::Disabled
     };
     item.installed = Some(InstalledInfo {
-        version: "1.0.0".to_owned(),
         source: SourceRef {
             kind: SourceKind::Catalogue,
             reference: "acme.notes".to_owned(),
         },
         sha256: "0123abcd".to_owned(),
-        installed_at_ms: 0,
-        cli: Vec::new(),
+        ..crate::service::fixtures::base_installed_info()
     });
     item
 }
@@ -199,16 +178,11 @@ fn next_inspect(rig: &mut Rig) -> oneshot::Sender<Result<ExtensionReview, Refusa
 
 fn installed() -> ExtensionInstalled {
     ExtensionInstalled {
-        id: "acme.notes".to_owned(),
-        version: "1.0.0".to_owned(),
         source: SourceRef {
             kind: SourceKind::Catalogue,
             reference: "acme.notes".to_owned(),
         },
-        sha256: "0123abcd".to_owned(),
-        enabled: true,
-        installed_at_ms: 0,
-        cli: Vec::new(),
+        ..crate::service::fixtures::base_extension_installed()
     }
 }
 
@@ -349,9 +323,7 @@ fn the_enabled_switch_sends_the_change_and_shows_only_what_the_service_then_repo
     );
 
     let _ = reply.send(Ok(ExtensionEnabled {
-        id: "acme.notes".to_owned(),
-        enabled: false,
-        changed: true,
+        ..crate::service::fixtures::base_extension_enabled()
     }));
     rig.updates
         .send(StoreUpdate::Extensions(ExtensionsRead {
@@ -418,10 +390,7 @@ fn uninstall_sends_the_removal_and_closes_the_confirm_when_the_service_answers(
             assert!(!params.delete_agent_homes && !params.uninstall_cli);
             assert_eq!(params.uninstall_consent, None);
             let _ = reply.send(Ok(ExtensionRemoved {
-                id: "acme.notes".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
-                cli: Vec::new(),
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("the confirm sends the removal to the service"),
@@ -477,9 +446,7 @@ fn installed_with_cli() -> ExtensionItem {
         info.cli = vec![massorca_protocol::methods::extensions::CliRecord {
             agent: "notes".to_owned(),
             binary: "notes".to_owned(),
-            detected_before_install: false,
-            installer: None,
-            installed_by_package: true,
+            ..crate::service::fixtures::base_cli_record()
         }];
     }
     item
@@ -498,10 +465,7 @@ fn a_removal_that_takes_the_cli_sends_uninstall_cli_once_the_box_is_ticked(
             assert_eq!(params.id, "acme.notes");
             assert!(params.uninstall_cli, "the ticked CLI removal is asked for");
             let _ = reply.send(Ok(ExtensionRemoved {
-                id: "acme.notes".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
-                cli: Vec::new(),
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("the confirm sends the removal to the service"),
@@ -520,10 +484,7 @@ fn an_unticked_cli_removal_keeps_the_cli_as_today(cx: &mut TestAppContext) {
                 "the CLI stays unless the box is ticked"
             );
             let _ = reply.send(Ok(ExtensionRemoved {
-                id: "acme.notes".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
-                cli: Vec::new(),
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("the confirm sends the removal to the service"),
@@ -539,17 +500,14 @@ fn a_cli_that_was_not_removed_is_said_under_the_item(cx: &mut TestAppContext) {
     match rig.script.next() {
         Some(Command::Extension(ExtensionCommand::Remove { reply, .. })) => {
             let _ = reply.send(Ok(ExtensionRemoved {
-                id: "acme.notes".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
                 cli: vec![massorca_protocol::methods::extensions::CliRemoval {
-                    agent: "notes".to_owned(),
-                    binary: "notes".to_owned(),
                     action: massorca_protocol::methods::extensions::CliRemovalAction::Failed {
                         command: vec!["npm".to_owned(), "uninstall".to_owned()],
                         message: "the uninstall exited with code 1".to_owned(),
                     },
+                    ..crate::service::fixtures::base_cli_removal()
                 }],
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("the confirm sends the removal to the service"),
@@ -577,11 +535,7 @@ fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
     item.listing.category = "agents".to_owned();
     item.agents = vec![massorca_protocol::methods::extensions::AgentItem {
         id: kind.to_owned(),
-        detected: false,
-        program_path: None,
-        path_source: None,
-        cli_installed_by_package: false,
-        cli: None,
+        ..crate::service::fixtures::base_agent_item()
     }];
     item
 }
@@ -597,14 +551,12 @@ fn installed_agent(kind: &str, enabled: bool) -> ExtensionItem {
         },
     );
     item.installed = Some(InstalledInfo {
-        version: "1.0.0".to_owned(),
         source: SourceRef {
             kind: SourceKind::Catalogue,
             reference: format!("massorca.{kind}"),
         },
         sha256: "0123abcd".to_owned(),
-        installed_at_ms: 0,
-        cli: Vec::new(),
+        ..crate::service::fixtures::base_installed_info()
     });
     item
 }
@@ -705,7 +657,7 @@ fn a_built_in_agent_switch_turns_its_package_on_and_off(cx: &mut TestAppContext)
             let _ = reply.send(Ok(ExtensionEnabled {
                 id: "massorca.codex".to_owned(),
                 enabled: true,
-                changed: true,
+                ..crate::service::fixtures::base_extension_enabled()
             }));
         }
         _ => panic!("the switch sends the agent's package to the service"),
@@ -732,9 +684,7 @@ fn a_built_in_agent_uninstall_removes_its_package_and_leaves_its_cli(cx: &mut Te
             );
             let _ = reply.send(Ok(ExtensionRemoved {
                 id: "massorca.codex".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
-                cli: Vec::new(),
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("the confirm sends the agent's removal to the service"),
@@ -745,8 +695,7 @@ fn a_built_in_agent_uninstall_removes_its_package_and_leaves_its_cli(cx: &mut Te
 fn tampered_package() -> ExtensionItem {
     let mut item = installed_package(true);
     item.problem = Some(ItemProblem {
-        code: "extension.tampered".to_owned(),
-        message: "the files changed".to_owned(),
+        ..crate::service::fixtures::base_item_problem()
     });
     item
 }
@@ -808,10 +757,7 @@ fn a_tampered_package_refuses_enable_and_can_still_be_uninstalled(cx: &mut TestA
         Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
             assert_eq!(params.id, "acme.notes");
             let _ = reply.send(Ok(ExtensionRemoved {
-                id: "acme.notes".to_owned(),
-                version: "1.0.0".to_owned(),
-                failures: Vec::new(),
-                cli: Vec::new(),
+                ..crate::service::fixtures::base_extension_removed()
             }));
         }
         _ => panic!("uninstall is still sent for a tampered package"),
@@ -1249,10 +1195,7 @@ fn details_start_collapsed_open_on_show_details_and_leave_the_install_request_un
 fn removing_a_package_with_connections_deletes_its_agent_homes(cx: &mut TestAppContext) {
     let mut package = installed_package(true);
     package.listing.connections = vec![massorca_protocol::methods::extensions::Connection {
-        id: "notes-login".to_owned(),
-        kind: "agent-login".to_owned(),
-        title: "Notes account".to_owned(),
-        multiple: true,
+        ..crate::service::fixtures::base_connection()
     }];
     let (mut rig, cx, _) = open_listed(cx, vec![package.clone()], vec![package]);
     click(cx, "button:marketplace-uninstall");
@@ -1285,12 +1228,9 @@ fn an_agent_page_header_draws_the_agents_own_mark(cx: &mut TestAppContext) {
 /// The service's history of the installed package: rollback and the log offered, and an update that replaced 0.9.0.
 fn kept_history() -> ExtensionHistory {
     let update = ExtensionRun {
-        at_ms: 1_700_000_000_000,
-        action: ExtensionRunAction::Update,
         from_version: Some("0.9.0".to_owned()),
         to_version: Some("1.0.0".to_owned()),
-        outcome: ExtensionRunOutcome::Ok,
-        output: Vec::new(),
+        ..crate::service::fixtures::base_extension_run()
     };
     ExtensionHistory {
         rollback_offered: true,
@@ -1304,16 +1244,13 @@ fn kept_history() -> ExtensionHistory {
 /// The package as a rollback answers it: the version it restores, installed.
 fn restored_package() -> ExtensionInstalled {
     ExtensionInstalled {
-        id: "acme.notes".to_owned(),
         version: "0.9.0".to_owned(),
         source: SourceRef {
             kind: SourceKind::Catalogue,
             reference: "acme.notes".to_owned(),
         },
-        sha256: "0123abcd".to_owned(),
-        enabled: true,
         installed_at_ms: 1_700_000_000_000,
-        cli: Vec::new(),
+        ..crate::service::fixtures::base_extension_installed()
     }
 }
 
@@ -1474,12 +1411,11 @@ fn logged_run(
     output: Vec<String>,
 ) -> ExtensionRun {
     ExtensionRun {
-        at_ms: 1_700_000_000_000,
         action,
         from_version: from.map(str::to_owned),
         to_version: to.map(str::to_owned),
-        outcome: ExtensionRunOutcome::Ok,
         output,
+        ..crate::service::fixtures::base_extension_run()
     }
 }
 

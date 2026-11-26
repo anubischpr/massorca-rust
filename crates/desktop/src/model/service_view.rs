@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
 use super::hosts::{HostTone, host_state};
+use super::preflight::preflight_notice;
+use super::project_icon::ProjectGlyph;
 use super::shell::{
     Agent, AgentState, HostGroup, HostReach, PlaceholderRow, ProjectGroup, ServiceNotice,
     ServiceStatus, ServiceTone, ShellSnapshot, StatusBarModel, WorkspaceRow,
@@ -15,7 +17,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::{Project, ProjectIcon, ProjectKind};
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -50,7 +52,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             .map(|project| ProjectGroup {
                 id: project.id.clone(),
                 name: project.name.clone(),
-                emoji: project.icon.as_ref().and_then(emoji_of),
+                icon: ProjectGlyph::of(project.icon.as_ref()),
                 owner: remote_owner_of(project),
                 plain_folder: project.kind == ProjectKind::Folder,
                 hosts: vec![HostGroup {
@@ -82,7 +84,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         projects.push(ProjectGroup {
             id: NO_PROJECT_LABEL.to_owned(),
             name: NO_PROJECT_LABEL.to_owned(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: false,
             hosts: vec![HostGroup {
@@ -112,6 +114,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         prototypes: 0,
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
+        preflight: preflight_notice(state.connection.is_connected(), state.service_git.as_ref()),
     }
 }
 
@@ -302,14 +305,6 @@ fn remote_owner_of(_project: &Project) -> Option<String> {
     None
 }
 
-/// The emoji an icon is; the other icon kinds are not drawn yet.
-fn emoji_of(icon: &ProjectIcon) -> Option<String> {
-    match icon {
-        ProjectIcon::Emoji { emoji } => Some(emoji.clone()),
-        ProjectIcon::Lucide { .. } | ProjectIcon::Image { .. } => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,7 +316,7 @@ mod tests {
         fixtures::{agent, project, workspace},
     };
     use massorca_client::HostRecord;
-    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+    use massorca_protocol::methods::agents::{Activity, ActivityState, Outcome};
     use massorca_protocol::methods::config::ConfigValue;
 
     fn connected() -> ConnectionState {
@@ -797,11 +792,8 @@ mod tests {
                 name: name.into(),
                 server: format!("{name}-server"),
                 addresses: vec!["100.64.0.10:7347".into()],
-                pin: "sha256:test".into(),
-                device_id: "dev-1".into(),
-                device_name: "laptop".into(),
                 scopes: vec!["read".into()],
-                paired_at_ms: 1,
+                ..crate::service::fixtures::base_host_record()
             },
             link,
             last_connected: None,
@@ -922,9 +914,7 @@ mod tests {
         let report = |state, outcome| Activity {
             state,
             outcome,
-            source: ActivitySource::Hook,
-            at_ms: 1,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         };
         let mut working = agent("s1", "w1", 10);
         working.activity = Some(report(ActivityState::Working, None));

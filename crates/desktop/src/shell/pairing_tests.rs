@@ -177,11 +177,7 @@ fn device(id: &str, name: &str) -> DeviceInfo {
         id: id.into(),
         name: name.into(),
         scopes: vec!["read".into()],
-        key_pin: "sha256:test".into(),
-        paired_at_ms: 0,
-        last_seen_ms: None,
-        revoked_at_ms: None,
-        current: false,
+        ..crate::service::fixtures::base_device_info()
     }
 }
 
@@ -299,7 +295,9 @@ fn retire_offer_names_the_shown_offer_and_clears_it_once_the_service_agrees(
     cx.run_until_parked();
     let (_, reply) = next_retire(&mut rig);
     reply
-        .send(Ok(PairingCancelled { cancelled: 1 }))
+        .send(Ok(PairingCancelled {
+            ..crate::service::fixtures::base_pairing_cancelled()
+        }))
         .expect("the page listens");
     cx.run_until_parked();
     assert_eq!(
@@ -318,7 +316,9 @@ fn a_new_offer_retires_the_one_shown_first(cx: &mut TestAppContext) {
     let (id, reply) = next_retire(&mut rig);
     assert_eq!(id.as_deref(), Some("id-offer-one"));
     reply
-        .send(Ok(PairingCancelled { cancelled: 1 }))
+        .send(Ok(PairingCancelled {
+            ..crate::service::fixtures::base_pairing_cancelled()
+        }))
         .expect("the page listens");
     cx.run_until_parked();
     assert!(

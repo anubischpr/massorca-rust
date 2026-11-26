@@ -53,7 +53,9 @@ placeholder from a typed name. This slice builds the service primitive only.
 
 - Only service-chosen names are ever renamed, and only while the branch is still private to this computer.
 - `name_generated`, the new method and the new codes are optional additions; an older client ignores them.
-- The trigger and the name generation are a later slice: after the first agent work, a one-shot
+- The trigger and the name generation are a later slice (decision 0118): after the first agent work, a one-shot
   `Agents::generate_title` from the agent session produces the text, and the service calls this primitive with
-  `expected_branch` set to the branch it saw.
+  `expected_branch` set to the branch it saw. A rename by that trigger ends the name's generated state: the same store
+  write sets `name_generated` to `0`, so the name is the person's from then on. A client's `workspace.rename` keeps the
+  flag set, as above.
 - `massorca workspace rename <WORKSPACE> <NEW_NAME> --from-generated [--expected-branch B]` is the debug entry point.
