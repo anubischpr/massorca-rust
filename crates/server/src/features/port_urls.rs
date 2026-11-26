@@ -1,25 +1,16 @@
 //! The URL a listening port is opened at (decision 0131): the last `http(s)` URL with that port that its terminal printed,
 //! as dev servers print `Local: http://localhost:5173/`, else a guess from the socket's address.
 
-/// The URL for `port`, and whether the terminal printed it. A printed URL on a loopback or wildcard host wins over one on
-/// another host (a dev server's `Network:` line); among equals the last one printed wins.
+/// The URL for `port`, and whether the terminal printed it. Only a printed URL on a loopback or wildcard host counts, the
+/// last one printed; a URL on any other host (a dev server's `Network:` line, or anything a program prints) is ignored, so
+/// the URL stays informational and never points away from the host.
 pub(crate) fn advertised_url(screen: &str, port: u16, connect_host: &str) -> (String, bool) {
-    let mut local = None;
-    let mut other = None;
-    for url in printed_urls(screen) {
-        let Some((host, url_port)) = authority(url) else {
-            continue;
-        };
-        if url_port != port {
-            continue;
-        }
-        if is_local_host(host) {
-            local = Some(url);
-        } else {
-            other = Some(url);
-        }
-    }
-    match local.or(other) {
+    let local = printed_urls(screen)
+        .filter(|url| {
+            authority(url).is_some_and(|(host, url_port)| url_port == port && is_local_host(host))
+        })
+        .last();
+    match local {
         Some(url) => (without_query(url).to_owned(), true),
         None => (guessed_url(connect_host, port), false),
     }
@@ -81,8 +72,12 @@ fn authority(url: &str) -> Option<(&str, u16)> {
     ))
 }
 
+/// `localhost`, or a loopback or wildcard address (127.0.0.0/8, `::1`, `0.0.0.0`, `::`).
 fn is_local_host(host: &str) -> bool {
-    matches!(host, "localhost" | "0.0.0.0" | "::" | "::1") || host.starts_with("127.")
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback() || address.is_unspecified())
 }
 
 #[cfg(test)]
@@ -115,11 +110,19 @@ mod tests {
             advertised_url(token, 9000, "localhost"),
             ("http://localhost:9000".to_owned(), true)
         );
-        let network_only = "Network: http://10.0.0.2:4000";
+        // A URL on any other host is not trusted: the guess stands in for it.
+        let network_only = "Network: http://10.0.0.2:4000 or https://evil.example:4000/login";
         assert_eq!(
             advertised_url(network_only, 4000, "localhost"),
-            ("http://10.0.0.2:4000".to_owned(), true)
+            ("http://localhost:4000/".to_owned(), false)
         );
+        for host in ["127.1.2.3", "[::1]", "0.0.0.0", "[::]"] {
+            let screen = format!("at http://{host}:4000/x");
+            assert_eq!(
+                advertised_url(&screen, 4000, "localhost"),
+                (format!("http://{host}:4000/x"), true)
+            );
+        }
     }
 
     #[test]
