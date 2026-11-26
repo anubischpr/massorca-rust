@@ -152,7 +152,12 @@
       { "id": "opus", "label": "Opus", "fast": true },
       { "id": "sonnet", "label": "Sonnet", "default": true },
       { "id": "haiku", "label": "Haiku", "efforts": [] }
-    ]
+    ],
+    "discover": {
+      "args": ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"],
+      "stdin": "{\"type\":\"control_request\",\"request_id\":\"massorca-model-discovery\",\"request\":{\"subtype\":\"list_models\"}}\n",
+      "format": "claude-control"
+    }
   },
   "effort": {
     "flag": "--effort",

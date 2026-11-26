@@ -10,8 +10,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentKind,
-    AgentListParams, AgentPromptParams, AgentResumeParams, AgentSession, AgentSessionList,
-    AgentSetModeParams, AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel,
+    AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -32,6 +33,8 @@ use crate::terminal_attach;
 pub enum AgentCommand {
     /// Lists the agent kinds: built in and declared in the profile, each one's package state, whether its program is detected, and any problems.
     Kinds,
+    /// Lists the models a kind's picker offers for an account: the declared models, then the ones its vendor CLI lists.
+    Models(ModelsArgs),
     /// Starts an agent in a workspace. The agent keeps running after this command exits.
     Start(AgentStartArgs),
     /// Lists agent sessions, newest first: every session, or those of one workspace.
@@ -274,6 +277,18 @@ pub struct AgentHookArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ModelsArgs {
+    /// Agent kind, for example claude.
+    pub kind: String,
+    /// Account whose models are listed. Without it, the kind's active account, or the vendor's usual home when it has none.
+    #[arg(long)]
+    pub account: Option<String>,
+    /// Asks the vendor CLI again instead of answering from the cache.
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AgentStartArgs {
     /// Agent kind, for example claude.
     pub kind: String,
@@ -376,6 +391,35 @@ pub struct AgentListArgs {
     pub archived: bool,
 }
 
+/// The `agent models` text: one line per model with its default, its efforts and where it came from, then the listing's
+/// failure when it has one.
+fn models_text(models: &AgentModels) -> Vec<String> {
+    let mut lines: Vec<String> = models
+        .models
+        .iter()
+        .map(|model| {
+            let default = if model.default { "  default" } else { "" };
+            let efforts = match &model.efforts {
+                Some(levels) if levels.is_empty() => "  efforts: none".to_owned(),
+                Some(levels) => format!("  efforts: {}", levels.join(", ")),
+                None => String::new(),
+            };
+            let source = match model.source {
+                ModelSource::Declared => "declared",
+                ModelSource::Discovered => "listed",
+            };
+            format!("{}  {}{default}{efforts}  {source}", model.id, model.label)
+        })
+        .collect();
+    if models.models.is_empty() {
+        lines.push("no models".to_owned());
+    }
+    if let Some(error) = &models.error {
+        lines.push(format!("listing failed: {}", error.message));
+    }
+    lines
+}
+
 /// The `agent kinds` text: the shared table and problems, then a `models:` and an `efforts:` line for each kind that
 /// declares choices (decision 0096). The ids keep their declared order, and the default is marked.
 fn kinds_text(kinds: &[AgentKind]) -> Vec<String> {
@@ -461,6 +505,16 @@ pub async fn execute(
         AgentCommand::Kinds => {
             let kinds = client.agent_kinds().await?;
             output.success(&kinds, &kinds_text(&kinds.kinds));
+        }
+        AgentCommand::Models(args) => {
+            let models = client
+                .agent_models(&AgentModelsParams {
+                    kind: args.kind,
+                    account: args.account,
+                    refresh: args.refresh,
+                })
+                .await?;
+            output.success(&models, &models_text(&models));
         }
         AgentCommand::Start(args) => {
             let params = AgentStartParams {
