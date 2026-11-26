@@ -2,6 +2,7 @@
 
 mod access;
 mod board;
+mod bot_advanced;
 mod card_menu;
 mod conference;
 mod dialogs;

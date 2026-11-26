@@ -5,6 +5,7 @@ mod access;
 mod board;
 mod board_move;
 mod bot_edit;
+mod bot_options;
 mod card_menu;
 mod filters;
 mod live;
@@ -22,6 +23,9 @@ pub use access::{access_change, access_line, new_team_access_hint};
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
 pub use board_move::{BoardMove, board_move};
 pub use bot_edit::{BotChange, BotForm};
+pub use bot_options::{
+    KindOptions, OptionRow, effort_rows, kind_options, model_rows, options_of, row_index,
+};
 pub use card_menu::{CardMenuRow, card_menu_rows};
 pub use filters::{BoardFilterRow, ProjectFilter, board_filter_rows};
 pub use live::{agent_of_kind, live_teams};
