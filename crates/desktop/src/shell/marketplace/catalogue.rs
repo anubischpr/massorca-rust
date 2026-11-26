@@ -3,7 +3,7 @@
 
 use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
-use super::installed::installed_rows;
+use super::installed;
 use super::item::problem_banner;
 use super::item_images;
 use super::more_menu::{self, MoreMenu};
@@ -68,7 +68,9 @@ pub(super) fn nav_column(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let (installed, updates) = counts(&frame.snapshot);
+    let (listed_installed, updates) = counts(&frame.snapshot);
+    // Your apps: the installed skills and services are listed beside the packages, so they count too.
+    let installed = listed_installed + frame.apps.rows.len();
     let theme = *cx.theme();
     let mut entries = vec![
         NavEntry {
@@ -170,7 +172,7 @@ fn nav_row(
 }
 
 /// The words of the empty state of a view: the search that matched nothing, or the view itself.
-fn empty_copy(page: MarketplacePage, query: &str) -> (String, &'static str) {
+pub(super) fn empty_copy(page: MarketplacePage, query: &str) -> (String, &'static str) {
     if !query.trim().is_empty() {
         return (
             no_match_text(query),
@@ -280,6 +282,12 @@ pub(super) fn catalogue_view(
     let theme = *cx.theme();
     let p = &theme.palette;
     let items = listed(&frame.snapshot, page, &frame.query);
+    let listed_apps = match page {
+        MarketplacePage::Installed => {
+            installed::matching_apps(&frame.apps.rows, &frame.query).len()
+        }
+        _ => 0,
+    };
     let title = heading(page);
     let header = div()
         .flex()
@@ -312,19 +320,18 @@ pub(super) fn catalogue_view(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(p.text.tertiary)
-                .child(count_line(items.len())),
+                .child(count_line(items.len() + listed_apps)),
         );
-    let body = if items.is_empty() {
-        let (title, explanation) = empty_copy(page, &frame.query);
-        EmptyState::new("marketplace-empty", title)
-            .explanation(explanation)
-            .into_any_element()
-    } else {
-        match page {
-            MarketplacePage::Discover => discover_groups(frame, &items, cx),
-            MarketplacePage::Installed => installed_rows(frame, &items, window, cx),
-            _ => card_grid(frame, &items, cx),
+    let body = match page {
+        MarketplacePage::Installed => installed::installed_body(frame, &items, window, cx),
+        _ if items.is_empty() => {
+            let (title, explanation) = empty_copy(page, &frame.query);
+            EmptyState::new("marketplace-empty", title)
+                .explanation(explanation)
+                .into_any_element()
         }
+        MarketplacePage::Discover => discover_groups(frame, &items, cx),
+        _ => card_grid(frame, &items, cx),
     };
     let column = div()
         .flex()
