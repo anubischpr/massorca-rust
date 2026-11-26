@@ -603,25 +603,6 @@ impl Agents {
         Ok(depth < self.delegation_depth_limit()?)
     }
 
-    /// The id of the session at the top of `row`'s delegation chain: `row` itself for a root.
-    pub(super) fn tree_root_of(&self, row: &AgentSessionRow) -> Result<String, AgentError> {
-        let mut root = row.id.clone();
-        let mut parent = row.parent_id.clone();
-        let mut walked = 0;
-        while let Some(id) = parent {
-            walked += 1;
-            if walked > MAX_CHAIN_WALK {
-                return Err(chain_too_long(&row.id));
-            }
-            parent = self
-                .store()
-                .get_agent_session(&id)?
-                .and_then(|link| link.parent_id);
-            root = id;
-        }
-        Ok(root)
-    }
-
     /// What children `row` could delegate now, where it works when it shares its parent's folder, and why its current
     /// run got no instructions (decision 0161). A lookup that fails leaves its part absent rather than failing the view.
     pub(super) fn delegation_view(&self, row: &AgentSessionRow) -> DelegationView {

@@ -259,6 +259,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
     } else {
         None
     };
+    // Probed once per installed program (decision 0101, D10).
+    let chat = crate::chat::version::kind_chat(decl, program_path.as_deref());
     AgentKind {
         id: entry.id.clone(),
         name: decl.name.clone(),
@@ -277,7 +279,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
-        chat: None,
+        chat,
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
     }

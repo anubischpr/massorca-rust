@@ -309,6 +309,7 @@ mod tests {
             resume: None,
             delegation: None,
             notes: Vec::new(),
+            shared_folder_with: Vec::new(),
         }))
     }
 
