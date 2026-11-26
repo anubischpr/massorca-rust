@@ -3763,6 +3763,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-core-tools"
+version = "0.1.0"
+dependencies = [
+ "massorca-core-terminal",
+ "massorca-process",
+ "massorca-protocol",
+ "tempfile",
+]
+
+[[package]]
 name = "massorca-core-vault"
 version = "0.1.0"
 dependencies = [
@@ -3933,6 +3943,7 @@ dependencies = [
  "massorca-core-schedule",
  "massorca-core-store",
  "massorca-core-terminal",
+ "massorca-core-tools",
  "massorca-core-vault",
  "massorca-core-watch",
  "massorca-core-workspace",

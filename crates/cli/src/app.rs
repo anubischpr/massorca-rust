@@ -233,6 +233,10 @@ fn service_command(
             let target = globals.target()?;
             block_on(control::info(&target, globals.autostart, output))
         }
+        ServiceCommand::Tools { refresh } => {
+            let target = globals.target()?;
+            block_on(control::tools(&target, globals.autostart, refresh, output))
+        }
         ServiceCommand::Stop => {
             globals.local_only("service stop")?;
             block_on(control::stop(&globals.profile()?, output))

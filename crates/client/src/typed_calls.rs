@@ -22,7 +22,7 @@ use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef,
 };
-use massorca_protocol::methods::service::{self, ServiceInfo};
+use massorca_protocol::methods::service::{self, ServiceInfo, ToolList, ToolsParams};
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalInputParams,
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
@@ -56,6 +56,17 @@ impl Client {
     /// `service.info`: the service's identity, protocol version, capabilities and process.
     pub async fn service_info(&self) -> Result<ServiceInfo, ClientError> {
         self.call(service::INFO, &()).await
+    }
+
+    /// `service.tools`: the developer tools on the service's host. `refresh` detects them again instead of answering
+    /// from the service's last detection.
+    pub async fn service_tools(&self, refresh: bool) -> Result<ToolList, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::SERVICE_TOOLS),
+            capabilities::SERVICE_TOOLS,
+            "service.tools",
+        )?;
+        self.call(service::TOOLS, &ToolsParams { refresh }).await
     }
 
     /// `service.shutdown`: asks the service to stop. The request is answered before the service winds down.

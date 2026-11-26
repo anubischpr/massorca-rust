@@ -54,6 +54,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::PROJECTS,
             capabilities::SCRIPT_TRUST,
             capabilities::SECRETS,
+            capabilities::SERVICE_TOOLS,
             capabilities::SERVICE,
             capabilities::SERVICES,
             capabilities::SKILLS,
