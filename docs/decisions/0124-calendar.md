@@ -1,7 +1,7 @@
 # 0124: Calendar of routines and automations (AUTO-30, first version)
 
 Status: accepted, 2026-11-25. The Calendar shows the runs of routines and automations in one week. Done runs show on
-request; the Show done switch is not saved between starts yet (see Gaps).
+request, and the Show done switch is kept for each viewer.
 
 ## Context
 
@@ -27,16 +27,17 @@ automation on one timeline. Routines and automations are one core schedule engin
   the Routines page and one made by a bot in the Conference room are the same stored rows, so both appear.
 - D5 Core schedule. `massorca-core-schedule` gains `occurrences_between` and `wall_clock_in`, in a new module. The
   occurrence search and the cron rules of decision 0123 are unchanged.
-- D6 Server. Routines are read from the store. Automations are read through their feature's own module, with their
-  compiled schedule and the automation view. The routine schedule mapping is a copy of the one the Bot Teams routine
-  methods hold, because that module does not expose it; a later change can share it.
+- D6 Server. Routines are read from the store, and their schedules come from `teams::routines::schedule_of`, the mapping
+  the Bot Teams routine methods use too. Automations are read through their feature's own module, with their compiled
+  schedule and the automation view.
 
 ## Desktop
 
 - D7 Page. The Calendar is a full page opened from the activity rail. It has Previous, Today and Next, the week's
   range title, and the Show done switch. Each day is a column with its runs in time order; an empty day reads
   "Nothing scheduled", and an empty week shows the empty state. A click on a routine opens its team's Routines page,
-  and a click on an automation opens the Automations page.
+  and a click on an automation opens the Automations page. The Show done switch is saved for this viewer in the
+  desktop's `ui-state.json` and read at start, so the page opens as it was left; it is off until it is switched on.
 - D8 Modes. The chips are All, Team (Bot Teams routines) and Automations (Workspaces automations), in the words of the
   Calendar artboard (`docs/design/artboards/bt-calendar-week.dc.html`).
 - D9 Older services. A service without `calendar/1` is refused with `service.capability_missing`. The page says the
@@ -51,7 +52,5 @@ automation on one timeline. Routines and automations are one core schedule engin
 
 - Day and Month views, and the hour grid that places runs on the artboard. The page lists each day's runs in time
   order.
-- The Show done switch is not saved between starts. The desktop's saved UI state (`crates/desktop/src/ui_state.rs`) is
-  the mechanism for it; that file is outside this change and needs its own approval.
 - The artboard's team picker is not built. The Team chip filters by kind.
 - Automation runs and their done state wait for AUTO-03.
