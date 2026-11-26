@@ -78,6 +78,11 @@ impl Client {
         self.shared.closed().await;
     }
 
+    /// Whether the connection has ended, without waiting. See [`Client::closed`].
+    pub fn is_closed(&self) -> bool {
+        self.shared.is_closed()
+    }
+
     /// Calls a method and decodes its result. A failure the service reports is `ClientError::Remote`.
     pub async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, ClientError>
     where

@@ -79,6 +79,10 @@ impl Shared {
         }
     }
 
+    pub(crate) fn is_closed(&self) -> bool {
+        lock(&self.routes).closed
+    }
+
     pub(crate) fn forget(&self, id: u64) {
         lock(&self.routes).pending.remove(&id);
     }
