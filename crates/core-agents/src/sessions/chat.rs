@@ -26,6 +26,7 @@ use super::{
     write_files,
 };
 use crate::attachments::{self, Attachment};
+use crate::chat::adapter::PromptImage;
 use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
@@ -294,7 +295,7 @@ impl Agents {
         force: bool,
     ) -> Result<usize, AgentError> {
         let typed = attachments::with_mentions(text, run.mention.as_deref(), files);
-        let bytes = lock(&run.adapter).encode_prompt(&typed);
+        let bytes = Self::chat_message(run, &typed, files)?;
         let mut refused = false;
         self.change_journal(session, |writer| {
             if !writer.busy() {
@@ -322,6 +323,37 @@ impl Agents {
             )
         })?;
         Ok(bytes.len())
+    }
+
+    /// The stream-json message that sends `text` and `files` (decision 0172): each image goes as an image block, read
+    /// and base64 encoded, while the text files are already named in `text`. A dialect that cannot carry an image refuses
+    /// the prompt with `agent.attachment_unsupported`.
+    fn chat_message(
+        run: &ChatRun,
+        text: &str,
+        files: &[Attachment],
+    ) -> Result<Vec<u8>, AgentError> {
+        let mut images = Vec::new();
+        for file in files {
+            if let attachments::Kind::Image { media_type } = file.kind {
+                images.push(PromptImage {
+                    media_type,
+                    data: attachments::image_data(file)?,
+                });
+            }
+        }
+        let mut adapter = lock(&run.adapter);
+        if images.is_empty() {
+            return Ok(adapter.encode_prompt(text));
+        }
+        adapter
+            .encode_prompt_with_images(text, &images)
+            .ok_or_else(|| {
+                AgentError::new(
+                    codes::AGENT_ATTACHMENT_UNSUPPORTED,
+                    "this agent cannot take an image",
+                )
+            })
     }
 
     /// `agent.prompt` on a chat session (decision 0101, D7): a stream-json user message, with receipt `sent_to_chat`.

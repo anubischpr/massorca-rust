@@ -47,6 +47,23 @@ pub struct ApprovalAnswer {
     pub message: Option<String>,
 }
 
+/// One image a chat prompt sends as an image block (decision 0172): its media type and its bytes, base64 encoded. It
+/// holds the person's file, so it prints its size and never its data.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PromptImage {
+    pub media_type: &'static str,
+    pub data: String,
+}
+
+impl std::fmt::Debug for PromptImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptImage")
+            .field("media_type", &self.media_type)
+            .field("data", &format_args!("{} bytes", self.data.len()))
+            .finish()
+    }
+}
+
 /// One vendor's structured dialect. A run gets its own adapter, so an adapter may keep state between lines.
 pub trait ChatAdapter: Send {
     /// The arguments the run starts with, from the arguments the kind's launch plan built (its declared arguments and the
@@ -55,6 +72,16 @@ pub trait ChatAdapter: Send {
 
     /// The bytes that send `text` as the person's next message, with their line ending.
     fn encode_prompt(&mut self, text: &str) -> Vec<u8>;
+
+    /// The bytes that send `text` and the `images` as the person's next message, with their line ending (decision 0172).
+    /// `None` when the dialect cannot carry an image, which a prompt with images then reports as unsupported.
+    fn encode_prompt_with_images(
+        &mut self,
+        _text: &str,
+        _images: &[PromptImage],
+    ) -> Option<Vec<u8>> {
+        None
+    }
 
     /// What one line of standard output (without its line ending) means for the journal. A line the adapter cannot read
     /// should become a `notice`, never an error.
