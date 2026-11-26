@@ -19,6 +19,7 @@ import { useNow } from '../state/use-now';
 import { usePalette } from '../theme/palette';
 import { spacingTokens, typeTokens } from '../theme/tokens.generated';
 import { connectionBannerModel, type BannerActionKind } from './connection-banner-model';
+import { FolderWithoutGitSheet } from './folder-without-git-sheet';
 import { WorkspaceRowView } from './workspace-row';
 import { workspaceSections, type WorkspaceRow } from './workspace-sections';
 
@@ -44,6 +45,8 @@ export function WorkspacesScreen({ navigation, route }: Props) {
   const record = useHostRecord(host);
   const now = useNow(5_000);
   const [list, setList] = useState<ListState>({ status: 'loading' });
+  /** The plain folder whose No Git badge was tapped, while its sheet is open. */
+  const [noGitFolder, setNoGitFolder] = useState<string | undefined>(undefined);
   const connection = record?.connection;
   const connectedHost = connection?.status === 'connected' ? connection.host : undefined;
   const agents = record?.agents;
@@ -120,6 +123,7 @@ export function WorkspacesScreen({ navigation, route }: Props) {
           <WorkspaceRowView
             row={item}
             onOpen={() => navigation.navigate('Workspace', { host, workspace: item.id, noGit: item.noGit })}
+            onNoGit={() => setNoGitFolder(item.name)}
           />
         )}
         refreshControl={<RefreshControl refreshing={false} onRefresh={reload} />}
@@ -144,6 +148,11 @@ export function WorkspacesScreen({ navigation, route }: Props) {
         <ActionButton label={ROUTINES_ACTION} variant="ghost" onPress={() => navigation.navigate('Routines', { host })} />
       </View>
       {body}
+      <FolderWithoutGitSheet
+        visible={noGitFolder !== undefined}
+        folder={noGitFolder ?? ''}
+        onClose={() => setNoGitFolder(undefined)}
+      />
     </View>
   );
 }
