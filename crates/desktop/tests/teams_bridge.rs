@@ -26,10 +26,10 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
 struct TempHome {

@@ -72,8 +72,7 @@ pub(crate) async fn serve(
                 max_frame_len,
                 streams: StreamTable::default(),
             });
-            shutdown_seen =
-                run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
+            shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
         }
     };
     let writer_ended = tokio::select! {
