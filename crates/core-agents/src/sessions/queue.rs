@@ -81,6 +81,7 @@ impl Agents {
             request_id: request_id.map(str::to_owned),
             at: now_ms(),
             host_admin,
+            attachments_json: "[]".to_owned(),
         })?;
         self.notify(Change::Queue(row.id.clone()));
         let shown = self.queued_item(&mut live, &row.id, &stored.id)?;
@@ -766,6 +767,7 @@ mod tests {
                     request_id: None,
                     at: now_ms(),
                     host_admin: false,
+                    attachments_json: "[]".to_owned(),
                 })
                 .unwrap();
         }
@@ -1049,6 +1051,7 @@ mod tests {
                 request_id: None,
                 at: now_ms(),
                 host_admin: false,
+                attachments_json: "[]".to_owned(),
             })
             .unwrap();
 

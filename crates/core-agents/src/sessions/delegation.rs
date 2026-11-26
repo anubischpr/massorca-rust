@@ -971,6 +971,7 @@ impl Agents {
             at: now_ms(),
             // The service writes it and it holds no secret, so a parent run that holds vault secrets still takes it.
             host_admin: true,
+            attachments_json: "[]".to_owned(),
         });
         match stored {
             Ok(row) => {

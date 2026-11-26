@@ -602,6 +602,14 @@ ALTER TABLE agent_sessions ADD COLUMN forked_from TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // The files a queued prompt sends with it (decision 0172): a JSON array of the paths the caller gave, checked again
+    // before the prompt is typed. A prompt queued before this step sends no files.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_prompt_queue ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
