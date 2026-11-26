@@ -2,6 +2,8 @@
 //! that open them (decision 0028). The service answers move the flows; the store changes only
 //! through the events those calls cause.
 
+use super::path_field::PickKind;
+use super::project_icon::read_icon_file;
 use super::project_mark::project_mark;
 use std::path::Path;
 
@@ -27,6 +29,7 @@ use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
 use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
+use massorca_ui::components::project_icon_popover::ProjectIconChoice;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 
 /// The "Add a project" dialog: its path field, and the form the field feeds.
@@ -175,6 +178,9 @@ fn session_item(id: SessionMenuId) -> MenuItem {
         SessionMenuId::CopyPath => ("Copy path", IconName::Copy),
         SessionMenuId::OpenFolder => ("Open folder", IconName::Folder),
         SessionMenuId::RevealInWorkPanel => ("Reveal in Work panel", IconName::PanelRight),
+        SessionMenuId::Rename => ("Rename", IconName::Pencil),
+        SessionMenuId::Archive => ("Archive", IconName::EyeOff),
+        SessionMenuId::Unarchive => ("Unarchive", IconName::Eye),
         SessionMenuId::Delete => ("Delete session…", IconName::Trash2),
     };
     let item = MenuItem::new(label).icon(icon);
@@ -259,6 +265,7 @@ impl Shell {
                     Some(SessionFacts {
                         running: agent.execution.state != TerminalState::Exited,
                         has_terminal: agent.terminal_id.is_some(),
+                        archived: agent.archived,
                     })
                 }
                 None => None,
@@ -267,6 +274,7 @@ impl Shell {
                 session: facts,
                 local,
                 delete_offered: state.agent_archive,
+                archive_offered: state.agent_archive,
             })
         };
         self.open_menu(
@@ -306,6 +314,7 @@ impl Shell {
             let facts = SessionFacts {
                 running: held.reached && agent.execution.state != TerminalState::Exited,
                 has_terminal: false,
+                archived: false,
             };
             let path = held
                 .workspaces
@@ -316,6 +325,7 @@ impl Shell {
                 session: Some(facts),
                 local: false,
                 delete_offered: false,
+                archive_offered: false,
             });
             (rows, path)
         };
@@ -363,6 +373,9 @@ impl Shell {
             }
             SessionMenuId::OpenFolder
             | SessionMenuId::RevealInWorkPanel
+            | SessionMenuId::Rename
+            | SessionMenuId::Archive
+            | SessionMenuId::Unarchive
             | SessionMenuId::Delete => {}
         }
     }
@@ -450,6 +463,22 @@ impl Shell {
                 if let Some(session) = session {
                     self.open_delete_session(session, cx);
                 }
+            }
+            SessionMenuId::Rename => {
+                if let Some(session) = session {
+                    self.start_session_rename(session, cx);
+                }
+            }
+            SessionMenuId::Archive | SessionMenuId::Unarchive => {
+                let (Some(session), Some(service)) = (session, self.service.clone()) else {
+                    return;
+                };
+                let (session, archived) = (session.to_owned(), action == SessionMenuId::Archive);
+                cx.spawn(async move |_, _| {
+                    // The store follows the service's own answer; a refusal leaves the session as it was.
+                    let _ = service.agent_archive(&session, archived).await;
+                })
+                .detach();
             }
         }
     }
@@ -592,6 +621,64 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Opens or closes the Add a project dialog's icon grid.
+    pub(super) fn set_add_project_icon_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.set_icon_open(open);
+            cx.notify();
+        }
+    }
+
+    /// Chooses the dialog's icon: a bundled one, Reset for the service's own detection, or a PNG the person picks.
+    pub(super) fn choose_add_project_icon(
+        &mut self,
+        choice: ProjectIconChoice,
+        cx: &mut Context<Self>,
+    ) {
+        match choice {
+            ProjectIconChoice::Lucide(name) => self.set_add_project_icon(
+                Some(massorca_protocol::methods::projects::ProjectIcon::Lucide {
+                    name: name.to_owned(),
+                }),
+                cx,
+            ),
+            ProjectIconChoice::Reset => self.set_add_project_icon(None, cx),
+            ProjectIconChoice::Upload => self.upload_add_project_icon(cx),
+        }
+    }
+
+    fn set_add_project_icon(
+        &mut self,
+        icon: Option<massorca_protocol::methods::projects::ProjectIcon>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.choose_icon(icon);
+            cx.notify();
+        }
+    }
+
+    /// Reads the PNG the person picks as the dialog's icon; a file that is not one keeps the grid open with its reason.
+    fn upload_add_project_icon(&self, cx: &mut Context<Self>) {
+        let picked = self.path_picker.pick(PickKind::File, cx);
+        cx.spawn(async move |this, cx| {
+            let Some(path) = picked.await else {
+                return;
+            };
+            let read = read_icon_file(&path);
+            let _ = this.update(cx, |shell, cx| match read {
+                Ok(icon) => shell.set_add_project_icon(Some(icon), cx),
+                Err(reason) => {
+                    if let Some(dialog) = shell.dialogs.add_project.as_mut() {
+                        dialog.form.refuse_icon(reason);
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Closes the add-project dialog unless its call is out.

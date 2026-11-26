@@ -62,6 +62,8 @@ pub struct SessionRow {
     pub can_bring_back: bool,
     /// The agent's latest `waiting` or `done` has not been marked seen (WS-33); never folded.
     pub unread: bool,
+    /// The session is archived (decision 0163): the Sidebar and the palette leave it out until Show archived is on.
+    pub archived: bool,
     /// Child sessions, shown indented under the parent (A83 to A85).
     pub children: Vec<SessionRow>,
 }

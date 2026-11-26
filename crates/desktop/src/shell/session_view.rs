@@ -172,6 +172,8 @@ pub(super) struct SessionFrame {
     pub failure: Option<String>,
     /// Why the last stop or resume of the session was refused.
     pub notice: Option<String>,
+    /// The other sessions that also write in this folder, named under the header (decision 0169).
+    pub shared_folder: Option<String>,
     /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
     pub stop_aside: Option<bool>,
     /// A terminal-arm session has no composer: its header names the arm and carries the mode chip instead.
@@ -383,6 +385,17 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .child(header)
+        .when_some(frame.shared_folder, |page, notice| {
+            page.child(
+                div()
+                    .debug_selector(|| "session-shared-folder".to_owned())
+                    .flex_none()
+                    .px(px(SPACE_4))
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.tertiary)
+                    .child(notice),
+            )
+        })
         .child(body)
         .when_some(frame.notice, |page, notice| {
             page.child(
@@ -505,7 +518,7 @@ impl Shell {
             return None;
         }
         let id = self.model.snapshot().active_session.clone()?;
-        let (session, kinds, queue, waiting) = {
+        let (session, kinds, queue, waiting, shared_folder) = {
             let state = self.store.read(cx).state();
             let session = state
                 .agents
@@ -517,7 +530,8 @@ impl Shell {
                 .as_ref()
                 .and_then(|queues| queues.get(&id).cloned());
             let waiting = child_wait(&state.agents, &session);
-            (session, state.agent_kinds.clone(), queue, waiting)
+            let shared_folder = shared_folder_notice(&session, &state.agents, &state.agent_kinds);
+            (session, state.agent_kinds.clone(), queue, waiting, shared_folder)
         };
         // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
         // terminal session draws one only where a test holds a transcript for it.
@@ -640,6 +654,7 @@ impl Shell {
             surface,
             failure,
             notice: self.session_notices.get(&id).cloned(),
+            shared_folder,
             composer,
             queue,
             shell: cx.entity().downgrade(),
@@ -1331,6 +1346,32 @@ impl QueueCall {
             ),
         }
     }
+}
+
+/// The line naming the other sessions that also write in the session's folder, or `None` when none does (decision
+/// 0169). A writer the store does not hold is named generically.
+pub(super) fn shared_folder_notice(
+    session: &AgentSession,
+    sessions: &[AgentSession],
+    kinds: &[AgentKind],
+) -> Option<String> {
+    if session.shared_folder_with.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = session
+        .shared_folder_with
+        .iter()
+        .map(|id| {
+            sessions.iter().find(|other| &other.id == id).map_or_else(
+                || "another session".to_owned(),
+                |other| session_title(other, kinds),
+            )
+        })
+        .collect();
+    Some(format!(
+        "Also writing in this folder: {}.",
+        names.join(", ")
+    ))
 }
 
 /// The session's name in its header: its title, or its agent's name when it has none.

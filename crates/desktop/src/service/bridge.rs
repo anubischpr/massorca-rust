@@ -211,6 +211,18 @@ pub(crate) enum Command {
         params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// `agent.rename` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentRename {
+        session: String,
+        title: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.archive_session` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentArchive {
+        session: String,
+        archived: bool,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
     AgentResume {
         params: AgentResumeParams,
@@ -1465,6 +1477,16 @@ fn spawn_call(
         Command::AgentForget { params, reply } => {
             agents::spawn_forget(&client, params, reply, updates);
         }
+        Command::AgentRename {
+            session,
+            title,
+            reply,
+        } => agents::spawn_rename(&client, session, title, reply, updates),
+        Command::AgentArchive {
+            session,
+            archived,
+            reply,
+        } => agents::spawn_archive(&client, session, archived, reply, updates),
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1582,7 +1604,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::AgentStop { reply, .. }
         | Command::AgentResume { reply, .. }
-        | Command::AgentForget { reply, .. } => {
+        | Command::AgentForget { reply, .. }
+        | Command::AgentRename { reply, .. }
+        | Command::AgentArchive { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

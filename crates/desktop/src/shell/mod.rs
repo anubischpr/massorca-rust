@@ -32,6 +32,7 @@ mod secret_requests;
 mod service_banner;
 mod session_child_wait;
 mod session_grid;
+mod session_rename;
 mod session_view;
 mod settings;
 mod settings_remove_dialog;
@@ -102,6 +103,8 @@ use zones::ZoneFocus;
 #[cfg(test)]
 mod add_host_tests;
 #[cfg(test)]
+mod add_project_icon_tests;
+#[cfg(test)]
 mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
@@ -149,6 +152,8 @@ mod session_view_tests;
 mod settings_git_tests;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod shared_folder_tests;
 #[cfg(test)]
 mod sidebar_session_rows_tests;
 #[cfg(test)]
@@ -258,6 +263,8 @@ pub struct Shell {
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// The session row whose title is being edited in place (A97 Rename).
+    session_rename: Option<session_rename::SessionRename>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
     chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
     /// The chat session whose transcript stream the bridge follows for the open view (decision 0101).
@@ -671,6 +678,7 @@ impl Shell {
             session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            session_rename: None,
             chat_transcripts: HashMap::new(),
             chat_watched: None,
             chat_history_pending: BTreeSet::new(),
@@ -897,6 +905,7 @@ impl Render for Shell {
         self.drive_debug_page(window, cx);
         self.focus_started_terminal(window, cx);
         self.focus_started_chat(window, cx);
+        self.focus_session_rename(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -1083,6 +1092,12 @@ impl Render for Shell {
             .map(|notice| host_remove::removal_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
+        let archive = self
+            .store
+            .read(cx)
+            .state()
+            .agent_archive
+            .then(|| self.model.show_archived());
         let body = div()
             .relative()
             .flex_1()
@@ -1093,7 +1108,11 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.collapsed_projects,
+                        sidebar::SidebarView {
+                            collapsed: &self.collapsed_projects,
+                            renaming: self.session_rename.as_ref(),
+                            archive,
+                        },
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -1121,7 +1140,11 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.collapsed_projects,
+                        sidebar::SidebarView {
+                            collapsed: &self.collapsed_projects,
+                            renaming: self.session_rename.as_ref(),
+                            archive,
+                        },
                         &self.search,
                         true,
                         self.rail.morph_generation(),
