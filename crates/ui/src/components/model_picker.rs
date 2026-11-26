@@ -872,4 +872,48 @@ mod tests {
             "reduced motion jumps to the new stop"
         );
     }
+
+    #[gpui::test]
+    fn the_track_paints_no_border_so_its_drawing_covers_the_whole_track(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        let track = cx
+            .debug_bounds("reasoning-slider")
+            .expect("the track is drawn");
+        let paint = cx
+            .debug_bounds("reasoning-paint")
+            .expect("the track paints");
+        assert_eq!(
+            paint.origin.x, track.origin.x,
+            "no border insets the painted track on the left"
+        );
+        assert_eq!(
+            paint.size.width, track.size.width,
+            "no border insets the painted track on the right"
+        );
+        assert_eq!(
+            paint.size.height, track.size.height,
+            "no border insets the painted track at the top or bottom"
+        );
+    }
+
+    #[gpui::test]
+    fn the_thumb_centre_sits_on_the_track_axis_at_100_125_and_150_percent(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        click(cx, "reasoning-level-3");
+        for scale in [1.0, 1.25, 1.5] {
+            cx.simulate_scale_factor_change(scale);
+            draw(cx);
+            let track = cx
+                .debug_bounds("reasoning-slider")
+                .expect("the track is drawn");
+            let thumb = super::reasoning_slider::painted_thumb().expect("the thumb is painted");
+            let offset = (f32::from(thumb.center().x) - f32::from(track.center().x)).abs();
+            assert!(
+                offset <= 0.01,
+                "at {scale}x the thumb centre is {offset} px off the track axis"
+            );
+        }
+    }
 }

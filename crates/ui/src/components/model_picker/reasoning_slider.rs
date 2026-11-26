@@ -5,6 +5,7 @@
 mod brand;
 pub(super) mod effects;
 mod stops;
+mod track_paint;
 
 use std::rc::Rc;
 
@@ -20,14 +21,14 @@ use gpui::{
 pub use brand::{AgentBrand, BrandColours, brand_colours, name_colour};
 use stops::{STOP_INSET, Slide, nearest_stop, stop_fraction, value_text};
 pub use stops::{has_slider, is_top_level};
+use track_paint::TrackPaint;
+#[cfg(test)]
+pub(super) use track_paint::painted_thumb;
 
 use crate::components::popover::TriggerBounds;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
 use crate::tokens::Color;
-use crate::tokens::{
-    RADIUS_FULL, SIZE_REASONING_SLIDER_THUMB, SIZE_REASONING_SLIDER_TRACK, TYPE_BODY,
-    TYPE_BODY_STRONG,
-};
+use crate::tokens::{RADIUS_FULL, SIZE_REASONING_SLIDER_TRACK, TYPE_BODY, TYPE_BODY_STRONG};
 
 /// The key context of the slider. Its keys are bound here, so they win over the picker's list keys.
 pub const KEY_CONTEXT: &str = "ReasoningSlider";
@@ -171,78 +172,43 @@ impl RenderOnce for ReasoningSlider {
             None => target,
         };
         let top = is_top_level(selected, count);
-        let (elapsed, reduced) = (self.elapsed, self.reduced);
         let tertiary: Hsla = p.text.tertiary.into();
         let pick = self.on_change.clone();
         let value: SharedString = value_text(&self.levels[selected], selected, count).into();
 
-        let fill = div()
-            .absolute()
-            .top(relative(1.0 - fraction))
-            .mt(px(-STOP_INSET))
-            .bottom(px(-STOP_INSET))
-            .left_0()
-            .right_0()
-            .rounded(px(RADIUS_FULL))
-            .overflow_hidden()
-            .bg(gpui::linear_gradient(
-                0.,
-                gpui::linear_color_stop(self.brand.first, 0.),
-                gpui::linear_color_stop(self.brand.second, 1.),
-            ));
-        let fill = fill.when(top, |fill| {
-            fill.child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        effects::paint_top(bounds, elapsed, reduced, window)
-                    },
-                )
-                .size_full(),
-            )
-        });
-        let stops = (0..count).map(|index| {
-            let colour = if index <= selected {
-                gpui::white().opacity(0.7)
-            } else {
-                tertiary.opacity(0.45)
-            };
-            div()
-                .id(("reasoning-stop", index))
-                .absolute()
-                .top(relative(1.0 - stop_fraction(index, count)))
-                .mt(px(-2.))
-                .left(px((SIZE_REASONING_SLIDER_TRACK - 4.) / 2.))
-                .size(px(4.))
-                .rounded(px(2.))
-                .bg(colour)
-        });
         let mut thumb_shadows = box_shadows(theme.shadows.e1);
         if top {
             thumb_shadows.extend(top_rings(self.brand.second));
         }
-        let thumb = div()
+        let paint = TrackPaint {
+            fraction,
+            count,
+            selected,
+            top,
+            first: self.brand.first.into(),
+            second: self.brand.second.into(),
+            thumb: p.slider.thumb.into(),
+            thumb_ring: Hsla::from(p.border.default).opacity(0.5),
+            stop_on: gpui::white().opacity(0.7),
+            stop_off: tertiary.opacity(0.45),
+            thumb_shadows,
+            elapsed: self.elapsed,
+            reduced: self.reduced,
+        };
+        // The fill, stops and thumb are painted from the track's own bounds, not laid out as children.
+        let painted = div()
+            .debug_selector(|| "reasoning-paint".to_owned())
             .absolute()
-            .top(relative(1.0 - fraction))
-            .mt(px(-SIZE_REASONING_SLIDER_THUMB / 2.))
-            .left(px((SIZE_REASONING_SLIDER_TRACK
-                - SIZE_REASONING_SLIDER_THUMB)
-                / 2.))
-            .size(px(SIZE_REASONING_SLIDER_THUMB))
-            .rounded(px(RADIUS_FULL))
-            .bg(p.slider.thumb)
-            .border_1()
-            .border_color(Hsla::from(p.border.default).opacity(0.5))
-            .shadow(thumb_shadows);
-        let lane = div()
-            .absolute()
-            .top(px(STOP_INSET))
-            .bottom(px(STOP_INSET))
+            .top_0()
             .left_0()
-            .right_0()
-            .child(fill)
-            .children(stops)
-            .child(thumb);
+            .size_full()
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| track_paint::paint_track(bounds, &paint, window),
+                )
+                .size_full(),
+            );
 
         let track = div()
             .id(self.id.clone())
@@ -250,8 +216,6 @@ impl RenderOnce for ReasoningSlider {
             .relative()
             .rounded(px(RADIUS_FULL))
             .bg(p.surface.sunken)
-            .border_1()
-            .border_color(p.border.subtle)
             .role(Role::Slider)
             .aria_label(self.label.clone())
             .aria_value(value)
@@ -261,7 +225,7 @@ impl RenderOnce for ReasoningSlider {
             .track_focus(&self.focus)
             .debug_selector(|| "reasoning-slider".to_owned())
             .when(top, |track| track.child(halo(self.brand.second)))
-            .child(lane)
+            .child(painted)
             .on_action({
                 let pick = pick.clone();
                 move |_: &RaiseLevel, window, cx| {
