@@ -117,7 +117,7 @@ export function WorkspacesScreen({ navigation, route }: Props) {
         renderItem={({ item }) => (
           <WorkspaceRowView
             row={item}
-            onOpen={() => navigation.navigate('Changes', { host, workspace: item.id, noGit: item.noGit })}
+            onOpen={() => navigation.navigate('Workspace', { host, workspace: item.id, noGit: item.noGit })}
           />
         )}
         ListHeaderComponent={<Text style={[styles.caption, { color: palette['text.secondary'] }]}>{ON_HOST(host)}</Text>}

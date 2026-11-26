@@ -105,6 +105,8 @@ impl Agents {
             permission_mode: params.permission_mode,
             model: kept.model,
             effort: kept.effort,
+            // A fork takes no fast mode, as a resume does: the start's choice is not kept with the session (decision 0165).
+            fast: None,
         };
         let from = ForkFrom {
             source_id: source.id.clone(),

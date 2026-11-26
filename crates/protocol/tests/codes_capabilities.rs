@@ -122,6 +122,12 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::AGENT_MODE_UNKNOWN, "agent.mode_unknown"),
     (codes::AGENT_MODE_UNAVAILABLE, "agent.mode_unavailable"),
     (codes::AGENT_OPTION_UNSUPPORTED, "agent.option_unsupported"),
+    (
+        codes::AGENT_ONESHOT_UNSUPPORTED,
+        "agent.oneshot_unsupported",
+    ),
+    (codes::AGENT_ONESHOT_TIMEOUT, "agent.oneshot_timeout"),
+    (codes::AGENT_ONESHOT_FAILED, "agent.oneshot_failed"),
     (codes::AGENT_QUEUE_UNAVAILABLE, "agent.queue_unavailable"),
     (codes::AGENT_QUEUE_FULL, "agent.queue_full"),
     (codes::AGENT_QUEUE_NOT_FOUND, "agent.queue_not_found"),
@@ -181,8 +187,11 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_ARCHIVE, "agent-archive/1");
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
+    assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
     assert_eq!(capabilities::AGENT_FORK, "agent-fork/1");
+    assert_eq!(capabilities::AGENT_MODELS, "agent-models/1");
+    assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

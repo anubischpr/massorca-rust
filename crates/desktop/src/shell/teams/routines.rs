@@ -1,19 +1,22 @@
-//! The Routines page of a team (D-AG-25, screens 4.6): each routine with its schedule, bot, host, last
-//! run and an enable switch, and the team's web addresses with their tokens hidden. A routine's form
-//! is not built yet; "New routine" opens the page that says so.
+//! The Routines page of a team (D-AG-25, screens 4.6): each routine with its schedule, bot, host, next run and an
+//! enable switch with its More menu, and the team's web addresses with their tokens hidden. The New and Edit routine
+//! form and the run history are their own pages.
 
 use super::super::Shell;
-use super::super::change;
 use super::team_pill;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{AddressId, Routine, RoutineId, Team, TeamId, TeamPage};
+use crate::model::teams::{
+    AddressId, Routine, RoutineId, Team, TeamId, TeamPage, local_time, schedule_words,
+};
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
 };
+use jiff::tz::TimeZone;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
 use massorca_ui::components::empty_state::EmptyState;
+use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
     SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM, TYPE_HEADING, TYPE_TITLE_SM,
@@ -63,6 +66,7 @@ pub(in crate::shell) fn routines_page(
             connected,
             ButtonVariant::Ghost,
         ));
+    let zone = TimeZone::system();
     let routines = if team_data.routines.is_empty() {
         EmptyState::new("routines-empty", "No routines yet")
             .icon(IconName::Repeat)
@@ -80,7 +84,7 @@ pub(in crate::shell) fn routines_page(
     } else {
         let mut list = div().flex().flex_wrap().gap(px(SPACE_4));
         for routine in &team_data.routines {
-            list = list.child(routine_card(routine, team, team_data, shell, &theme));
+            list = list.child(routine_card(routine, team, team_data, shell, &theme, &zone));
         }
         list.into_any_element()
     };
@@ -123,8 +127,8 @@ fn new_routine_button(
         .leading_icon(IconName::Plus)
         .variant(variant)
         .on_click(move |_, cx| {
-            change(&shell, cx, move |shell| {
-                shell.model.open_team_page(TeamPage::NewRoutine(team_id));
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_routine_form(TeamPage::NewRoutine(team_id), cx);
             });
         });
     match routines_blocked_reason(team, connected) {
@@ -155,50 +159,68 @@ fn new_web_address_button() -> Button {
 
 const WEB_ADDRESS_UNAVAILABLE: &str = "Web addresses are not available yet.";
 
-/// A routine card: its name, the schedule in words, the bot and the last run, and an enable switch.
+/// A routine card: its name, the schedule in words, the bot, the next run, and the switch with its More button.
 fn routine_card(
     routine: &Routine,
     team: TeamId,
     team_data: &Team,
     shell: &WeakEntity<Shell>,
     theme: &Theme,
+    zone: &TimeZone,
 ) -> impl IntoElement {
     let bot = routine
         .bot
         .and_then(|id| team_data.bot(id))
         .map_or("No bot", |bot| bot.name.as_str());
-    let last = routine
-        .last_run
-        .map_or("No runs yet", |outcome| outcome.word());
-    let schedule = routine.cadence.words(&routine.time);
+    let schedule = schedule_words(routine.cadence, &routine.time, routine.run_date.clone());
+    let enabled = routine.enabled;
     let switch = {
         let shell = shell.clone();
         let id = routine.id;
-        Switch::new(format!("routine-switch-{}", routine.id.0), routine.enabled)
+        Switch::new(format!("routine-switch-{}", routine.id.0), enabled)
             .label(routine.name.clone())
-            .helper(if routine.enabled { "On" } else { "Paused" })
+            .helper(if enabled { "On" } else { "Paused" })
             .on_change(move |on, _, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.set_routine_enabled(team, id, on, cx));
             })
     };
-    let host_reach = team_data.reach;
+    let more = {
+        let shell = shell.clone();
+        let id = routine.id;
+        IconButton::new(
+            format!("routine-more-{}", routine.id.0),
+            IconName::Ellipsis,
+            "More",
+        )
+        .on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_routine_menu(team, id, enabled, window, cx);
+            });
+        })
+    };
+    let mut card = Card::new(format!("routine-{}", routine.id.0))
+        .padding(CardPadding::Comfortable)
+        .title(routine.name.clone())
+        .child(line(schedule, theme))
+        .child(line(
+            format!("Bot: {bot} · Runs on {}", routine.host),
+            theme,
+        ));
+    if let Some(at_ms) = routine.next_run_at_ms.filter(|_| enabled) {
+        card = card.child(line(format!("Next run {}", local_time(at_ms, zone)), theme));
+    }
+    if let Some(outcome) = routine.last_run {
+        card = card.child(line(format!("Last run: {}", outcome.word()), theme));
+    }
     div().w(px(320.0)).child(
-        Card::new(format!("routine-{}", routine.id.0))
-            .padding(CardPadding::Comfortable)
-            .title(routine.name.clone())
-            .child(line(schedule, theme))
-            .child(line(
-                format!("Bot: {bot} · Runs on {}", routine.host),
-                theme,
-            ))
-            .child(line(format!("Last run: {last}"), theme))
-            .child(match host_reach {
-                HostReach::Connected => div().into_any_element(),
-                HostReach::Unreachable { minutes } => {
-                    line(format!("Last known state, {minutes} min ago"), theme).into_any_element()
-                }
-            })
-            .footer_action(switch),
+        card.footer_action(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(switch)
+                .child(more),
+        ),
     )
 }
 
@@ -292,7 +314,7 @@ fn note(text: &str, theme: &Theme) -> impl IntoElement {
 }
 
 impl Shell {
-    /// Switches a routine on or off in the sample store.
+    /// Pauses or resumes a routine: through the service when one is attached, else in the sample store.
     pub(super) fn set_routine_enabled(
         &mut self,
         team: TeamId,
@@ -300,11 +322,27 @@ impl Shell {
         enabled: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self
-            .model
-            .teams_mut()
-            .set_routine_enabled(team, routine, enabled);
-        cx.notify();
+        let Some(service) = self.service.clone() else {
+            let _ = self
+                .model
+                .teams_mut()
+                .set_routine_enabled(team, routine, enabled);
+            cx.notify();
+            return;
+        };
+        let (Some(team_key), Some(routine_key)) =
+            (self.team_key(team, cx), self.routine_key(routine, cx))
+        else {
+            cx.notify();
+            return;
+        };
+        // The switch shows the service's state once the read that follows the answer lands.
+        cx.spawn(async move |_, _| {
+            let _ = service
+                .set_routine_paused(team_key, routine_key, !enabled)
+                .await;
+        })
+        .detach();
     }
 
     /// Deletes one web address of a team.
@@ -362,11 +400,11 @@ mod tests {
     }
 
     #[gpui::test]
-    fn new_routine_opens_its_page_which_says_the_form_is_not_built(cx: &mut TestAppContext) {
+    fn new_routine_opens_the_routine_form(cx: &mut TestAppContext) {
         let (shell, cx) = shell(cx);
         shell.update(cx, |shell, cx| {
             shell.model.press_mode_switch();
-            shell.model.open_team_page(TeamPage::NewRoutine(TeamId(1)));
+            shell.open_routine_form(TeamPage::NewRoutine(TeamId(1)), cx);
             cx.notify();
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));

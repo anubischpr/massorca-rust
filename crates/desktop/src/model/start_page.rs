@@ -244,6 +244,7 @@ pub fn start_params(
         request_id: None,
         permission_mode,
         model: options.model,
+        fast: None,
         effort: options.effort,
     }
 }

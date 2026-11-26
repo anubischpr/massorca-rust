@@ -13,6 +13,8 @@ use crate::methods::workspaces::{WorkspaceKind, WorkspaceRemoved};
 
 /// Params: none. Result: [`AgentKinds`].
 pub const KINDS: &str = "agent.kinds";
+/// Params: [`AgentModelsParams`]. Result: [`AgentModels`] (capability `agent-models/1`, decision 0166).
+pub const MODELS: &str = "agent.models";
 /// Params: [`AgentStartParams`]. Result: [`AgentSession`].
 pub const START: &str = "agent.start";
 /// Params: [`AgentListParams`]. Result: [`AgentSessionList`], newest first.
@@ -84,6 +86,8 @@ pub const ACCOUNTS_IMPORT_CANDIDATES: &str = "agent.accounts.import_candidates";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
+/// Names a chat from its first prompt and reply by a one-shot run of its kind (decision 0167, capability `agent-title/1`).
+pub const GENERATE_TITLE: &str = "agent.generate_title";
 
 /// Params: [`AgentQueueParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
 pub const QUEUE: &str = "agent.queue";
@@ -115,6 +119,9 @@ pub const QUEUE_REASON_PAUSED_STOPPED: &str = "paused_stopped";
 pub const QUEUE_REASON_PAUSED_RESTARTED: &str = "paused_restarted";
 /// `reason` of a waiting prompt held behind a failed delivery.
 pub const QUEUE_REASON_BEHIND_FAILED: &str = "behind_failed";
+/// `reason` of a waiting prompt held because a writing child of the session works in the session's own workspace: the
+/// parent waits until that child finishes (decision 0170).
+pub const QUEUE_REASON_CHILD_WRITING: &str = "child_writing";
 
 /// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,6 +277,27 @@ pub struct AgentKind {
     /// effort, and from a peer that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<KindEffort>,
+    /// Fast mode the kind takes at start (decision 0165). Absent from a peer that predates it; a kind that declares no fast
+    /// mode says so with `supported: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<KindFast>,
+}
+
+/// The `fast` option of a kind (decision 0165), as `agent.kinds` lists it: whether it takes fast mode at start, and why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindFast {
+    pub supported: bool,
+    /// Why the kind takes no fast mode, when `supported` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The fast mode of a session (decision 0165): whether its current or last run was started with it on, and whether
+/// something confirmed the vendor took it. Nothing confirms it yet, so `confirmed` is false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFast {
+    pub on: bool,
+    pub confirmed: bool,
 }
 
 /// The `model` option of a kind (decision 0094), as `agent.kinds` lists it: the choices its picker shows.
@@ -291,6 +319,9 @@ pub struct KindModelChoice {
     /// The effort levels this model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub efforts: Option<Vec<String>>,
+    /// Whether the model takes fast mode (decision 0165). Omitted when it does not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
 }
 
 /// The `effort` option of a kind (decision 0094), as `agent.kinds` lists it: the levels its picker shows.
@@ -394,6 +425,8 @@ struct AgentKindWire {
     model: Option<KindModel>,
     #[serde(default)]
     effort: Option<KindEffort>,
+    #[serde(default)]
+    fast: Option<KindFast>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -416,6 +449,7 @@ impl From<AgentKindWire> for AgentKind {
             chat: wire.chat,
             model: wire.model,
             effort: wire.effort,
+            fast: wire.fast,
         }
     }
 }
@@ -496,6 +530,10 @@ pub struct AgentStartParams {
     /// declares no effort flag refuses it with `agent.option_unsupported`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Fast mode for this start (capability `agent-fast/1`, decision 0165): passed as the kind's `fast` settings. A kind
+    /// that declares no fast mode, or a model that does not take it, refuses it with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
 }
 
 /// Params of `agent.list`.
@@ -681,6 +719,10 @@ pub struct AgentDelegateParams {
     pub title: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    /// Run a writing child in the parent's own workspace instead of a new worktree (decision 0170): the person's manual
+    /// pick. The parent then waits until the child finishes. Absent means false; a peer older than 0170 ignores it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub same_workspace: bool,
     /// The parent run's token, required when called from inside that run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -711,6 +753,10 @@ pub struct AgentTree {
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Params of `agent.bring_back`.
@@ -948,6 +994,10 @@ pub struct AgentSession {
     /// stored options, and that a first input the agent never took (decision 0168).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Whether the run was started with fast mode on (capability `agent-fast/1`, decision 0165). Absent when off, and
+    /// from a peer without the capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<SessionFast>,
     /// The other live writing sessions in the folder workspace this live session writes in (decision 0169). Empty
     /// (absent) when there are none, for a worktree, for a read-only or exited session, and from an older peer. A client
     /// shows that another session also writes in the folder.
@@ -1246,12 +1296,104 @@ pub struct AccountsRemoved {
     pub removed: bool,
 }
 
+/// Params of `agent.models` (capability `agent-models/1`, decision 0166). Without `account`, the kind's active account is
+/// listed, or the vendor's usual home when the kind has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModelsParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// Ask the vendor CLI again instead of answering from the cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
+}
+
+/// Result of `agent.models`: the kind's declared models, then the models its vendor CLI listed for the account and the
+/// declaration does not name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModels {
+    pub models: Vec<AgentModel>,
+    /// When the listing behind `models` was fetched, in milliseconds since the Unix epoch. Absent when no listing has
+    /// succeeded, such as a kind that declares no listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at_ms: Option<u64>,
+    /// Why the latest listing failed. The declared models are still listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ModelListingError>,
+}
+
+/// One model a picker offers: declared by the kind, or listed by its vendor CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModel {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// The effort levels the model accepts, by id. Absent: every level of the kind. Empty: the model takes no effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+    pub source: ModelSource,
+}
+
+/// Where a model came from: the kind's declaration, or its vendor CLI's listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSource {
+    Declared,
+    Discovered,
+}
+
+/// Why a model listing failed (decision 0166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelListingFailure {
+    /// The kind's program was not found.
+    CliMissing,
+    /// The account's check reports it is not signed in, so the picker can offer the sign-in command.
+    NotSignedIn,
+    /// The vendor CLI did not answer within the time limit.
+    TimedOut,
+    /// The vendor CLI failed, or its output could not be read.
+    Failed,
+    /// The vendor CLI listed no model MassOrca can use.
+    NoModels,
+}
+
+/// A failed model listing: its code, and a message that names no path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelListingError {
+    pub code: ModelListingFailure,
+    pub message: String,
+}
+
 /// Params of `agent.accounts.check`. Without `account`, the kind's active account is checked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountsCheckParams {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+}
+
+/// Params of `agent.generate_title` (capability `agent-title/1`, decision 0167): the first prompt of a chat and, once the
+/// agent has answered, its first reply. Without `account`, the kind's active account runs the one-shot form; `model` is
+/// passed only by a kind that reuses its model flag for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateTitleParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+/// Result of `agent.generate_title`: at most four lowercase words joined by `-`, at most 48 characters of `a-z`, `0-9` and
+/// `-`. Never empty: a run that names no usable title is `agent.oneshot_failed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerateTitleResult {
+    pub slug: String,
 }
 
 /// Payload of the `agent.accounts_changed` event, whose id is the kind.

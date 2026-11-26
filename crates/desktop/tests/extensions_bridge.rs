@@ -2,18 +2,22 @@
 //! headlessly: no window opens. The package is a folder fixture with no vendor command, so no installer runs.
 
 use std::fs;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::Client;
 use massorca_desktop::model::marketplace::MarketplaceSnapshot;
 use massorca_desktop::service::{
-    ExtensionsRead, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
+    ExtensionsRead, Refusal, RollbackAnswer, ServiceBridge, ServiceHandle, StoreState, StoreUpdate,
+    connect_options,
 };
 use massorca_profile::Profile;
+use massorca_protocol::codes;
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
-    ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams, ExtensionState,
+    ExtensionInstallParams, ExtensionRemoveParams, ExtensionRollbackParams, ExtensionRunAction,
+    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -308,6 +312,7 @@ async fn a_read_older_than_the_held_one_never_replaces_it() {
             number: held.number - 1,
             installed: Err(Refusal::unavailable("stale")),
             catalogue: Err(Refusal::unavailable("stale")),
+            history: Default::default(),
         }),
         Instant::now(),
     );
@@ -671,5 +676,287 @@ async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
         "a fresh profile's Discover has no other category, so no other section"
     );
     assert!(agents >= 4, "the built-in agents are one Agents group");
+    stop_service(service).await;
+}
+
+/// Set in the child process that runs the built-in agent check, so the parent knows to run the check itself.
+const FAKE_CLI_CHILD: &str = "MASSORCA_BRIDGE_FAKE_CLI_CHILD";
+
+/// A stand-in for the built-in agent's CLI, named as its package runs it: it prints nothing and exits 0.
+fn write_fake_cli(bin: &Path) {
+    #[cfg(windows)]
+    {
+        fs::write(bin.join("claude.cmd"), "@echo off\r\nexit /b 0\r\n")
+            .expect("the fake CLI is written");
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let cli = bin.join("claude");
+        fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("the fake CLI is written");
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755))
+            .expect("the fake CLI is executable");
+    }
+}
+
+/// The built-in Claude agent installs from the catalogue and is Enabled, and its Installed row says so. The service
+/// resolves vendor programs on its own PATH (MASSORCA_VENDOR_PATH=process) and a test cannot set the process
+/// environment (unsafe is denied), so the check runs in a child process whose PATH holds one fake CLI.
+#[test]
+fn an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list() {
+    if std::env::var_os(FAKE_CLI_CHILD).is_none() {
+        let bin = tempfile::TempDir::new().expect("a bin folder");
+        write_fake_cli(bin.path());
+        let status = massorca_process::command(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                "an_installed_built_in_agent_is_an_enabled_row_in_the_installed_list",
+                "--nocapture",
+            ])
+            .env(FAKE_CLI_CHILD, "1")
+            .env("PATH", bin.path())
+            .env("MASSORCA_VENDOR_PATH", "process")
+            .status()
+            .expect("the child check runs");
+        assert!(status.success(), "the child check passed");
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(installed_built_in_agent_is_an_enabled_row());
+}
+
+async fn installed_built_in_agent_is_an_enabled_row() {
+    use massorca_desktop::model::marketplace::{
+        MarketplaceSource, ServiceMarketplace, listed, status_word,
+    };
+    use massorca_desktop::model::navigation::MarketplacePage;
+
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the catalogue", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+    let source = "catalogue:massorca.claude".to_owned();
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the built-in package is reviewed");
+    handle
+        .install_extension(install_params(source, Some(review.consent.clone())))
+        .await
+        .expect("the built-in agent installs without its vendor installer");
+    until(
+        &mut updates,
+        &mut state,
+        "the installed built-in agent",
+        |state| installed_state(state, "massorca.claude") == Some(ExtensionState::Enabled),
+    )
+    .await;
+
+    let read = state.extensions.as_ref().expect("the lists are read");
+    let mut marketplace = ServiceMarketplace::default();
+    marketplace.follow_agent_kinds(&state.agent_kinds);
+    marketplace.follow_extensions(
+        read.installed.as_ref().expect("the installed list"),
+        read.catalogue.as_ref().expect("the catalogue"),
+    );
+    let snapshot = marketplace.snapshot();
+    let installed = listed(&snapshot, MarketplacePage::Installed, "");
+    let row = installed
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some("claude"))
+        .expect("the built-in agent is in the Installed list");
+    assert_eq!(
+        status_word(&row.state).as_deref(),
+        Some("Enabled"),
+        "its row says Enabled"
+    );
+    stop_service(service).await;
+}
+
+/// Writes the manifest of `package` into a zip archive at `path`, as the CLI's archive tests write theirs: one entry
+/// per file.
+fn write_zip_package(path: &Path, package: &Path) {
+    let manifest = fs::read(package.join("extension.json")).expect("the manifest is read");
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("extension.json", zip::write::SimpleFileOptions::default())
+        .expect("an archive entry");
+    writer.write_all(&manifest).expect("the manifest's bytes");
+    let bytes = writer.finish().expect("the archive").into_inner();
+    fs::write(path, bytes).expect("the archive file");
+}
+
+/// A zip package is inspected under its `file:` source and installs from that source: the path the Add extension
+/// menu's zip entry takes. The service reads a zip archive, as its archive tests show.
+#[tokio::test]
+async fn a_zip_package_goes_through_inspect_and_installs_from_its_file_source() {
+    let home = temp_home();
+    let folder = TempDir::new().expect("a folder for the package");
+    let package = folder.path().join("package");
+    write_package(&package, "1.0.0");
+    let archive = folder.path().join("notes.zip");
+    write_zip_package(&archive, &package);
+
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+
+    let source = format!("file:{}", archive.display());
+    let review = handle
+        .inspect_extension(source.clone())
+        .await
+        .expect("the archive is reviewed");
+    assert_eq!(
+        review.id, PACKAGE,
+        "the review names the package in the archive"
+    );
+    let refused = handle
+        .install_extension(install_params(source.clone(), Some(review.consent.clone())))
+        .await
+        .expect_err("an archive without the hash its review read is refused");
+    assert_eq!(refused.code(), Some("extension.hash_required"));
+    let mut params = install_params(source, Some(review.consent.clone()));
+    params.sha256 = Some(review.sha256.clone());
+    handle
+        .install_extension(params)
+        .await
+        .expect("the archive installs against the hash its review read");
+    until(&mut updates, &mut state, "the installed archive", |state| {
+        installed_state(state, PACKAGE) == Some(ExtensionState::Enabled)
+    })
+    .await;
+    stop_service(service).await;
+}
+
+/// The installed version of a package in the store, if the store lists it.
+fn installed_version(state: &StoreState, id: &str) -> Option<String> {
+    let read = state.extensions.as_ref()?;
+    let installed = read.installed.as_ref().ok()?;
+    installed
+        .iter()
+        .find(|item| item.id == id)
+        .map(|item| item.version.clone())
+}
+
+#[tokio::test]
+async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_the_runs() {
+    let home = temp_home();
+    let package = home.path().join("package");
+    write_package(&package, "1.0.0");
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the extension lists", |state| {
+        state.extensions.is_some()
+    })
+    .await;
+
+    let first = handle
+        .inspect_extension(source_of(&package))
+        .await
+        .expect("the first review is read");
+    handle
+        .install_extension(install_params(
+            source_of(&package),
+            Some(first.consent.clone()),
+        ))
+        .await
+        .expect("the first version installs");
+    let refusal = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("an install keeps no version to roll back to");
+    assert_eq!(refusal.code(), Some(codes::EXTENSION_NO_PREVIOUS_VERSION));
+
+    write_package(&package, "2.0.0");
+    let second = handle
+        .inspect_extension(source_of(&package))
+        .await
+        .expect("the second review is read");
+    handle
+        .update_extension(ExtensionUpdateParams {
+            id: PACKAGE.to_owned(),
+            consent: Some(second.consent.clone()),
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("the update installs");
+    until(&mut updates, &mut state, "the updated package", |state| {
+        installed_version(state, PACKAGE).as_deref() == Some("2.0.0")
+            && state
+                .extensions
+                .as_ref()
+                .is_some_and(|read| read.history.runs.get(PACKAGE).map(Vec::len) == Some(2))
+    })
+    .await;
+    let offered = state.extensions.as_ref().map(|read| &read.history);
+    assert!(offered.is_some_and(|history| history.rollback_offered && history.log_offered));
+
+    let log = handle
+        .extension_log(PACKAGE.to_owned())
+        .await
+        .expect("the run log is read");
+    assert_eq!(log.runs.len(), 2, "the install and the update: {log:?}");
+    assert_eq!(log.runs[1].action, ExtensionRunAction::Update);
+    assert_eq!(log.runs[1].from_version.as_deref(), Some("1.0.0"));
+    assert_eq!(log.runs[1].to_version.as_deref(), Some("2.0.0"));
+
+    let asked = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: None,
+            agent_token: None,
+        })
+        .await
+        .expect("the service asks for the restored version's consent");
+    let RollbackAnswer::ConsentNeeded { version, consent } = asked else {
+        panic!("a rollback without consent asks first: {asked:?}");
+    };
+    assert_eq!(version, "1.0.0");
+    assert_eq!(
+        consent, first.consent,
+        "the restored review is the first one"
+    );
+
+    let restored = handle
+        .rollback_extension(ExtensionRollbackParams {
+            id: PACKAGE.to_owned(),
+            consent: Some(consent),
+            agent_token: None,
+        })
+        .await
+        .expect("the reviewed version is restored");
+    let RollbackAnswer::Restored(restored) = restored else {
+        panic!("a rollback with the consent restores: {restored:?}");
+    };
+    assert_eq!(restored.version, "1.0.0");
+    until(&mut updates, &mut state, "the restored version", |state| {
+        installed_version(state, PACKAGE).as_deref() == Some("1.0.0")
+    })
+    .await;
+
+    let log = handle
+        .extension_log(PACKAGE.to_owned())
+        .await
+        .expect("the run log is read again");
+    assert_eq!(log.runs.len(), 3, "the rollback is logged: {log:?}");
+    assert_eq!(log.runs[2].action, ExtensionRunAction::Rollback);
+    assert_eq!(log.runs[2].from_version.as_deref(), Some("2.0.0"));
     stop_service(service).await;
 }

@@ -150,6 +150,14 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     } else if session.mode_source == Some(ModeSource::VendorDefault) {
         lines.push("mode: the CLI's default".to_owned());
     }
+    // Fast mode is requested until something confirms the vendor took it; nothing does yet (decision 0165).
+    if let Some(fast) = session.fast.filter(|fast| fast.on) {
+        lines.push(if fast.confirmed {
+            "fast: on".to_owned()
+        } else {
+            "fast: requested".to_owned()
+        });
+    }
     if let Some(pending) = &session.pending_permission_mode {
         lines.push(format!("next resume mode: {pending}"));
     }

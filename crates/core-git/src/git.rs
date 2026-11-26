@@ -45,6 +45,11 @@ impl Git {
         }
     }
 
+    /// The executable this handle runs: a path, or a bare name that PATH resolves.
+    pub fn binary(&self) -> &Path {
+        &self.binary
+    }
+
     /// The same git for a caller without `workspace` permission (decision 0078). Its reads start no program the
     /// repository's configuration names: no filter, diff driver, monitor or hook; `empty_hooks` must be an empty
     /// folder, or every run is refused. Commands that change the repository or reach a remote are refused.
