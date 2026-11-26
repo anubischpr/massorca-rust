@@ -359,7 +359,8 @@ pub struct ProjectAddArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
-    /// Creates a worktree on a new branch (git project), or registers a folder (folder project).
+    /// Creates a worktree on a new branch (git project), or registers a folder (folder project). With `--in-place`,
+    /// registers the project's own checkout instead (decision 0112).
     Create(WorkspaceCreateArgs),
     /// Lists every workspace, or only those of one project.
     List(WorkspaceListArgs),
@@ -370,7 +371,8 @@ pub enum WorkspaceCommand {
     },
     /// Shows the workspace that contains the current directory, or the one that contains --path.
     Current(WorkspaceCurrentArgs),
-    /// Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
+    /// Removes a workspace. A worktree is deleted with its directory; a folder and an in-place workspace (the project's
+    /// own checkout) are only forgotten.
     Rm {
         /// Workspace id, name or path.
         workspace: String,
@@ -423,7 +425,7 @@ pub struct WorkspaceCreateArgs {
     /// Project id, name or path.
     pub project: String,
     /// Name of the workspace, cleaned for its folder and branch (accents folded, other characters
-    /// become `-`). Omit it to generate one.
+    /// become `-`). Omit it to generate one, or with `--in-place` to take the project's name.
     pub name: Option<String>,
     /// Branch to create or check out. Defaults to the workspace name, after the branch prefix
     /// (`workspaces.branch_prefix`) when one is set.
@@ -456,6 +458,11 @@ pub struct WorkspaceCreateArgs {
     /// `--branch` or `--existing-branch`. For scripts and tests.
     #[arg(long)]
     pub name_generated: bool,
+    /// Registers the project's own checkout as its workspace: no worktree or branch is made, and removing the workspace
+    /// only forgets it (decision 0112). NAME defaults to the project's name. Not with `--branch`, `--base`,
+    /// `--existing-branch`, `--refresh-base`, `--path`, `--unique` or `--name-generated`.
+    #[arg(long)]
+    pub in_place: bool,
 }
 
 #[derive(Debug, Args)]

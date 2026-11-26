@@ -67,6 +67,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::TERMINALS,
             capabilities::WORKSPACE_CHECK,
             capabilities::WORKSPACE_CURRENT,
+            capabilities::WORKSPACE_IN_PLACE,
             capabilities::WORKSPACE_RENAME,
             capabilities::WORKSPACE_UNIQUE_NAME,
             capabilities::WORKSPACE_UPDATE,

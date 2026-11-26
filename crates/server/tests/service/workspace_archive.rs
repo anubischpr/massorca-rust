@@ -223,6 +223,48 @@ async fn a_failed_archive_script_refuses_the_removal_unless_it_is_waived() {
 }
 
 #[tokio::test]
+async fn an_in_place_workspace_runs_no_archive_script_and_its_checkout_stays() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, copy_script());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Archive).await;
+    let created: Workspace = client
+        .call(
+            workspaces::CREATE,
+            &WorkspaceCreateParams {
+                project: project.id.clone(),
+                name: String::new(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                refresh_base: false,
+                path: None,
+                request_id: None,
+                no_setup: false,
+                unique_name: false,
+                name_generated: false,
+                in_place: true,
+            },
+        )
+        .await
+        .expect("create in place");
+
+    let removed = remove(&client, &created.id).await;
+    assert!(
+        removed.archive.is_none(),
+        "an in-place workspace runs no archive script: {:?}",
+        removed.archive
+    );
+    assert!(!repo.join(ARCHIVED).exists(), "nothing ran in the checkout");
+    assert!(repo.join("keep.txt").is_file());
+    assert!(removed.directory_kept);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_folder_workspace_has_no_archive_script() {
     let home = temp_home();
     let folder = home.path().join("notes");

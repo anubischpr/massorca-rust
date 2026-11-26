@@ -631,3 +631,69 @@ async fn current_names_the_workspace_that_holds_a_directory_and_refuses_one_outs
     );
     stop(running).await;
 }
+
+#[tokio::test]
+async fn an_in_place_workspace_is_the_project_checkout_and_removing_it_only_forgets_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "main"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(
+        client
+            .welcome()
+            .capabilities
+            .iter()
+            .any(|name| name == capabilities::WORKSPACE_IN_PLACE),
+        "the service offers workspace-in-place/1"
+    );
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let mut params = create_params(&project.name, "");
+    params.in_place = true;
+
+    let created = client
+        .workspace_create(&params)
+        .await
+        .expect("create in place");
+    assert!(created.in_place);
+    assert_eq!(created.kind, WorkspaceKind::Worktree);
+    assert_eq!(created.branch.as_deref(), Some("main"));
+    assert!(created.setup.is_none(), "no worktree, so no setup script");
+    assert_eq!(
+        next_event(&mut events).await,
+        ChangeEvent {
+            topic: TOPIC_WORKSPACE_CREATED.to_owned(),
+            id: created.id.clone()
+        }
+    );
+    let again = client
+        .workspace_create(&params)
+        .await
+        .expect("a repeat returns the same workspace");
+    assert_eq!(again.id, created.id);
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_CREATED);
+
+    let mut with_branch = params.clone();
+    with_branch.branch = Some("topic".to_owned());
+    let refused = client.workspace_create(&with_branch).await;
+    assert_eq!(
+        remote_code(&refused.expect_err("refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, false))
+        .await
+        .expect("remove");
+    assert!(removed.directory_kept);
+    assert!(!removed.branch_deleted);
+    assert!(repo.join("README.md").is_file());
+    assert_eq!(
+        next_event(&mut events).await.topic,
+        TOPIC_WORKSPACE_REMOVING
+    );
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_REMOVED);
+    stop(running).await;
+}

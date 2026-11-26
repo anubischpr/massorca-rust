@@ -104,6 +104,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             rename,
         )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_IN_PLACE, Owner::Core)?,
     ])
 }
 
@@ -114,8 +117,9 @@ async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Worksp
     let created = blocking(move || domain.create_workspace_once(params)).await?;
     let mut workspace = created.workspace;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
-    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again.
-    if !created.repeated {
+    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again. An in-place
+    // workspace has no new worktree to set up (decision 0112).
+    if !created.repeated && !workspace.in_place {
         workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
     }
     Ok(workspace)
