@@ -177,7 +177,7 @@ impl Agents {
             ));
         }
         let (decl, _) = self.startable_kind(&kind)?;
-        modes::plan_start(&decl, params.permission_mode.as_deref())?;
+        modes::plan_start(&decl, params.permission_mode.as_deref(), None)?;
         let parent_workspace = self
             .inner
             .config
@@ -219,6 +219,7 @@ impl Agents {
                 permission_mode: params.permission_mode,
                 model: None,
                 effort: None,
+                fast: None,
             },
             Some(&parent),
             grant,
@@ -1090,6 +1091,7 @@ then report"
                     permission_mode: None,
                     model: None,
                     effort: None,
+                    fast: None,
                 },
                 SecretGrant::Provide,
             )
@@ -1180,6 +1182,7 @@ then report"
                     permission_mode: None,
                     model: None,
                     effort: None,
+                    fast: None,
                 },
                 SecretGrant::Provide,
             )

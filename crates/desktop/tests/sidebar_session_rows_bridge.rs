@@ -142,6 +142,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         })
         .await

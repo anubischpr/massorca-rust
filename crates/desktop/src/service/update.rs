@@ -678,6 +678,7 @@ pub(crate) mod fixtures {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
         }
@@ -709,6 +710,7 @@ pub(crate) mod fixtures {
             default_permission_mode: None,
             chat: None,
             model: None,
+            fast: None,
             effort: None,
         }
     }

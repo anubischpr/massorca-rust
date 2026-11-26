@@ -924,6 +924,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        command(
+            "agent.title",
+            "Name a chat from its first prompt and reply",
+            "agent.generate_title",
+            json!({
+                "type": "object",
+                "required": ["kind", "prompt"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "reply": { "type": "string" },
+                    "model": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
     ]
 }
 

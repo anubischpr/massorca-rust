@@ -9,7 +9,7 @@ use massorca_core_terminal::credential_guard::{CREDENTIAL_GUARD_ENV, CREDENTIAL_
 use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 use serde_json::{Value, json};
 
-use crate::kind::{KindDecl, PromptMode, REF_PLACEHOLDER, StatusMechanism};
+use crate::kind::{FastDecl, KindDecl, PromptMode, REF_PLACEHOLDER, StatusMechanism};
 use crate::paths;
 use crate::provided_env::{ProvidedEnv, dangerous_caller_name, reserved_name, same_name};
 
@@ -23,6 +23,8 @@ pub const ENV_BIN: &str = "MASSORCA_BIN";
 
 /// The settings file of a `claude-settings` run, in the session's run directory.
 pub const CLAUDE_SETTINGS_FILE: &str = "claude-settings.json";
+/// The flag a `claude-settings` run passes its settings file with.
+const SETTINGS_FLAG: &str = "--settings";
 /// The event name `codex-notify` reports at each turn end.
 pub const CODEX_TURN_EVENT: &str = "turn-complete";
 
@@ -66,6 +68,9 @@ pub struct LaunchInput<'a> {
     pub instructions: Option<&'a str>,
     /// The `PATH` the run's terminal inherits from the service, which the run's own `PATH` starts from.
     pub inherited_path: Option<&'a str>,
+    /// The kind's fast-mode settings, when the start asked for fast mode (decision 0165). They go on the kind's settings
+    /// flag, or into the hook settings file when that file is passed on `--settings` already.
+    pub fast: Option<&'a FastDecl>,
 }
 
 /// What to run. Values in `env` may be secrets: never log them.
@@ -157,7 +162,13 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     let mut args = decl.args.clone();
     args.extend(input.mode_args.iter().cloned());
     let mut files = Vec::new();
-    install_hooks(input, &mut args, &mut files);
+    let carries_fast = install_hooks(input, &mut args, &mut files);
+    if let Some(fast) = input.fast
+        && !carries_fast
+    {
+        args.push(fast.settings_flag.clone());
+        args.push(Value::Object(fast.settings.clone()).to_string());
+    }
     if let (Some(channel), Some(text)) = (&decl.instructions, input.instructions) {
         args.extend(channel.args_with(text));
     }
@@ -223,33 +234,41 @@ fn with_ref(args: &[String], agent_ref: &str) -> Vec<String> {
         .collect()
 }
 
-/// Hooks are installed per run, never globally (0053).
+/// Hooks are installed per run, never globally (0053). Returns whether the settings file it wrote carries the run's fast
+/// settings: a `claude-settings` run passes its file on `--settings`, so fast mode merges into that file when the kind's
+/// settings flag is `--settings` too (decision 0165), instead of a second `--settings`.
 fn install_hooks(
     input: &LaunchInput<'_>,
     args: &mut Vec<String>,
     files: &mut Vec<(PathBuf, String)>,
-) {
+) -> bool {
     let bin = input.massorca_bin.to_string_lossy();
     match input.decl.status.mechanism {
         StatusMechanism::ClaudeSettings => {
             let path =
                 paths::run_dir(input.profile_dir, input.session_id).join(CLAUDE_SETTINGS_FILE);
-            files.push((path.clone(), claude_settings(&bin, input.decl)));
-            args.push("--settings".to_owned());
+            let fast = input
+                .fast
+                .filter(|fast| fast.settings_flag == SETTINGS_FLAG);
+            files.push((path.clone(), claude_settings(&bin, input.decl, fast)));
+            args.push(SETTINGS_FLAG.to_owned());
             args.push(path.to_string_lossy().into_owned());
+            fast.is_some()
         }
         StatusMechanism::CodexNotify => {
             // A JSON array of strings is also a TOML array: both escape `\` and `"` the same way.
             let command = Value::from(vec![&*bin, "agent", "hook", CODEX_TURN_EVENT]);
             args.push("-c".to_owned());
             args.push(format!("notify={command}"));
+            false
         }
-        StatusMechanism::EnvCommand | StatusMechanism::None => {}
+        StatusMechanism::EnvCommand | StatusMechanism::None => false,
     }
 }
 
-/// A Claude settings document whose hooks run `"<bin>" agent hook <Event>` for each declared event.
-fn claude_settings(bin: &str, decl: &KindDecl) -> String {
+/// A Claude settings document whose hooks run `"<bin>" agent hook <Event>` for each declared event, with the keys of
+/// the run's fast settings when it asked for fast mode (decision 0165).
+fn claude_settings(bin: &str, decl: &KindDecl, fast: Option<&FastDecl>) -> String {
     let quoted = quote_for_shell(bin);
     let hooks: serde_json::Map<String, Value> = decl
         .status
@@ -263,8 +282,14 @@ fn claude_settings(bin: &str, decl: &KindDecl) -> String {
             )
         })
         .collect();
-    let mut text = serde_json::to_string_pretty(&json!({ "hooks": hooks }))
-        .unwrap_or_else(|_| "{}".to_owned());
+    let mut document = json!({ "hooks": hooks });
+    // The kind's validation keeps the fast settings from setting `hooks`, so the hooks stay as they are.
+    if let (Some(fast), Some(object)) = (fast, document.as_object_mut()) {
+        for (key, value) in &fast.settings {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    let mut text = serde_json::to_string_pretty(&document).unwrap_or_else(|_| "{}".to_owned());
     text.push('\n');
     text
 }
@@ -424,6 +449,7 @@ mod tests {
         caller_env: BTreeMap<String, String>,
         instructions: Option<String>,
         inherited_path: Option<String>,
+        fast: Option<FastDecl>,
     }
 
     impl Fixture {
@@ -441,6 +467,7 @@ mod tests {
                 caller_env: BTreeMap::new(),
                 instructions: None,
                 inherited_path: None,
+                fast: None,
             }
         }
 
@@ -461,6 +488,7 @@ mod tests {
                 caller_env: &self.caller_env,
                 instructions: self.instructions.as_deref(),
                 inherited_path: self.inherited_path.as_deref(),
+                fast: self.fast.as_ref(),
             })
         }
 
@@ -486,6 +514,70 @@ mod tests {
             "id": "fake", "name": "Fake", "program": ["fake"], "args": ["--plain"],
             "prompt": prompt, "status": { "mechanism": "env-command", "events": { "stop": "done" } }
         }))
+    }
+
+    /// The fast settings `kind` declares in the claude form: `{"fastMode": true}` on `--settings`.
+    fn fast_settings(flag: &str) -> FastDecl {
+        serde_json::from_value(json!({ "settings": { "fastMode": true }, "settings_flag": flag }))
+            .expect("fast settings parse")
+    }
+
+    #[test]
+    fn claude_fast_mode_joins_its_hook_settings_file_and_passes_one_settings_flag() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.fast = Some(fast_settings("--settings"));
+        let plan = fixture.first(Some("go"));
+        let settings = paths::run_dir(&fixture.profile, "s-1").join(CLAUDE_SETTINGS_FILE);
+        let flags = plan.args.iter().filter(|arg| *arg == "--settings").count();
+        assert_eq!(
+            flags, 1,
+            "one --settings, carrying hooks and fast mode: {:?}",
+            plan.args
+        );
+        assert_eq!(plan.args[1], settings.to_string_lossy());
+        assert_eq!(plan.files.len(), 1);
+        let document: Value = serde_json::from_str(&plan.files[0].1).expect("valid JSON");
+        assert_eq!(document["fastMode"], json!(true));
+        assert!(
+            document["hooks"]["Stop"].is_array(),
+            "the hooks stay: {document}"
+        );
+    }
+
+    #[test]
+    fn a_kind_without_hook_settings_gets_its_fast_settings_as_one_json_argument() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.fast = Some(fast_settings("--settings"));
+        let plan = fixture.first(Some("fix it"));
+        assert_eq!(
+            plan.args,
+            ["--plain", "--settings", "{\"fastMode\":true}", "fix it"]
+        );
+        assert!(plan.files.is_empty());
+    }
+
+    #[test]
+    fn fast_settings_on_another_flag_are_passed_on_it_beside_the_hook_settings() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.fast = Some(fast_settings("--config"));
+        let plan = fixture.first(None);
+        let settings = paths::run_dir(&fixture.profile, "s-1").join(CLAUDE_SETTINGS_FILE);
+        let document: Value = serde_json::from_str(&plan.files[0].1).expect("valid JSON");
+        assert!(document.get("fastMode").is_none(), "{document}");
+        let at = plan
+            .args
+            .iter()
+            .position(|arg| arg == "--config")
+            .expect("the fast settings flag");
+        assert_eq!(plan.args[at + 1], "{\"fastMode\":true}");
+        assert_eq!(plan.args[1], settings.to_string_lossy());
+    }
+
+    #[test]
+    fn no_fast_settings_leave_the_launch_unchanged() {
+        let fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        let plan = fixture.first(Some("fix it"));
+        assert_eq!(plan.args, ["--plain", "fix it"]);
     }
 
     #[test]

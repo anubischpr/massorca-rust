@@ -489,6 +489,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         })
         .await
@@ -723,6 +724,7 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         })
         .await

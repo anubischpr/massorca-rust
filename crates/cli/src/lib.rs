@@ -8,6 +8,7 @@ pub mod agent_context;
 pub mod agent_credentials;
 pub mod agent_hook;
 pub mod agent_text;
+pub mod agent_title;
 pub mod app;
 pub mod args;
 pub mod cli_install;

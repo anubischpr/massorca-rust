@@ -779,6 +779,7 @@ mod tests {
             label: label.to_owned(),
             default,
             efforts: efforts.map(|levels| levels.iter().map(|level| (*level).to_owned()).collect()),
+            fast: false,
         }
     }
 
