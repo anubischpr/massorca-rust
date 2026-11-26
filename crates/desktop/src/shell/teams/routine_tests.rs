@@ -29,6 +29,7 @@ fn wire_bot() -> WireBot {
         effort: None,
         lead: false,
         created_at_ms: 1,
+        skills: Vec::new(),
     }
 }
 
