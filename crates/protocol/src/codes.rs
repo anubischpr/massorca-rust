@@ -218,6 +218,12 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
+/// The kind declares no one-shot form, so it cannot name a chat (decision 0167).
+pub const AGENT_ONESHOT_UNSUPPORTED: &str = "agent.oneshot_unsupported";
+/// A one-shot run that names a chat did not finish within its time limit (decision 0167).
+pub const AGENT_ONESHOT_TIMEOUT: &str = "agent.oneshot_timeout";
+/// A one-shot run that names a chat exited with a failure, or printed no usable title (decision 0167).
+pub const AGENT_ONESHOT_FAILED: &str = "agent.oneshot_failed";
 /// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
 pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 /// The kind declares no permission mode of that id, or none at all; the data names the kind, the mode and the known ids.

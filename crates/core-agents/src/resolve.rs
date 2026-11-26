@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Extensions Windows tries when `PATHEXT` is not set.
 const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
@@ -71,6 +72,34 @@ pub fn vendor_search_env() -> (SearchEnv, PathSource) {
             },
             PathSource::Process,
         ),
+    }
+}
+
+/// Where agent programs are searched for when kinds are listed and started (decision 0164): the host's search path, the
+/// one the extension install check uses (decision 0092), or a fixed one for tests and support.
+#[derive(Clone)]
+pub struct VendorSearch(Arc<dyn Fn() -> SearchEnv + Send + Sync>);
+
+impl VendorSearch {
+    /// The host's search path: the process `PATH`, with the registry's machine and user `Path` merged in on Windows.
+    pub fn host() -> Self {
+        Self(Arc::new(|| vendor_search_env().0))
+    }
+
+    /// A search that always gives `env`.
+    pub fn fixed(env: SearchEnv) -> Self {
+        Self(Arc::new(move || env.clone()))
+    }
+
+    /// The search path now.
+    pub fn env(&self) -> SearchEnv {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for VendorSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VendorSearch")
     }
 }
 
@@ -471,5 +500,42 @@ mod tests {
             "C:\\Program Files\\nodejs"
         );
         assert_eq!(merge_search_path("C:\\a", None, None), "C:\\a");
+    }
+
+    /// A bundle installer's `.cmd` launcher sits in a folder only the registry's user `Path` lists (decision 0092). The
+    /// merged search finds it under Windows' PATHEXT; the process `PATH` alone does not.
+    #[cfg(windows)]
+    #[test]
+    fn a_launcher_on_the_registry_user_path_resolves_through_the_merged_search() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let bundle = dir.path().join("bundle").join("bin");
+        let process = dir.path().join("process");
+        fs::create_dir_all(&bundle).expect("a bundle folder");
+        fs::create_dir_all(&process).expect("a process folder");
+        fs::write(bundle.join("gentle-shell.cmd"), "@echo off\r\n").expect("a launcher");
+        let user = bundle.display().to_string();
+        let process_text = process.display().to_string();
+        let pathext = Some(".COM;.EXE;.BAT;.CMD".to_owned());
+        let merged = SearchEnv {
+            path: Some(OsString::from(merge_search_path(
+                &process_text,
+                None,
+                Some(&user),
+            ))),
+            pathext: pathext.clone(),
+        };
+        // The PATHEXT spelling decides the file's case, and Windows names the same file either way.
+        let found = resolve("gentle-shell", &merged).expect("the launcher resolves");
+        assert!(
+            found
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&bundle.join("gentle-shell.cmd").to_string_lossy()),
+            "{found:?}"
+        );
+        let process_only = SearchEnv {
+            path: Some(OsString::from(&process_text)),
+            pathext,
+        };
+        assert_eq!(resolve("gentle-shell", &process_only), None);
     }
 }

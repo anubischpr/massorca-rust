@@ -20,6 +20,7 @@ use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
+use crate::agent_title::{self, AgentTitleArgs};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
@@ -163,6 +164,8 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: AccountsCommand,
     },
+    /// Names a chat from its first prompt and reply, by one run of the kind's one-shot form (decision 0167). Prints the slug.
+    Title(AgentTitleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -291,6 +294,10 @@ pub struct AgentStartArgs {
     /// The reasoning effort, passed to the kind's effort flag; a kind that declares no effort flag refuses it.
     #[arg(long, value_name = "EFFORT")]
     pub effort: Option<String>,
+    /// Fast mode: passed to the settings the kind declares for it. Needs a kind and a model that offer it; a kind that
+    /// declares no fast mode, or a model that does not take it, refuses the start.
+    #[arg(long)]
+    pub fast: bool,
     /// Start the session as a structured chat (`agent.chat.start`) instead of in a terminal. A kind that cannot run as a
     /// chat (no chat support, or a CLI version outside its range) is refused with agent.chat_unsupported.
     #[arg(long, conflicts_with = "args")]
@@ -465,6 +472,7 @@ pub async fn execute(
                 permission_mode: args.mode,
                 model: args.model,
                 effort: args.effort,
+                fast: args.fast.then_some(true),
             };
             let started = if args.chat {
                 client.agent_chat_start(&params).await?
@@ -632,6 +640,9 @@ pub async fn execute(
         }
         AgentCommand::Accounts { command } => {
             agent_accounts::execute(target, &client, command, output, json).await?;
+        }
+        AgentCommand::Title(args) => {
+            agent_title::execute(&client, args, output).await?;
         }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();

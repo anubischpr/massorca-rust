@@ -174,6 +174,10 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- `launch_values` (decision 0164), optional: the vendor's spellings of the mode's launch value, in preference order.
+  `args` then holds `{value}` exactly once, right after its flag. At launch the first spelling the CLI's `--help` lists
+  for that flag is passed, and the first spelling when the help lists none or cannot be read. The help is the
+  instruction channel's cached `--help` probe, so one run serves both.
 - A mode's presentation (decision 0163), each optional: `description` (one line), `icon` (a
   lucide icon name: lowercase letters and digits in `-`-joined words, at most 64 characters),
   `tone` (`normal` | `warning`; a bypass mode never has `normal`) and `selectable` (default
@@ -195,6 +199,16 @@ directory that does not exist has no kinds.
   lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
   Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
   choice is the default, and no label is empty.
+- `fast` (decision 0165): optional, `{ "settings": {...}, "settings_flag"?: "--settings", "live"?:
+  "/fast", "toggle"?: true }`. `settings` is a non-empty object that may not set `hooks`;
+  `settings_flag` (default `--settings`) is a flag. A start with fast mode passes `settings` on that
+  flag as one JSON argument. A `claude-settings` run whose hook settings file already goes on
+  `--settings` gets the keys merged into that file instead. `live` and `toggle` are declared for the
+  live switch of a later change; nothing sends them. A `model.choices` entry takes `"fast": true`
+  only when the kind declares `fast`. A start with fast mode is refused with
+  `agent.option_unsupported`, naming the kind and model, unless the kind declares `fast` and, when
+  the kind lists model choices, the named model (the default choice when none is named) is marked
+  `fast: true`. A kind with no model choices passes fast mode on for any model.
 
 ## Session record (`AgentSession`)
 
@@ -214,6 +228,7 @@ directory that does not exist has no kinds.
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
@@ -225,8 +240,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
-| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts?, fast? }] }, effort?: { levels?: [{ id, label }], default? }, fast?: { supported, reason? } }] }` |
+| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?`, `fast?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`; `fast` needs `agent-fast/1` (decision 0165). The client refuses each before sending when the service does not offer it. |
 | `agent.list` | read | `workspace?`, `include_archived?` | `{ sessions }`, newest first; archived sessions only with `include_archived` (capability `agent-archive/1`) |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
@@ -256,6 +271,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
+| `agent.generate_title` | workspace | `kind`, `prompt`, `reply?`, `model?`, `account?` | `{ slug }`, capability `agent-title/1` (decision 0167) |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -740,7 +756,7 @@ it was noticed.
 
 ```
 massorca agent kinds
-massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
+massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--fast] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
 massorca agent list [--workspace <ws>] [--archived]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
@@ -1101,6 +1117,47 @@ first 100000 characters, and the rest was searched for the variables above, not 
 Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
 may still see a set but empty variable; and the list covers the variables named in the documents read,
 not every variable a future Claude release may read.
+
+## Chat titles by a one-shot run (decision 0167)
+
+A kind may declare a non-interactive form that names a chat from its first prompt and reply:
+
+```json
+"oneshot": {
+  "args": ["-p", "{prompt}", "--output-format", "text"],
+  "model_flag_reuse": true,
+  "optional_args": [{ "flag": "--max-turns", "values": ["1"] }, { "flag": "--strict-mcp-config" }]
+}
+```
+
+- `args` holds `{prompt}` exactly once; the prompt is one argument of the run, never a shell line. `model_flag_reuse`
+  passes the kind's `model` arguments to the run when a model is named; without it the model is ignored. Only Claude
+  declares it: the other built-in kinds have no non-interactive form that was confirmed.
+- `optional_args` are passed after `args` only when the program's `--help` lists their flag as a whole word. The listing
+  is the instruction channel's cached probe output (`instructions::probe_run`), so `--help` runs once per program; without
+  a listing none is passed. Claude lists the restrictions that stop tool use in its print mode: one turn, the permission
+  mode `default`, no MCP servers beyond an empty `--mcp-config`, the built-in tools denied through one comma-separated
+  `--disallowedTools` argument, `--tools ""` and `--no-session-persistence`. Hooks in the account's settings still load.
+- The request asks for an English ASCII title of two to four words, whatever the language of the chat, and is one line:
+  every line break and run of whitespace becomes one space (a Windows `.cmd` launcher refuses an argument with a line
+  break). A leading label such as `Title:` or `Título:` is removed before the slug is made (`title.rs`).
+- Below host-admin a caller may name only the kind's active account; another account is refused with
+  `permission.denied`. The method takes no project, so a project's own choice is not reachable through it.
+- `agent.generate_title` (capability `agent-title/1`, `massorca agent title`) runs the kind's startable program once.
+  The account is the one named, else the kind's active one; no usable account is `agent.credentials_invalid`. Its home
+  is read under the same gate as an account check, with the state file repaired first (decision 0099).
+- The run's environment removes the kind's `strip_inherited_env`, its credential and account `strip_env` lists, and the
+  three run identity variables (`MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`). It installs no
+  status hooks and writes no session row, terminal or transcript of MassOrca's. Its working folder is a fresh folder
+  under the profile's `tmp` folder, outside every workspace, removed when the run ends.
+- The run has 30 seconds (`MASSORCA_TITLE_TIMEOUT_MS` shortens it for tests, down to 100 ms). Past that its process tree
+  is stopped and the call fails with `agent.oneshot_timeout`.
+- The reply's first line that holds a usable word becomes the slug: accents folded (`canción` is `cancion`), every other
+  character a separator, at most four words joined by `-`, at most 48 characters. A reply with no usable word, a
+  non-zero exit or a missing program fails with `agent.oneshot_failed`; a kind with no one-shot form fails with
+  `agent.oneshot_unsupported`. A reply is never logged; the error names the kind and the cause only.
+- Open: Claude's print mode may keep its own transcript under the account home. `--no-session-persistence` would stop
+  that, but it is not declared because it cannot be checked here without running the real CLI.
 
 ## Follow-ups
 
