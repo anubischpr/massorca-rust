@@ -13,7 +13,7 @@ mod selectors;
 mod timer;
 mod view;
 
-pub(crate) use occurrences::upcoming_runs;
+pub(crate) use occurrences::{done_runs, upcoming_runs};
 pub(crate) use timer::follow_automations;
 
 use massorca_protocol::capabilities;
