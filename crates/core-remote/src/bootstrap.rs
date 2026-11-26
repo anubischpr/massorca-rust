@@ -17,11 +17,24 @@ pub const DEFAULT_OFFER_TTL_SECS: u32 = 120;
 /// The listen address of an installed service when none is given: this node's Tailscale address (decision 0043).
 pub const DEFAULT_LISTEN: &str = "tailscale";
 
+/// The systemd user unit that runs the service on an SSH host; its logs are read with `journalctl --user -u` (REM-25).
+pub const UNIT_NAME: &str = "massorca.service";
+
 /// The unit file as the host's shell expands it.
-const UNIT_FILE: &str = "$HOME/.config/systemd/user/massorca.service";
+fn unit_file() -> String {
+    format!("$HOME/.config/systemd/user/{UNIT_NAME}")
+}
+
 /// The unit file as it is shown to people.
-const UNIT_PATH_DISPLAY: &str = "~/.config/systemd/user/massorca.service";
-const ENABLE_UNIT: &str = "systemctl --user daemon-reload && systemctl --user enable massorca.service && systemctl --user restart massorca.service";
+fn unit_path_display() -> String {
+    format!("~/.config/systemd/user/{UNIT_NAME}")
+}
+
+fn enable_unit() -> String {
+    format!(
+        "systemctl --user daemon-reload && systemctl --user enable {UNIT_NAME} && systemctl --user restart {UNIT_NAME}"
+    )
+}
 /// Readiness checks of the service, half a second apart: 20 seconds in all.
 const READY_POLLS: u32 = 40;
 
@@ -195,10 +208,10 @@ pub fn bootstrap(
         listen: &plan.listen,
     });
     checked(
-        shell.run(&format!("cat > \"{UNIT_FILE}\""), Some(unit.as_bytes()))?,
+        shell.run(&format!("cat > \"{}\"", unit_file()), Some(unit.as_bytes()))?,
         "writing the unit file",
     )?;
-    checked(shell.run(ENABLE_UNIT, None)?, "starting the service")?;
+    checked(shell.run(&enable_unit(), None)?, "starting the service")?;
 
     progress("Waiting for the service");
     let ready = checked(
@@ -217,7 +230,7 @@ pub fn bootstrap(
         remote_os,
         remote_arch,
         remote_binary: format!("~/{rest}/bin/massorca"),
-        unit_path: UNIT_PATH_DISPLAY.to_owned(),
+        unit_path: unit_path_display(),
         offer,
         server_version: version_of(&ready.stdout),
     })
@@ -263,12 +276,12 @@ pub fn probe_over_ssh(
 /// Stops and disables the service, then removes its unit and the install directory (decision 0045).
 pub fn uninstall(shell: &dyn RemoteShell, remote_dir: &str) -> Result<(), BootstrapError> {
     let rest = remote_rest(remote_dir)?;
-    let stop = shell.run("systemctl --user disable --now massorca.service", None)?;
+    let stop = shell.run(&format!("systemctl --user disable --now {UNIT_NAME}"), None)?;
     if stop.status != 0 && !is_not_loaded(&stop.stderr) {
         return Err(failed("stopping the service", &stop));
     }
     checked(
-        shell.run(&format!("rm -f \"{UNIT_FILE}\""), None)?,
+        shell.run(&format!("rm -f \"{}\"", unit_file()), None)?,
         "removing the unit file",
     )?;
     checked(
@@ -469,8 +482,7 @@ fn version_of(stdout: &[u8]) -> String {
 /// Any other failure (no user bus, permissions) keeps the files, since the service may run.
 fn is_not_loaded(stderr: &[u8]) -> bool {
     let text = String::from_utf8_lossy(stderr).to_lowercase();
-    text.contains("massorca.service")
-        && (text.contains("not loaded") || text.contains("does not exist"))
+    text.contains(UNIT_NAME) && (text.contains("not loaded") || text.contains("does not exist"))
 }
 
 /// A non-zero exit becomes a `Remote` error that names the step and shows the error output.
