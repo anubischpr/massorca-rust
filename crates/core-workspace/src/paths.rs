@@ -101,8 +101,10 @@ pub struct ContainedFile {
 }
 
 /// The regular file `text` names inside `root` (decision 0172). A relative `text` is taken from the root and holds
-/// plain names only. An absolute one may name any place, but it is accepted only when the file it reaches, after
-/// symlinks and junctions are followed, lies inside the root.
+/// plain names only. An absolute one must be spelled under the root, as given or canonical, which is checked before the
+/// path is looked up on disk: an absolute path elsewhere is `Outside` whether or not it exists, and a UNC, verbatim
+/// (`\\?\`) or device (`\\.\`) path is always `Outside`. Either way the file it reaches, after symlinks and junctions
+/// are followed, must lie inside the root.
 pub fn regular_file_inside(root: &Path, text: &str) -> Result<ContainedFile, FileRefusal> {
     let given = Path::new(text);
     if given
@@ -111,8 +113,17 @@ pub fn regular_file_inside(root: &Path, text: &str) -> Result<ContainedFile, Fil
     {
         return Err(FileRefusal::Outside);
     }
+    if !plain_prefix(given) {
+        return Err(FileRefusal::Outside);
+    }
+    let absolute = given.is_absolute();
+    // Spelled under the root as given: decided without touching the disk.
+    let under_given = absolute && lexically_under(given, root);
     let root = dunce::canonicalize(root).map_err(|_| FileRefusal::Missing)?;
-    let candidate = if given.is_absolute() {
+    if absolute && !under_given && !lexically_under(given, &root) {
+        return Err(FileRefusal::Outside);
+    }
+    let candidate = if absolute {
         given.to_path_buf()
     } else {
         if !given
@@ -146,6 +157,35 @@ pub fn regular_file_inside(root: &Path, text: &str) -> Result<ContainedFile, Fil
         path: resolved,
         relative,
     })
+}
+
+/// Whether `path` has no prefix, or a plain drive prefix (`C:`). A UNC, verbatim or device prefix names a place no
+/// workspace file is checked through, so it is refused before anything reads the disk.
+fn plain_prefix(path: &Path) -> bool {
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => matches!(prefix.kind(), std::path::Prefix::Disk(_)),
+        _ => true,
+    }
+}
+
+/// Whether `path` is spelled under `root`, name by name, without touching the disk: case-insensitively where the
+/// filesystem ignores case. `.` names are skipped; the caller has refused `..`.
+fn lexically_under(path: &Path, root: &Path) -> bool {
+    let named = |part: &Component<'_>| !matches!(part, Component::CurDir);
+    let mut parts = path.components().filter(named);
+    root.components()
+        .filter(named)
+        .all(|want| parts.next().is_some_and(|got| same_name(got, want)))
+}
+
+/// Whether two path components are one name: equal, or equal ignoring case where the filesystem does.
+fn same_name(got: Component<'_>, want: Component<'_>) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        got.as_os_str().to_string_lossy().to_lowercase()
+            == want.as_os_str().to_string_lossy().to_lowercase()
+    } else {
+        got == want
+    }
 }
 
 /// Removes `.` and resolves `..` against earlier components, without touching the disk.
@@ -340,5 +380,55 @@ mod tests {
     #[test]
     fn a_utf8_path_is_stored_as_its_text() {
         assert_eq!(path_text(Path::new("some/dir")).expect("utf-8"), "some/dir");
+    }
+
+    #[test]
+    fn an_absolute_path_outside_the_root_is_outside_whether_or_not_it_exists() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let elsewhere = tempfile::tempdir().expect("temp dir");
+        let gone = elsewhere.path().join("gone.txt");
+        assert_eq!(
+            regular_file_inside(root.path(), gone.to_str().expect("utf-8")),
+            Err(FileRefusal::Outside),
+            "missing and outside are one answer"
+        );
+        let beside = format!("{}-sibling/a.txt", root.path().to_str().expect("utf-8"));
+        assert_eq!(
+            regular_file_inside(root.path(), &beside),
+            Err(FileRefusal::Outside),
+            "a folder whose name starts with the root's is not under it"
+        );
+    }
+
+    #[test]
+    fn an_absolute_missing_file_under_the_root_is_missing() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let gone = root.path().join("gone.txt");
+        assert_eq!(
+            regular_file_inside(root.path(), gone.to_str().expect("utf-8")),
+            Err(FileRefusal::Missing)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_unc_verbatim_or_device_path_is_outside_even_when_it_names_a_file_inside() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let file = root.path().join("notes.txt");
+        std::fs::write(&file, "x").expect("file");
+        let canonical = dunce::canonicalize(&file).expect("canonical");
+        let text = canonical.to_str().expect("utf-8");
+        for spelling in [
+            format!(r"\\?\{text}"),
+            format!(r"\\.\{text}"),
+            r"\\server\share\notes.txt".to_owned(),
+            r"\\?\UNC\server\share\notes.txt".to_owned(),
+        ] {
+            assert_eq!(
+                regular_file_inside(root.path(), &spelling),
+                Err(FileRefusal::Outside),
+                "{spelling}"
+            );
+        }
     }
 }
