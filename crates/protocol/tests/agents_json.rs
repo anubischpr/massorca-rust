@@ -39,34 +39,13 @@ fn live_session() -> AgentSession {
         id: "s-1".to_owned(),
         kind: "claude".to_owned(),
         workspace_id: "w-1".to_owned(),
-        title: None,
-        read_only: false,
-        parent_id: None,
-        brought_back_at_ms: None,
-        agent_ref: None,
         terminal_id: Some("t-1".to_owned()),
-        run: Default::default(),
         created_at_ms: 1_767_225_600_000,
         execution: Execution {
             state: TerminalState::Live,
             exit: None,
         },
-        activity: None,
-        result: None,
-        holds_secrets: false,
-        secrets_withheld: None,
-        permission_mode: None,
-        mode_confirmed: false,
-        mode_source: None,
-        pending_permission_mode: None,
-        retained: false,
-        released: false,
-        archived: false,
-        resume: None,
-        delegation: None,
-        fast: None,
-        notes: Vec::new(),
-        shared_folder_with: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -82,6 +61,7 @@ fn method_names_match_the_wire_table() {
         (agents::FORGET, "agent.forget"),
         (agents::PROMPT, "agent.prompt"),
         (agents::RESUME, "agent.resume"),
+        (agents::FORK, "agent.fork"),
         (agents::MARK_SEEN, "agent.mark_seen"),
         (agents::HOOK, "agent.hook"),
         (agents::WATCH, "agent.watch"),
@@ -1466,4 +1446,28 @@ fn shared_folder_with_lists_the_other_writers_and_is_absent_when_empty() {
     assert!(alone.get("shared_folder_with").is_none(), "{alone}");
     let older: AgentSession = serde_json::from_value(alone).expect("an older record decodes");
     assert!(older.shared_folder_with.is_empty());
+}
+
+/// The metadata of decision 0168 is flat on the wire, and a record from an older peer reads with none of it.
+#[test]
+fn session_metadata_is_flat_on_the_wire() {
+    let mut session = live_session();
+    session.meta = massorca_protocol::methods::agents::SessionMeta {
+        model: Some("m-1".to_owned()),
+        effort: Some("high".to_owned()),
+        branch: Some("feature".to_owned()),
+        preview: Some("done: hello".to_owned()),
+        forked_from: Some("s-0".to_owned()),
+    };
+    let mut expected = serde_json::to_value(live_session()).unwrap();
+    for (key, value) in [
+        ("model", "m-1"),
+        ("effort", "high"),
+        ("branch", "feature"),
+        ("preview", "done: hello"),
+        ("forked_from", "s-0"),
+    ] {
+        expected[key] = json!(value);
+    }
+    assert_wire(&session, &expected);
 }

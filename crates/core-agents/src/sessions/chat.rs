@@ -158,7 +158,7 @@ impl Agents {
         grant: SecretGrant,
         adapter: Box<dyn ChatAdapter>,
     ) -> Result<AgentSession, AgentError> {
-        self.start_session_as(params, None, grant, RunStart::Chat(adapter))
+        self.start_session_as(params, None, grant, RunStart::Chat(adapter), None)
     }
 
     /// `agent.chat.start` (decision 0101, D1): a session of `params.kind` whose run is a chat, with the adapter its
