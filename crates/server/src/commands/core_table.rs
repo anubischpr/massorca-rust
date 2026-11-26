@@ -498,6 +498,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "kind": { "type": "string" },
                     "prompt": { "type": "string" },
                     "args": { "type": "array", "items": { "type": "string" } },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" } },
                     "read_only": { "type": "boolean" },
                     "title": { "type": "string" },
                     "request_id": { "type": "string" },
@@ -899,6 +900,34 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.credentials.remove",
             "Delete an agent kind's credential home in this profile",
             "agent.credentials.remove",
+            selector("kind"),
+        ),
+        command(
+            "agent.settings.show",
+            "Show an agent kind's standing program, arguments and environment names",
+            "agent.settings.get",
+            selector("kind"),
+        ),
+        command(
+            "agent.settings.set",
+            "Set an agent kind's standing program, arguments or environment, used by every run of the kind",
+            "agent.settings.set",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "program": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "remove_env": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        ),
+        command(
+            "agent.settings.clear",
+            "Remove an agent kind's standing launch settings",
+            "agent.settings.clear",
             selector("kind"),
         ),
         command(

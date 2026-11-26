@@ -40,6 +40,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_QUEUE,
             capabilities::AGENT_RELEASE,
             capabilities::AGENT_SEEN,
+            capabilities::AGENT_SETTINGS,
             capabilities::AGENT_TITLE,
             capabilities::AGENTS,
             capabilities::BINARY_FRAMES,

@@ -269,6 +269,10 @@ impl Service {
             vendor_env: Some(massorca_core_agents::VendorEnv::process()),
             // The host's search path, the one the extension install check uses (decision 0164).
             vendor_search: massorca_core_agents::VendorSearch::host(),
+            // Each kind's standing launch settings, sealed in the vault (decision 0174).
+            kind_settings: Some(massorca_core_agents::KindSettingsStore::new(
+                crate::features::agent_settings::VaultSettings(Arc::clone(&vault)),
+            )),
         });
         // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
         let guarded = agents.clone();

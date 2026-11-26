@@ -42,6 +42,7 @@ use serde_json::{Value, json};
 use crate::catalog::Catalog;
 use crate::instructions::{self, DELEGATION_INSTRUCTIONS};
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
+use crate::kind_settings::StandingSettings;
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::modes;
 use crate::packages::KindPackages;
@@ -50,7 +51,7 @@ use crate::prompt;
 use crate::provided_env::{
     EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
 };
-use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
+use crate::resolve::{SearchEnv, VendorSearch};
 use crate::resume_state::{self, ResumeInputs};
 use crate::run_notes;
 use crate::session_options::{self, ChosenOptions};
@@ -61,6 +62,7 @@ mod chat;
 mod delegation;
 mod fork;
 mod queue;
+mod settings;
 
 pub use chat::ChatOpened;
 use chat::{ChatRun, RunStart, Started};
@@ -277,6 +279,9 @@ pub struct AgentsConfig {
     /// The search path agent programs are found on when kinds are listed and started: the host's, as the extension
     /// install check searches it (decision 0164).
     pub vendor_search: VendorSearch,
+    /// Where each kind's standing launch settings are kept (decision 0174); `None` keeps none, and every kind starts as
+    /// declared.
+    pub kind_settings: Option<crate::KindSettingsStore>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -639,13 +644,17 @@ impl Agents {
             Some(selector) => Some(self.started_workspace(selector)?),
             None => None,
         };
-        let (decl, program) = self.startable_kind(&params.kind)?;
+        let (decl, program, standing) = self.installed_kind_with(&params.kind, true)?;
+        // The kind's standing arguments come before the start's, and its standing variables under the start's (decision
+        // 0174): what a start names wins.
+        let caller_args = standing.args_with(&params.args);
+        let caller_env = standing.env_with(&params.env);
         let mode = modes::plan_start(
             &decl,
             params.permission_mode.as_deref(),
             Some(program.as_path()),
         )?
-        .with_caller_args(&params.args);
+        .with_caller_args(&caller_args);
         // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
         let mode_args = [
             mode.args.clone(),
@@ -735,10 +744,10 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             mode_args: &mode_args,
-            caller_args: &params.args,
+            caller_args: &caller_args,
             provided_env: &provided,
             holds_secrets,
-            caller_env: &params.env,
+            caller_env: &caller_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
             fast,
@@ -953,7 +962,7 @@ impl Agents {
             .agent_ref
             .clone()
             .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
-        let (decl, program) = self.resumable_kind(&row)?;
+        let (decl, program, standing) = self.resumable_kind_with(&row)?;
         // The CLI saved no conversation for the ref, or a resume already found none (decision 0160): refused before a run
         // that would only fail.
         let state = resume_state::resume_state(&ResumeInputs {
@@ -1064,9 +1073,11 @@ impl Agents {
             .unwrap_or(false);
         let mode_args = [mode.args.clone(), kept.args.clone()].concat();
         let fast = decl.fast_for(kept.model.as_deref(), chosen_fast)?;
-        // Besides those options, a resumed run takes the kind's resume arguments only: the caller's arguments and
-        // environment of the first start are not kept with the session (docs/architecture/agents.md).
-        let no_env = BTreeMap::new();
+        // Besides those options, a resumed run takes the kind's resume arguments and its standing settings only (decision
+        // 0174): the caller's arguments and environment of the first start are not kept with the session
+        // (docs/architecture/agents.md).
+        let standing_args = standing.args_with(&[]);
+        let standing_env = standing.env_with(&BTreeMap::new());
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -1079,10 +1090,10 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             mode_args: &mode_args,
-            caller_args: &[],
+            caller_args: &standing_args,
             provided_env: &provided,
             holds_secrets,
-            caller_env: &no_env,
+            caller_env: &standing_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
             // A resume takes the fast mode `agent.set_options` chose for the session, if any (decisions 0165, 0171).
@@ -1260,6 +1271,15 @@ impl Agents {
 
     /// The declaration and program a resume starts with: declared, valid, with a resume form, and installed (0054).
     fn resumable_kind(&self, row: &AgentSessionRow) -> Result<(KindDecl, PathBuf), AgentError> {
+        self.resumable_kind_with(row)
+            .map(|(decl, program, _)| (decl, program))
+    }
+
+    /// [`Agents::resumable_kind`], with the kind's standing launch settings (decision 0174), whose program it resolved.
+    fn resumable_kind_with(
+        &self,
+        row: &AgentSessionRow,
+    ) -> Result<(KindDecl, PathBuf, StandingSettings), AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(&row.kind).ok_or_else(|| {
             resume_unavailable(&row.id, &format!("kind {} is no longer declared", row.kind))
@@ -1274,16 +1294,9 @@ impl Agents {
                 &format!("kind {} declares no resume form", row.kind),
             ));
         }
-        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
-            AgentError::new(
-                codes::AGENT_NOT_INSTALLED,
-                format!(
-                    "agent kind {} is not installed: none of its programs was found",
-                    row.kind
-                ),
-            )
-        })?;
-        Ok((decl.clone(), program))
+        let settings = self.standing_settings(&row.kind)?;
+        let program = self.program_for(decl, &settings)?;
+        Ok((decl.clone(), program, settings))
     }
 
     /// Whether `token` is the run token of a live run of `session`, compared in constant time.
@@ -2211,6 +2224,16 @@ impl Agents {
         id: &str,
         gated: bool,
     ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        self.installed_kind_with(id, gated)
+            .map(|(decl, program, _)| (decl, program))
+    }
+
+    /// [`Agents::installed_kind`], with the kind's standing launch settings (decision 0174), whose program it resolved.
+    fn installed_kind_with(
+        &self,
+        id: &str,
+        gated: bool,
+    ) -> Result<(crate::KindDecl, PathBuf, StandingSettings), AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(id).ok_or_else(|| {
             AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
@@ -2224,13 +2247,9 @@ impl Agents {
                 format!("agent kind {id} is invalid: {}", entry.problems.join("; ")),
             )
         })?;
-        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
-            AgentError::new(
-                codes::AGENT_NOT_INSTALLED,
-                format!("agent kind {id} is not installed: none of its programs was found"),
-            )
-        })?;
-        Ok((decl.clone(), program))
+        let settings = self.standing_settings(id)?;
+        let program = self.program_for(decl, &settings)?;
+        Ok((decl.clone(), program, settings))
     }
 
     /// Refuses `kind` with `agent.kind_not_enabled` when it is declared by a package that is not enabled (decision
@@ -3136,6 +3155,7 @@ pub(crate) mod tests {
             kind_packages: packages,
             vendor_env: None,
             vendor_search,
+            kind_settings: Some(crate::KindSettingsStore::in_memory()),
         });
         (agents, workspace.id, profile)
     }
