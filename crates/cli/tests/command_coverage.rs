@@ -157,6 +157,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "host.memory",
             "host.ports",
             "host.self-test",
+            "host.update",
             "marketplace.services.connect",
             "marketplace.services.disconnect",
             "marketplace.services.list",

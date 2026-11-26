@@ -22,6 +22,11 @@ impl Output {
         Self { json }
     }
 
+    /// Whether this run prints one JSON document.
+    pub fn is_json(self) -> bool {
+        self.json
+    }
+
     /// Prints a success: `lines` in text mode, the result document in JSON mode.
     pub fn success<T: Serialize>(self, result: &T, lines: &[String]) {
         if self.json {

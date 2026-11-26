@@ -13,9 +13,23 @@ use crate::task::TaskCommand;
 use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
 
+/// `--version` after the program name: the version and the protocol range, which a self-update checks (decision 0132).
+pub fn version_text() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| {
+        massorca_protocol::methods::self_update::version_text(
+            env!("CARGO_PKG_VERSION"),
+            massorca_protocol::ProtocolRange {
+                min: massorca_protocol::MIN_PROTOCOL_VERSION,
+                max: massorca_protocol::PROTOCOL_VERSION,
+            },
+        )
+    })
+}
+
 /// Runs and controls the MassOrca service and reads and changes its settings.
 #[derive(Debug, Parser)]
-#[command(name = "massorca", version, arg_required_else_help = true)]
+#[command(name = "massorca", version = version_text(), arg_required_else_help = true)]
 pub struct Cli {
     /// Profile to use. Each profile has its own service and data.
     #[arg(long, global = true, value_name = "NAME", env = "MASSORCA_PROFILE")]
@@ -607,6 +621,9 @@ pub enum HostCommand {
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
     AddSsh(HostAddSshArgs),
+    /// Updates a paired host's service over its connection: shows the current version and the one to install, asks
+    /// for confirmation, uploads the binary, and waits for the restarted service. Needs host-admin on the host.
+    Update(HostUpdateArgs),
     /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
     Memory,
     /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them. Works
@@ -627,6 +644,33 @@ pub struct HostRemoveArgs {
     /// SSH destination of the host to uninstall, as ssh takes it: [user@]host.
     #[arg(long, value_name = "TARGET", requires = "uninstall")]
     pub ssh: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct HostUpdateArgs {
+    /// Host name.
+    pub name: String,
+    /// massorca binary to install. Defaults to this massorca itself; any other file needs --sha256.
+    #[arg(long, value_name = "PATH", conflicts_with = "rollback")]
+    pub binary: Option<PathBuf>,
+    /// The binary's SHA-256, as its release publishes it. Required with --binary.
+    #[arg(long, value_name = "HEX", requires = "binary")]
+    pub sha256: Option<String>,
+    /// The version the binary reports, when it cannot run on this computer (built for another system).
+    #[arg(long, value_name = "VERSION", conflicts_with = "rollback")]
+    pub expect_version: Option<String>,
+    /// Accepts a version older than the host's.
+    #[arg(long, conflicts_with = "rollback")]
+    pub allow_downgrade: bool,
+    /// Reinstalls the version the host already runs.
+    #[arg(long, conflicts_with = "rollback")]
+    pub force: bool,
+    /// Puts back the binary the last update replaced.
+    #[arg(long)]
+    pub rollback: bool,
+    /// Confirms without asking. Required when the command does not run at a terminal.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]

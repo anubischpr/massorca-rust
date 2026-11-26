@@ -65,6 +65,27 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "service.info",
             json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
         ),
+        // A CLI composition: `host.update_begin` is its first request on the host, or `host.update_rollback` with
+        // `rollback`.
+        command(
+            "host.update",
+            "Update a paired host's service over its connection: confirm, upload, swap and restart",
+            "host.update_begin",
+            json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "binary": { "type": "string" },
+                    "sha256": { "type": "string" },
+                    "expect_version": { "type": "string" },
+                    "allow_downgrade": { "type": "boolean" },
+                    "force": { "type": "boolean" },
+                    "rollback": { "type": "boolean" },
+                    "yes": { "type": "boolean" }
+                }
+            }),
+        ),
         command(
             "events.subscribe",
             "Stream change events",
