@@ -18,8 +18,8 @@ pub(crate) struct StreamTable {
 struct Open {
     last_id: u64,
     cancels: HashMap<u64, oneshot::Sender<()>>,
-    /// Where the client's bytes for a duplex stream go.
-    inbound: HashMap<u64, mpsc::Sender<Vec<u8>>>,
+    /// Where the client's bytes for a duplex stream go, and the largest payload it takes.
+    inbound: HashMap<u64, (mpsc::Sender<Vec<u8>>, usize)>,
 }
 
 /// What became of stream bytes a client sent.
@@ -30,6 +30,9 @@ pub(crate) enum Delivery {
     Dropped,
     /// The stream's queue is full: the stream has been released and must be told why.
     Overflow,
+    /// The payload is larger than the stream takes, so it was not queued: the stream has been released and must be told
+    /// why.
+    TooLarge,
 }
 
 /// A table handle a forwarder can release its own stream through, without keeping the table alive.
@@ -49,13 +52,14 @@ impl StreamTable {
         (id, cancelled)
     }
 
-    /// Like `open`, for a stream whose client also sends bytes, which go to `inbound`.
+    /// Like `open`, for a stream whose client also sends bytes, at most `max_payload` each, which go to `inbound`.
     pub(crate) fn open_duplex(
         &self,
         inbound: mpsc::Sender<Vec<u8>>,
+        max_payload: usize,
     ) -> (u64, oneshot::Receiver<()>) {
         let (id, cancelled) = self.open();
-        lock(&self.inner).inbound.insert(id, inbound);
+        lock(&self.inner).inbound.insert(id, (inbound, max_payload));
         (id, cancelled)
     }
 
@@ -63,9 +67,14 @@ impl StreamTable {
     /// connection's reader.
     pub(crate) fn deliver(&self, stream: u64, payload: Vec<u8>) -> Delivery {
         let mut open = lock(&self.inner);
-        let Some(inbound) = open.inbound.get(&stream) else {
+        let Some((inbound, max_payload)) = open.inbound.get(&stream) else {
             return Delivery::Dropped;
         };
+        if payload.len() > *max_payload {
+            open.inbound.remove(&stream);
+            open.cancels.remove(&stream);
+            return Delivery::TooLarge;
+        }
         match inbound.try_send(payload) {
             Ok(()) => Delivery::Delivered,
             Err(mpsc::error::TrySendError::Closed(_)) => Delivery::Dropped,

@@ -48,6 +48,9 @@ type StreamFn =
 pub struct DuplexSource {
     pub items: ByteStreamSource,
     pub inbound: mpsc::Sender<Vec<u8>>,
+    /// The largest payload the stream takes. A larger one is refused before it is queued, and ends the stream with
+    /// `stream.inbound_too_large`.
+    pub max_payload: usize,
 }
 
 /// The source a stream handler opened, as the dispatcher forwards it.

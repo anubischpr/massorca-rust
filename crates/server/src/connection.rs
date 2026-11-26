@@ -160,21 +160,26 @@ fn route(frame: Frame, session: &Arc<Session>, requests: &mut JoinSet<()>) {
         Frame::Message(message) => message,
         // Only duplex streams take a client's bytes (decision 0131); bytes for any other stream are dropped.
         Frame::StreamBytes { stream, payload } => {
-            if session.streams.deliver(stream, payload) == Delivery::Overflow {
-                let outbound = session.outbound.clone();
-                tokio::spawn(async move {
-                    let error = ErrorBody::new(
-                        codes::STREAM_INBOUND_OVERFLOW,
-                        "the client sent more bytes than the stream accepts unread",
-                    );
-                    let _ = outbound
-                        .send(Frame::Message(Message::End {
-                            stream,
-                            error: Some(error),
-                        }))
-                        .await;
-                });
-            }
+            let error = match session.streams.deliver(stream, payload) {
+                Delivery::Delivered | Delivery::Dropped => return,
+                Delivery::Overflow => ErrorBody::new(
+                    codes::STREAM_INBOUND_OVERFLOW,
+                    "the client sent more bytes than the stream accepts unread",
+                ),
+                Delivery::TooLarge => ErrorBody::new(
+                    codes::STREAM_INBOUND_TOO_LARGE,
+                    "the client sent a payload larger than the stream takes",
+                ),
+            };
+            let outbound = session.outbound.clone();
+            tokio::spawn(async move {
+                let _ = outbound
+                    .send(Frame::Message(Message::End {
+                        stream,
+                        error: Some(error),
+                    }))
+                    .await;
+            });
             return;
         }
     };

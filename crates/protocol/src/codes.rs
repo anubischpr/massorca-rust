@@ -21,6 +21,8 @@ pub const STREAM_ITEM_TOO_LARGE: &str = "stream.item_too_large";
 pub const STREAM_BINARY_FRAMES_REQUIRED: &str = "stream.binary_frames_required";
 /// The client sent more stream bytes than the stream accepts unread; the stream ends with this error.
 pub const STREAM_INBOUND_OVERFLOW: &str = "stream.inbound_overflow";
+/// The client sent a payload larger than the stream takes; it is refused unqueued and the stream ends with this error.
+pub const STREAM_INBOUND_TOO_LARGE: &str = "stream.inbound_too_large";
 /// No open forward of this connection has the id (decision 0131).
 pub const FORWARD_NOT_FOUND: &str = "forward.not_found";
 /// A forward's target is not a loopback address on the host.

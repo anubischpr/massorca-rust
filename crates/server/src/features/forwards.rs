@@ -310,6 +310,8 @@ async fn connect(
     Ok(DuplexSource {
         items: source,
         inbound,
+        // The tag byte and one chunk: anything larger is refused before it is queued.
+        max_payload: 1 + MAX_CHUNK,
     })
 }
 

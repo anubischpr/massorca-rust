@@ -49,7 +49,10 @@ reach it: a database, a dev server, an admin page.
   written to the receiving socket, so a slow reader slows the sender and no queue grows without limit. A side that
   receives a 17th unacknowledged data chunk ends the tunnel as a protocol error. Acknowledgements are taken apart from
   socket writes (a writer fed by a queue the size of the window), so a target that writes without reading never starves
-  the other direction of credit, and data queued before the peer leaves is still written. End of data half-closes: the receiver shuts its socket's write side and keeps
+  the other direction of credit, and data queued before the peer leaves is still written. The service checks each
+  client payload's size as it arrives: one larger than a chunk (32 KiB and its tag byte) is never queued, and ends the
+  tunnel with `stream.inbound_too_large`, since a network frame may hold 1 MiB. A client that fills a tunnel's queue
+  ends it with `stream.inbound_overflow`. Queued client data is therefore bounded per tunnel by about one window. End of data half-closes: the receiver shuts its socket's write side and keeps
   reading. The tunnel ends when both sides sent end of data, either side fails or cancels, the forward stops, or it is
   idle. Closing either socket therefore closes the other.
 - D8 Limits. 16 forwards per connection and 64 connections per forward at a time (`forward.limit`); the CLI closes a

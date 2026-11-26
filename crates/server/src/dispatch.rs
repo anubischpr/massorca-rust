@@ -118,7 +118,9 @@ async fn reply(session: &Session, id: u64, result: Result<Value, ErrorBody>) {
 /// Replies `Subscribed` and then starts forwarding. The stream is registered before the reply, so a cancel that follows it always finds the stream.
 async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
     let (stream, cancelled) = match &source {
-        OpenedSource::Duplex(duplex) => session.streams.open_duplex(duplex.inbound.clone()),
+        OpenedSource::Duplex(duplex) => session
+            .streams
+            .open_duplex(duplex.inbound.clone(), duplex.max_payload),
         OpenedSource::Events(_) | OpenedSource::Items(_) => session.streams.open(),
     };
     let subscribed = match encode(&Subscribed { stream }) {
