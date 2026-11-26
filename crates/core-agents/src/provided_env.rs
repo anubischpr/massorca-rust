@@ -140,7 +140,7 @@ pub fn dangerous_caller_name(caller_env: &BTreeMap<String, String>) -> Option<&s
         .find(|name| is_dangerous_env_name(name))
 }
 
-fn has_reserved_prefix(name: &str) -> bool {
+pub(crate) fn has_reserved_prefix(name: &str) -> bool {
     name.get(..RESERVED_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(RESERVED_PREFIX))
 }
