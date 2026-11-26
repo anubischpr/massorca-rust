@@ -161,6 +161,19 @@ impl Workspaces {
         Ok(views::workspace(&row))
     }
 
+    /// Returns workspace `id` from `removing` to `ready` after [`Workspaces::begin_remove`], when a step before git
+    /// acts refuses the removal, such as a failed archive script (decision 0095). A row in any other state is left.
+    pub fn cancel_remove(&self, id: &str) -> Result<(), DomainError> {
+        let _guard = self.lock_mutations();
+        if let Some(row) = self.store.get_workspace(id)?
+            && row.state == StoreWorkspaceState::Removing
+        {
+            self.store
+                .set_workspace_state(&row.id, StoreWorkspaceState::Ready)?;
+        }
+        Ok(())
+    }
+
     /// Second half of removing workspace `id`. Runs the checks again, since the tree may have
     /// changed since [`Workspaces::begin_remove`], then removes the worktree (`--force` only
     /// when `force`), deletes the row, and deletes the branch the workspace created when git
@@ -227,6 +240,7 @@ impl Workspaces {
             branch_deleted,
             branch_kept_reason,
             directory_kept,
+            archive: None,
         })
     }
 

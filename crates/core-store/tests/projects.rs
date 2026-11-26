@@ -137,3 +137,56 @@ fn a_project_icon_round_trips_and_can_be_set_and_cleared() {
     assert_eq!(store.get_project(&row.id).unwrap().unwrap().icon, None);
     assert!(!store.set_project_icon("missing", None).unwrap());
 }
+
+// Trusted orca.yaml scripts (decision 0095).
+
+#[test]
+fn a_trusted_script_hash_is_kept_per_project_and_kind() {
+    let store = store();
+    let alpha = project_row("alpha", "key-alpha");
+    let beta = project_row("beta", "key-beta");
+    store.insert_project(&alpha).unwrap();
+    store.insert_project(&beta).unwrap();
+    assert_eq!(store.trusted_script_hash(&alpha.id, "setup").unwrap(), None);
+
+    store.trust_script(&alpha.id, "setup", "hash-1").unwrap();
+    assert_eq!(
+        store
+            .trusted_script_hash(&alpha.id, "setup")
+            .unwrap()
+            .as_deref(),
+        Some("hash-1")
+    );
+    assert_eq!(
+        store.trusted_script_hash(&alpha.id, "archive").unwrap(),
+        None
+    );
+    assert_eq!(store.trusted_script_hash(&beta.id, "setup").unwrap(), None);
+}
+
+#[test]
+fn trusting_new_content_replaces_the_old_hash() {
+    let store = store();
+    let alpha = project_row("alpha", "key-alpha");
+    store.insert_project(&alpha).unwrap();
+    store.trust_script(&alpha.id, "archive", "old").unwrap();
+    store.trust_script(&alpha.id, "archive", "new").unwrap();
+    assert_eq!(
+        store
+            .trusted_script_hash(&alpha.id, "archive")
+            .unwrap()
+            .as_deref(),
+        Some("new")
+    );
+}
+
+#[test]
+fn a_removed_project_takes_its_trust_with_it() {
+    let store = store();
+    let alpha = project_row("alpha", "key-alpha");
+    store.insert_project(&alpha).unwrap();
+    store.trust_script(&alpha.id, "setup", "hash").unwrap();
+    store.delete_project(&alpha.id).unwrap();
+    store.insert_project(&alpha).unwrap();
+    assert_eq!(store.trusted_script_hash(&alpha.id, "setup").unwrap(), None);
+}

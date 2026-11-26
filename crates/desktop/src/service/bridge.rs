@@ -1120,7 +1120,7 @@ impl Link {
             TOPIC_AGENT_CHANGED => client
                 .agent_show(&id)
                 .await
-                .map(StoreUpdate::AgentChanged)
+                .map(|session| StoreUpdate::AgentChanged(Box::new(session)))
                 .or_else(|error| {
                     gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
                         StoreUpdate::AgentGone(id.clone())
