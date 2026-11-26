@@ -599,6 +599,7 @@ pub async fn execute(
                     session: args.session,
                     text: args.text,
                     force: args.force,
+                    attachments: Vec::new(),
                 })
                 .await?;
             let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
@@ -816,6 +817,7 @@ async fn queue_command(
                     session,
                     text,
                     request_id: None,
+                    attachments: Vec::new(),
                 })
                 .await?;
             output.success(&queued, &agent_text::queued_lines(&queued));

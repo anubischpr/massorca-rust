@@ -18,6 +18,7 @@ use massorca_protocol::methods::agents::{
     AgentListParams, AgentModel, AgentModels, AgentModelsParams, ForgetPreviewWorkspace, ModeTone,
     ModelListingError, ModelListingFailure, ModelSource, WorkspaceRemovalError,
 };
+use massorca_protocol::methods::agents::{AgentPromptParams, PromptAttachment};
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use massorca_protocol::methods::workspaces::WorkspaceKind;
@@ -832,6 +833,7 @@ fn queue_params_and_the_list_have_their_wire_shapes() {
             session: "s-1".to_owned(),
             text: "later".to_owned(),
             request_id: None,
+            attachments: Vec::new(),
         },
         &json!({ "session": "s-1", "text": "later" }),
     );
@@ -840,8 +842,40 @@ fn queue_params_and_the_list_have_their_wire_shapes() {
             session: "s-1".to_owned(),
             text: "later".to_owned(),
             request_id: Some("req-1".to_owned()),
+            attachments: Vec::new(),
         },
         &json!({ "session": "s-1", "text": "later", "request_id": "req-1" }),
+    );
+    assert_wire(
+        &AgentQueueParams {
+            session: "s-1".to_owned(),
+            text: "later".to_owned(),
+            request_id: None,
+            attachments: vec![PromptAttachment {
+                path: "notes/a.txt".to_owned(),
+            }],
+        },
+        &json!({ "session": "s-1", "text": "later", "attachments": [{ "path": "notes/a.txt" }] }),
+    );
+    assert_wire(
+        &AgentPromptParams {
+            session: "s-1".to_owned(),
+            text: "look".to_owned(),
+            force: false,
+            attachments: Vec::new(),
+        },
+        &json!({ "session": "s-1", "text": "look", "force": false }),
+    );
+    assert_wire(
+        &AgentPromptParams {
+            session: "s-1".to_owned(),
+            text: "look".to_owned(),
+            force: true,
+            attachments: vec![PromptAttachment {
+                path: "shots/a.png".to_owned(),
+            }],
+        },
+        &json!({ "session": "s-1", "text": "look", "force": true, "attachments": [{ "path": "shots/a.png" }] }),
     );
     assert_wire(
         &AgentQueueEditParams {

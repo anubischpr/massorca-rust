@@ -522,20 +522,35 @@ impl Client {
         self.call(agents::ARCHIVE, &session_ref(session)).await
     }
 
-    /// `agent.prompt`: types a prompt into a session's terminal once it is ready; `force` types it at once.
+    /// `agent.prompt`: types a prompt into a session's terminal once it is ready; `force` types it at once. Attachments
+    /// need capability `agent-prompt-attachments/1` (decision 0172); a service without it is refused before anything is sent.
     pub async fn agent_prompt(
         &self,
         params: &AgentPromptParams,
     ) -> Result<PromptReceipt, ClientError> {
+        if !params.attachments.is_empty() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_PROMPT_ATTACHMENTS),
+                capabilities::AGENT_PROMPT_ATTACHMENTS,
+                "attachments on a prompt",
+            )?;
+        }
         self.call(agents::PROMPT, params).await
     }
 
     /// `agent.queue`: queues a prompt behind a busy agent; it is typed once the agent is idle or done (capability
-    /// `agent-queue/1`, decision 0084).
+    /// `agent-queue/1`, decision 0084). Attachments need capability `agent-prompt-attachments/1` (decision 0172).
     pub async fn agent_queue(
         &self,
         params: &AgentQueueParams,
     ) -> Result<QueuedPrompt, ClientError> {
+        if !params.attachments.is_empty() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_PROMPT_ATTACHMENTS),
+                capabilities::AGENT_PROMPT_ATTACHMENTS,
+                "attachments on a queued prompt",
+            )?;
+        }
         self.call(agents::QUEUE, params).await
     }
 
@@ -811,6 +826,23 @@ mod require_offered_tests {
             ClientError::CapabilityMissing { what, capability } => {
                 assert_eq!(what, "the models of an agent kind");
                 assert_eq!(capability, "agent-models/1");
+            }
+            other => panic!("unexpected refusal: {other}"),
+        }
+    }
+
+    #[test]
+    fn attachments_on_a_prompt_need_agent_prompt_attachments() {
+        let refused = require_offered(
+            false,
+            capabilities::AGENT_PROMPT_ATTACHMENTS,
+            "attachments on a prompt",
+        )
+        .expect_err("refused without the capability");
+        match refused {
+            ClientError::CapabilityMissing { what, capability } => {
+                assert_eq!(what, "attachments on a prompt");
+                assert_eq!(capability, "agent-prompt-attachments/1");
             }
             other => panic!("unexpected refusal: {other}"),
         }

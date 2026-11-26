@@ -651,6 +651,7 @@ async fn a_prompt_reaches_the_session_terminal_and_stop_ends_the_run() {
             session: session.id.clone(),
             text: line.to_owned(),
             force: false,
+            attachments: Vec::new(),
         })
         .await
         .expect("the prompt is typed into the session");

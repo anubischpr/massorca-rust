@@ -384,6 +384,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
             session: session.clone(),
             text: "again".to_owned(),
             force: false,
+            attachments: Vec::new(),
         })
         .await
         .expect("the prompt is accepted");

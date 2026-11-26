@@ -123,13 +123,16 @@ pub const QUEUE_REASON_BEHIND_FAILED: &str = "behind_failed";
 /// parent waits until that child finishes (decision 0170).
 pub const QUEUE_REASON_CHILD_WRITING: &str = "child_writing";
 
-/// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first. The
+/// attachments are checked when the prompt is queued and again when it is typed (decision 0172).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentQueueParams {
     pub session: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<PromptAttachment>,
 }
 
 /// Params of `agent.queue.edit`. Only a waiting or failed prompt can be edited.
@@ -576,13 +579,25 @@ pub struct AgentStopParams {
     pub force: bool,
 }
 
-/// Params of `agent.prompt`. `force` types even while the agent is working or waiting.
+/// A file of the session's workspace sent with a prompt or a queued prompt (decision 0172). `path` is relative to the
+/// workspace root; an absolute path is accepted only when it names a file inside the root. The service refuses the prompt
+/// with `agent.attachment_invalid` for a path it cannot accept, and with `agent.attachment_unsupported` for a file the run
+/// cannot take.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptAttachment {
+    pub path: String,
+}
+
+/// Params of `agent.prompt`. `force` types even while the agent is working or waiting. `attachments` needs capability
+/// `agent-prompt-attachments/1` (decision 0172).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentPromptParams {
     pub session: String,
     pub text: String,
     #[serde(default)]
     pub force: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<PromptAttachment>,
 }
 
 /// What `agent.prompt` can honestly say about a delivery (0054).
