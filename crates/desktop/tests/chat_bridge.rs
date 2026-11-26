@@ -342,11 +342,9 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let answered = handle
         .agent_chat_answer(ChatApprovalAnswerParams {
             session: session.clone(),
-            request_id: "r-1".to_owned(),
-            decision: ApprovalDecision::Allow,
             scope: Some(ApprovalScope::Always),
-            message: None,
             seq: Some(seq),
+            ..base_chat_approval_answer_params()
         })
         .await
         .expect("the answer is accepted");
@@ -358,11 +356,9 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let again = handle
         .agent_chat_answer(ChatApprovalAnswerParams {
             session: session.clone(),
-            request_id: "r-1".to_owned(),
             decision: ApprovalDecision::Deny,
-            scope: None,
-            message: None,
             seq: Some(seq),
+            ..base_chat_approval_answer_params()
         })
         .await
         .expect_err("a second answer is refused");
@@ -427,4 +423,17 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+}
+
+/// Every `ChatApprovalAnswerParams` field at its usual value; tests override the fields they vary.
+fn base_chat_approval_answer_params() -> massorca_protocol::methods::chat::ChatApprovalAnswerParams
+{
+    massorca_protocol::methods::chat::ChatApprovalAnswerParams {
+        session: String::new(),
+        request_id: "r-1".to_owned(),
+        decision: massorca_protocol::methods::chat::ApprovalDecision::Allow,
+        scope: None,
+        message: None,
+        seq: None,
+    }
 }

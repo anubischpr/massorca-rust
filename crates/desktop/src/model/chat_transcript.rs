@@ -220,8 +220,8 @@ mod tests {
 
     fn cursor(seq: u64) -> ChatCursor {
         ChatCursor {
-            epoch: "epoch-1".to_owned(),
             seq,
+            ..crate::service::fixtures::base_chat_cursor()
         }
     }
 
@@ -230,10 +230,8 @@ mod tests {
             id: id.to_owned(),
             position,
             seq: position,
-            turn: None,
-            parent: None,
-            at_ms: 0,
             body,
+            ..crate::service::fixtures::base_chat_item()
         }
     }
 
@@ -275,9 +273,7 @@ mod tests {
         ChatEvent::Snapshot(Box::new(ChatSnapshot {
             cursor: cursor(seq),
             items,
-            has_older: false,
-            latest_turn: None,
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         }))
     }
 
@@ -285,7 +281,7 @@ mod tests {
         ChatEvent::Batch(ChatBatch {
             cursor: cursor(seq),
             updates,
-            activity: None,
+            ..crate::service::fixtures::base_chat_batch()
         })
     }
 
@@ -340,7 +336,7 @@ mod tests {
             items: vec![user("ask", 8, "later")],
             has_older: true,
             latest_turn: Some(turn.clone()),
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         })));
 
         assert_eq!(transcript.latest_turn(), Some(&turn));
@@ -602,10 +598,8 @@ mod tests {
         let mut transcript = ChatTranscript::default();
         transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
             cursor: cursor(1),
-            items: Vec::new(),
-            has_older: false,
-            latest_turn: None,
             activity: Some(working.clone()),
+            ..crate::service::fixtures::base_chat_snapshot()
         })));
         transcript.apply(batch(2, Vec::new()));
         assert_eq!(transcript.activity(), Some(&working));
@@ -613,8 +607,8 @@ mod tests {
         let waiting = activity(ActivityState::Waiting);
         transcript.apply(ChatEvent::Batch(ChatBatch {
             cursor: cursor(3),
-            updates: Vec::new(),
             activity: Some(waiting.clone()),
+            ..crate::service::fixtures::base_chat_batch()
         }));
         assert_eq!(transcript.activity(), Some(&waiting));
     }
@@ -625,9 +619,8 @@ mod tests {
         transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
             cursor: cursor(2),
             items: vec![turn_item("turn-1", 2, TurnState::Running)],
-            has_older: false,
             latest_turn: Some(turn_item("turn-1", 2, TurnState::Running)),
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         })));
         transcript.apply(batch(
             3,
@@ -667,8 +660,7 @@ mod tests {
             cursor: cursor(9),
             items: vec![user("c", 8, "three"), user("d", 9, "four")],
             has_older: true,
-            latest_turn: None,
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         })));
         assert!(transcript.has_older());
         assert_eq!(transcript.history_cursor(), Some(cursor(8)));

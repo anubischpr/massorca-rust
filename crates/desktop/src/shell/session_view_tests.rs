@@ -1035,16 +1035,13 @@ fn chat_transcript() -> crate::model::chat_transcript::ChatTranscript {
         id: id.to_owned(),
         position,
         seq: position,
-        turn: None,
-        parent: None,
-        at_ms: 0,
         body,
+        ..crate::service::fixtures::base_chat_item()
     };
     let mut transcript = crate::model::chat_transcript::ChatTranscript::default();
     transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
         cursor: ChatCursor {
-            epoch: "epoch-1".to_owned(),
-            seq: 2,
+            ..crate::service::fixtures::base_chat_cursor()
         },
         items: vec![
             item(
@@ -1063,9 +1060,7 @@ fn chat_transcript() -> crate::model::chat_transcript::ChatTranscript {
                 },
             ),
         ],
-        has_older: false,
-        latest_turn: None,
-        activity: None,
+        ..crate::service::fixtures::base_chat_snapshot()
     })));
     transcript
 }

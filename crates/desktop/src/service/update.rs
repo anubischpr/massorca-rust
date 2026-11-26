@@ -865,6 +865,85 @@ pub(crate) mod fixtures {
             updated_at_ms: 1,
         }
     }
+
+    /// Every `ApprovalSuggestion` field at its usual value; tests override the fields they vary.
+    pub fn base_approval_suggestion() -> massorca_protocol::methods::chat::ApprovalSuggestion {
+        massorca_protocol::methods::chat::ApprovalSuggestion {
+            kind: "addRules".to_owned(),
+            rules: Vec::new(),
+            destination: "localSettings".to_owned(),
+        }
+    }
+
+    /// Every `ChatBatch` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_batch() -> massorca_protocol::methods::chat::ChatBatch {
+        massorca_protocol::methods::chat::ChatBatch {
+            cursor: crate::service::fixtures::base_chat_cursor(),
+            updates: Vec::new(),
+            activity: None,
+        }
+    }
+
+    /// Every `ChatCursor` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_cursor() -> massorca_protocol::methods::chat::ChatCursor {
+        massorca_protocol::methods::chat::ChatCursor {
+            epoch: "epoch-1".to_owned(),
+            seq: 2,
+        }
+    }
+
+    /// Every `ChatHistoryPage` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_history_page() -> massorca_protocol::methods::chat::ChatHistoryPage {
+        massorca_protocol::methods::chat::ChatHistoryPage {
+            epoch: "e1".to_owned(),
+            items: Vec::new(),
+            has_older: false,
+        }
+    }
+
+    /// Every `ChatInterrupted` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_interrupted() -> massorca_protocol::methods::chat::ChatInterrupted {
+        massorca_protocol::methods::chat::ChatInterrupted {
+            interrupted: true,
+            turn: None,
+        }
+    }
+
+    /// Every `ChatItem` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_item() -> massorca_protocol::methods::chat::ChatItem {
+        massorca_protocol::methods::chat::ChatItem {
+            id: "ap".to_owned(),
+            position: 3,
+            seq: 5,
+            turn: None,
+            parent: None,
+            at_ms: 0,
+            body: massorca_protocol::methods::chat::ChatItemBody::Unknown,
+        }
+    }
+
+    /// Every `ChatSnapshot` field at its usual value; tests override the fields they vary.
+    pub fn base_chat_snapshot() -> massorca_protocol::methods::chat::ChatSnapshot {
+        massorca_protocol::methods::chat::ChatSnapshot {
+            cursor: crate::service::fixtures::base_chat_cursor(),
+            items: Vec::new(),
+            has_older: false,
+            latest_turn: None,
+            activity: None,
+        }
+    }
+
+    /// Every `ToolUse` field at its usual value; tests override the fields they vary.
+    pub fn base_tool_use() -> massorca_protocol::methods::chat::ToolUse {
+        massorca_protocol::methods::chat::ToolUse {
+            tool_use_id: "tu-1".to_owned(),
+            name: "Bash".to_owned(),
+            input_summary: "cargo test".to_owned(),
+            status: massorca_protocol::methods::chat::ToolStatus::Started,
+            output_summary: None,
+            truncated: false,
+        }
+    }
 }
 
 #[cfg(test)]
