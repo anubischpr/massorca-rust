@@ -142,6 +142,8 @@ mod settings_git_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
+mod shared_folder_tests;
+#[cfg(test)]
 mod sidebar_session_rows_tests;
 #[cfg(test)]
 mod source_control_tests;
