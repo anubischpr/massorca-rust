@@ -78,11 +78,8 @@ pub async fn execute(
     }
     let listener = bind(args.bind, args.local.unwrap_or(port)).await?;
     let local = listener.local_addr().map_err(io_failure)?;
-    if !args.bind.is_loopback() {
-        output.progress(&format!(
-            "warning: the forward listens on {}, so other machines can reach host port {port} through it",
-            args.bind
-        ));
+    if let Some(warning) = bind_warning(args.bind, port) {
+        output.progress(&warning);
     }
     let params = ForwardParams {
         port,
@@ -195,6 +192,16 @@ async fn bind(address: IpAddr, port: u16) -> Result<TcpListener, CliError> {
         })
 }
 
+/// The warning a listener on a non-loopback address prints. An IPv4-mapped loopback address (`::ffff:127.0.0.1`) is
+/// loopback too.
+fn bind_warning(bind: IpAddr, port: u16) -> Option<String> {
+    (!bind.to_canonical().is_loopback()).then(|| {
+        format!(
+            "warning: the forward listens on {bind} with no authentication, so other machines can reach host port {port} through it"
+        )
+    })
+}
+
 /// The dev server's printed URL for `port` with this side's address, when `host ports` knows one; else `http://`.
 async fn local_url(client: &Client, port: u16, local: SocketAddr) -> String {
     let printed = if client.has_capability(capabilities::HOST) {
@@ -271,7 +278,23 @@ fn io_failure(error: std::io::Error) -> CliError {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 
-    use super::rebase;
+    use std::net::IpAddr;
+
+    use super::{bind_warning, rebase};
+
+    #[test]
+    fn only_a_non_loopback_bind_warns_and_says_there_is_no_authentication() {
+        for quiet in ["127.0.0.1", "127.5.6.7", "::1", "::ffff:127.0.0.1"] {
+            let address: IpAddr = quiet.parse().unwrap();
+            assert_eq!(bind_warning(address, 3000), None, "{quiet}");
+        }
+        for open in ["0.0.0.0", "192.168.1.5", "::", "::ffff:10.0.0.1"] {
+            let address: IpAddr = open.parse().unwrap();
+            let warning = bind_warning(address, 3000).unwrap_or_else(|| panic!("{open} warns"));
+            assert!(warning.contains("no authentication"), "{warning}");
+            assert!(warning.contains(open), "{warning}");
+        }
+    }
 
     #[test]
     fn a_printed_url_keeps_its_scheme_and_path_on_the_local_port() {

@@ -42,7 +42,7 @@ reach it: a database, a dev server, an admin page.
   client closes its local socket.
 - D6 Local side. `massorca host forward NAME PORT` listens on `127.0.0.1` and the same port unless `--local` (0 picks a
   free port, printed in the first line) or `--bind` say otherwise; a non-loopback `--bind` is the user's explicit
-  choice and prints a warning. The forward is foreground: it ends with the command (Ctrl+C), when stopped on the host,
+  choice and warns that the listener has no authentication (`::ffff:127.0.0.1` counts as loopback). The forward is foreground: it ends with the command (Ctrl+C), when stopped on the host,
   or when the connection is lost (exit 4). Saving forwards per host and restoring them on reconnect is the desktop's
   part of REM-16 and is not built here.
 - D7 Backpressure and close. Each direction may have at most 16 data chunks unacknowledged; a chunk is acknowledged once
