@@ -3,6 +3,7 @@
 mod agent_chat;
 mod agent_redaction;
 mod agents;
+mod automations;
 mod command_schema;
 mod config;
 pub(crate) use config::default_conversations_root;
@@ -74,6 +75,7 @@ pub(crate) fn register_core(
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);
+    handles.extend(automations::register(registries)?);
     handles.extend(command_schema::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)

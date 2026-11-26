@@ -5,6 +5,7 @@ mod agent_packages;
 mod agents_chat;
 mod agents_redaction;
 mod agents_seen;
+mod automations;
 mod capabilities;
 mod command_schema;
 mod common;
