@@ -337,8 +337,7 @@ mod tests {
         let busy =
             crate::service::Refusal::from(&massorca_client::ClientError::Remote(ErrorBody {
                 code: codes::AGENT_WORKSPACE_BUSY.to_owned(),
-                message: "session x already writes in this workspace".to_owned(),
-                data: None,
+                ..crate::service::fixtures::base_error_body()
             }));
         let sentence = super::start_refusal_sentence(&busy);
         assert!(sentence.starts_with("Another session is already working in this workspace"));

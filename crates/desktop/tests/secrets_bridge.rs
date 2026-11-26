@@ -137,10 +137,8 @@ async fn the_store_follows_the_vault_by_name_and_never_holds_a_value() {
     let client = client_for(home.path()).await;
     client
         .secret_set(&SecretSet {
-            scope: "global".to_owned(),
-            name: "BRIDGE_TOKEN".to_owned(),
             value: VALUE.to_owned(),
-            replace: false,
+            ..base_secret_set()
         })
         .await
         .expect("the secret is stored");
@@ -190,19 +188,16 @@ async fn a_secret_with_links_is_removed_with_them_only_when_asked() {
     .await;
     handle
         .secret_set(SecretSet {
-            scope: "global".to_owned(),
             name: "SHARED_TOKEN".to_owned(),
             value: VALUE.to_owned(),
-            replace: false,
+            ..base_secret_set()
         })
         .await
         .expect("the secret is added");
     let client = client_for(home.path()).await;
     client
         .secret_link(&SecretLink {
-            scope: "project:demo".to_owned(),
-            name: "SHARED_TOKEN".to_owned(),
-            from_scope: "global".to_owned(),
+            ..base_secret_link()
         })
         .await
         .expect("the project links the secret");
@@ -216,10 +211,7 @@ async fn a_secret_with_links_is_removed_with_them_only_when_asked() {
 
     // The links would be lost, so the removal is refused with its code unless they go too.
     let remove = SecretRemove {
-        scope: "global".to_owned(),
-        name: "SHARED_TOKEN".to_owned(),
-        include_links: false,
-        force: false,
+        ..base_secret_remove()
     };
     let refused = handle
         .secret_remove(remove.clone())
@@ -268,10 +260,9 @@ async fn a_secret_is_added_and_replaced_only_as_asked_and_each_refusal_keeps_its
     .await;
 
     let add = SecretSet {
-        scope: "global".to_owned(),
         name: "ADDED_TOKEN".to_owned(),
         value: VALUE.to_owned(),
-        replace: false,
+        ..base_secret_set()
     };
     let entry = handle
         .secret_set(add.clone())
@@ -346,5 +337,34 @@ fn base_peer_info() -> massorca_protocol::PeerInfo {
     massorca_protocol::PeerInfo {
         name: "massorca-test-client".to_owned(),
         version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `SecretLink` field at its usual value; tests override the fields they vary.
+fn base_secret_link() -> massorca_protocol::methods::secrets::SecretLink {
+    massorca_protocol::methods::secrets::SecretLink {
+        scope: "project:demo".to_owned(),
+        name: "SHARED_TOKEN".to_owned(),
+        from_scope: "global".to_owned(),
+    }
+}
+
+/// Every `SecretRemove` field at its usual value; tests override the fields they vary.
+fn base_secret_remove() -> massorca_protocol::methods::secrets::SecretRemove {
+    massorca_protocol::methods::secrets::SecretRemove {
+        scope: "global".to_owned(),
+        name: "SHARED_TOKEN".to_owned(),
+        include_links: false,
+        force: false,
+    }
+}
+
+/// Every `SecretSet` field at its usual value; tests override the fields they vary.
+fn base_secret_set() -> massorca_protocol::methods::secrets::SecretSet {
+    massorca_protocol::methods::secrets::SecretSet {
+        scope: "global".to_owned(),
+        name: "BRIDGE_TOKEN".to_owned(),
+        value: String::new(),
+        replace: false,
     }
 }

@@ -338,11 +338,7 @@ fn owned_secret(scope: &str, name: &str) -> SecretEntry {
         scope: scope.into(),
         name: name.into(),
         owner_scope: scope.into(),
-        linked: false,
-        linked_scopes: Vec::new(),
-        created_at_ms: 1,
-        rotated_at_ms: 1,
-        used_at_ms: None,
+        ..crate::service::fixtures::base_secret_entry()
     }
 }
 
@@ -350,10 +346,7 @@ fn owned_secret(scope: &str, name: &str) -> SecretEntry {
 fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
     let status = SecretStatus {
-        protection: "file".into(),
-        state: "ready".into(),
-        count: 1,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     };
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status))))
@@ -395,10 +388,8 @@ fn the_vault_dialogs_are_centred_in_the_window_whichever_row_opened_them(cx: &mu
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
             SecretStatus {
-                protection: "file".into(),
-                state: "ready".into(),
                 count: 3,
-                name_clashes: Vec::new(),
+                ..crate::service::fixtures::base_secret_status()
             },
         ))))
         .expect("the store listens");
@@ -433,10 +424,8 @@ fn open_vault_with_three_scopes(rig: &Rig, cx: &mut VisualTestContext) {
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
             SecretStatus {
-                protection: "file".into(),
-                state: "ready".into(),
                 count: 4,
-                name_clashes: Vec::new(),
+                ..crate::service::fixtures::base_secret_status()
             },
         ))))
         .expect("the store listens");
@@ -697,10 +686,7 @@ fn an_empty_clipboard_is_refused_and_pastes_nothing(cx: &mut TestAppContext) {
 fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
     let status = SecretStatus {
-        protection: "file".into(),
-        state: "ready".into(),
-        count: 1,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     };
     let mut shared = owned_secret("global", "SHARED");
     shared.linked_scopes = vec!["project:p1".to_owned()];
@@ -741,9 +727,8 @@ fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &m
             );
             reply
                 .send(Ok(SecretRemoved {
-                    scope: "global".to_owned(),
-                    name: "SHARED".to_owned(),
                     links_removed: vec!["project:p1".to_owned()],
+                    ..crate::service::fixtures::base_secret_removed()
                 }))
                 .expect("the page listens");
         }

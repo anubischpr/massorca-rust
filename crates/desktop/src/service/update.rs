@@ -1719,6 +1719,117 @@ pub(crate) mod fixtures {
             files: Vec::new(),
         }
     }
+
+    /// Every `DeviceInfo` field at its usual value; tests override the fields they vary.
+    pub fn base_device_info() -> massorca_protocol::methods::devices::DeviceInfo {
+        massorca_protocol::methods::devices::DeviceInfo {
+            id: String::new(),
+            name: "Pixel 8".into(),
+            scopes: Vec::new(),
+            key_pin: "sha256:test".into(),
+            paired_at_ms: 0,
+            last_seen_ms: None,
+            revoked_at_ms: None,
+            current: false,
+        }
+    }
+
+    /// Every `ErrorBody` field at its usual value; tests override the fields they vary.
+    pub fn base_error_body() -> massorca_protocol::ErrorBody {
+        massorca_protocol::ErrorBody {
+            code: String::new(),
+            message: "session x already writes in this workspace".to_owned(),
+            data: None,
+        }
+    }
+
+    /// Every `IdentityMismatch` field at its usual value; tests override the fields they vary.
+    pub fn base_identity_mismatch() -> massorca_client::IdentityMismatch {
+        massorca_client::IdentityMismatch {
+            host: "vps".into(),
+            trusted_from: massorca_client::TrustedFrom::Pairing,
+            expected: "sha256:old".into(),
+            actual: None,
+        }
+    }
+
+    /// Every `PairingCancelled` field at its usual value; tests override the fields they vary.
+    pub fn base_pairing_cancelled() -> massorca_protocol::methods::devices::PairingCancelled {
+        massorca_protocol::methods::devices::PairingCancelled { cancelled: 1 }
+    }
+
+    /// Every `SecretDecline` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_decline() -> massorca_protocol::methods::secrets::SecretDecline {
+        massorca_protocol::methods::secrets::SecretDecline {
+            request: "request-1".to_owned(),
+        }
+    }
+
+    /// Every `SecretEntry` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_entry() -> massorca_protocol::methods::secrets::SecretEntry {
+        massorca_protocol::methods::secrets::SecretEntry {
+            scope: String::new(),
+            name: String::new(),
+            owner_scope: String::new(),
+            linked: false,
+            linked_scopes: Vec::new(),
+            created_at_ms: 1,
+            rotated_at_ms: 1,
+            used_at_ms: None,
+        }
+    }
+
+    /// Every `SecretLink` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_link() -> massorca_protocol::methods::secrets::SecretLink {
+        massorca_protocol::methods::secrets::SecretLink {
+            scope: "project:p1".to_owned(),
+            name: "OPENAI_API_KEY".to_owned(),
+            from_scope: "global".to_owned(),
+        }
+    }
+
+    /// Every `SecretRemoved` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_removed() -> massorca_protocol::methods::secrets::SecretRemoved {
+        massorca_protocol::methods::secrets::SecretRemoved {
+            scope: "global".to_owned(),
+            name: "SHARED".to_owned(),
+            links_removed: Vec::new(),
+        }
+    }
+
+    /// Every `SecretRequest` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_request() -> massorca_protocol::methods::secrets::SecretRequest {
+        massorca_protocol::methods::secrets::SecretRequest {
+            id: String::new(),
+            scope: String::new(),
+            name: String::new(),
+            reason: "the agent needs it to call the API".to_owned(),
+            session: None,
+            state: "pending".to_owned(),
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        }
+    }
+
+    /// Every `SecretSet` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_set() -> massorca_protocol::methods::secrets::SecretSet {
+        massorca_protocol::methods::secrets::SecretSet {
+            scope: "global".to_owned(),
+            name: "TOKEN".to_owned(),
+            value: "hidden-test-value".to_owned(),
+            replace: false,
+        }
+    }
+
+    /// Every `SecretStatus` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_status() -> massorca_protocol::methods::secrets::SecretStatus {
+        massorca_protocol::methods::secrets::SecretStatus {
+            protection: "file".into(),
+            state: "ready".into(),
+            count: 1,
+            name_clashes: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2162,12 +2273,7 @@ mod tests {
         );
         assert!(matches!(
             HostLink::from_error(&ClientError::ServerIdentityMismatch(Box::new(
-                massorca_client::IdentityMismatch {
-                    host: "vps".into(),
-                    trusted_from: massorca_client::TrustedFrom::Pairing,
-                    expected: "sha256:old".into(),
-                    actual: Some("sha256:new".into()),
-                }
+                massorca_client::IdentityMismatch { trusted_from: massorca_client::TrustedFrom::Pairing, actual: Some("sha256:new".into()), ..crate::service::fixtures::base_identity_mismatch() }
             ))),
             HostLink::Failed(message)
                 if message.starts_with("Vps presented a different server key")
@@ -2212,10 +2318,7 @@ mod tests {
     fn a_vault_answer_replaces_only_the_part_it_names() {
         let mut state = StoreState::default();
         let status = SecretStatus {
-            protection: "file".into(),
-            state: "ready".into(),
-            count: 1,
-            name_clashes: Vec::new(),
+            ..crate::service::fixtures::base_secret_status()
         };
         let now = Instant::now();
         state.apply(

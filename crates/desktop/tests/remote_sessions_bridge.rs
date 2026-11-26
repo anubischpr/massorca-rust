@@ -229,10 +229,7 @@ async fn a_paired_hosts_session_is_listed_and_kept_unverifiable_when_the_host_st
     let session = start_fake(&server_handle, &workspace.id).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            addresses: Vec::new(),
-            admin: false,
-            standard: false,
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -309,10 +306,7 @@ async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() 
     let first = start_fake(&server_handle, &workspace.id).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            addresses: Vec::new(),
-            admin: false,
-            standard: false,
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -371,10 +365,7 @@ async fn a_stop_of_a_paired_hosts_session_is_answered_by_that_host() {
     let session = start_fake(&server_handle, &workspace.id).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            addresses: Vec::new(),
-            admin: false,
-            standard: false,
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -455,5 +446,15 @@ fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAdd
         kind: None,
         workspaces_root: None,
         icon: None,
+    }
+}
+
+/// Every `PairingCreateParams` field at its usual value; tests override the fields they vary.
+fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingCreateParams {
+    massorca_protocol::methods::devices::PairingCreateParams {
+        ttl_secs: None,
+        admin: false,
+        standard: false,
+        addresses: Vec::new(),
     }
 }

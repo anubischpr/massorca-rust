@@ -296,11 +296,9 @@ mod tests {
             scope: scope.into(),
             name: name.into(),
             owner_scope: scope.into(),
-            linked: false,
-            linked_scopes: Vec::new(),
             created_at_ms: 0,
             rotated_at_ms: rotated_day * DAY_MS,
-            used_at_ms: None,
+            ..crate::service::fixtures::base_secret_entry()
         }
     }
 
@@ -317,7 +315,7 @@ mod tests {
             protection: protection.into(),
             state: state.into(),
             count,
-            name_clashes: Vec::new(),
+            ..crate::service::fixtures::base_secret_status()
         }
     }
 

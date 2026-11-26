@@ -242,10 +242,7 @@ async fn pair() -> Pair {
     let session = start_fake(&server_handle, &workspace.id).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            addresses: Vec::new(),
-            admin: false,
-            standard: false,
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -424,5 +421,15 @@ fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAdd
         kind: None,
         workspaces_root: None,
         icon: None,
+    }
+}
+
+/// Every `PairingCreateParams` field at its usual value; tests override the fields they vary.
+fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingCreateParams {
+    massorca_protocol::methods::devices::PairingCreateParams {
+        ttl_secs: None,
+        admin: false,
+        standard: false,
+        addresses: Vec::new(),
     }
 }
