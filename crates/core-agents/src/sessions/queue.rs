@@ -16,6 +16,7 @@ use massorca_protocol::methods::agents::{
     QUEUE_REASON_ASKING, QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY, QUEUE_REASON_CHILD_WRITING,
     QUEUE_REASON_PAUSED_STOPPED, QueueState, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::RunType;
 
 use super::{AgentError, Agents, Change, LiveRun, LiveRuns, input_refusal, lock, not_live};
 use crate::catalog::Catalog;
@@ -37,7 +38,10 @@ impl Agents {
     ) -> Result<QueuedPrompt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
-        self.require_queue_kind(&row.kind)?;
+        // A chat session reports its activity through its journal, whatever its kind declares (decision 0101).
+        if self.run_type_of(&row.id)? != RunType::Chat {
+            self.require_queue_kind(&row.kind)?;
+        }
         let mut live = lock(&self.inner.status);
         let row = self.reload(&row.id)?;
         if let Some(request_id) = request_id
@@ -243,13 +247,20 @@ impl Drop for UnfinishedDelivery {
     }
 }
 
-/// What a delivery types into a run: the queued prompt it sends, the run's terminal and the bytes of its text. It holds
-/// the prompt text, so it has no `Debug`.
+/// What a delivery types into a run: the queued prompt it sends, and where it goes. It holds the prompt text, so it has
+/// no `Debug`.
 struct Delivery {
     session: String,
     item: String,
-    terminal: String,
-    bytes: Vec<u8>,
+    target: Target,
+}
+
+/// Where a delivery goes.
+enum Target {
+    /// The bytes of the text, typed into the run's terminal.
+    Terminal { terminal: String, bytes: Vec<u8> },
+    /// The text, sent to a chat run as a message (decision 0101, D7); `force` for a person's send-now.
+    Chat { text: String, force: bool },
 }
 
 impl Agents {
@@ -336,6 +347,13 @@ impl Agents {
         {
             return None;
         }
+        // A chat run takes the head once no turn runs; its journal records `working` while one does (decision 0101).
+        if let Some(chat) = self.chat_run(session) {
+            if state == Some(ActivityState::Working) {
+                return None;
+            }
+            return self.start_chat_sending(&chat, head, false).ok();
+        }
         let terminal = view.terminal_id.clone()?;
         let run = live.get_mut(session)?;
         if run.delivering || input_refusal(run, session, state, false).is_some() {
@@ -362,8 +380,39 @@ impl Agents {
         Ok(Delivery {
             session: item.session_id.clone(),
             item: item.id.clone(),
-            terminal,
-            bytes: prompt::input_bytes(&item.text, run.prompt.paste, &run.prompt.submit),
+            target: Target::Terminal {
+                terminal,
+                bytes: prompt::input_bytes(&item.text, run.prompt.paste, &run.prompt.submit),
+            },
+        })
+    }
+
+    /// [`Self::start_sending`] for a chat run: marked sending in the store, then the run is marked as delivering, so no
+    /// other prompt interleaves. Refused with `agent.busy` while another delivery is under way.
+    fn start_chat_sending(
+        &self,
+        run: &super::chat::ChatRun,
+        item: &QueuedPromptRow,
+        force: bool,
+    ) -> Result<Delivery, AgentError> {
+        if run.delivering.swap(true, Ordering::SeqCst) {
+            return Err(sending_refusal(&item.id));
+        }
+        if let Err(error) =
+            self.store()
+                .set_queued_prompt_state(&item.id, QueuedState::Sending, None, now_ms())
+        {
+            run.delivering.store(false, Ordering::SeqCst);
+            return Err(error.into());
+        }
+        self.notify(Change::Queue(item.session_id.clone()));
+        Ok(Delivery {
+            session: item.session_id.clone(),
+            item: item.id.clone(),
+            target: Target::Chat {
+                text: item.text.clone(),
+                force,
+            },
         })
     }
 
@@ -371,15 +420,18 @@ impl Agents {
     fn send_delivery(&self, delivery: Delivery, started: &AtomicBool) -> Result<(), AgentError> {
         // Recorded before the write, so a failure after it is known to have attempted the write.
         started.store(true, Ordering::SeqCst);
-        let written = self
-            .inner
-            .config
-            .terminals
-            .input(&delivery.terminal, &delivery.bytes)
-            .map_err(|error| match error {
-                TerminalError::Exited | TerminalError::NotFound => not_live(&delivery.session),
-                other => AgentError::from(other),
-            });
+        let written = match &delivery.target {
+            Target::Terminal { terminal, bytes } => self
+                .inner
+                .config
+                .terminals
+                .input(terminal, bytes)
+                .map_err(|error| match error {
+                    TerminalError::Exited | TerminalError::NotFound => not_live(&delivery.session),
+                    other => AgentError::from(other),
+                }),
+            Target::Chat { text, force } => self.deliver_chat_text(&delivery.session, text, *force),
+        };
         self.finish_delivery(&delivery.session, &delivery.item, written.clone(), true);
         written
     }
@@ -393,6 +445,9 @@ impl Agents {
         written: Result<(), AgentError>,
         typing_started: bool,
     ) {
+        if let Some(chat) = self.chat_run(session) {
+            chat.delivering.store(false, Ordering::SeqCst);
+        }
         let mut live = lock(&self.inner.status);
         if let Some(run) = live.get_mut(session) {
             run.delivering = false;
@@ -421,6 +476,12 @@ impl Agents {
                 }
                 self.store().delete_queued_prompt(item).map(drop)
             }
+            // A chat run that turned busy between the drain's check and the send (a prompt won the race) took nothing:
+            // the prompt waits again for the next idle or done (decision 0101, D7).
+            Err(error) if error.code == codes::AGENT_BUSY => self
+                .store()
+                .set_queued_prompt_state(item, QueuedState::Waiting, None, now_ms())
+                .map(drop),
             Err(error) => self
                 .store()
                 .set_queued_prompt_state(item, QueuedState::Failed, Some(&error.message), now_ms())
@@ -455,6 +516,16 @@ impl Agents {
                 ));
             }
             let shown = self.queued_item(&mut live, &session, id)?;
+            // A chat run takes it as a forced message: the CLI holds it for its next turn (decision 0101, D7).
+            if let Some(chat) = self.chat_run(&session) {
+                let delivery = self.start_chat_sending(&chat, &item, true)?;
+                drop(live);
+                let outcome = self.send_delivery(delivery, &AtomicBool::new(false));
+                if outcome.is_ok() {
+                    self.lift_pauses(&session);
+                }
+                return outcome.map(|()| shown);
+            }
             let terminal = view.terminal_id.clone().ok_or_else(|| not_live(&session))?;
             let run = live.get_mut(&session).ok_or_else(|| not_live(&session))?;
             if let Some(refusal) = input_refusal(run, &session, state, true) {
@@ -867,6 +938,38 @@ mod tests {
             agents.prepare_drain(&session).is_none(),
             "nothing is delivered behind a failed prompt, with or without a run"
         );
+    }
+
+    #[test]
+    fn a_delivery_that_lost_a_race_to_a_prompt_waits_again() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let head = agents.queue_add(&session, "one", None, false).unwrap();
+        let next = agents.queue_add(&session, "two", None, false).unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&head.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+
+        agents.finish_delivery(
+            &session,
+            &head.id,
+            Err(AgentError::new(
+                codes::AGENT_BUSY,
+                "session is in the middle of a turn",
+            )),
+            false,
+        );
+
+        let waiting = agents.queue_list(&session).unwrap();
+        assert_eq!(waiting.items[0].id, head.id);
+        assert_eq!(waiting.items[0].state, QueueState::Waiting);
+        assert_ne!(
+            waiting.items[1].reason.as_deref(),
+            Some(QUEUE_REASON_BEHIND_FAILED),
+            "nothing is held behind it"
+        );
+        assert_eq!(waiting.items[1].id, next.id);
     }
 
     #[test]

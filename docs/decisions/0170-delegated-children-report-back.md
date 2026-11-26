@@ -66,9 +66,12 @@ Status: accepted, 2026-11-25.
   In a plain folder it changes nothing (the child already shares the
   folder). The field is omitted when false, so an older service never sees it; an older service given it ignores it and
   gives the child its own worktree.
-- **One writer per tree.** The exception of decision 0161 is widened from plain folders to any workspace a delegation
-  tree shares: on a start or a resume, sessions of the same tree do not count as other writers
-  (`agent.workspace_busy`). Any session outside the tree still does.
+- **One writer per tree.** In a worktree, which keeps one writing session at a time, sessions of the same delegation
+  tree do not count as other writers on a start or a resume (`agent.workspace_busy`); any session outside the tree
+  still does. A plain folder takes several writers anyway (decision 0169), so there only the parent wait applies: the
+  refusals of a second `same_workspace` child and of a resume beside a tree writer are for worktrees. A chat child
+  (decision 0101) has no hook run, so it holds its parent until its run ends, and a chat parent waits for its writing
+  child as a terminal one does.
 
 ## Consequences
 

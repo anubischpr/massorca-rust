@@ -859,9 +859,21 @@ impl Agents {
                 row.parent_id.as_deref() == Some(parent.id.as_str())
                     && !row.read_only
                     && row.exit.is_none()
-                    && live.get(&row.id).is_some_and(|run| !run.finished)
+                    && self.unfinished(live, &row.id)
             })
             .map(|row| row.id)
+    }
+
+    /// Whether `session` has a live run that has not finished (decision 0170). A chat run (decision 0101) has no hook
+    /// run in `live`: it counts as unfinished until it ends.
+    fn unfinished(&self, live: &LiveRuns, session: &str) -> bool {
+        live.get(session)
+            .map_or_else(|| self.chat_run(session).is_some(), |run| !run.finished)
+    }
+
+    /// Whether `session` has a live run, hook or chat, finished or not.
+    fn runs(&self, live: &LiveRuns, session: &str) -> bool {
+        live.contains_key(session) || self.chat_run(session).is_some()
     }
 
     /// A writing session of `parent`'s delegation tree, other than `parent`, that a new or resumed child of `parent` in
@@ -891,9 +903,8 @@ impl Agents {
             let writing = row.id != parent.id
                 && !row.read_only
                 && row.exit.is_none()
-                && live
-                    .get(&row.id)
-                    .is_some_and(|run| !run.finished || ancestors.contains(&row.id));
+                && (self.unfinished(live, &row.id)
+                    || (ancestors.contains(&row.id) && self.runs(live, &row.id)));
             if writing && self.tree_root_of(&row)? == root {
                 return Ok(Some(row.id));
             }

@@ -937,6 +937,11 @@ pub struct AgentSession {
     /// (absent) otherwise, and from an older peer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// The other live writing sessions in the folder workspace this live session writes in (decision 0169). Empty
+    /// (absent) when there are none, for a worktree, for a read-only or exited session, and from an older peer. A client
+    /// shows that another session also writes in the folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_folder_with: Vec<String>,
 }
 
 /// The children a session could delegate now (decision 0161).

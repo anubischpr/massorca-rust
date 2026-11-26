@@ -216,6 +216,7 @@ directory that does not exist has no kinds.
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
 
 ## Wire
 
@@ -422,7 +423,7 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_found` when the
 session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
-workspace.
+worktree; a folder workspace takes several writers (decision 0169).
 
 ### Resume state (decision 0160)
 
@@ -568,10 +569,84 @@ the stream sends an `append` with the byte offset it starts at; a replay sends t
   so the cursor of that event says which later batches it already covers. A stream that falls behind the chat channel
   (4 096 changes) gets `reset { overflow }` and a snapshot. A forgotten session's streams end with `end { forgotten }`;
   a shutdown ends them as every stream, with `service.shutting_down`.
-- `agent.chat.subscribe` and `agent.chat.history` refuse a session that is not a chat with `agent.not_chat`, and a run
-  that holds vault secrets below host-admin scope, as its terminal (decision 0071). They are registered under
-  `agent-chat/1`, which the service does not offer until it serves `agent.chat.start`; a test build offers it, and starts
-  the kinds `MASSORCA_TEST_CHAT_KINDS` names as chat runs of the fake agent's dialect (`massorca-fake-agent chat`).
+- `agent.chat.subscribe`, `agent.chat.history`, `agent.chat.approval.answer` and `agent.chat.interrupt` refuse a
+  session that is not a chat with `agent.not_chat`, and a run that holds vault secrets below host-admin scope, as its
+  terminal (decision 0071). Every chat method is registered under `agent-chat/1`, which the service offers. A test
+  build also starts the kinds `MASSORCA_TEST_CHAT_KINDS` names as chat runs of the fake agent's own dialect
+  (`massorca-fake-agent chat`), through `agent.start` or `agent.chat.start`.
+
+### Starting, prompting and the activity of a chat
+
+- `agent.chat.start` (CLI: `massorca agent start KIND --chat`) takes the `agent.start` params; `cols`, `rows` and `args`
+  are `request.invalid_params`. The kind needs a `chat` block (`{ "adapter", "min_version", "max_major" }`) whose
+  adapter MassOrca speaks (`claude-stream-json`), and its CLI's probed version in range; otherwise
+  `agent.chat_unsupported`, with the kind's `KindChat` as `data`.
+- `agent.prompt` on a chat session writes the adapter's user message and answers `sent_to_chat`. While a turn runs or a
+  request waits it is `agent.busy`; with `force` the message is written anyway and opens its own running turn at once
+  (a held turn). The next `result` closes the running turn and every held turn (the CLI may fold held messages into its
+  turn), an interrupt ends them all `interrupted`, and the run's end ends them. A service restart reads every running
+  turn back, so the next end closes them.
+- The service records a chat session's activity from its journal (source `output`): `working` while a turn runs,
+  `waiting` while a permission request is pending, `done` with the CLI's outcome when a turn completed, `idle` after an
+  interrupted or unverifiable turn. A change is announced as for a hook report, travels as the batch's `activity`, and
+  an `idle` or `done` drains the prompt queue (decision 0084). A queued prompt reaches a chat run as a message, through
+  the same gates; `agent.queue.send_now` sends it forced. A delivery that finds the chat busy (a prompt won the race)
+  waits again. A chat session has a queue whatever its kind's status mechanism.
+- `agent.chat.approval.answer` settles the approval item under the journal lock, so the first answer wins and a later
+  one is `agent.approval_settled` (with the item as `data`). A request the adapter no longer holds (withdrawn by the
+  CLI, cancelled by an interrupt) is settled too and nothing is written; so is a request id the current run never
+  sent. With `seq`, an item that changed since (the CLI sent the request again) is `agent.approval_changed`. `always`
+  needs `allow` and an item that says `can_always`. The answer is recorded first and the adapter forgets the request
+  only then; a write to the run that fails afterwards adds an error notice.
+- `agent.chat.interrupt` writes the adapter's interrupt and ends the open turn `interrupted` (open tool calls and
+  sub-agents `interrupted`, pending approvals `cancelled`) under the journal lock. Any turn end cancels the approvals
+  still pending; a service restart finds them in the store and cancels them with the run's end.
+- `agent.resume` of an exited chat session starts the kind's resume form with the adapter's arguments, after the same
+  version check as a start (`agent.chat_unsupported` outside the range). The row names the new `run_id`; the journal and
+  its epoch carry on.
+
+### The Claude adapter
+
+`chat/claude.rs` speaks Claude Code's stream-json dialect, written against the frame vocabulary of Claude Code 2.1.258
+(pv96's `claude-stream-json-frame-schema.ts`). A run starts with `-p --input-format stream-json --output-format
+stream-json --verbose --include-partial-messages --permission-prompt-tool stdio`, then the kind's arguments (its
+session id or resume form, permission mode, model, effort and instructions). A prompt is
+`{"type":"user","message":{"role":"user","content":[{"type":"text","text":...}]},"parent_tool_use_id":null,"session_id":""}`.
+
+| Frame | Journal |
+|---|---|
+| `stream_event` `message_start` | remembers the message id |
+| `stream_event` `content_block_start` (text, thinking) | adds a running `assistant_message` or `thinking` |
+| `stream_event` `content_block_delta` (`text_delta`, `thinking_delta`) | `append` |
+| `assistant` text or thinking block | replaces the streamed text when it differs; adds the block when nothing streamed it |
+| `assistant` `tool_use` | `tool_use` `started`; `Task`/`Agent`: `subagent` `running`; `TodoWrite`: `plan`; `ExitPlanMode` with a plan file: also a `plan` whose `document` is that path |
+| `tool_progress` | the call `updated` |
+| `user` `tool_result` | the call `completed` or `failed` with its output (16 KiB); a sub-agent `completed` or `failed`; an `Edit`, `MultiEdit` or `Write` success adds a `diff` (`added` for a created file, else `modified`), from the result's `structuredPatch` or else built from the input |
+| any frame with `parent_tool_use_id` | its items name the sub-agent's item as `parent` |
+| `control_request` `can_use_tool` | a pending `approval` listing as `suggestions` the offered `addRules` that allow, to `session` or `localSettings` (`can_always` when there is one); everything else offered is dropped; no tool or an input that is not an object: denied, with a notice |
+| `control_request` of another subtype | refused with an error response, with a notice |
+| `control_cancel_request` | the approval `cancelled`; nothing answers it |
+| `result` | the turn `completed`, outcome `failure` when `is_error` or not `success` (with an error notice); the result answering an interrupt is skipped |
+| `system` `api_retry`, `compact_boundary`, model refusals, `permission_denied`; `auth_status` with an error | notices |
+| the rest of the vocabulary (`init`, hooks, status, tasks, `control_response`, `rate_limit_event`, ...) | nothing |
+| an unknown type or an unreadable line | a warning notice naming the type, never the content |
+
+An allow answers `{"behavior":"allow","updatedInput":<the request's input>}` with `updatedPermissions` (only the listed
+suggestions) for `always`; a deny answers `{"behavior":"deny","message":...}`; both carry `toolUseID` when the request
+named one. The interrupt is `{"type":"control_request","request_id":"massorca-interrupt-N","request":{"subtype":"interrupt","cancel_queued":true}}`.
+A `result` and an interrupt both make the adapter forget the turn's partial messages and unfinished calls. Names the
+CLI sends (tools, frame types, subtypes) are cut to 128 characters, paths and plan entries to 16 KiB, a plan to 200
+entries.
+
+### Version probing
+
+`agent.kinds` fills `AgentKind.chat` for a kind with a `chat` block: the kind's resolved program is run with `--version`
+(no account home, the account-stripped variables removed, 5 s), the first `MAJOR.MINOR.PATCH` of its output is read,
+and the result is kept per program path and modified time in the probe cache the instruction probe shares
+(`probe.rs`); a failed probe is run again after 60 s. A chat resume probes before it takes the start gates. `not_detected` when no program resolves, `version_unknown` when the probe fails or prints no version,
+`version_outside_range` below `min_version` or above `max_major`; `range` reads `>=MIN, <MAX+1.0.0`. The built-in
+`claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
+`MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
 ## Archive and delete (decision 0163)
 
@@ -600,9 +675,9 @@ folder workspace is forgotten and its files stay. A refusal or failure after the
   parent's uncommitted changes were not carried over.
 - Folder children (decision 0161): a writing child of a plain folder workspace runs in the parent's folder, with no
   copy, and its `note` and `notes` say "This workspace has no Git, so the child works in this folder." The
-  sessions under the same delegation root count as one writer there: `agent.workspace_busy` does not refuse a writing
-  start or resume of one of them because another writes in the folder, while any other writing start is refused as
-  before. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
+  folder takes several writers (decision 0169), so no writing start or resume there is refused because another session
+  writes in it. `agent.workspace_busy` remains for a worktree workspace (decision 0072), where a second writing start
+  is refused. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
 - The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
   workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
   `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
