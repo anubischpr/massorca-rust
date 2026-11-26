@@ -6,6 +6,7 @@ mod agent_chat;
 mod agent_prompt_queue;
 mod agent_sessions;
 mod automations;
+mod automations_runs;
 mod backup;
 mod bot_skills;
 mod bots;
@@ -37,6 +38,7 @@ pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,
 };
 pub use automations::AutomationRow;
+pub use automations_runs::{AutomationRunRow, run_state};
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;
