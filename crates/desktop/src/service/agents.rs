@@ -143,7 +143,7 @@ pub(super) fn spawn_start(
             .await
             .map_err(|error| Refusal::from(&error));
         if let Ok(session) = &result {
-            let _ = updates.send(StoreUpdate::AgentChanged(session.clone()));
+            let _ = updates.send(StoreUpdate::AgentChanged(Box::new(session.clone())));
         }
         let _ = reply.send(result);
     });
@@ -293,7 +293,7 @@ pub(super) fn spawn_set_mode(
             .await
             .map_err(|error| Refusal::from(&error));
         if let Ok(set) = &result {
-            let _ = updates.send(StoreUpdate::AgentChanged(set.session.clone()));
+            let _ = updates.send(StoreUpdate::AgentChanged(Box::new(set.session.clone())));
         }
         let _ = reply.send(result);
     });
@@ -309,7 +309,7 @@ fn spawn_session_answer(
     tokio::spawn(async move {
         let result = call.await.map_err(|error| Refusal::from(&error));
         if let Ok(session) = &result {
-            let _ = updates.send(StoreUpdate::AgentChanged(session.clone()));
+            let _ = updates.send(StoreUpdate::AgentChanged(Box::new(session.clone())));
         }
         let _ = reply.send(result);
     });
@@ -325,7 +325,7 @@ async fn refetch_tree(
     match client.agent_tree(session).await {
         Ok(tree) => {
             for member in std::iter::once(tree.root).chain(tree.children) {
-                let _ = updates.send(StoreUpdate::AgentChanged(member));
+                let _ = updates.send(StoreUpdate::AgentChanged(Box::new(member)));
             }
         }
         Err(ClientError::Remote(body)) if body.code == codes::AGENT_NOT_FOUND => {

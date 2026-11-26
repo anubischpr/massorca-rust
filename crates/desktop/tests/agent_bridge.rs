@@ -819,7 +819,7 @@ async fn a_forget_with_the_archive_options_reaches_the_service_that_offers_the_c
 }
 
 #[tokio::test]
-async fn a_folder_projects_second_start_runs_in_its_folder_once_the_first_session_ends() {
+async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     let home = temp_home();
     let folder = home.path().with_file_name("notes");
     std::fs::create_dir_all(&folder).expect("the folder");
@@ -882,33 +882,52 @@ async fn a_folder_projects_second_start_runs_in_its_folder_once_the_first_sessio
         .expect("the folder workspace is listed for its project");
     assert_eq!(folder_workspace.id, first_workspace.id);
     let first = start_fake(&handle, &folder_workspace.id).await;
-    // The service lets one live writer work in a folder workspace, so a start beside it is refused.
-    let beside = handle
+    // Several writers may work in a folder workspace (decision 0169): a start beside a live one succeeds.
+    let second = handle
         .agent_start(fake_start_params(&folder_workspace.id))
         .await
-        .expect_err("a live writer holds the folder");
-    assert_eq!(beside.code(), Some(codes::AGENT_WORKSPACE_BUSY));
-    handle
-        .agent_stop(&first.id)
-        .await
-        .expect("the first session stops");
-    let second = timeout(WAIT, async {
+        .expect("a second writer starts in the folder while the first runs");
+    assert_eq!(second.workspace_id, folder_workspace.id);
+    assert_ne!(second.id, first.id);
+    assert!(
+        second.shared_folder_with.contains(&first.id),
+        "the second session names the first as sharing its folder: {:?}",
+        second.shared_folder_with
+    );
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_worktree_keeps_refusing_a_second_writer_while_the_first_runs() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
         loop {
-            match handle
-                .agent_start(fake_start_params(&folder_workspace.id))
-                .await
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
             {
-                Ok(session) => return session,
-                Err(refusal) if refusal.code() == Some(codes::AGENT_WORKSPACE_BUSY) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                Err(refusal) => panic!("the second start is refused: {refusal:?}"),
+                return;
             }
         }
     })
     .await
-    .expect("the second start succeeds once the first session ends");
-    assert_eq!(second.workspace_id, folder_workspace.id);
+    .expect("the bridge connects and lists the fake kind");
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let _first = start_fake(&handle, &workspace.id).await;
+    let beside = handle
+        .agent_start(fake_start_params(&workspace.id))
+        .await
+        .expect_err("a live writer holds the worktree");
+    assert_eq!(beside.code(), Some(codes::AGENT_WORKSPACE_BUSY));
     drop(bridge);
     stop_service(service).await;
 }

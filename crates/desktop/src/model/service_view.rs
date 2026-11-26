@@ -429,13 +429,19 @@ mod tests {
     fn the_first_session_takes_the_placeholders_place_in_the_tree() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s0", "w1", 1)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s0", "w1", 1))),
+            now,
+        );
         let placeholder = tree_rows(&state, now)
             .iter()
             .position(|row| matches!(row, TreeRow::Placeholder { .. }))
             .expect("the placeholder is listed");
 
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         let rows = tree_rows(&state, now);
         assert!(
             !rows
@@ -452,7 +458,10 @@ mod tests {
     fn a_workspace_with_no_session_left_has_no_row_and_no_placeholder_comes_back() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         state.apply(StoreUpdate::AgentGone("s4".into()), now);
         assert!(placeholders_of(&state, now).is_empty());
         assert!(!state.awaiting_session.contains_key("w4"));

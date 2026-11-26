@@ -161,6 +161,7 @@ impl RemoveFlow {
             force: self.waivers.force,
             discard_ignored: self.waivers.discard_ignored,
             forget_orphan: self.waivers.forget_orphan,
+            allow_failed_archive: false,
         }
     }
 

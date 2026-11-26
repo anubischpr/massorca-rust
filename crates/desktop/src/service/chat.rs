@@ -347,7 +347,7 @@ pub(super) fn spawn_call(
                 let result = client.agent_chat_start(&params).await;
                 // The store hears of the session before the caller does, as it does for `agent.start`.
                 if let Ok(session) = &result {
-                    let _ = updates.send(StoreUpdate::AgentChanged(session.clone()));
+                    let _ = updates.send(StoreUpdate::AgentChanged(Box::new(session.clone())));
                 }
                 answer(reply, result);
             }

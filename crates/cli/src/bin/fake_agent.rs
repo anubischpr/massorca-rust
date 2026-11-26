@@ -31,6 +31,8 @@ const CREDENTIAL_HOME_ENV: &str = "FAKE_AGENT_HOME";
 const CREDENTIAL_FILE: &str = "token.json";
 /// Comma-separated variable names whose state (`set`, `empty` or `unset`) is printed at start, never their values.
 const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
+/// Names whose values the agent prints. Tests list non-secret variables only.
+const SHOW_ENV: &str = "FAKE_AGENT_SHOW_ENV";
 /// Comma-separated `NAME=VALUE` pairs: start prints `env NAME foreign` when the variable holds VALUE, else `env NAME own`
 /// (decision 0160), so a test can see that an inherited value did not reach the run. Never a value.
 const PROBE_FOREIGN_ENV: &str = "FAKE_AGENT_PROBE_FOREIGN";
@@ -299,8 +301,11 @@ impl Agent {
                 if present { "present" } else { "absent" }
             ));
         }
-        for name in probed_env() {
+        for name in listed_env(PROBE_ENV) {
             say(&format!("env {name} {}", env_state(&name)));
+        }
+        for name in listed_env(SHOW_ENV) {
+            say(&format!("value {name} {}", env_value(&name)));
         }
         for (name, foreign) in probed_foreign() {
             let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
@@ -605,9 +610,9 @@ fn massorca_first_on_path() -> bool {
         .is_some_and(|first| first == folder)
 }
 
-/// The names listed in `FAKE_AGENT_PROBE_ENV`.
-fn probed_env() -> Vec<String> {
-    env::var(PROBE_ENV)
+/// The names listed in the variable `variable`, separated by commas.
+fn listed_env(variable: &str) -> Vec<String> {
+    env::var(variable)
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
@@ -633,6 +638,14 @@ fn env_state(name: &str) -> &'static str {
         None => "unset",
         Some(value) if value.is_empty() => "empty",
         Some(_) => "set",
+    }
+}
+
+/// A variable's value in brackets, so an empty value shows; `unset` when it is not set.
+fn env_value(name: &str) -> String {
+    match env::var_os(name) {
+        None => "unset".to_owned(),
+        Some(value) => format!("[{}]", value.to_string_lossy()),
     }
 }
 
