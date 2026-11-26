@@ -334,7 +334,41 @@ impl Agents {
     /// The head of a session's queue, when it may be typed now: waiting and not paused, its run live and ready, the agent
     /// not asking, no merge holding the workspace, and no other input being typed. Marks it sending under the status
     /// lock; the caller types the bytes. A failed store write holds the prompt, so nothing is typed that is not recorded.
+    ///
+    /// The head's files are checked before the status lock is taken, since the check reads the disk (decision 0172). The
+    /// head is read again under the lock; when another prompt has become the head meanwhile, its files are checked in
+    /// turn, a few times at most.
     fn prepare_drain(&self, session: &str) -> Option<Delivery> {
+        for _ in 0..3 {
+            let resolved = self.resolve_head(session)?;
+            let mut stale = false;
+            let delivery = self.prepare_drain_with(session, &resolved, &mut stale);
+            if !stale {
+                return delivery;
+            }
+        }
+        None
+    }
+
+    /// The files of a session's queue head, when it waits and is not paused, checked outside the status lock.
+    fn resolve_head(&self, session: &str) -> Option<ResolvedFiles> {
+        let rows = self.store().list_queued_prompts(session).ok()?;
+        let head = rows.first()?;
+        if head.state != QueuedState::Waiting || head.reason.is_some() {
+            return None;
+        }
+        let workspace_id = self.reload(session).ok()?.workspace_id;
+        Some(self.resolve_queued(head, workspace_id))
+    }
+
+    /// [`Self::prepare_drain`] with the head's files already checked: `stale` is set, and nothing is done, when the
+    /// head under the lock is not the prompt they were checked for.
+    fn prepare_drain_with(
+        &self,
+        session: &str,
+        resolved: &ResolvedFiles,
+        stale: &mut bool,
+    ) -> Option<Delivery> {
         let mut live = lock(&self.inner.status);
         let rows = self.store().list_queued_prompts(session).ok()?;
         let head = rows.first()?;
@@ -342,6 +376,10 @@ impl Agents {
             return None;
         }
         let row = self.reload(session).ok()?;
+        if !resolved.is_for(head, &row.workspace_id) {
+            *stale = true;
+            return None;
+        }
         let view = self.view_with(&mut live, row).ok()?;
         // A run that holds vault secrets (decision 0071) types only prompts a host-admin caller queued. Others fail here,
         // and a host-admin send-now may still retry them (decision 0084, D7).
@@ -378,7 +416,7 @@ impl Agents {
             if state == Some(ActivityState::Working) {
                 return None;
             }
-            let files = match self.queued_files(head, &view.workspace_id, true) {
+            let files = match resolved.files.clone() {
                 Ok(files) => files,
                 Err(error) => {
                     self.fail_queued(head, session, &error);
@@ -392,7 +430,7 @@ impl Agents {
         if run.delivering || input_refusal(run, session, state, false).is_some() {
             return None;
         }
-        let typed = match self.queued_typed(head, &view.workspace_id, run.prompt.mention.as_deref())
+        let typed = match queued_typed(head, resolved.files.clone(), run.prompt.mention.as_deref())
         {
             Ok(typed) => typed,
             Err(error) => {
@@ -463,34 +501,23 @@ impl Agents {
     }
 
     /// The files a queued prompt sends, checked again now that it may be typed (decision 0172). The attachments were
-    /// checked when the prompt was queued; the workspace may have changed since.
-    fn queued_files(
-        &self,
-        item: &QueuedPromptRow,
-        workspace_id: &str,
-        chat: bool,
-    ) -> Result<Vec<Attachment>, AgentError> {
-        let names: Vec<String> = serde_json::from_str(&item.attachments_json).map_err(|_| {
-            AgentError::new(
-                codes::AGENT_ATTACHMENT_INVALID,
-                "the attachments of the queued prompt cannot be read",
-            )
-        })?;
-        self.attachments_in(workspace_id, &names, chat)
-    }
-
-    /// The text a terminal run types for a queued prompt: its text, with the files it names mentioned (decision 0172).
-    /// The result must still fit the prompt limit.
-    fn queued_typed(
-        &self,
-        item: &QueuedPromptRow,
-        workspace_id: &str,
-        mention: Option<&str>,
-    ) -> Result<String, AgentError> {
-        let files = self.queued_files(item, workspace_id, false)?;
-        let typed = attachments::with_mentions(&item.text, mention, &files);
-        launch::check_prompt(&typed)?;
-        Ok(typed)
+    /// checked when the prompt was queued; the workspace may have changed since. The check reads the disk, so it runs
+    /// outside the status lock, and images are refused for a terminal run later, by [`queued_typed`].
+    fn resolve_queued(&self, item: &QueuedPromptRow, workspace_id: String) -> ResolvedFiles {
+        let files = serde_json::from_str::<Vec<String>>(&item.attachments_json)
+            .map_err(|_| {
+                AgentError::new(
+                    codes::AGENT_ATTACHMENT_INVALID,
+                    "the attachments of the queued prompt cannot be read",
+                )
+            })
+            .and_then(|names| self.attachments_in(&workspace_id, &names, true));
+        ResolvedFiles {
+            item: item.id.clone(),
+            attachments_json: item.attachments_json.clone(),
+            workspace_id,
+            files,
+        }
     }
 
     /// Holds a queued prompt that cannot be typed as it is: it is failed with `error` as its reason, and nothing is
@@ -598,6 +625,11 @@ impl Agents {
     /// workspace, and when the run is not live. On success the prompt leaves the queue and the session's pauses lift.
     pub fn queue_send_now(&self, id: &str) -> Result<QueuedPrompt, AgentError> {
         let session = self.queue_session(id)?;
+        // The files are checked before the status lock is taken, since the check reads the disk (decision 0172).
+        let resolved = {
+            let item = self.queue_row(id)?;
+            self.resolve_queued(&item, self.reload(&session)?.workspace_id)
+        };
         let (delivery, shown) = {
             let mut live = lock(&self.inner.status);
             let item = self.queue_row(id)?;
@@ -605,6 +637,10 @@ impl Agents {
                 return Err(sending_refusal(id));
             }
             let view = self.view_with(&mut live, self.reload(&session)?)?;
+            // A queued prompt's id and files never change, nor a session's workspace, so the check stands.
+            if !resolved.is_for(&item, &view.workspace_id) {
+                return Err(sending_refusal(id));
+            }
             self.refuse_while_merging(&view.workspace_id)?;
             let state = view.activity.as_ref().map(|activity| activity.state);
             if state == Some(ActivityState::Waiting) {
@@ -618,7 +654,7 @@ impl Agents {
             let shown = self.queued_item(&mut live, &session, id)?;
             // A chat run takes it as a forced message: the CLI holds it for its next turn (decision 0101, D7).
             if let Some(chat) = self.chat_run(&session) {
-                let files = self.queued_files(&item, &view.workspace_id, true)?;
+                let files = resolved.files.clone()?;
                 let delivery = self.start_chat_sending(&chat, &item, files, true)?;
                 drop(live);
                 let outcome = self.send_delivery(delivery, &AtomicBool::new(false));
@@ -632,8 +668,7 @@ impl Agents {
             if let Some(refusal) = input_refusal(run, &session, state, true) {
                 return Err(refusal);
             }
-            let typed =
-                self.queued_typed(&item, &view.workspace_id, run.prompt.mention.as_deref())?;
+            let typed = queued_typed(&item, resolved.files.clone(), run.prompt.mention.as_deref())?;
             let delivery = self.start_sending(run, &item, terminal, &typed)?;
             (delivery, shown)
         };
@@ -700,6 +735,38 @@ const SECRETS_HELD_REFUSAL: &str =
     "queued by a caller without host-admin; the run now holds secrets";
 
 /// The JSON array of the files a queued prompt names, as the store keeps it (decision 0172).
+/// The files of a queued prompt as they were checked outside the status lock (decision 0172), with what they were
+/// checked for: the prompt, its stored names and the session's workspace.
+struct ResolvedFiles {
+    item: String,
+    attachments_json: String,
+    workspace_id: String,
+    files: Result<Vec<Attachment>, AgentError>,
+}
+
+impl ResolvedFiles {
+    /// Whether these are the files of `item` in the workspace `workspace_id`.
+    fn is_for(&self, item: &QueuedPromptRow, workspace_id: &str) -> bool {
+        self.item == item.id
+            && self.attachments_json == item.attachments_json
+            && self.workspace_id == workspace_id
+    }
+}
+
+/// The text a terminal run types for a queued prompt: its text, with its checked `files` mentioned (decision 0172). A
+/// terminal run takes no image, and the result must still fit the prompt limit.
+fn queued_typed(
+    item: &QueuedPromptRow,
+    files: Result<Vec<Attachment>, AgentError>,
+    mention: Option<&str>,
+) -> Result<String, AgentError> {
+    let files = files?;
+    attachments::refuse_images(&files, attachments::TERMINAL_IMAGE_REFUSAL)?;
+    let typed = attachments::with_mentions(&item.text, mention, &files);
+    launch::check_prompt(&typed)?;
+    Ok(typed)
+}
+
 fn attachments_json(names: &[String]) -> Result<String, AgentError> {
     serde_json::to_string(names).map_err(|_| {
         AgentError::new(
