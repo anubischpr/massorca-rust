@@ -45,6 +45,10 @@ async fn a_dropped_stream_keeps_its_unread_bytes_and_closes_although_another_pee
         }
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !flood.is_finished(),
+        "the flood still waits on a full pipe, so the closing thread is jammed"
+    );
     flood.abort();
     let _ = flood.await;
 

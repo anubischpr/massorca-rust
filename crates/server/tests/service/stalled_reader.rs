@@ -13,6 +13,7 @@ use super::common::{Raw, echo, hello, request, start, temp_home};
 
 /// Replies large enough to fill the pipe and the writer's buffer many times over.
 const FLOOD_REQUESTS: u64 = 48;
+// Larger than the pipe buffer, so the first reply is still being written at the close; a reply cut short reads as a close.
 const FLOOD_REPLY_BYTES: usize = 128 * 1024;
 /// How long a stop or a close may take; the shutdown grace is 5 seconds.
 const CLOSE_WAIT: Duration = Duration::from_secs(15);
