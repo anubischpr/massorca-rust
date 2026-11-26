@@ -93,6 +93,12 @@ pub(crate) fn plan(
         plan.chosen.effort = Some(effort.clone());
     }
     if let Some(on) = request.fast {
+        // A running session is compared with the state its run was started in; a stopped one with what its next run keeps.
+        let current = if running {
+            recorded_fast
+        } else {
+            chosen.fast.unwrap_or(false)
+        };
         // Fast mode is a toggle: its command is typed only when the running run is not in the state asked for.
         let toggle = decl
             .fast
@@ -105,7 +111,7 @@ pub(crate) fn plan(
                 plan.applied.fast = Some(OptionApplied::Live);
                 plan.fast_typed = Some(on);
             }
-            None if chosen.fast.unwrap_or(false) != on => {
+            None if current != on => {
                 plan.applied.fast = Some(OptionApplied::NextResume);
                 next_resume = true;
             }
@@ -342,6 +348,27 @@ mod tests {
         assert!(unchanged.typed.is_empty(), "{:?}", unchanged.typed);
         assert_eq!(unchanged.applied, OptionsApplied::default());
         assert_eq!(unchanged.fast_typed, None);
+    }
+
+    #[test]
+    fn a_running_fast_mode_the_run_already_has_is_not_applied_again() {
+        // The run was started with fast mode on, which the session keeps no record of, so `chosen` says off.
+        let plan = plan(
+            &claude(),
+            "s-1",
+            &asks(None, None, Some(true)),
+            &ChosenOptions {
+                model: Some("opus".to_owned()),
+                fast: Some(false),
+                ..ChosenOptions::default()
+            },
+            true,
+            true,
+        )
+        .expect("planned");
+        assert!(plan.typed.is_empty(), "{:?}", plan.typed);
+        assert_eq!(plan.applied.fast, None, "the run has it already: {plan:?}");
+        assert_eq!(plan.chosen.fast, Some(true), "the next resume keeps it on");
     }
 
     #[test]
