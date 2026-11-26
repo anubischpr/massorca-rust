@@ -68,12 +68,10 @@ mod tests {
     fn run(scheduled: &str, task: Option<&str>, error: Option<&str>) -> RoutineRun {
         RoutineRun {
             id: format!("run-{scheduled}"),
-            routine_id: "r1".into(),
             scheduled_for_ms: scheduled.parse::<Timestamp>().unwrap().as_millisecond(),
             task_id: task.map(Into::into),
             error: error.map(Into::into),
-            error_code: None,
-            created_at_ms: 1,
+            ..crate::service::fixtures::base_routine_run()
         }
     }
 

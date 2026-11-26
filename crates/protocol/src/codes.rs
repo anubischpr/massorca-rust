@@ -43,6 +43,18 @@ pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 /// Delegated children run in workspaces of their own under this one; removal needs `with_children` (decision 0110).
 /// `data.children` names them.
 pub const WORKSPACE_HAS_CHILDREN: &str = "workspace.has_children";
+/// Skill placement (SKL-02): a folder for the skill already holds one MassOrca did not place.
+pub const SKILL_NAME_TAKEN: &str = "skill.name_taken";
+/// Skill placement (SKL-02): the skill changed since MassOrca placed it; remove the placed copies first.
+pub const SKILL_CONTENT_CHANGED: &str = "skill.content_changed";
+/// Skill placement (SKL-02): `skills.unplace` names a skill MassOrca did not place.
+pub const SKILL_NOT_PLACED: &str = "skill.not_placed";
+/// Skill placement (SKL-02): no skill with that id is found on this host.
+pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+/// Skill placement (SKL-02): the skill cannot be copied (a link inside it, a bundled or plugin skill, or too large).
+pub const SKILL_NOT_PLACEABLE: &str = "skill.not_placeable";
+/// Skill placement (SKL-02): the placement record on this host cannot be read, so nothing is removed.
+pub const SKILL_RECORD_INVALID: &str = "skill.record_invalid";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
@@ -277,6 +289,8 @@ pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
 /// `task.start` found the Bot teams folder already added as a project that is not a folder project.
 pub const TEAM_FOLDER_TAKEN: &str = "team.folder_taken";
 pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+/// The team has Workspaces off, so its projects cannot be connected to code (decision 0120).
+pub const TEAM_WORKSPACES_OFF: &str = "team.workspaces_off";
 /// The team has no memory line with this id.
 pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
@@ -284,6 +298,12 @@ pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
 pub const TEAM_ROUTINE_RUN_INTERRUPTED: &str = "team.routine_run_interrupted";
 /// Other calls kept changing the routine while this edit was made; read it again and retry.
 pub const TEAM_ROUTINE_CHANGED: &str = "team.routine_changed";
+/// `team.room_answer` names no line of the team's room, or a line that is not a choice card.
+pub const TEAM_ROOM_CARD_NOT_FOUND: &str = "team.room_card_not_found";
+/// `team.room_answer` on a choice card that was answered already; a card takes one answer.
+pub const TEAM_ROOM_CARD_ANSWERED: &str = "team.room_card_answered";
+/// `team.room_post`'s `reply_to` names no line of the team's room.
+pub const TEAM_ROOM_LINE_NOT_FOUND: &str = "team.room_line_not_found";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
@@ -365,3 +385,11 @@ pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
 pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
 /// `extensions.rollback` found no version kept for the package: nothing changed.
 pub const EXTENSION_NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";
+/// No automation has the id or name given (`automation.*`, decision 0123).
+pub const AUTOMATION_NOT_FOUND: &str = "automation.not_found";
+/// An automation's cadence, time, weekday, cron expression or grace is refused, such as a cron that can never occur.
+pub const AUTOMATION_SCHEDULE_INVALID: &str = "automation.schedule_invalid";
+/// An automation's time zone is unknown, or the host's zone cannot be read so the automation needs one.
+pub const AUTOMATION_ZONE_INVALID: &str = "automation.zone_invalid";
+/// A calendar window that ends before it starts, or spans more than 62 days.
+pub const CALENDAR_WINDOW_INVALID: &str = "calendar.window_invalid";

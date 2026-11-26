@@ -129,9 +129,7 @@ fn install_params(source: String, consent: Option<String>) -> ExtensionInstallPa
     ExtensionInstallParams {
         source,
         consent,
-        run_installer: false,
-        sha256: None,
-        agent_token: None,
+        ..base_extension_install_params()
     }
 }
 
@@ -250,7 +248,7 @@ async fn an_install_with_the_reviewed_consent_is_listed_and_enable_disable_and_r
     handle
         .set_extension_enabled(ExtensionSetEnabledParams {
             id: PACKAGE.to_owned(),
-            enabled: false,
+            ..base_extension_set_enabled_params()
         })
         .await
         .expect("the package is disabled");
@@ -415,7 +413,7 @@ async fn installing_an_agent_package_refreshes_the_agent_kinds_without_a_reconne
     handle
         .set_extension_enabled(ExtensionSetEnabledParams {
             id: AGENT_PACKAGE.to_owned(),
-            enabled: false,
+            ..base_extension_set_enabled_params()
         })
         .await
         .expect("the agent package is disabled");
@@ -641,7 +639,7 @@ async fn a_package_with_no_examples_has_no_banner_part() {
 }
 
 #[tokio::test]
-async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
+async fn a_real_services_discover_lists_the_built_in_agents_and_tools_as_their_categories() {
     use massorca_desktop::model::marketplace::{
         ItemKind, MarketplaceSource, ServiceMarketplace, listed,
     };
@@ -671,11 +669,18 @@ async fn a_real_services_discover_lists_the_built_in_agents_as_one_category() {
         .iter()
         .filter(|item| item.kind == ItemKind::Agent)
         .count();
+    let tools = discover
+        .iter()
+        .filter(|item| item.kind == ItemKind::Tool)
+        .count();
     assert!(
-        discover.iter().all(|item| item.kind == ItemKind::Agent),
-        "a fresh profile's Discover has no other category, so no other section"
+        discover
+            .iter()
+            .all(|item| matches!(item.kind, ItemKind::Agent | ItemKind::Tool)),
+        "a fresh profile's Discover has only the Agents and Tools sections"
     );
     assert!(agents >= 4, "the built-in agents are one Agents group");
+    assert_eq!(tools, 3, "Git, GitHub CLI and Node.js are one Tools group");
     stop_service(service).await;
 }
 
@@ -876,8 +881,7 @@ async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_th
     let refusal = handle
         .rollback_extension(ExtensionRollbackParams {
             id: PACKAGE.to_owned(),
-            consent: None,
-            agent_token: None,
+            ..base_extension_rollback_params()
         })
         .await
         .expect_err("an install keeps no version to roll back to");
@@ -892,8 +896,7 @@ async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_th
         .update_extension(ExtensionUpdateParams {
             id: PACKAGE.to_owned(),
             consent: Some(second.consent.clone()),
-            sha256: None,
-            agent_token: None,
+            ..base_extension_update_params()
         })
         .await
         .expect("the update installs");
@@ -920,8 +923,7 @@ async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_th
     let asked = handle
         .rollback_extension(ExtensionRollbackParams {
             id: PACKAGE.to_owned(),
-            consent: None,
-            agent_token: None,
+            ..base_extension_rollback_params()
         })
         .await
         .expect("the service asks for the restored version's consent");
@@ -938,7 +940,7 @@ async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_th
         .rollback_extension(ExtensionRollbackParams {
             id: PACKAGE.to_owned(),
             consent: Some(consent),
-            agent_token: None,
+            ..base_extension_rollback_params()
         })
         .await
         .expect("the reviewed version is restored");
@@ -959,4 +961,45 @@ async fn a_rollback_restores_the_version_an_update_replaced_and_the_log_lists_th
     assert_eq!(log.runs[2].action, ExtensionRunAction::Rollback);
     assert_eq!(log.runs[2].from_version.as_deref(), Some("2.0.0"));
     stop_service(service).await;
+}
+
+/// Every `ExtensionInstallParams` field at its usual value; tests override the fields they vary.
+fn base_extension_install_params() -> massorca_protocol::methods::extensions::ExtensionInstallParams
+{
+    massorca_protocol::methods::extensions::ExtensionInstallParams {
+        source: String::new(),
+        consent: None,
+        run_installer: false,
+        sha256: None,
+        agent_token: None,
+    }
+}
+
+/// Every `ExtensionRollbackParams` field at its usual value; tests override the fields they vary.
+fn base_extension_rollback_params()
+-> massorca_protocol::methods::extensions::ExtensionRollbackParams {
+    massorca_protocol::methods::extensions::ExtensionRollbackParams {
+        id: String::new(),
+        consent: None,
+        agent_token: None,
+    }
+}
+
+/// Every `ExtensionSetEnabledParams` field at its usual value; tests override the fields they vary.
+fn base_extension_set_enabled_params()
+-> massorca_protocol::methods::extensions::ExtensionSetEnabledParams {
+    massorca_protocol::methods::extensions::ExtensionSetEnabledParams {
+        id: String::new(),
+        enabled: false,
+    }
+}
+
+/// Every `ExtensionUpdateParams` field at its usual value; tests override the fields they vary.
+fn base_extension_update_params() -> massorca_protocol::methods::extensions::ExtensionUpdateParams {
+    massorca_protocol::methods::extensions::ExtensionUpdateParams {
+        id: String::new(),
+        consent: None,
+        sha256: None,
+        agent_token: None,
+    }
 }

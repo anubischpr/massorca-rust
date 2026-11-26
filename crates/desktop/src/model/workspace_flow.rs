@@ -1,6 +1,7 @@
 //! The remove-workspace flow and the project menu rows as plain state, free of GPUI
 //! (decision 0028). The views draw them; the service answers decide how they move.
 
+use crate::model::project_icon::ProjectGlyph;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceRemoveParams};
 
@@ -46,6 +47,8 @@ pub enum ProjectIcon {
 pub struct ProjectMenuRow {
     pub label: String,
     pub icon: ProjectIcon,
+    /// A project's own icon, drawn in its row; None for "No project", which keeps the struck folder (decision 0091).
+    pub glyph: Option<ProjectGlyph>,
     pub choice: ProjectChoice,
 }
 
@@ -56,12 +59,14 @@ pub fn project_menu_rows(projects: &[Project]) -> Vec<ProjectMenuRow> {
         .map(|project| ProjectMenuRow {
             label: project.name.clone(),
             icon: ProjectIcon::Folder,
+            glyph: Some(ProjectGlyph::of(project.icon.as_ref())),
             choice: ProjectChoice::Project(project.id.clone()),
         })
         .collect();
     rows.push(ProjectMenuRow {
         label: NO_PROJECT_LABEL.to_owned(),
         icon: ProjectIcon::FolderStruck,
+        glyph: None,
         choice: ProjectChoice::NoProject,
     });
     rows
@@ -647,5 +652,38 @@ mod tests {
         assert_eq!(chosen_workspace_item(&menu, 6, None), None);
         assert_eq!(chosen_workspace_item(&menu, 9, None), None);
         assert_eq!(chosen_workspace_item(&menu, 7, Some(0)), None);
+    }
+}
+
+#[cfg(test)]
+mod glyph_tests {
+    use super::*;
+    use massorca_protocol::methods::projects::{Project, ProjectIcon as StoredIcon};
+
+    fn project(id: &str, icon: Option<StoredIcon>) -> Project {
+        Project {
+            id: id.into(),
+            path: format!("/repos/{id}"),
+            name: id.into(),
+            workspaces_root: format!("/repos/{id}-worktrees"),
+            icon,
+            ..crate::service::fixtures::base_project()
+        }
+    }
+
+    #[test]
+    fn a_project_row_carries_its_own_icon_and_no_project_carries_none() {
+        let rows = project_menu_rows(&[
+            project(
+                "oppm",
+                Some(StoredIcon::Emoji {
+                    emoji: "🚀".into()
+                }),
+            ),
+            project("api", None),
+        ]);
+        assert_eq!(rows[0].glyph, Some(ProjectGlyph::Emoji("🚀".into())));
+        assert_eq!(rows[1].glyph, Some(ProjectGlyph::Folder));
+        assert_eq!(rows[2].glyph, None);
     }
 }

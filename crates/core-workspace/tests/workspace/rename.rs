@@ -364,3 +364,23 @@ fn a_branch_without_a_workspace_moves_the_name_on() {
     assert_eq!(renamed.name, "fix-login-2");
     assert_eq!(renamed.branch.as_deref(), Some("fix-login-2"));
 }
+
+#[test]
+fn a_rename_by_the_first_prompt_trigger_ends_the_generated_state() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = generated(&fx, &project.name);
+
+    let renamed = fx
+        .workspaces
+        .rename_from_first_prompt(rename(&ws.id, "Fix login"))
+        .expect("rename");
+
+    assert_eq!(renamed.name, "Fix-login");
+    assert!(!renamed.name_generated, "{renamed:?}");
+    assert!(!fx.workspaces.show_workspace(&ws.id).unwrap().name_generated);
+    expect_code(
+        fx.workspaces.rename_workspace(rename(&ws.id, "other")),
+        codes::WORKSPACE_NAME_NOT_GENERATED,
+    );
+}

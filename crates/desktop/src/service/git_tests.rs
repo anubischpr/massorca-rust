@@ -19,10 +19,8 @@ use super::{GitUpdate, Refusal, StoreState, StoreUpdate};
 fn status() -> GitStatus {
     GitStatus {
         branch: BranchState::default(),
-        operation: None,
-        entries: Vec::new(),
         totals: StatusTotals::default(),
-        truncated: false,
+        ..crate::service::fixtures::base_git_status()
     }
 }
 
@@ -255,16 +253,8 @@ impl GitPeer for ScriptedPeer {
         } else {
             GitStatus {
                 entries: vec![StatusEntry {
-                    path: "notes.txt".into(),
-                    original_path: None,
-                    staged: None,
-                    unstaged: None,
                     untracked: true,
-                    conflict: None,
-                    staged_lines: None,
-                    unstaged_lines: None,
-                    submodule: false,
-                    path_lossy: false,
+                    ..crate::service::fixtures::base_status_entry()
                 }],
                 ..status()
             }
@@ -273,18 +263,14 @@ impl GitPeer for ScriptedPeer {
 
     async fn log(&self, _workspace: &str) -> Result<GitLog, ClientError> {
         Ok(GitLog {
-            commits: Vec::new(),
-            next_cursor: None,
+            ..crate::service::fixtures::base_git_log()
         })
     }
 }
 
 fn ready_item() -> Result<GitWatchEvent, ClientError> {
     Ok(GitWatchEvent {
-        ready: true,
-        kinds: Vec::new(),
-        degraded: false,
-        reason: None,
+        ..crate::service::fixtures::base_git_watch_event()
     })
 }
 
@@ -292,8 +278,7 @@ fn change_item() -> Result<GitWatchEvent, ClientError> {
     Ok(GitWatchEvent {
         ready: false,
         kinds: vec![WatchKind::Worktree],
-        degraded: false,
-        reason: None,
+        ..crate::service::fixtures::base_git_watch_event()
     })
 }
 

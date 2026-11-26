@@ -11,8 +11,8 @@ use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentForkParams,
     AgentKind, AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams,
-    AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams,
-    AgentWatchEvent, AgentWatchParams, KindEffort, KindModel, ModelSource,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentSetOptionsParams,
+    AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -90,6 +90,24 @@ pub enum AgentCommand {
         /// Type the switch into an agent whose kind reports no activity, so it may be in the middle of a prompt.
         #[arg(long)]
         force: bool,
+    },
+    /// Changes a session's model, effort or fast mode: typed into its run where the kind declares a live command for it,
+    /// otherwise applied at the session's next resume (decision 0171).
+    SetOptions {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// The model, one the kind takes at start.
+        #[arg(long)]
+        model: Option<String>,
+        /// The effort level, one the kind takes at start.
+        #[arg(long)]
+        effort: Option<String>,
+        /// Turns fast mode on.
+        #[arg(long, conflicts_with = "no_fast")]
+        fast: bool,
+        /// Turns fast mode off.
+        #[arg(long = "no-fast")]
+        no_fast: bool,
     },
     /// Marks a session's Waiting for you or Done state as seen, which clears its marker in every client.
     Seen {
@@ -661,6 +679,28 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&set, &agent_text::mode_set_lines(&set));
+        }
+        AgentCommand::SetOptions {
+            session,
+            model,
+            effort,
+            fast,
+            no_fast,
+        } => {
+            let fast = match (fast, no_fast) {
+                (true, _) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+            };
+            let set = client
+                .agent_set_options(&AgentSetOptionsParams {
+                    session,
+                    model,
+                    effort,
+                    fast,
+                })
+                .await?;
+            output.success(&set, &agent_text::options_set_lines(&set));
         }
         AgentCommand::Seen { session } => {
             // Mark only the activity shown here, never one that arrived after it was read.

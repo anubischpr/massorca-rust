@@ -2,8 +2,8 @@
 //! It reads when the page opens, when the picked host changes and on Refresh, and shows pv96's states for each answer.
 
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, WeakEntity, div,
-    prelude::*, px,
+    AnyElement, App, Context, IntoElement, ParentElement, Role, SharedString, Styled, WeakEntity,
+    div, prelude::*, px,
 };
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -16,11 +16,16 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use super::MarketplaceFrame;
 use super::host_pick::effective_target;
 use crate::model::marketplace::{
-    HostTarget, ItemKind, RootRow, SkillRow, root_rows, search_skills, skill_count_line, skill_rows,
+    HostTarget, ItemKind, ManagedRow, RootRow, SkillRow, detected_agents, managed_rows,
+    place_review_sentence, plan_detail_lines, remove_review_sentence, result_sentence, root_rows,
+    search_skills, skill_count_line, skill_rows,
 };
 use crate::model::navigation::{MarketplacePage, Page};
-use crate::service::SkillsListing;
+use crate::service::{PlacementAnswer, PlacementCall, PlacementOutcome, SkillsListing};
 use crate::shell::Shell;
+use massorca_protocol::methods::skill_placement::{
+    PlacementAgent, PlacementState, SkillPlacementResult,
+};
 
 /// What the section says while the service it reads through is not connected.
 const NOT_CONNECTED: &str = "The service is not connected.";
@@ -46,6 +51,29 @@ pub(super) struct SkillsSection {
     pub(super) host: String,
     pub(super) panel: SkillsPanel,
     pub(super) roots_open: bool,
+    /// Whether the shown host is This computer, the only host skills are placed on.
+    pub(super) local: bool,
+    /// The placement waiting for the owner's confirmation, if one is open.
+    pub(super) review: Option<PlacementReview>,
+    /// The newest placement answer: the preview under review, or the note of the last change.
+    pub(super) answer: Option<PlacementAnswer>,
+    /// The skills MassOrca placed on This computer, by name.
+    pub(super) placed: Vec<ManagedRow>,
+}
+
+/// A placement the owner must confirm: the preview of placing a skill (answered under `request`), or the removal of the
+/// copies MassOrca placed for a skill.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::shell) enum PlacementReview {
+    Place {
+        skill_id: String,
+        name: String,
+        request: u64,
+        details_open: bool,
+    },
+    Remove {
+        name: String,
+    },
 }
 
 impl Shell {
@@ -62,7 +90,10 @@ impl Shell {
             return;
         };
         match target {
-            HostTarget::Local => service.read_skills(request, refresh),
+            HostTarget::Local => {
+                service.read_skills(request, refresh);
+                service.skill_placement(request, PlacementCall::Managed);
+            }
             HostTarget::Paired(name) => service.read_host_skills(name.clone(), request, refresh),
         }
     }
@@ -71,6 +102,18 @@ impl Shell {
     pub(in crate::shell) fn on_skills_page(&self) -> bool {
         self.model.navigation().page
             == Page::Marketplace(MarketplacePage::Category(ItemKind::Skill))
+    }
+
+    /// The request number of the next placement call; only the newest request's answer is shown.
+    pub(in crate::shell) fn next_placement_request(&mut self) -> u64 {
+        self.marketplace_placement_request += 1;
+        self.marketplace_placement_request
+    }
+
+    /// Asks for the removal of the copies MassOrca placed for a skill; the Skills page shows the review to confirm.
+    pub(in crate::shell) fn ask_remove_placement(&mut self, name: String, cx: &mut Context<Self>) {
+        self.marketplace_placement_review = Some(PlacementReview::Remove { name });
+        cx.notify();
     }
 }
 
@@ -115,6 +158,13 @@ pub(super) fn section_of(shell: &Shell, cx: &App) -> SkillsSection {
             HostTarget::Paired(name) => name.clone(),
         },
         panel: panel(answer, host, state.connection.is_connected()),
+        local: host.is_none(),
+        review: shell.marketplace_placement_review.clone(),
+        answer: state.placement.clone(),
+        placed: match state.managed.as_ref().map(|held| &held.outcome) {
+            Some(PlacementOutcome::Managed(skills)) => managed_rows(skills),
+            _ => Vec::new(),
+        },
     }
 }
 
@@ -195,6 +245,7 @@ pub(super) fn skills_section(frame: &MarketplaceFrame, cx: &App) -> AnyElement {
                 .child(refresh_button(frame)),
         )
         .child(body)
+        .child(placement_panel(frame, cx))
         .children(report)
         .into_any_element()
 }
@@ -217,13 +268,14 @@ fn found_body(frame: &MarketplaceFrame, rows: &[SkillRow], cx: &App) -> AnyEleme
     }
     let mut list = div().flex().flex_col();
     for row in matches {
-        list = list.child(skill_row(row, cx));
+        list = list.child(skill_row(frame, row, cx));
     }
     list.into_any_element()
 }
 
-/// One skill as a list row: its name, its description, and the agents and the root it has.
-fn skill_row(row: &SkillRow, cx: &App) -> AnyElement {
+/// One skill as a list row: its name, its description, and the agents and the root it has. On This computer a home
+/// skill also offers Place.
+fn skill_row(frame: &MarketplaceFrame, row: &SkillRow, cx: &App) -> AnyElement {
     let theme = *cx.theme();
     let mut item = ListRow::new(
         SharedString::from(format!("marketplace-skill-{}", row.id)),
@@ -232,13 +284,296 @@ fn skill_row(row: &SkillRow, cx: &App) -> AnyElement {
     if let Some(description) = &row.description {
         item = item.secondary(description.clone());
     }
-    item.trailing(
+    let mut trailing = div().flex().items_center().gap(px(SPACE_2)).child(
         div()
             .text_style(TYPE_BODY_SM)
             .text_color(theme.palette.text.tertiary)
             .child(trailing_text(row)),
-    )
-    .into_any_element()
+    );
+    if frame.skills.local && row.placeable {
+        trailing = trailing.child(place_button(frame, row));
+    }
+    item.trailing(trailing).into_any_element()
+}
+
+fn place_button(frame: &MarketplaceFrame, row: &SkillRow) -> Button {
+    let shell = frame.shell.clone();
+    let (skill_id, name) = (row.id.clone(), row.name.clone());
+    Button::new(format!("marketplace-skill-place-{}", row.id), "Place")
+        .variant(ButtonVariant::Secondary)
+        .on_click(move |_, cx| start_place(&shell, skill_id.clone(), name.clone(), cx))
+}
+
+/// The placement area under the list: the review waiting for the owner, the note of the last change, and the skills
+/// MassOrca placed on This computer.
+fn placement_panel(frame: &MarketplaceFrame, cx: &App) -> AnyElement {
+    let section = &frame.skills;
+    let mut panel = div().flex().flex_col().gap(px(SPACE_2));
+    if let Some(review) = &section.review {
+        panel = panel.child(review_body(frame, review, section.answer.as_ref(), cx));
+    } else if let Some(note) = answer_note(section.answer.as_ref()) {
+        panel = panel.child(Banner::new(
+            SharedString::from("marketplace-skills-placement-note"),
+            BannerVariant::Info,
+            note,
+        ));
+    }
+    if section.local && !section.placed.is_empty() {
+        panel = panel.child(placed_list(frame, &section.placed, cx));
+    }
+    panel.into_any_element()
+}
+
+/// The review: the one sentence to confirm, the folders under "Show details", and the buttons that answer it.
+fn review_body(
+    frame: &MarketplaceFrame,
+    review: &PlacementReview,
+    answer: Option<&PlacementAnswer>,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let shell = frame.shell.clone();
+    let body = div().flex().flex_col().gap(px(SPACE_1));
+    match review {
+        PlacementReview::Place {
+            name,
+            request,
+            details_open,
+            ..
+        } => match answer
+            .filter(|held| held.request == *request)
+            .map(|held| &held.outcome)
+        {
+            Some(PlacementOutcome::Preview(plan)) => {
+                let agents = create_agents(plan);
+                let mut actions = div().flex().gap(px(SPACE_2));
+                if !agents.is_empty() {
+                    let confirm = shell.clone();
+                    actions = actions.child(
+                        Button::new("marketplace-skill-place-confirm", "Place")
+                            .variant(ButtonVariant::Primary)
+                            .on_click(move |_, cx| confirm_place(&confirm, cx)),
+                    );
+                }
+                let details = shell.clone();
+                let details_label = if *details_open {
+                    "Hide details"
+                } else {
+                    "Show details"
+                };
+                actions = actions
+                    .child(
+                        Button::new("marketplace-skill-place-details", details_label)
+                            .variant(ButtonVariant::Ghost)
+                            .on_click(move |_, cx| toggle_details(&details, cx)),
+                    )
+                    .child(cancel_button("marketplace-skill-place-cancel", &shell));
+                let mut lines =
+                    body.child(review_text(place_review_sentence(name, &agents), theme));
+                lines = lines.child(actions);
+                if *details_open {
+                    for line in plan_detail_lines(plan) {
+                        lines = lines.child(
+                            div()
+                                .text_style(TYPE_BODY_SM)
+                                .text_color(theme.palette.text.tertiary)
+                                .child(SharedString::from(line)),
+                        );
+                    }
+                }
+                lines.into_any_element()
+            }
+            Some(PlacementOutcome::Refused(refusal)) => body
+                .child(review_text(refusal.sentence(), theme))
+                .child(cancel_button("marketplace-skill-place-cancel", &shell))
+                .into_any_element(),
+            _ => body
+                .child(review_text(
+                    format!("Checking what would be placed for {name}."),
+                    theme,
+                ))
+                .child(cancel_button("marketplace-skill-place-cancel", &shell))
+                .into_any_element(),
+        },
+        PlacementReview::Remove { name } => {
+            let confirm = shell.clone();
+            body.child(review_text(remove_review_sentence(name), theme))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(SPACE_2))
+                        .child(
+                            Button::new("marketplace-skill-remove-confirm", "Remove")
+                                .variant(ButtonVariant::Danger)
+                                .on_click(move |_, cx| confirm_remove(&confirm, cx)),
+                        )
+                        .child(cancel_button("marketplace-skill-remove-cancel", &shell)),
+                )
+                .into_any_element()
+        }
+    }
+}
+
+fn review_text(sentence: String, theme: massorca_ui::Theme) -> impl IntoElement {
+    div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.primary)
+        .child(SharedString::from(sentence))
+}
+
+fn cancel_button(id: &'static str, shell: &WeakEntity<Shell>) -> Button {
+    let shell = shell.clone();
+    Button::new(id, "Cancel")
+        .variant(ButtonVariant::Secondary)
+        .on_click(move |_, cx| clear_review(&shell, cx))
+}
+
+/// The one-sentence note of the last change, or of a refusal that is not a review.
+fn answer_note(answer: Option<&PlacementAnswer>) -> Option<String> {
+    match &answer?.outcome {
+        PlacementOutcome::Changed(result) => {
+            let removing = result
+                .agents
+                .iter()
+                .any(|row| row.state == PlacementState::Removed);
+            Some(result_sentence(result, removing))
+        }
+        PlacementOutcome::Refused(refusal) => Some(refusal.sentence()),
+        PlacementOutcome::Preview(_) | PlacementOutcome::Managed(_) => None,
+    }
+}
+
+/// The skills MassOrca placed, each with the agents it is placed for and a Remove action.
+fn placed_list(frame: &MarketplaceFrame, placed: &[ManagedRow], cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let mut list = div().flex().flex_col().gap(px(SPACE_1));
+    list = list.child(
+        div()
+            .id("marketplace-skills-placed-heading")
+            .role(Role::Heading)
+            .text_style(TYPE_LABEL)
+            .text_color(theme.palette.text.primary)
+            .child("Placed by MassOrca"),
+    );
+    for row in placed {
+        let shell = frame.shell.clone();
+        let name = row.name.clone();
+        let remove = Button::new(format!("marketplace-placed-remove-{}", row.name), "Remove")
+            .variant(ButtonVariant::Secondary)
+            .on_click(move |_, cx| start_remove(&shell, name.clone(), cx));
+        list = list.child(
+            ListRow::new(
+                SharedString::from(format!("marketplace-placed-{}", row.name)),
+                row.name.clone(),
+            )
+            .secondary(row.agents.clone())
+            .trailing(remove),
+        );
+    }
+    list.into_any_element()
+}
+
+/// The agents a preview would create a folder for: the ones a placement goes to.
+fn create_agents(plan: &SkillPlacementResult) -> Vec<PlacementAgent> {
+    plan.agents
+        .iter()
+        .filter(|row| row.state == PlacementState::Create)
+        .map(|row| row.agent)
+        .collect()
+}
+
+/// The agents a placement offers on This computer: the ones whose folder exists here.
+fn detected_here(state: &crate::service::StoreState) -> Vec<PlacementAgent> {
+    state
+        .skills
+        .get(&None)
+        .and_then(|read| match &read.listing {
+            SkillsListing::Found(discovery) => Some(detected_agents(&discovery.sources)),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Opens the review of placing a skill: asks what would be placed for the agents whose folder exists here.
+fn start_place(shell: &WeakEntity<Shell>, skill_id: String, name: String, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        let agents = detected_here(shell.store.read(cx).state());
+        let request = shell.next_placement_request();
+        shell.marketplace_placement_review = Some(PlacementReview::Place {
+            skill_id: skill_id.clone(),
+            name,
+            request,
+            details_open: false,
+        });
+        if let Some(service) = shell.service.clone() {
+            service.skill_placement(request, PlacementCall::Preview { skill_id, agents });
+        }
+        cx.notify();
+    });
+}
+
+/// Places the agents the previewed review names, once the owner confirms.
+fn confirm_place(shell: &WeakEntity<Shell>, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        let Some(PlacementReview::Place {
+            skill_id, request, ..
+        }) = shell.marketplace_placement_review.clone()
+        else {
+            return;
+        };
+        let agents = match shell.store.read(cx).state().placement.as_ref() {
+            Some(held) if held.request == request => match &held.outcome {
+                PlacementOutcome::Preview(plan) => create_agents(plan),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        if agents.is_empty() {
+            return;
+        }
+        let next = shell.next_placement_request();
+        shell.marketplace_placement_review = None;
+        if let Some(service) = shell.service.clone() {
+            service.skill_placement(next, PlacementCall::Place { skill_id, agents });
+        }
+        cx.notify();
+    });
+}
+
+fn toggle_details(shell: &WeakEntity<Shell>, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        if let Some(PlacementReview::Place { details_open, .. }) =
+            shell.marketplace_placement_review.as_mut()
+        {
+            *details_open = !*details_open;
+        }
+        cx.notify();
+    });
+}
+
+fn start_remove(shell: &WeakEntity<Shell>, name: String, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| shell.ask_remove_placement(name, cx));
+}
+
+fn confirm_remove(shell: &WeakEntity<Shell>, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        let Some(PlacementReview::Remove { name }) = shell.marketplace_placement_review.take()
+        else {
+            return;
+        };
+        let next = shell.next_placement_request();
+        if let Some(service) = shell.service.clone() {
+            service.skill_placement(next, PlacementCall::Unplace { name });
+        }
+        cx.notify();
+    });
+}
+
+fn clear_review(shell: &WeakEntity<Shell>, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        shell.marketplace_placement_review = None;
+        cx.notify();
+    });
 }
 
 /// The agents that have a skill and the root it was read from, such as "Claude · Claude home".
@@ -361,9 +696,7 @@ mod tests {
 
     fn empty_discovery() -> SkillDiscovery {
         SkillDiscovery {
-            skills: Vec::new(),
-            sources: Vec::new(),
-            scanned_at: 1,
+            ..crate::service::fixtures::base_skill_discovery()
         }
     }
 

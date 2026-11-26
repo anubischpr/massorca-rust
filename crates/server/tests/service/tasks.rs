@@ -39,6 +39,7 @@ fn bot_params(team: &str, name: &str, lead: bool) -> BotAddParams {
         model: None,
         effort: None,
         lead,
+        skills: Vec::new(),
     }
 }
 

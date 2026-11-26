@@ -11,18 +11,22 @@ mod hosted_services;
 mod import_folder;
 mod install_details;
 mod install_review;
+mod installed_offers;
 mod item_images;
 mod item_page;
 mod package_problem;
+mod program_update;
 mod remove_review;
 mod rollback_review;
 mod run_log;
 mod sample;
 mod service_accounts;
 mod service_source;
+mod skill_placement;
 mod skills;
 mod source;
 mod types;
+mod your_apps;
 
 pub use accounts::{
     AccountActivity, AccountView, TerminalSignIn, account_block, account_views, busy_refusal,
@@ -43,6 +47,7 @@ pub use import_folder::{
 };
 pub use install_details::review_details;
 pub use install_review::{ReviewOutcome, installer_runs, review_outcome};
+pub use installed_offers::{RowOffers, row_offers};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_palette_slot,
@@ -52,15 +57,23 @@ pub use item_page::{
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,
 };
+pub use program_update::{
+    ItemMenuId, item_menu, program_update_details, program_update_outcome, updatable_program,
+};
 pub use remove_review::{RemoveOutcome, remove_details, remove_outcome};
 pub use rollback_review::{RollbackOutcome, rollback_details, rollback_outcome};
 pub use run_log::{RunRow, run_log_text, run_row};
 pub use sample::SampleMarketplaceSource;
 pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
+pub use skill_placement::{
+    ManagedRow, detected_agents, managed_rows, place_review_sentence, plan_detail_lines,
+    remove_review_sentence, result_sentence,
+};
 pub use skills::{RootRow, SkillRow, root_rows, search_skills, skill_count_line, skill_rows};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
     AccountId, AccountState, AgentAccount, DEFAULT_AGENT_KEY, Host, HostId, HostState, ItemKind,
     ItemState, MarketplaceItem, MarketplaceItemId, MarketplaceSnapshot, SignInFlow, SignInStep,
 };
+pub use your_apps::{AppAction, AppRow, service_apps, skill_apps};

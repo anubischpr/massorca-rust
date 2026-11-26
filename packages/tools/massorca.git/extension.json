@@ -1,0 +1,44 @@
+{
+  "id": "massorca.git",
+  "name": "Git",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "The version control system your workspaces and agents use.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["git"] }, "reason": "Runs Git on this host." }
+  ],
+  "contributes": {
+    "hostPrograms": [{
+      "id": "git",
+      "cli": {
+        "binary": "git",
+        "verify": ["git", "--version"],
+        "source": "https://git-scm.com/downloads",
+        "sourceChecked": "2026-11-25",
+        "install": [
+          { "os": "windows", "command": ["winget", "install", "--id", "Git.Git", "-e"] },
+          { "os": "macos", "command": ["brew", "install", "git"] },
+          { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "git"], "manual": true },
+          { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "git"], "manual": true }
+        ],
+        "update": [
+          { "os": "windows", "command": ["winget", "upgrade", "--id", "Git.Git", "-e"] },
+          { "os": "macos", "command": ["brew", "upgrade", "git"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["winget", "uninstall", "--id", "Git.Git", "-e"] },
+          { "os": "macos", "command": ["brew", "uninstall", "git"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "tools",
+    "developer": { "name": "Git project" },
+    "website": "https://git-scm.com/downloads"
+  }
+}

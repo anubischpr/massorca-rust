@@ -1,8 +1,9 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentSession, AgentTree,
-    BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentOptionsSet,
+    AgentSession, AgentTree, BringBackResult, Execution, ModeApplied, ModeSource, OptionApplied,
+    Outcome, PackageState,
 };
 
 use massorca_protocol::methods::agents::{AgentArchive, AgentQueueList, QueueState, QueuedPrompt};
@@ -180,6 +181,33 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
 }
 
 /// What `agent mode` did: when the mode applies, then the session.
+/// The `agent set-options` text: where each option that changed took effect, or that nothing changed (decision 0171).
+pub fn options_set_lines(set: &AgentOptionsSet) -> Vec<String> {
+    let applied = [
+        ("model", set.applied.model),
+        ("effort", set.applied.effort),
+        ("fast mode", set.applied.fast),
+    ];
+    let mut lines: Vec<String> = applied
+        .into_iter()
+        .filter_map(|(name, route)| {
+            let route = route?;
+            Some(match route {
+                OptionApplied::Live if name == "fast mode" => format!(
+                    "{name} switched in the running session (requested: nothing confirms it)"
+                ),
+                OptionApplied::Live => format!("{name} switched in the running session"),
+                OptionApplied::NextResume => format!("{name} applies at the next resume"),
+                OptionApplied::Unknown => format!("{name} changed"),
+            })
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push("nothing changed: the session already has these options".to_owned());
+    }
+    lines
+}
+
 pub fn mode_set_lines(set: &AgentModeSet) -> Vec<String> {
     let session = &set.session;
     let applied = match set.applied {

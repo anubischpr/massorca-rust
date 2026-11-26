@@ -27,7 +27,10 @@ pub const VENDOR_PROGRAMS: [&str; 5] = ["winget", "brew", "npm", "powershell", "
 
 /// Whether a cli block declares a vendor command: an install, an uninstall or a verify. Only a built-in may (0062, V1).
 pub fn declares_vendor_commands(cli: &AgentCli) -> bool {
-    cli.verify.is_some() || !cli.install.is_empty() || !cli.uninstall.is_empty()
+    cli.verify.is_some()
+        || !cli.install.is_empty()
+        || !cli.update.is_empty()
+        || !cli.uninstall.is_empty()
 }
 
 /// Whether a vendor command's argv starts with an allowlisted program.
@@ -74,8 +77,43 @@ pub struct AgentCli {
     pub source_checked: Option<String>,
     #[serde(default)]
     pub install: Vec<CliStep>,
+    /// The vendor's update command, run only for a program the package installed (decision 0151).
+    #[serde(default)]
+    pub update: Vec<CliStep>,
     #[serde(default)]
     pub uninstall: Vec<CliStep>,
+}
+
+/// A program on the host that a tool package installs and tracks, such as Git (decision 0151).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostProgram {
+    pub id: String,
+    pub cli: AgentCli,
+}
+
+impl Manifest {
+    /// Every CLI the package names, agent adapters first, then host programs, by contribution id.
+    pub fn program_clis(&self) -> impl Iterator<Item = (&str, &AgentCli)> {
+        let adapters = self
+            .contributes
+            .agent_adapters
+            .iter()
+            .filter_map(|adapter| Some((adapter.id.as_str(), adapter.cli.as_ref()?)));
+        let programs = self
+            .contributes
+            .host_programs
+            .iter()
+            .map(|program| (program.id.as_str(), &program.cli));
+        adapters.chain(programs)
+    }
+
+    /// The CLI of the agent adapter or host program `id`.
+    pub fn cli_of(&self, id: &str) -> Option<&AgentCli> {
+        self.program_clis()
+            .find(|(cli_id, _)| *cli_id == id)
+            .map(|(_, cli)| cli)
+    }
 }
 
 /// One command for one operating system, as argv.
@@ -84,6 +122,10 @@ pub struct AgentCli {
 pub struct CliStep {
     pub os: CliOs,
     pub command: Vec<String>,
+    /// A step that needs administrator rights: shown for the person to run, never run by MassOrca (decision 0151).
+    /// Only an install step may be manual, and an OS may list several manual steps, such as apt and dnf.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 /// The operating systems a CLI step may target.
@@ -115,6 +157,12 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
         problems.add(
             "/contributes/agentAdapters",
             "agent adapters need a process permission",
+        );
+    }
+    if !has_process && !manifest.contributes.host_programs.is_empty() {
+        problems.add(
+            "/contributes/hostPrograms",
+            "host programs need a process permission",
         );
     }
     if !has_process && !servers.is_empty() {
@@ -149,6 +197,20 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
             if let Some(cli) = &adapter.cli {
                 validate_cli(cli, &at(here, "cli"), problems);
             }
+        },
+    );
+    list(
+        &manifest.contributes.host_programs,
+        "hostPrograms",
+        "id",
+        ids::is_kind_id,
+        |program| program.id.as_str(),
+        problems,
+        |program, here, problems| {
+            if adapters.iter().any(|adapter| adapter.id == program.id) {
+                problems.add(at(here, "id"), "repeats an agent adapter id");
+            }
+            validate_cli(&program.cli, &at(here, "cli"), problems);
         },
     );
     list(
@@ -198,10 +260,12 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
             "must be an https URL to the vendor's official install docs",
         );
     }
-    check_steps(&cli.install, &at(base, "install"), None, problems);
+    check_steps(&cli.install, &at(base, "install"), true, None, problems);
+    check_steps(&cli.update, &at(base, "update"), false, None, problems);
     check_steps(
         &cli.uninstall,
         &at(base, "uninstall"),
+        false,
         Some(&cli.binary),
         problems,
     );
@@ -209,17 +273,31 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
 
 /// Checks a list of steps. An install starts an allowlisted program; an uninstall, given the CLI's `own_binary`, may start
 /// that binary as well (decision 0164).
-fn check_steps(steps: &[CliStep], base: &str, own_binary: Option<&str>, problems: &mut Problems) {
+fn check_steps(
+    steps: &[CliStep],
+    base: &str,
+    manual_allowed: bool,
+    own_binary: Option<&str>,
+    problems: &mut Problems,
+) {
     let mut seen = HashSet::new();
+    let mut manual_os = HashSet::new();
     for (index, step) in steps.iter().enumerate() {
         let here = at(base, index);
+        check_argv(&step.command, &at(&here, "command"), problems);
+        if step.manual {
+            if !manual_allowed {
+                problems.add(at(&here, "manual"), "only an install step may be manual");
+            }
+            manual_os.insert(step.os);
+            continue;
+        }
         if !seen.insert(step.os) {
             problems.add(
                 at(&here, "os"),
                 "has one entry per operating system in this list",
             );
         }
-        check_argv(&step.command, &at(&here, "command"), problems);
         let allowed = match own_binary {
             Some(binary) => is_uninstall_program(&step.command, binary),
             None => is_vendor_program(&step.command),
@@ -233,6 +311,14 @@ fn check_steps(steps: &[CliStep], base: &str, own_binary: Option<&str>, problems
                 None => format!("must start with an allowlisted program: {programs}"),
             };
             problems.add(at(&here, "command"), message);
+        }
+    }
+    for (index, step) in steps.iter().enumerate() {
+        if !step.manual && manual_os.contains(&step.os) {
+            problems.add(
+                at(&at(base, index), "os"),
+                "an operating system has either a run step or manual steps",
+            );
         }
     }
 }

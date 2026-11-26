@@ -275,7 +275,6 @@ pub fn group_count_line(group: &ScopeGroup) -> String {
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::projects::ProjectKind;
 
     use super::*;
     use crate::service::Refusal;
@@ -284,15 +283,11 @@ mod tests {
 
     fn project(id: &str, name: &str) -> Project {
         Project {
-            icon: None,
-            remote_owner: None,
             id: id.into(),
-            kind: ProjectKind::Git,
             path: format!("/repos/{name}"),
             name: name.into(),
             workspaces_root: format!("/repos/{name}-worktrees"),
-            added_at_ms: 1,
-            base_ref: None,
+            ..crate::service::fixtures::base_project()
         }
     }
 
@@ -301,11 +296,9 @@ mod tests {
             scope: scope.into(),
             name: name.into(),
             owner_scope: scope.into(),
-            linked: false,
-            linked_scopes: Vec::new(),
             created_at_ms: 0,
             rotated_at_ms: rotated_day * DAY_MS,
-            used_at_ms: None,
+            ..crate::service::fixtures::base_secret_entry()
         }
     }
 
@@ -322,7 +315,7 @@ mod tests {
             protection: protection.into(),
             state: state.into(),
             count,
-            name_clashes: Vec::new(),
+            ..crate::service::fixtures::base_secret_status()
         }
     }
 

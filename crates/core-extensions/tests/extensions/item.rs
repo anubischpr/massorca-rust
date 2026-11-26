@@ -13,7 +13,7 @@ use crate::service::setup;
 fn a_catalogue_item_is_available_until_installed() {
     let s = setup(FakeHost::new().with_program("claude"));
     let catalogue = s.service.catalogue().expect("catalogue");
-    assert_eq!(catalogue.len(), 4);
+    assert_eq!(catalogue.len(), 7, "four agents and three tools");
     let claude = &catalogue[0];
     assert_eq!(claude.id, "massorca.claude");
     assert_eq!(claude.state, ItemState::Available);
@@ -64,7 +64,7 @@ fn each_built_in_agent_lists_three_prompts_under_its_mention_and_its_colours() {
         .catalogue()
         .expect("catalogue")
         .into_iter()
-        .filter(|item| item.id.starts_with("massorca."))
+        .filter(|item| item.listing.category == "agents")
         .collect();
     assert_eq!(built_in.len(), 4);
     for item in built_in {

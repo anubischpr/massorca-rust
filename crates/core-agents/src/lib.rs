@@ -25,6 +25,7 @@ pub mod provided_env;
 pub mod resolve;
 pub mod resume_state;
 mod run_notes;
+mod session_options;
 pub mod sessions;
 pub mod sign_in;
 pub mod sources;
@@ -42,5 +43,5 @@ pub use resume_state::VendorEnv;
 pub use sessions::{
     AgentError, Agents, AgentsConfig, ArchivedOutput, Change, ChatOpened, DELEGATION_DEPTH_DEFAULT,
     DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult,
-    RepoOps,
+    PromptDelivered, PromptListener, RepoOps,
 };
