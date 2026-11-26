@@ -64,6 +64,7 @@ fn live_session() -> AgentSession {
         resume: None,
         delegation: None,
         notes: Vec::new(),
+        shared_folder_with: Vec::new(),
     }
 }
 
@@ -1230,4 +1231,21 @@ fn rename_takes_a_session_and_a_title() {
         },
         &json!({ "session": "s1", "title": "New name" }),
     );
+}
+
+#[test]
+fn shared_folder_with_lists_the_other_writers_and_is_absent_when_empty() {
+    let shared = AgentSession {
+        shared_folder_with: vec!["s-2".to_owned()],
+        ..live_session()
+    };
+    let value = serde_json::to_value(shared.clone()).expect("serializes");
+    assert_eq!(value["shared_folder_with"], json!(["s-2"]));
+    let decoded: AgentSession = serde_json::from_value(value).expect("deserializes");
+    assert_eq!(decoded, shared);
+
+    let alone = serde_json::to_value(live_session()).expect("serializes");
+    assert!(alone.get("shared_folder_with").is_none(), "{alone}");
+    let older: AgentSession = serde_json::from_value(alone).expect("an older record decodes");
+    assert!(older.shared_folder_with.is_empty());
 }
