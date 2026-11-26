@@ -4,7 +4,7 @@ use massorca_protocol::methods::chat::{
 use serde_json::json;
 
 use super::{approval_added, feed, lines, notify, opened, sent};
-use crate::chat::adapter::{ApprovalAnswer, ChatAdapter, JournalOp};
+use crate::chat::adapter::{ApprovalAnswer, ChatAdapter, JournalOp, approval_key};
 
 #[test]
 fn an_approval_is_answered_once_by_its_id_and_a_withdrawn_one_is_cancelled() {
@@ -14,15 +14,9 @@ fn an_approval_is_answered_once_by_its_id_and_a_withdrawn_one_is_cancelled() {
                 "params": { "threadId": "thr-1", "turnId": "t1", "itemId": item, "command": "touch x" } })
     };
     let ops = feed(&mut adapter, ask(40, "c1"));
-    let JournalOp::Add {
-        key,
-        body: ChatItemBody::Approval(approval),
-        ..
-    } = &ops[0]
-    else {
-        panic!("{ops:?}");
-    };
-    assert_eq!(key.as_deref(), Some("approval:40"));
+    let (key, approval) = approval_added(&ops).expect("a pending approval");
+    assert_eq!(key, Some(approval_key(&approval.request_id)));
+    let request = approval.request_id.clone();
     assert_eq!(approval.state, ApprovalState::Pending);
     assert_eq!(approval.input_summary, "touch x");
     assert!(approval.can_always);
@@ -41,21 +35,25 @@ fn an_approval_is_answered_once_by_its_id_and_a_withdrawn_one_is_cancelled() {
         (ApprovalDecision::Deny, ApprovalScope::Once, "decline"),
     ] {
         let line = adapter
-            .encode_approval("40", &answer(decision, scope))
+            .encode_approval(&request, &answer(decision, scope))
             .unwrap();
         assert_eq!(
             lines(&line)[0],
             json!({ "id": 40, "result": { "decision": wire } })
         );
     }
-    adapter.forget_request("40");
+    adapter.forget_request(&request);
     assert!(
         adapter
-            .encode_approval("40", &answer(ApprovalDecision::Allow, ApprovalScope::Once))
+            .encode_approval(
+                &request,
+                &answer(ApprovalDecision::Allow, ApprovalScope::Once)
+            )
             .is_none()
     );
 
-    feed(&mut adapter, ask(41, "c2"));
+    let (_, second) =
+        approval_added(&feed(&mut adapter, ask(41, "c2"))).expect("a pending approval");
     let withdrawn = feed(
         &mut adapter,
         notify(
@@ -69,9 +67,27 @@ fn an_approval_is_answered_once_by_its_id_and_a_withdrawn_one_is_cancelled() {
     );
     assert!(
         adapter
-            .encode_approval("41", &answer(ApprovalDecision::Allow, ApprovalScope::Once))
+            .encode_approval(
+                &second.request_id,
+                &answer(ApprovalDecision::Allow, ApprovalScope::Once)
+            )
             .is_none()
     );
+}
+
+#[test]
+fn two_runs_name_their_approvals_apart_though_the_app_server_numbers_them_alike() {
+    let ask = json!({ "id": 40, "method": "item/commandExecution/requestApproval",
+                      "params": { "threadId": "thr-1", "turnId": "t1", "itemId": "c1", "command": "touch x" } });
+    let (mut first_run, _) = opened(&[]);
+    let (mut second_run, _) = opened(&[]);
+    let (first_key, first) =
+        approval_added(&feed(&mut first_run, ask.clone())).expect("a pending approval");
+    let (second_key, second) =
+        approval_added(&feed(&mut second_run, ask)).expect("a pending approval");
+    // A journal keeps a key's item for the whole session, so a later run's approval must not take an earlier one's key.
+    assert_ne!(first_key, second_key);
+    assert_ne!(first.request_id, second.request_id);
 }
 
 #[test]

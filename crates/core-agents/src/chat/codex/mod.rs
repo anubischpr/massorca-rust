@@ -67,6 +67,8 @@ struct Request {
 #[derive(Debug)]
 pub struct CodexAdapter {
     plan: ThreadPlan,
+    /// This run's id: its permission requests are named with it (see `request_id_of`).
+    run: String,
     thread: Thread,
     next_id: u64,
     sent: HashMap<u64, Sent>,
@@ -100,6 +102,7 @@ impl CodexAdapter {
     pub fn new() -> Self {
         Self {
             plan: ThreadPlan::default(),
+            run: uuid::Uuid::now_v7().simple().to_string(),
             thread: Thread::Opening,
             next_id: 0,
             sent: HashMap::new(),
