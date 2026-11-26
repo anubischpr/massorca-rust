@@ -20,7 +20,7 @@ use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams, TerminalState};
+use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams};
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::tokens::{
@@ -629,18 +629,9 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
     rig._updates
         .send(StoreUpdate::TerminalChanged(Terminal {
             id: terminal.to_owned(),
-            workspace_id: "w1".to_owned(),
-            state: TerminalState::Live,
-            title: None,
             cols,
             rows,
-            pid: None,
-            shell: "/bin/zsh".to_owned(),
-            cwd: "/repos/fix-login".to_owned(),
-            created_at_ms: 1,
-            exit: None,
-            holds_secrets: false,
-            git_credential_guard: false,
+            ..crate::service::fixtures::base_terminal()
         }))
         .expect("the store listens");
     reply

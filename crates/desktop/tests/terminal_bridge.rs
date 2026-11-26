@@ -182,12 +182,9 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
     TerminalCreateParams {
         workspace: workspace.to_owned(),
         shell: Some(shell()),
-        cwd: None,
-        env: Default::default(),
         cols: Some(80),
         rows: Some(24),
-        title: None,
-        request_id: None,
+        ..base_terminal_create_params()
     }
 }
 
@@ -563,5 +560,19 @@ fn base_shell_spec() -> massorca_protocol::methods::terminals::ShellSpec {
     massorca_protocol::methods::terminals::ShellSpec {
         program: "cmd.exe".to_owned(),
         args: Vec::new(),
+    }
+}
+
+/// Every `TerminalCreateParams` field at its usual value; tests override the fields they vary.
+fn base_terminal_create_params() -> massorca_protocol::methods::terminals::TerminalCreateParams {
+    massorca_protocol::methods::terminals::TerminalCreateParams {
+        workspace: String::new(),
+        shell: None,
+        cwd: None,
+        env: Default::default(),
+        cols: None,
+        rows: None,
+        title: None,
+        request_id: None,
     }
 }

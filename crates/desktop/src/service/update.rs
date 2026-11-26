@@ -1238,6 +1238,146 @@ pub(crate) mod fixtures {
             detail: None,
         }
     }
+
+    /// Every `BranchState` field at its usual value; tests override the fields they vary.
+    pub fn base_branch_state() -> massorca_protocol::methods::git::status::BranchState {
+        massorca_protocol::methods::git::status::BranchState {
+            head: None,
+            oid: None,
+            upstream: None,
+            ahead: None,
+            behind: None,
+            upstream_gone: false,
+        }
+    }
+
+    /// Every `Commit` field at its usual value; tests override the fields they vary.
+    pub fn base_commit() -> massorca_protocol::methods::git::log::Commit {
+        massorca_protocol::methods::git::log::Commit {
+            id: "0123456789abcdef".into(),
+            parents: Vec::new(),
+            author: crate::service::fixtures::base_signature(),
+            committer: crate::service::fixtures::base_signature(),
+            subject: "first".into(),
+            message: String::new(),
+            message_truncated: false,
+        }
+    }
+
+    /// Every `GitDiffFile` field at its usual value; tests override the fields they vary.
+    pub fn base_git_diff_file() -> massorca_protocol::methods::git::diff::GitDiffFile {
+        massorca_protocol::methods::git::diff::GitDiffFile {
+            path: "logo.png".into(),
+            patch: None,
+            binary: true,
+            truncated: false,
+            old_size: None,
+            new_size: None,
+            submodule: None,
+        }
+    }
+
+    /// Every `GitLog` field at its usual value; tests override the fields they vary.
+    pub fn base_git_log() -> massorca_protocol::methods::git::log::GitLog {
+        massorca_protocol::methods::git::log::GitLog {
+            commits: Vec::new(),
+            next_cursor: None,
+        }
+    }
+
+    /// Every `GitStatus` field at its usual value; tests override the fields they vary.
+    pub fn base_git_status() -> massorca_protocol::methods::git::status::GitStatus {
+        massorca_protocol::methods::git::status::GitStatus {
+            branch: crate::service::fixtures::base_branch_state(),
+            operation: None,
+            entries: Vec::new(),
+            totals: crate::service::fixtures::base_status_totals(),
+            truncated: false,
+        }
+    }
+
+    /// Every `GitWatchEvent` field at its usual value; tests override the fields they vary.
+    pub fn base_git_watch_event() -> massorca_protocol::methods::git::watch::GitWatchEvent {
+        massorca_protocol::methods::git::watch::GitWatchEvent {
+            ready: true,
+            kinds: Vec::new(),
+            degraded: false,
+            reason: None,
+        }
+    }
+
+    /// Every `LineCounts` field at its usual value; tests override the fields they vary.
+    pub fn base_line_counts() -> massorca_protocol::methods::git::LineCounts {
+        massorca_protocol::methods::git::LineCounts {
+            added: 3,
+            removed: 0,
+            binary: false,
+        }
+    }
+
+    /// Every `Signature` field at its usual value; tests override the fields they vary.
+    pub fn base_signature() -> massorca_protocol::methods::git::log::Signature {
+        massorca_protocol::methods::git::log::Signature {
+            name: "Ada".into(),
+            email: "ada@example.invalid".into(),
+            time_ms: 1,
+        }
+    }
+
+    /// Every `StatusEntry` field at its usual value; tests override the fields they vary.
+    pub fn base_status_entry() -> massorca_protocol::methods::git::status::StatusEntry {
+        massorca_protocol::methods::git::status::StatusEntry {
+            path: "notes.txt".into(),
+            original_path: None,
+            staged: None,
+            unstaged: None,
+            untracked: false,
+            conflict: None,
+            staged_lines: None,
+            unstaged_lines: None,
+            submodule: false,
+            path_lossy: false,
+        }
+    }
+
+    /// Every `StatusTotals` field at its usual value; tests override the fields they vary.
+    pub fn base_status_totals() -> massorca_protocol::methods::git::status::StatusTotals {
+        massorca_protocol::methods::git::status::StatusTotals {
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+        }
+    }
+
+    /// Every `Terminal` field at its usual value; tests override the fields they vary.
+    pub fn base_terminal() -> massorca_protocol::methods::terminals::Terminal {
+        massorca_protocol::methods::terminals::Terminal {
+            id: String::new(),
+            workspace_id: "w1".to_owned(),
+            state: massorca_protocol::methods::terminals::TerminalState::Live,
+            title: None,
+            cols: 80,
+            rows: 24,
+            pid: None,
+            shell: "/bin/zsh".to_owned(),
+            cwd: "/repos/fix-login".to_owned(),
+            created_at_ms: 1,
+            exit: None,
+            holds_secrets: false,
+            git_credential_guard: false,
+        }
+    }
+
+    /// Every `TerminalExit` field at its usual value; tests override the fields they vary.
+    pub fn base_terminal_exit() -> massorca_protocol::methods::terminals::TerminalExit {
+        massorca_protocol::methods::terminals::TerminalExit {
+            code: None,
+            signal: None,
+            reason: massorca_protocol::methods::terminals::ExitReason::Exited,
+            at_ms: 2,
+        }
+    }
 }
 
 #[cfg(test)]
