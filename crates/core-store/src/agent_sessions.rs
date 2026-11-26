@@ -313,10 +313,36 @@ impl Store {
         mode: &RunMode,
         pending: Option<&str>,
     ) -> Result<bool, StoreError> {
+        self.restart_run(id, Some(terminal_id), None, holds_secrets, mode, pending)
+    }
+
+    /// [`Store::restart_agent_session`] for a chat run (decision 0101, D9): the row names the new chat run `run_id` and
+    /// no terminal.
+    pub fn restart_chat_agent_session(
+        &self,
+        id: &str,
+        run_id: &str,
+        holds_secrets: bool,
+        mode: &RunMode,
+        pending: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.restart_run(id, None, Some(run_id), holds_secrets, mode, pending)
+    }
+
+    /// Starts a new run of an exited session, in a terminal (`terminal_id`) or as a chat (`run_id`).
+    fn restart_run(
+        &self,
+        id: &str,
+        terminal_id: Option<&str>,
+        run_id: Option<&str>,
+        holds_secrets: bool,
+        mode: &RunMode,
+        pending: Option<&str>,
+    ) -> Result<bool, StoreError> {
         let connection = self.lock();
         let transaction = connection.unchecked_transaction()?;
         let changed = transaction.execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL, released_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            "UPDATE agent_sessions SET terminal_id = ?2, run_id = COALESCE(?8, run_id), holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL, activity_seen_at = NULL, released_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
             params![
                 id,
                 terminal_id,
@@ -324,7 +350,8 @@ impl Store {
                 mode.permission_mode,
                 mode.source,
                 mode.confirmed,
-                pending
+                pending,
+                run_id
             ],
         )?;
         // A new run replaces the archive of the one before it (decision 0090).

@@ -66,6 +66,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // Fast mode on a start, a kind, a model and a session (decision 0165).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_FAST, Owner::Core)?,
         // Import source detection, and an import without a folder (decision 0097).
         registries
             .capabilities
@@ -545,6 +549,8 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| {
+        // A chat resume probes its CLI's version, which can take seconds: before the gate (decision 0101).
+        agents.prepare_chat_resume(&params.session);
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
         agents.resume_at(

@@ -26,6 +26,7 @@
       { "flag": "--no-session-persistence" }
     ]
   },
+  "chat": { "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2 },
   "strip_inherited_env": [
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_SESSION_ID",
@@ -103,7 +104,8 @@
       "id": "default",
       "label": "Manual",
       "description": "Asks before file edits and commands; reads in the working directories run without asking.",
-      "args": ["--permission-mode", "default"],
+      "args": ["--permission-mode", "{value}"],
+      "launch_values": ["default", "manual"],
       "icon": "hand",
       "tone": "normal"
     },
@@ -147,7 +149,7 @@
     "flag": "--model",
     "choices": [
       { "id": "fable", "label": "Fable" },
-      { "id": "opus", "label": "Opus" },
+      { "id": "opus", "label": "Opus", "fast": true },
       { "id": "sonnet", "label": "Sonnet", "default": true },
       { "id": "haiku", "label": "Haiku", "efforts": [] }
     ]
@@ -162,5 +164,11 @@
       { "id": "max", "label": "Max" }
     ],
     "default": "high"
+  },
+  "fast": {
+    "settings": { "fastMode": true },
+    "settings_flag": "--settings",
+    "live": "/fast",
+    "toggle": true
   }
 }

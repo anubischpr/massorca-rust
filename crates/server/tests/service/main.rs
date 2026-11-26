@@ -43,5 +43,6 @@ mod tasks;
 mod teams;
 mod terminal_secrets;
 mod terminal_wait;
+mod workspace_archive;
 mod workspace_setup;
 mod workspaces;

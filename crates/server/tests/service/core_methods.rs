@@ -162,6 +162,8 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "project.rm",
     "project.set-base",
     "project.update",
+    "project.scripts",
+    "project.trust-scripts",
     "workspace.create",
     "workspace.list",
     "workspace.show",

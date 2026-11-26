@@ -252,6 +252,10 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             chat: None,
             model: None,
             effort: None,
+            fast: Some(wire::KindFast {
+                supported: false,
+                reason: Some("the kind is not valid, so its fast mode is unknown".to_owned()),
+            }),
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -259,6 +263,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
     } else {
         None
     };
+    // Probed once per installed program (decision 0101, D10).
+    let chat = crate::chat::version::kind_chat(decl, program_path.as_deref());
     AgentKind {
         id: entry.id.clone(),
         name: decl.name.clone(),
@@ -277,9 +283,25 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         problems: entry.problems.clone(),
         permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
         default_permission_mode: decl.default_permission_mode.clone(),
-        chat: None,
+        chat,
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
+        fast: Some(fast_view(decl)),
+    }
+}
+
+/// A declared `fast` as `agent.kinds` lists it (decision 0165): supported, or why the kind takes no fast mode.
+fn fast_view(decl: &KindDecl) -> wire::KindFast {
+    if decl.fast.is_some() {
+        wire::KindFast {
+            supported: true,
+            reason: None,
+        }
+    } else {
+        wire::KindFast {
+            supported: false,
+            reason: Some("the kind declares no fast mode".to_owned()),
+        }
     }
 }
 
@@ -294,6 +316,7 @@ fn model_view(model: &ModelDecl) -> wire::KindModel {
                 label: choice.label.clone(),
                 default: choice.default,
                 efforts: choice.efforts.clone(),
+                fast: choice.fast,
             })
             .collect(),
     }
@@ -666,6 +689,14 @@ mod tests {
         let claude = &kinds[0];
         // The vendor's own default (decision 0083): `auto` from 2.1.283, `default` before.
         assert_eq!(claude.default_permission_mode.as_deref(), Some("auto"));
+        // Manual passes the value its CLI's help lists (decision 0164): `manual` where only that is listed.
+        assert_eq!(
+            claude
+                .permission_mode("default")
+                .expect("Manual is declared")
+                .launch_values,
+            ["default", "manual"]
+        );
         assert_eq!(
             modes_of(claude),
             [
@@ -679,7 +710,7 @@ mod tests {
                 (
                     "default",
                     "Manual",
-                    vec!["--permission-mode", "default"],
+                    vec!["--permission-mode", "{value}"],
                     None,
                     false
                 ),

@@ -642,13 +642,14 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
             created_at_ms: 1,
             exit: None,
             holds_secrets: false,
+            git_credential_guard: false,
         }))
         .expect("the store listens");
     reply
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -825,7 +826,7 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -872,7 +873,7 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -892,7 +893,7 @@ fn new_session_from_the_workspace_menu_opens_the_start_page_of_that_workspace(
     );
     let session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
     rig._updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     rig.shell
@@ -1015,7 +1016,7 @@ fn send_without_the_chat_capability_opens_the_session_with_its_terminal_focused(
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -1201,7 +1202,7 @@ fn a_terminal_start_opens_the_session_with_its_terminal_focused(cx: &mut TestApp
         .send(Ok(session.clone()))
         .expect("the shell is waiting for the answer");
     rig._updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -1572,6 +1573,7 @@ fn claude_with_models() -> AgentKind {
         label: label.into(),
         default,
         efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
+        fast: false,
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.model = Some(KindModel {

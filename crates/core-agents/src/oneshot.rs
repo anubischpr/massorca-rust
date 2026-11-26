@@ -15,8 +15,8 @@ use massorca_protocol::codes;
 
 use crate::account_check::{account_command, account_strip_names, collect, read_limited};
 use crate::credentials;
-use crate::instructions::probe_run;
 use crate::kind::{CredentialsDecl, KindDecl, OneshotDecl, OptionalArgDecl, PROMPT_PLACEHOLDER};
+use crate::probe::cached_probe;
 use crate::process_tree;
 use crate::sessions::{AgentError, Agents};
 use crate::state_file;
@@ -108,7 +108,7 @@ fn listed_optional_args(decl: &KindDecl, program: &Path, oneshot: &OneshotDecl) 
     if oneshot.optional_args.is_empty() {
         return Vec::new();
     }
-    let help = probe_run(decl, program, &[HELP_ARG.to_owned()]);
+    let help = cached_probe(decl, program, &[HELP_ARG.to_owned()]);
     if help.exit != Some(0) {
         return Vec::new();
     }
