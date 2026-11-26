@@ -60,4 +60,4 @@ if [ "$ready" != true ]; then
   exit 1
 fi
 
-gradle --no-daemon --console=plain -p "$project" test
+GRADLE=gradle "$(dirname "$0")/gradle-with-retry.sh" --no-daemon --console=plain -p "$project" test
