@@ -1,5 +1,5 @@
 //! Automation runs as the store keeps them and the protocol shows them (decision 0125): the rows a claim or a manual
-//! run records, retention, and the `automation.changed` event.
+//! run records, the cap on a run's result text, retention, and the `automation.changed` event.
 
 use massorca_core_store::{AutomationRow, AutomationRunRow, Store, new_id, run_state};
 use massorca_protocol::codes;
@@ -13,6 +13,8 @@ use crate::context::AppState;
 
 /// Final runs kept per automation; runs in progress are never evicted (AUTO-03, as pv96 keeps them).
 pub(super) const KEPT_FINAL_RUNS: usize = 100;
+/// The most characters of a run's result text kept, its most recent ones.
+pub(super) const MAX_RESULT_CHARS: usize = 16_384;
 
 const NO_PROJECT: &str = "The automation has no project, so the run did not start.";
 const NO_USAGE: &str = "the agent session reports no token usage";
@@ -63,6 +65,15 @@ fn skipped(
         ended_at: Some(now),
         ..run
     }
+}
+
+/// The most recent [`MAX_RESULT_CHARS`] characters of `text`; older text is dropped from the front.
+pub(super) fn capped_result(text: &str) -> String {
+    let count = text.chars().count();
+    if count <= MAX_RESULT_CHARS {
+        return text.to_owned();
+    }
+    text.chars().skip(count - MAX_RESULT_CHARS).collect()
 }
 
 /// Drops the final runs beyond retention. A failure is only logged: the next run prunes again.
@@ -138,5 +149,23 @@ fn outcome_of(outcome: &str) -> AutomationRunOutcome {
         "cancelled" => AutomationRunOutcome::Cancelled,
         "interrupted" => AutomationRunOutcome::Interrupted,
         _ => AutomationRunOutcome::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_RESULT_CHARS, capped_result};
+
+    #[test]
+    fn a_long_result_keeps_its_most_recent_characters() {
+        let text = format!("{}{}", "a".repeat(10), "é".repeat(MAX_RESULT_CHARS));
+        let kept = capped_result(&text);
+        assert_eq!(kept.chars().count(), MAX_RESULT_CHARS);
+        assert!(kept.chars().all(|ch| ch == 'é'));
+    }
+
+    #[test]
+    fn a_short_result_is_kept_whole() {
+        assert_eq!(capped_result("done"), "done");
     }
 }

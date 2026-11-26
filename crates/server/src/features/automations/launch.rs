@@ -13,6 +13,7 @@ use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{ErrorBody, codes};
 
+use super::completion::settle_session;
 
 /// Why a run receives no vault secrets: an automation records no host-admin creator.
 const WITHHELD: &str =
@@ -38,6 +39,12 @@ pub(super) fn dispatch(
             record(|| {
                 store.mark_automation_run_dispatched(&run.id, &session, &workspace, now_ms())
             });
+            // A Done that landed before the run named its session would never reach the listener otherwise.
+            if let Ok(view) = agents.show(&session)
+                && let Err(error) = settle_session(store, &view)
+            {
+                tracing::warn!(code = %error.code, "a run that ended at once could not be settled: {}", error.message);
+            }
         }
         Err(error) => {
             record(|| store.fail_automation_run(&run.id, &error.code, &error.message, now_ms()));
