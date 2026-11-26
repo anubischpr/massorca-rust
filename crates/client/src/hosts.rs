@@ -11,6 +11,7 @@ use massorca_net::TlsIdentity;
 use massorca_profile::Profile;
 use massorca_protocol::methods::devices::DeviceRevokeParams;
 use massorca_protocol::{PeerInfo, codes};
+use serde::{Deserialize, Serialize};
 
 /// What became of this device on a host that is being forgotten.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,16 @@ pub enum DeviceRevocation {
 const HOST_FILE: &str = "host.json";
 const KEY_FILE: &str = "device.key";
 const CERT_FILE: &str = "device.crt";
+const INSTALL_FILE: &str = "install.json";
+
+/// How `host add-ssh` installed a host: the SSH target and the `ssh` options it was given, kept beside the host file so
+/// `host self-test` can name the log command. The host record itself does not change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshInstall {
+    pub ssh_target: String,
+    #[serde(default)]
+    pub ssh_args: Vec<String>,
+}
 
 /// The hosts of one client profile.
 #[derive(Debug, Clone)]
@@ -89,6 +100,33 @@ impl Hosts {
     /// Whether a host of that name exists.
     pub fn exists(&self, name: &str) -> bool {
         self.dir.join(name).join(HOST_FILE).is_file()
+    }
+
+    /// Records that host `name` was installed over SSH as `install`; replaces an earlier note.
+    pub fn note_ssh_install(&self, name: &str, install: &SshInstall) -> Result<(), ClientError> {
+        validate_host_name(name)?;
+        if !self.exists(name) {
+            return Err(ClientError::HostNotFound(name.to_owned()));
+        }
+        massorca_profile::secure_root(&self.profile)?;
+        let hosts = open_hosts(&self.dir)?;
+        let _lock = hosts.lock().map_err(busy)?;
+        let json = serde_json::to_vec_pretty(install)
+            .map_err(|error| ClientError::Protocol(error.to_string()))?;
+        hosts.child(name)?.write_file(INSTALL_FILE, &json)?;
+        Ok(())
+    }
+
+    /// How host `name` was installed over SSH, or `None` when it has no such note.
+    pub fn ssh_install(&self, name: &str) -> Result<Option<SshInstall>, ClientError> {
+        validate_host_name(name)?;
+        match fs::read(self.dir.join(name).join(INSTALL_FILE)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|error| ClientError::Protocol(format!("{name}: {error}"))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Checks the profile as a service start does and opens `hosts` without following links, so a pairing is refused
@@ -292,7 +330,7 @@ mod tests {
     use massorca_net::TlsIdentity;
     use massorca_profile::Profile;
 
-    use super::{HostRecord, Hosts};
+    use super::{HostRecord, Hosts, SshInstall};
 
     #[test]
     fn a_new_host_folder_is_private_before_the_device_key_is_written() {
@@ -345,6 +383,34 @@ mod tests {
             massorca_profile::secure_root(&profile).expect("checked"),
             massorca_profile::RootAccess::Private
         );
+    }
+
+    #[test]
+    fn an_ssh_install_note_is_read_back_and_a_host_without_one_has_none() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let hosts = Hosts::of(&profile);
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        hosts.add(&office(), &identity).expect("the host is stored");
+
+        assert_eq!(hosts.ssh_install("office").expect("readable"), None);
+        let first = SshInstall {
+            ssh_target: "vps".to_owned(),
+            ssh_args: vec!["-p".to_owned(), "2222".to_owned()],
+        };
+        hosts
+            .note_ssh_install("office", &first)
+            .expect("the note is written");
+        assert_eq!(hosts.ssh_install("office").expect("readable"), Some(first));
+        let second = SshInstall {
+            ssh_target: "admin@vps".to_owned(),
+            ssh_args: Vec::new(),
+        };
+        hosts
+            .note_ssh_install("office", &second)
+            .expect("the note is replaced");
+        assert_eq!(hosts.ssh_install("office").expect("readable"), Some(second));
+        assert!(hosts.get("office").is_ok(), "the host record is unchanged");
     }
 
     fn office() -> HostRecord {
