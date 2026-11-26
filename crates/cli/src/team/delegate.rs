@@ -42,6 +42,13 @@ pub async fn run(
             exit::ERROR,
         ));
     };
+    let request_id = request_id_for(
+        &session,
+        &args.text,
+        args.bot.as_deref(),
+        args.team.as_deref(),
+        args.reads,
+    );
     let client = connect(target, autostart).await?;
     let delegated = client
         .team_delegate(&TeamDelegateParams {
@@ -51,10 +58,31 @@ pub async fn run(
             read_only: args.reads,
             session: Some(session),
             agent_token: Some(agent_token),
+            request_id: Some(request_id),
         })
         .await?;
     output.success(&delegated, &lines(&delegated));
     Ok(())
+}
+
+/// The key of one delegation: the same run, task, bot, team and read flag give the same key, so a retried call returns the
+/// child the first call made (decision 0128). FNV-1a, so it is the same in every build.
+fn request_id_for(
+    session: &str,
+    text: &str,
+    bot: Option<&str>,
+    team: Option<&str>,
+    reads: bool,
+) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let reads = if reads { "reads" } else { "writes" };
+    for part in [session, text, bot.unwrap_or(""), team.unwrap_or(""), reads] {
+        for byte in part.bytes().chain(std::iter::once(0)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("cli-{hash:016x}")
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -77,4 +105,25 @@ fn lines(delegated: &TeamDelegated) -> Vec<String> {
         lines.push(format!("the child did not start: {error}"));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::request_id_for;
+
+    #[test]
+    fn a_retried_delegation_keeps_its_key_and_a_different_one_gets_another() {
+        let key = request_id_for("s1", "Parse", Some("mara"), None, false);
+        assert_eq!(
+            key,
+            request_id_for("s1", "Parse", Some("mara"), None, false)
+        );
+        assert_ne!(
+            key,
+            request_id_for("s2", "Parse", Some("mara"), None, false)
+        );
+        assert_ne!(key, request_id_for("s1", "Lex", Some("mara"), None, false));
+        assert_ne!(key, request_id_for("s1", "Parse", Some("jun"), None, false));
+        assert_ne!(key, request_id_for("s1", "Parse", Some("mara"), None, true));
+    }
 }
