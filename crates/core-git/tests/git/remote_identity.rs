@@ -89,3 +89,25 @@ fn the_first_network_remote_is_primary_without_origin() {
     assert_eq!(remotes[0].owner, "group/sub");
     assert!(remotes[0].primary);
 }
+
+#[test]
+fn the_primary_owner_is_the_primary_network_remotes_owner() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    run_git(&repo, &["remote", "add", "origin", "/srv/widgets.git"]);
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/ops/widgets.git",
+        ],
+    );
+    assert_eq!(git().primary_remote_owner(&repo).as_deref(), Some("ops"));
+
+    let local_only = Fixture::new();
+    let local = local_only.repo();
+    run_git(&local, &["remote", "add", "origin", "/srv/widgets.git"]);
+    assert_eq!(git().primary_remote_owner(&local), None);
+}

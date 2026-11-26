@@ -34,8 +34,8 @@ and of the primary remote`, on `origin/feat/core-batch-4`), not on `origin/main`
 
 ## Consequences
 
-- The parser is one module, `crates/core-git/src/remote_identity.rs`. Its base is commit `080c3c17`; when that branch
-  lands, its `remote_owner` module and this one must be reconciled into this module, not kept side by side.
-- `Project.remote_owner` (on that branch) is not part of this change. A later change can read the owner through the
-  same parser.
+- The parser is one module, `crates/core-git/src/remote_identity.rs`. The owner parser of commit `080c3c17` is folded
+  into it; there is no second parser.
+- `Project.remote_owner` is the owner of the primary network remote, the one `git.remotes` marks primary (D5). A local
+  `origin` with a network `upstream` gives the upstream's owner; a repository with only local remotes has none.
 - Provider actions (pull requests, CI, issues) keep waiting for the phase decision 0010 names.

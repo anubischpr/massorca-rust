@@ -24,18 +24,13 @@ impl Git {
         Ok(remotes)
     }
 
-    /// The owner of the repository's primary remote: `origin`, else the first remote in git's order. `None`
-    /// when there is no such remote, git fails or the URL does not parse.
+    /// The owner of the primary network remote, as `remote_identities` marks it; `None` when there is none.
     pub fn primary_remote_owner(&self, repo: &Path) -> Option<String> {
-        let captured = self.run(Some(repo), ["remote", "-v"]).ok()?;
-        if !captured.succeeded() {
-            return None;
-        }
-        let text = captured.text().ok()?;
-        let (_, url) = fetch_urls(text)
-            .find(|(name, _)| *name == "origin")
-            .or_else(|| fetch_urls(text).next())?;
-        parse_remote(url).map(|parsed| parsed.owner)
+        self.remote_identities(repo)
+            .ok()?
+            .into_iter()
+            .find(|remote| remote.primary)
+            .map(|remote| remote.owner)
     }
 }
 
