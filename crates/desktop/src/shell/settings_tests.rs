@@ -1159,6 +1159,51 @@ fn a_paired_host_is_a_row_in_the_hosts_section(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn retry_now_on_an_unreachable_host_reconnects_that_host_only(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig._updates
+        .send(StoreUpdate::HostsResync(vec![
+            paired_host("nas"),
+            paired_host("vps"),
+        ]))
+        .expect("the store listens");
+    let connected = HostLink::Connected {
+        server: "nas-server".into(),
+        version: "0.1.0".into(),
+    };
+    let lost = HostLink::Reconnecting {
+        reason: "The host is unreachable: refused".into(),
+        attempt: 2,
+        retry_at: std::time::Instant::now() + std::time::Duration::from_secs(30),
+    };
+    for (name, link) in [("nas", connected), ("vps", lost)] {
+        rig._updates
+            .send(StoreUpdate::HostLinkChanged {
+                name: name.into(),
+                link,
+            })
+            .expect("the store listens");
+    }
+    cx.run_until_parked();
+    click(cx, "settings-nav-Hosts");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-host-retry-nas").is_none(),
+        "a connected host offers no retry"
+    );
+    while rig.script.next().is_some() {}
+    click(cx, "settings-host-retry-vps");
+    cx.run_until_parked();
+    let mut sent = Vec::new();
+    while let Some(command) = rig.script.next() {
+        if let Command::ReconnectHost { name } = command {
+            sent.push(name);
+        }
+    }
+    assert_eq!(sent, ["vps"], "only the host whose row was clicked");
+}
+
+#[gpui::test]
 fn remove_on_a_host_row_opens_the_remove_confirm(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
     rig._updates
