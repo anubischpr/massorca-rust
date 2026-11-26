@@ -192,19 +192,11 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
     handle
         .agent_start(AgentStartParams {
             workspace: Some(workspace.to_owned()),
-            kind: "fake".to_owned(),
-            prompt: None,
-            args: Vec::new(),
             env: BTreeMap::new(),
-            read_only: false,
             title: Some("Host session".to_owned()),
             cols: Some(100),
             rows: Some(30),
-            request_id: None,
-            permission_mode: None,
-            model: None,
-            effort: None,
-            fast: None,
+            ..base_agent_start_params()
         })
         .await
         .expect("the session starts")
@@ -395,4 +387,24 @@ async fn a_host_that_stops_is_reported_out_of_contact_and_its_terminal_is_not_en
     assert!(!screen.is_empty(), "the last screen is kept");
     drop(attach);
     drop(pair.client_bridge);
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
+    }
 }

@@ -278,20 +278,13 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
                 workspace: Some(workspace.id),
                 kind: "fakeclaude".to_owned(),
                 prompt: Some("say hello".to_owned()),
-                args: Vec::new(),
                 env: BTreeMap::from([(
                     "FAKE_CLAUDE_SCRIPT".to_owned(),
                     script_path.display().to_string(),
                 )]),
-                read_only: false,
-                title: None,
                 cols: Some(120),
                 rows: Some(40),
-                request_id: None,
-                permission_mode: None,
-                model: None,
-                effort: None,
-                fast: None,
+                ..base_agent_start_params()
             },
             true,
         )
@@ -376,8 +369,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
     let receipt = handle
         .agent_prompt(AgentPromptParams {
             session: session.clone(),
-            text: "again".to_owned(),
-            force: false,
+            ..base_agent_prompt_params()
         })
         .await
         .expect("the prompt is accepted");
@@ -435,5 +427,34 @@ fn base_chat_approval_answer_params() -> massorca_protocol::methods::chat::ChatA
         scope: None,
         message: None,
         seq: None,
+    }
+}
+
+/// Every `AgentPromptParams` field at its usual value; tests override the fields they vary.
+fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPromptParams {
+    massorca_protocol::methods::agents::AgentPromptParams {
+        session: String::new(),
+        text: "again".to_owned(),
+        force: false,
+    }
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
     }
 }

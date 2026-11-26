@@ -1571,16 +1571,7 @@ mod tests {
     #[test]
     fn a_delegate_call_while_the_service_is_down_is_refused_at_once() {
         let params = AgentDelegateParams {
-            parent: "p".to_owned(),
-            prompt: "look".to_owned(),
-            kind: None,
-            name: None,
-            title: None,
-            read_only: true,
-            same_workspace: false,
-            token: None,
-            request_id: None,
-            permission_mode: None,
+            ..crate::service::fixtures::base_agent_delegate_params()
         };
         let (reply, mut answer) = oneshot::channel();
         refuse_while_down(Command::Delegate { params, reply });

@@ -1082,6 +1082,50 @@ pub(crate) mod fixtures {
             updated_at_ms: 1,
         }
     }
+
+    /// Every `AgentDelegateParams` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_delegate_params() -> massorca_protocol::methods::agents::AgentDelegateParams {
+        massorca_protocol::methods::agents::AgentDelegateParams {
+            parent: "p".to_owned(),
+            prompt: "look".to_owned(),
+            kind: None,
+            name: None,
+            title: None,
+            read_only: true,
+            same_workspace: false,
+            token: None,
+            request_id: None,
+            permission_mode: None,
+        }
+    }
+
+    /// Every `AgentDelegated` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_delegated() -> massorca_protocol::methods::agents::AgentDelegated {
+        massorca_protocol::methods::agents::AgentDelegated {
+            session: crate::service::fixtures::base_agent_session(),
+            note: None,
+        }
+    }
+
+    /// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+        massorca_protocol::methods::agents::AgentStartParams {
+            workspace: None,
+            kind: "claude".to_owned(),
+            prompt: None,
+            args: Vec::new(),
+            env: Default::default(),
+            read_only: false,
+            title: None,
+            cols: None,
+            rows: None,
+            request_id: None,
+            permission_mode: None,
+            model: None,
+            effort: None,
+            fast: None,
+        }
+    }
 }
 
 #[cfg(test)]
