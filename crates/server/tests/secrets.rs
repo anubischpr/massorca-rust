@@ -153,6 +153,7 @@ async fn secrets_never_reach_logs_or_error_text() {
                 ttl_secs: None,
                 admin: false,
                 standard: false,
+                addresses: Vec::new(),
             },
         )
         .await

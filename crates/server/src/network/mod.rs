@@ -1,6 +1,7 @@
 //! The network side of the service (decisions 0040 to 0045): listeners, the server identity, pairing and devices.
 
 mod admission;
+mod advertise;
 mod auth;
 mod listen;
 mod listener;
@@ -17,6 +18,7 @@ use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
 pub(crate) use admission::Pending;
+pub(crate) use advertise::normalize_all as normalize_addresses;
 pub(crate) use auth::{Authenticated, authenticate};
 pub use listen::{ListenSpec, ListenSpecError, NetworkConfig};
 pub(crate) use live::{LiveGuard, revoked_error};

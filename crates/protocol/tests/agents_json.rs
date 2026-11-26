@@ -63,6 +63,7 @@ fn live_session() -> AgentSession {
         archived: false,
         resume: None,
         delegation: None,
+        fast: None,
         notes: Vec::new(),
         shared_folder_with: Vec::new(),
     }
@@ -245,6 +246,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         default_permission_mode: None,
         chat: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(
@@ -296,16 +298,19 @@ fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither
                     id: "sonnet".to_owned(),
                     label: "Sonnet".to_owned(),
                     default: true,
+                    fast: false,
                     efforts: None,
                 },
                 KindModelChoice {
                     id: "haiku".to_owned(),
                     label: "Haiku".to_owned(),
                     default: false,
+                    fast: false,
                     efforts: Some(Vec::new()),
                 },
             ],
         }),
+        fast: None,
         effort: Some(KindEffort {
             levels: vec![KindEffortLevel {
                 id: "high".to_owned(),
@@ -374,6 +379,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         default_permission_mode: None,
         chat: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(
@@ -451,6 +457,7 @@ fn start_params_default_every_optional_field() {
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         }
     );
@@ -473,6 +480,7 @@ fn a_start_without_a_workspace_omits_the_key() {
         request_id: None,
         permission_mode: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(&no_project, &json!({ "kind": "fake", "read_only": false }));
@@ -497,6 +505,7 @@ fn a_start_with_a_model_and_an_effort_carries_both_keys() {
         request_id: None,
         permission_mode: None,
         model: Some("fast-model".to_owned()),
+        fast: None,
         effort: Some("high".to_owned()),
     };
     assert_wire(
@@ -1230,6 +1239,117 @@ fn rename_takes_a_session_and_a_title() {
             title: "New name".to_owned(),
         },
         &json!({ "session": "s1", "title": "New name" }),
+    );
+}
+
+/// Fast mode (decision 0165): a start asks for it, a kind and a model say whether they offer it, and a session says
+/// whether it was asked for. Each is absent when off, and an older peer decodes without them.
+#[test]
+fn fast_mode_is_asked_on_a_start_offered_by_kinds_and_models_and_shown_on_a_session() {
+    let asked = AgentStartParams {
+        workspace: Some("main".to_owned()),
+        kind: "claude".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: Some("opus".to_owned()),
+        effort: None,
+        fast: Some(true),
+    };
+    assert_wire(
+        &asked,
+        &json!({ "workspace": "main", "kind": "claude", "read_only": false, "model": "opus", "fast": true }),
+    );
+    let plain = AgentStartParams {
+        fast: None,
+        model: None,
+        ..asked
+    };
+    assert_wire(
+        &plain,
+        &json!({ "workspace": "main", "kind": "claude", "read_only": false }),
+    );
+
+    let choices = KindModel {
+        choices: vec![
+            KindModelChoice {
+                id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                default: false,
+                efforts: None,
+                fast: true,
+            },
+            KindModelChoice {
+                id: "haiku".to_owned(),
+                label: "Haiku".to_owned(),
+                default: false,
+                efforts: None,
+                fast: false,
+            },
+        ],
+    };
+    assert_wire(
+        &choices,
+        &json!({ "choices": [
+            { "id": "opus", "label": "Opus", "fast": true },
+            { "id": "haiku", "label": "Haiku" }
+        ]}),
+    );
+
+    let kinds: AgentKinds = serde_json::from_value(json!({ "kinds": [
+        {
+            "id": "claude", "name": "Claude", "icon": "claude", "owner": "core",
+            "installed": true, "resumable": true, "status_mechanism": "claude-settings",
+            "credentials": { "supported": true, "imported": false },
+            "fast": { "supported": true }
+        },
+        {
+            "id": "codex", "name": "Codex", "icon": "codex", "owner": "core",
+            "installed": false, "resumable": true, "status_mechanism": "codex-notify",
+            "credentials": { "supported": true, "imported": false },
+            "fast": { "supported": false, "reason": "the kind declares no fast mode" }
+        },
+        {
+            "id": "old", "name": "Old", "icon": "bot", "owner": "core",
+            "installed": false, "resumable": false, "status_mechanism": "none",
+            "credentials": { "supported": false, "imported": false }
+        }
+    ]}))
+    .expect("kinds decode with and without fast mode");
+    assert_eq!(
+        kinds.kinds[0].fast,
+        Some(massorca_protocol::methods::agents::KindFast {
+            supported: true,
+            reason: None
+        })
+    );
+    assert_eq!(
+        kinds.kinds[1]
+            .fast
+            .as_ref()
+            .and_then(|fast| fast.reason.as_deref()),
+        Some("the kind declares no fast mode")
+    );
+    assert!(kinds.kinds[2].fast.is_none());
+
+    let session: AgentSession = serde_json::from_value(json!({
+        "id": "s-1", "kind": "claude", "workspace_id": "w-1", "read_only": false,
+        "created_at_ms": 1, "execution": { "state": "live" },
+        "fast": { "on": true, "confirmed": false }
+    }))
+    .expect("a session with fast mode decodes");
+    assert_eq!(
+        session.fast,
+        Some(massorca_protocol::methods::agents::SessionFast {
+            on: true,
+            confirmed: false
+        })
     );
 }
 

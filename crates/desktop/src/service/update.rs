@@ -17,6 +17,7 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
+use massorca_protocol::methods::service::GitStatus as ServiceGitStatus;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -69,6 +70,8 @@ pub enum StoreUpdate {
     AgentSeenOffered(bool),
     /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
     AgentNoProjectOffered(bool),
+    /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
+    AgentImportDetectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -110,6 +113,8 @@ pub enum StoreUpdate {
     Devices(Result<Vec<DeviceInfo>, Refusal>),
     /// The listeners and counts of this computer's service, after a read.
     Network(Result<NetworkStatus, Refusal>),
+    /// This computer's service's Git, read on each connect; `Ok(None)` from a service that predates the report.
+    ServiceGit(Result<Option<ServiceGitStatus>, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
     /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
@@ -270,6 +275,8 @@ pub struct StoreState {
     pub devices: Option<Result<Vec<DeviceInfo>, Refusal>>,
     /// This computer's listeners and counts, once read.
     pub network: Option<Result<NetworkStatus, Refusal>>,
+    /// What this computer's service said about Git on the last connect; `None` until that read answered.
+    pub service_git: Option<Result<Option<ServiceGitStatus>, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
     /// The number of the newest extension read applied; an older late answer changes nothing.
@@ -291,6 +298,8 @@ pub struct StoreState {
     pub agent_seen: bool,
     /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
     pub agent_no_project: bool,
+    /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
+    pub agent_import_detect: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -335,6 +344,7 @@ impl Default for StoreState {
             hosts: Vec::new(),
             devices: None,
             network: None,
+            service_git: None,
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
@@ -345,6 +355,7 @@ impl Default for StoreState {
             agent_queues: None,
             agent_seen: false,
             agent_no_project: false,
+            agent_import_detect: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
@@ -456,6 +467,7 @@ impl StoreState {
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
+            StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
@@ -517,6 +529,7 @@ impl StoreState {
             }
             StoreUpdate::Devices(result) => self.devices = Some(result),
             StoreUpdate::Network(result) => self.network = Some(result),
+            StoreUpdate::ServiceGit(result) => self.service_git = Some(result),
             StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
                 self.secrets.status = Some(result);
             }
@@ -746,6 +759,7 @@ pub(crate) mod fixtures {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
         }
@@ -777,6 +791,7 @@ pub(crate) mod fixtures {
             default_permission_mode: None,
             chat: None,
             model: None,
+            fast: None,
             effort: None,
         }
     }
@@ -833,6 +848,7 @@ pub(crate) mod fixtures {
             },
             bots: Vec::new(),
             projects: Vec::new(),
+            routines: Vec::new(),
         }
     }
 
@@ -1327,6 +1343,25 @@ mod tests {
         );
         assert_eq!(state.devices, Some(Err(Refusal::unavailable("gone"))));
         assert_eq!(state.network, None);
+    }
+
+    #[test]
+    fn this_computers_git_answer_replaces_the_one_held() {
+        let mut state = StoreState::default();
+        assert_eq!(state.service_git, None);
+        let present = ServiceGitStatus::Present {
+            version: "2.49.0".to_owned(),
+        };
+        state.apply(
+            StoreUpdate::ServiceGit(Ok(Some(present.clone()))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Ok(Some(present))));
+        state.apply(
+            StoreUpdate::ServiceGit(Err(Refusal::unavailable("gone"))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Err(Refusal::unavailable("gone"))));
     }
 
     #[test]

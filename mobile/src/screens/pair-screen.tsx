@@ -46,7 +46,12 @@ export function PairScreen({ navigation, route }: Props) {
   }
 
   return (
-    <ScrollView style={{ backgroundColor: palette['surface.canvas'] }} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={{ backgroundColor: palette['surface.canvas'] }}
+      contentContainerStyle={styles.content}
+      // With the keyboard open, a tap on a button must press it, not only close the keyboard.
+      keyboardShouldPersistTaps="handled"
+    >
       <SegmentedControl
         accessibilityLabel="Pairing mode"
         options={[
@@ -64,6 +69,7 @@ export function PairScreen({ navigation, route }: Props) {
       ) : (
         <View style={styles.section}>
           <TextField
+            testID="pairing-code"
             label={PAIRING_CODE_LABEL}
             value={code}
             onChangeText={changeCode}
