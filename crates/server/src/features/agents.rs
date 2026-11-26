@@ -441,6 +441,7 @@ async fn forget(ctx: RequestCtx, params: AgentForgetParams) -> Result<AgentForgo
         force,
         discard_ignored,
         expect_dirty,
+        allow_failed_archive,
     } = params;
     let waivers = massorca_core_workspace::RemovalWaivers {
         force,
@@ -472,7 +473,10 @@ async fn forget(ctx: RequestCtx, params: AgentForgetParams) -> Result<AgentForgo
         })
         .await;
         let removed = match begun {
-            Ok(begun) => super::workspaces::finish_begun_removal(&ctx, begun.id, waivers).await,
+            Ok(begun) => {
+                super::workspaces::finish_begun_removal(&ctx, begun, waivers, allow_failed_archive)
+                    .await
+            }
             Err(error) => Err(error),
         };
         match removed {

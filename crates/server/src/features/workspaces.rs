@@ -13,14 +13,14 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
-    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceRenameParams, WorkspaceUpdateParams,
+    self, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceCreateParams,
+    WorkspaceCurrentParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
+    WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde_json::json;
 
-use massorca_core_workspace::RemovalWaivers;
+use massorca_core_workspace::{RemovalWaivers, Workspaces};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
@@ -241,19 +241,44 @@ async fn remove(
     Ok(removed)
 }
 
-/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, then the removal and
-/// `workspace.removed`. Nothing is stopped: the caller checked under the mutation lock that nothing runs in it, and a
-/// `removing` workspace takes no new start, resume or terminal (decision 0163).
+/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, the archive script
+/// (decision 0095), then the removal and `workspace.removed`. Nothing is stopped: the caller checked under the mutation
+/// lock that nothing runs in it, and a `removing` workspace takes no new start, resume or terminal (decision 0163).
 pub(crate) async fn finish_begun_removal(
     ctx: &RequestCtx,
-    begun: String,
+    begun: Workspace,
     waivers: RemovalWaivers,
+    allow_failed_archive: bool,
 ) -> Result<WorkspaceRemoved, ErrorBody> {
-    let domain = for_mutation(ctx).await?;
-    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun);
-    let removed = blocking(move || domain.finish_remove(&begun, waivers)).await?;
+    let domain = Arc::new(for_mutation(ctx).await?);
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    let archive = archive_before_removal(ctx, &domain, &begun, allow_failed_archive).await?;
+    let id = begun.id.clone();
+    let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    removed.archive = archive;
     publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
+}
+
+/// Runs the archive script of the `removing` workspace `begun`. A refusal returns the row to `ready` before the
+/// refusal is returned, so nothing is removed or stopped (decision 0095).
+async fn archive_before_removal(
+    ctx: &RequestCtx,
+    domain: &Arc<Workspaces>,
+    begun: &Workspace,
+    allow_failed_archive: bool,
+) -> Result<Option<WorkspaceArchive>, ErrorBody> {
+    match workspace_archive::run(ctx, begun, allow_failed_archive).await {
+        Ok(archive) => Ok(archive),
+        Err(refusal) => {
+            let id = begun.id.clone();
+            let cancel = Arc::clone(domain);
+            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
+                publish(ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
+            }
+            Err(refusal)
+        }
+    }
 }
 
 /// Removes workspace `selector` with `waivers`: the refusals, `workspace.removing`, every run in it stopped, then the
@@ -272,17 +297,7 @@ pub(crate) async fn remove_workspace(
     };
     publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
     // Before anything is stopped: the archive may save work from the running checkout.
-    let archive = match workspace_archive::run(ctx, &begun, allow_failed_archive).await {
-        Ok(archive) => archive,
-        Err(refusal) => {
-            let id = begun.id.clone();
-            let cancel = Arc::clone(&domain);
-            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
-                publish(ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
-            }
-            return Err(refusal);
-        }
-    };
+    let archive = archive_before_removal(ctx, &domain, &begun, allow_failed_archive).await?;
     stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
     let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;

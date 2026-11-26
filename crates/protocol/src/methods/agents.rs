@@ -1439,6 +1439,9 @@ pub struct AgentForgetParams {
     /// `workspace.dirty` when the worktree has such changes now, even with `force`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_dirty: Option<bool>,
+    /// Remove the workspace even when its archive script fails or times out, as `workspace.remove`'s `allow_failed_archive`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_failed_archive: bool,
 }
 
 /// Result of `agent.forget`: the forgotten session, with what became of its workspace when one was to be removed.
