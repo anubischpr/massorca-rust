@@ -188,15 +188,17 @@ pub struct TerminalWait {
 }
 
 /// Whether the host that runs the process can prove it is alive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalState {
     Live,
     /// The host cannot prove either way right now; never read as death.
     Unverifiable,
     Exited,
-    /// A value from a newer peer that this build does not know; never sent by this build.
+    /// A value from a newer peer that this build does not know; never sent by this build. The default: a state not
+    /// known yet.
     #[serde(other)]
+    #[default]
     Unknown,
 }
 

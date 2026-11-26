@@ -35,6 +35,57 @@ impl Git {
         Ok(false)
     }
 
+    /// The branch part of every `refs/remotes/<remote>/<branch>` of a remote configured in `repo`, the
+    /// `<remote>/HEAD` pointers left out. Each remote name is matched whole, as in `remote_branch_exists`.
+    pub fn remote_branch_names(&self, repo: &Path) -> Result<Vec<String>, GitError> {
+        let remotes = self.run(Some(repo), ["remote"])?;
+        remotes.require_success()?;
+        let prefixes: Vec<String> = remotes
+            .text()?
+            .lines()
+            .map(|remote| format!("refs/remotes/{remote}/"))
+            .collect();
+        let captured = self.run(
+            Some(repo),
+            ["for-each-ref", "--format=%(refname)", "refs/remotes"],
+        )?;
+        captured.require_success()?;
+        Ok(captured
+            .text()?
+            .lines()
+            .flat_map(|reference| {
+                prefixes
+                    .iter()
+                    .filter_map(move |prefix| reference.strip_prefix(prefix.as_str()))
+            })
+            .filter(|branch| *branch != "HEAD")
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Whether the local branch `branch` has an upstream configured, as a push with `-u` leaves it. A git failure is
+    /// an error, never a no, so a caller that refuses published branches fails closed.
+    pub fn branch_has_upstream(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
+        if branch.starts_with('-') {
+            return Ok(false);
+        }
+        let reference = format!("refs/heads/{branch}");
+        let captured = self.run(
+            Some(repo),
+            [
+                "for-each-ref",
+                "--format=%(refname)%00%(upstream)",
+                reference.as_str(),
+            ],
+        )?;
+        captured.require_success()?;
+        // A pattern also matches refs below it, so only the exact ref counts.
+        Ok(captured.text()?.lines().any(|line| {
+            line.split_once('\0')
+                .is_some_and(|(name, upstream)| name == reference && !upstream.is_empty())
+        }))
+    }
+
     /// Whether `rev` resolves to a commit in `repo`.
     pub fn ref_exists(&self, repo: &Path, rev: &str) -> Result<bool, GitError> {
         // No ref starts with a dash, and a leading one would be read as an option.

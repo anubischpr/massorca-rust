@@ -226,7 +226,7 @@ fn update_renames_and_comments_one_workspace_and_keeps_its_directory_and_branch(
 
     assert!(
         store
-            .update_workspace(&row.id, "renamed", Some("waiting on review"))
+            .update_workspace(&row.id, "renamed", Some("waiting on review"), false)
             .unwrap()
     );
     let found = store.get_workspace(&row.id).unwrap().unwrap();
@@ -239,9 +239,17 @@ fn update_renames_and_comments_one_workspace_and_keeps_its_directory_and_branch(
         None
     );
 
-    assert!(store.update_workspace(&row.id, "renamed", None).unwrap());
+    assert!(
+        store
+            .update_workspace(&row.id, "renamed", None, false)
+            .unwrap()
+    );
     assert_eq!(store.get_workspace(&row.id).unwrap().unwrap().comment, None);
-    assert!(!store.update_workspace("missing", "renamed", None).unwrap());
+    assert!(
+        !store
+            .update_workspace("missing", "renamed", None, false)
+            .unwrap()
+    );
 }
 
 #[test]
@@ -254,10 +262,62 @@ fn update_to_a_name_another_workspace_of_the_project_holds_changes_nothing() {
     store.insert_workspace(&other).unwrap();
 
     let result = store
-        .update_workspace(&other.id, "feature", Some("note"))
+        .update_workspace(&other.id, "feature", Some("note"), false)
         .map(|_| ());
     assert_conflict(result, "workspaces.name");
     let kept = store.get_workspace(&other.id).unwrap().unwrap();
     assert_eq!(kept.name, "other");
     assert_eq!(kept.comment, None);
+}
+
+#[test]
+fn the_generated_name_flag_round_trips_and_an_update_sets_it() {
+    let (store, project) = store_with_project();
+    let row = WorkspaceRow {
+        name_generated: true,
+        ..workspace_row(&project.id, "otter", "ws-otter")
+    };
+    store.insert_workspace(&row).unwrap();
+    assert!(
+        store
+            .get_workspace(&row.id)
+            .unwrap()
+            .unwrap()
+            .name_generated
+    );
+
+    assert!(
+        store
+            .update_workspace(&row.id, "typed", None, false)
+            .unwrap()
+    );
+    assert!(
+        !store
+            .get_workspace(&row.id)
+            .unwrap()
+            .unwrap()
+            .name_generated
+    );
+}
+
+#[test]
+fn renaming_sets_the_name_and_branch_and_keeps_the_path() {
+    let (store, project) = store_with_project();
+    let row = WorkspaceRow {
+        name_generated: true,
+        ..workspace_row(&project.id, "otter", "ws-otter")
+    };
+    store.insert_workspace(&row).unwrap();
+
+    assert!(
+        store
+            .rename_workspace(&row.id, "fix-login", Some("fix-login"))
+            .unwrap()
+    );
+    let found = store.get_workspace(&row.id).unwrap().unwrap();
+    assert_eq!(found.name, "fix-login");
+    assert_eq!(found.branch.as_deref(), Some("fix-login"));
+    assert_eq!(found.path, row.path);
+    assert!(found.name_generated);
+    assert!(!store.rename_workspace("missing", "x", None).unwrap());
 }

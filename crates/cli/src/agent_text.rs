@@ -110,6 +110,17 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
     }
+    for (label, value) in [
+        ("branch", &session.meta.branch),
+        ("model", &session.meta.model),
+        ("effort", &session.meta.effort),
+        ("forked from", &session.meta.forked_from),
+        ("preview", &session.meta.preview),
+    ] {
+        if let Some(value) = value {
+            lines.push(format!("{label}: {value}"));
+        }
+    }
     if session.retained {
         lines.push("retained: yes".to_owned());
     }

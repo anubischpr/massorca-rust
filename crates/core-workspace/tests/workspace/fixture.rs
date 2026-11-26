@@ -109,6 +109,16 @@ impl Fixture {
             .expect("drop trigger");
     }
 
+    /// Makes every workspace row update fail, as a store that rejects the write would.
+    pub fn fail_workspace_updates(&self) {
+        self.connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_workspace_update BEFORE UPDATE ON workspaces \
+                 BEGIN SELECT RAISE(ABORT, 'simulated update failure'); END;",
+            )
+            .expect("install trigger");
+    }
+
     /// Makes every workspace row delete fail, as a store that rejects the delete would.
     pub fn fail_workspace_deletes(&self) {
         self.connection()
@@ -173,6 +183,8 @@ pub fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 

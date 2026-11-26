@@ -6,8 +6,8 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
-    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
+    AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
     AgentOptionsSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
     AgentQueueParams, AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession,
     AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentSetOptionsParams, AgentStartParams,
@@ -33,7 +33,7 @@ use massorca_protocol::methods::terminals::{
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceUpdateParams,
+    WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 
 use crate::client::Client;
@@ -179,6 +179,14 @@ impl Client {
         params: &WorkspaceUpdateParams,
     ) -> Result<Workspace, ClientError> {
         self.call(workspaces::UPDATE, params).await
+    }
+
+    /// `workspace.rename`: replaces a name the service chose, and its branch (decision 0111).
+    pub async fn workspace_rename(
+        &self,
+        params: &WorkspaceRenameParams,
+    ) -> Result<Workspace, ClientError> {
+        self.call(workspaces::RENAME, params).await
     }
 
     /// `workspace.check`: whether a workspace's folder is there and, for a worktree, still registered.
@@ -573,6 +581,17 @@ impl Client {
         params: &AgentResumeParams,
     ) -> Result<AgentSession, ClientError> {
         self.call(agents::RESUME, params).await
+    }
+
+    /// `agent.fork`: starts a new session from a copy of an exited session's conversation (decision 0168). Needs
+    /// capability `agent-fork/1`; a service that does not offer it is refused before anything is sent.
+    pub async fn agent_fork(&self, params: &AgentForkParams) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_FORK),
+            capabilities::AGENT_FORK,
+            "a fork of a session",
+        )?;
+        self.call(agents::FORK, params).await
     }
 
     /// `agent.set_mode`: switches a session's permission mode at once where the kind has a live switch, or stores it for

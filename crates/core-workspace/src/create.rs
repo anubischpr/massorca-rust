@@ -91,7 +91,12 @@ impl Workspaces {
             }
         }
         let project = self.resolve_project(&params.project)?;
+        // A named or existing branch is the person's, whoever chose the workspace name.
+        let name_generated = (matches!(naming, Naming::Generated) || params.name_generated)
+            && params.branch.is_none()
+            && !params.existing_branch;
         let name = match naming {
+            Naming::Typed if params.unique_name => self.unique_name(&project, &params)?,
             Naming::Typed => names::clean_workspace_name(&params.name)?,
             Naming::Generated => self.generated_name(&project)?,
         };
@@ -110,8 +115,8 @@ impl Workspaces {
             ));
         }
         let workspace = match project.kind {
-            StoreKind::Git => self.create_worktree(&project, &params),
-            StoreKind::Folder => self.create_folder(&project, &params),
+            StoreKind::Git => self.create_worktree(&project, &params, name_generated),
+            StoreKind::Folder => self.create_folder(&project, &params, name_generated),
         }?;
         Ok(Created {
             workspace,
@@ -166,6 +171,7 @@ impl Workspaces {
         &self,
         project: &ProjectRow,
         params: &WorkspaceCreateParams,
+        name_generated: bool,
     ) -> Result<Workspace, DomainError> {
         let repo = Path::new(&project.path);
         // Why: a named or existing branch is used as given; only a new one takes the prefix.
@@ -188,7 +194,9 @@ impl Workspaces {
             Some(text) => paths::absolute(text)?,
             None => paths::absolute(&project.workspaces_root)?.join(&params.name),
         };
-        if let Some(adopted) = self.adopt_interrupted_worktree(project, &target, branch, params)? {
+        if let Some(adopted) =
+            self.adopt_interrupted_worktree(project, &target, branch, params, name_generated)?
+        {
             return Ok(adopted);
         }
         self.ensure_path_free(&target)?;
@@ -285,6 +293,7 @@ impl Workspaces {
             request_id: params.request_id.clone(),
             created_at: now_ms(),
             comment: None,
+            name_generated,
         };
         if let Err(error) = self.store.insert_workspace(&row) {
             let leftovers =
@@ -307,6 +316,7 @@ impl Workspaces {
         target: &Path,
         branch: &str,
         params: &WorkspaceCreateParams,
+        name_generated: bool,
     ) -> Result<Option<Workspace>, DomainError> {
         let key = paths::path_key(target);
         let entries = self.git.worktree_list(Path::new(&project.path))?;
@@ -336,6 +346,7 @@ impl Workspaces {
             request_id: params.request_id.clone(),
             created_at: now_ms(),
             comment: None,
+            name_generated,
         };
         self.store.insert_workspace(&row).map_err(refused_write)?;
         Ok(Some(views::workspace(&row)))
@@ -346,6 +357,7 @@ impl Workspaces {
         &self,
         project: &ProjectRow,
         params: &WorkspaceCreateParams,
+        name_generated: bool,
     ) -> Result<Workspace, DomainError> {
         if params.branch.is_some()
             || params.base.is_some()
@@ -374,6 +386,7 @@ impl Workspaces {
             request_id: params.request_id.clone(),
             created_at: now_ms(),
             comment: None,
+            name_generated,
         };
         self.store.insert_workspace(&row).map_err(refused_write)?;
         Ok(views::workspace(&row))
@@ -417,13 +430,13 @@ impl Workspaces {
     }
 }
 
-fn invalid(message: &str) -> DomainError {
+pub(crate) fn invalid(message: &str) -> DomainError {
     DomainError::new(codes::REQUEST_INVALID_PARAMS, message)
 }
 
 /// A file, a link or a non-empty directory occupies a path; an absent path or an empty
 /// directory does not.
-fn is_occupied(target: &Path) -> bool {
+pub(crate) fn is_occupied(target: &Path) -> bool {
     match std::fs::symlink_metadata(target) {
         Err(_) => false,
         Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(target) {

@@ -80,6 +80,8 @@ mod tests {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         }
     }
 

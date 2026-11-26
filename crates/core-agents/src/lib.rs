@@ -24,6 +24,7 @@ pub mod prompt;
 pub mod provided_env;
 pub mod resolve;
 pub mod resume_state;
+mod run_notes;
 mod session_options;
 pub mod sessions;
 pub mod sign_in;

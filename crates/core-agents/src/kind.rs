@@ -39,6 +39,10 @@ pub struct KindDecl {
     /// Arguments of a new run of an exited session, with `{ref}`; absent means not resumable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<Vec<String>>,
+    /// Arguments of a new session that continues a copy of an exited session's conversation, with `{ref}` (decision
+    /// 0168); absent means not forkable. The new run's own ref is learned as a first start learns it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<Vec<String>>,
     #[serde(default)]
     pub status: StatusDecl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -773,6 +777,15 @@ impl KindDecl {
         serde_json::from_str(text).map_err(|error| format!("not a valid kind declaration: {error}"))
     }
 
+    /// Whether a fork of an exited session can be started (decision 0168): a fork form, and a ref learned from the run.
+    pub fn forkable(&self) -> bool {
+        self.fork.is_some()
+            && self
+                .session_ref
+                .as_ref()
+                .is_some_and(|session_ref| session_ref.learn.is_some())
+    }
+
     /// Whether a new run of an exited session can be started: a resume form, and a way to know the ref.
     pub fn resumable(&self) -> bool {
         self.resume.is_some()
@@ -848,6 +861,16 @@ impl KindDecl {
         }
         if let Some(resume) = &self.resume {
             needs_placeholder("resume", resume, &mut problems);
+        }
+        if let Some(fork) = &self.fork {
+            needs_placeholder("fork", fork, &mut problems);
+            if !self
+                .session_ref
+                .as_ref()
+                .is_some_and(|session_ref| session_ref.learn.is_some())
+            {
+                problems.push("fork needs session_ref.learn".to_owned());
+            }
         }
         self.status_problems(&mut problems);
         if let Some(credentials) = &self.credentials {
@@ -1124,6 +1147,15 @@ impl KindDecl {
             codes::AGENT_OPTION_UNSUPPORTED,
             format!("kind {} declares no flag for a {name}", self.id),
         )
+    }
+
+    /// Whether the kind still takes `model`, a model a session stored (decision 0168): its `model` flag accepts the value,
+    /// and, when the kind lists choices, one of them has that id. A resume or a fork passes it again only then.
+    pub(crate) fn takes_model(&self, model: &str) -> bool {
+        self.option_args(Some(model), None).is_ok()
+            && self.model.as_ref().is_some_and(|decl| {
+                decl.choices.is_empty() || decl.choices.iter().any(|choice| choice.id == model)
+            })
     }
 
     /// The declared choice `id` of the `model` option.
@@ -2021,6 +2053,33 @@ mod tests {
         assert!(!parse(value.clone()).resumable());
         value["session_ref"] = serde_json::json!({ "learn": "session_id" });
         assert!(parse(value).resumable());
+    }
+
+    /// A fork form needs `{ref}`, and a ref learned from the run, since the fork's own id is never assigned (decision 0168).
+    #[test]
+    fn a_fork_form_needs_the_ref_placeholder_and_a_learned_ref() {
+        let no_ref = problems_of(|value| value["fork"] = serde_json::json!(["--fork"]));
+        assert!(
+            no_ref
+                .iter()
+                .any(|problem| problem == "fork must contain {ref}"),
+            "{no_ref:?}"
+        );
+        assert!(
+            no_ref
+                .iter()
+                .any(|problem| problem == "fork needs session_ref.learn"),
+            "{no_ref:?}"
+        );
+        let mut value = minimal();
+        value["fork"] = serde_json::json!(["--fork", "{ref}"]);
+        value["session_ref"] = serde_json::json!({ "assign": ["--session-id", "{ref}"] });
+        assert!(!parse(value.clone()).forkable(), "an assigned ref alone");
+        value["session_ref"] = serde_json::json!({ "learn": "session_id" });
+        let decl = parse(value);
+        assert!(decl.forkable());
+        assert!(decl.problems().is_empty(), "{:?}", decl.problems());
+        assert!(!parse(minimal()).forkable(), "no fork form");
     }
 
     #[test]

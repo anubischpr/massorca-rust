@@ -15,6 +15,10 @@ pub const WORKSPACE_UPDATE: &str = "workspace-update/1";
 pub const WORKSPACE_CHECK: &str = "workspace-check/1";
 /// The containing-workspace lookup (`workspace.current`), offered apart so a client knows the service answers it.
 pub const WORKSPACE_CURRENT: &str = "workspace-current/1";
+/// `unique_name` on `workspace.create`: a taken name, branch or folder moves on to the next free `name-N`.
+pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
+/// `workspace.rename` (decision 0111): replacing a name the service chose, and its branch.
+pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).
@@ -57,6 +61,8 @@ pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
 /// `fast` on `agent.start` and `fast` on the kinds, models and sessions (decision 0165): fast mode passed to the settings the
 /// kind declares for it.
 pub const AGENT_FAST: &str = "agent-fast/1";
+/// `agent.fork` (decision 0168): a new session from a copy of an exited session's conversation, by the kind's fork form.
+pub const AGENT_FORK: &str = "agent-fork/1";
 /// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
 /// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
 pub const AGENT_CHAT: &str = "agent-chat/1";

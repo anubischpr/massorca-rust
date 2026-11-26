@@ -326,6 +326,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "workspace.rename",
+            "Rename a workspace whose name the service chose, and its branch",
+            "workspace.rename",
+            json!({
+                "type": "object",
+                "required": ["workspace", "name", "from_generated"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from_generated": { "type": "boolean" },
+                    "expected_branch": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "workspace.check",
             "Check a workspace's folder and its git registration",
             "workspace.check",
@@ -592,6 +607,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "session": { "type": "string" },
                     "permission_mode": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.fork",
+            "Start a new agent session from a copy of an exited session's conversation",
+            "agent.fork",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "permission_mode": { "type": "string" },
+                    "title": { "type": "string" }
                 }
             }),
         ),

@@ -15,6 +15,11 @@ use std::process::{Child, Command, Stdio};
 #[cfg(windows)]
 mod standard_handles;
 
+/// Writes the executables tests run; enabled by the `test-support` feature in dev-dependencies only.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_executable;
+
 /// The console program runs with a console but no window.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// The new process has no console at all.

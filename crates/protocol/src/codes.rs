@@ -41,6 +41,12 @@ pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// `workspace.rename` refused a name a person typed; only a name the service chose is renamed (decision 0111).
+pub const WORKSPACE_NAME_NOT_GENERATED: &str = "workspace.name_not_generated";
+/// The worktree is no longer on the branch the workspace records, or the one the caller expected.
+pub const WORKSPACE_BRANCH_CHANGED: &str = "workspace.branch_changed";
+/// The workspace's branch has an upstream or a remote copy, so renaming it would split it from what others see.
+pub const WORKSPACE_BRANCH_PUBLISHED: &str = "workspace.branch_published";
 /// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
 pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
 /// The project's `orca.yaml` defines no script of the kind asked for.
@@ -207,6 +213,8 @@ pub const AGENT_PROMPT_INVALID: &str = "agent.prompt_invalid";
 pub const AGENT_RESUME_UNAVAILABLE: &str = "agent.resume_unavailable";
 /// The kind keeps a saved conversation per agent ref, and none exists for the session's ref: a resume would fail.
 pub const AGENT_RESUME_NOT_FOUND: &str = "agent.resume_not_found";
+/// `agent.fork` cannot fork the session: its kind declares no fork form, or its agent ref is not known (decision 0168).
+pub const AGENT_FORK_UNAVAILABLE: &str = "agent.fork_unavailable";
 pub const AGENT_HOOK_REFUSED: &str = "agent.hook_refused";
 pub const AGENT_DELEGATE_NEEDS_GIT: &str = "agent.delegate_needs_git";
 pub const AGENT_DEPTH_EXCEEDED: &str = "agent.depth_exceeded";

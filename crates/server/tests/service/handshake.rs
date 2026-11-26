@@ -30,6 +30,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_ARCHIVE,
             capabilities::AGENT_CHAT,
             capabilities::AGENT_FAST,
+            capabilities::AGENT_FORK,
             capabilities::AGENT_IMPORT_DETECT,
             capabilities::AGENT_MODELS,
             capabilities::AGENT_MODES,
@@ -68,6 +69,8 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::TERMINALS,
             capabilities::WORKSPACE_CHECK,
             capabilities::WORKSPACE_CURRENT,
+            capabilities::WORKSPACE_RENAME,
+            capabilities::WORKSPACE_UNIQUE_NAME,
             capabilities::WORKSPACE_UPDATE,
             capabilities::WORKSPACES,
         ]

@@ -130,6 +130,7 @@ fn the_main_worktree_is_never_removed() {
         request_id: None,
         created_at: now_ms(),
         comment: None,
+        name_generated: false,
     };
     fx.store.insert_workspace(&row).expect("insert main row");
 
