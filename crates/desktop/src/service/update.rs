@@ -1203,10 +1203,7 @@ mod tests {
         };
         state.apply(StoreUpdate::Connection(up), t0);
         assert_eq!(state.service_git, None, "not read yet");
-        state.apply(
-            StoreUpdate::ServiceGit(Some(ServiceGitStatus::Missing)),
-            t0,
-        );
+        state.apply(StoreUpdate::ServiceGit(Some(ServiceGitStatus::Missing)), t0);
         assert_eq!(state.service_git, Some(ServiceGitStatus::Missing));
         let down = ConnectionState::Reconnecting {
             attempt: 1,

@@ -143,9 +143,7 @@ fn new_chat_opens_the_start_page_of_the_session_workspace(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn terminal_opens_a_terminal_in_the_work_panel_of_the_current_workspace(
-    cx: &mut TestAppContext,
-) {
+fn terminal_opens_a_terminal_in_the_work_panel_of_the_current_workspace(cx: &mut TestAppContext) {
     let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
     rig.shell.update(cx, |shell, _| {
         shell.model.select_workspace(Some("w1".to_owned()))
@@ -154,8 +152,8 @@ fn terminal_opens_a_terminal_in_the_work_panel_of_the_current_workspace(
     click(cx, "title-terminal");
     frame(cx);
     frame(cx);
-    let (params, _reply) = create_call(&mut rig.script)
-        .expect("a terminal.create call once the pane has painted");
+    let (params, _reply) =
+        create_call(&mut rig.script).expect("a terminal.create call once the pane has painted");
     assert_eq!(params.workspace, "w1");
     rig.shell.read_with(cx, |shell, _| {
         assert!(
