@@ -4,8 +4,12 @@ pub const SERVICE: &str = "service/1";
 /// Developer tools on the service's host: `service.tools` (PLAT-08, decision 0116).
 pub const SERVICE_TOOLS: &str = "service-tools/1";
 pub const PROJECTS: &str = "projects/1";
+/// `project.init_git` (decision 0115): turning a folder project into a git project.
+pub const PROJECT_INIT_GIT: &str = "project-init-git/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
+/// The colour of a Lucide project icon (`ProjectIcon::Lucide` `color`): an older service would drop it silently.
+pub const PROJECT_ICON_COLOR: &str = "project-icon-color/1";
 /// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0095).
 pub const SCRIPT_TRUST: &str = "script-trust/1";
 pub const WORKSPACES: &str = "workspaces/1";
@@ -79,6 +83,8 @@ pub const AGENT_TITLE: &str = "agent-title/1";
 pub const GIT: &str = "git/1";
 /// `project` on `git.branches`: a git project's own checkout, listed with no workspace.
 pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
+/// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
+pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).

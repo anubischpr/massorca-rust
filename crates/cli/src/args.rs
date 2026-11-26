@@ -243,6 +243,9 @@ pub struct RunArgs {
     /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
     #[arg(long)]
     pub allow_all_interfaces: bool,
+    /// Repoints a stale `massorca` command at this binary (decision 0113); set by the desktop, not by people.
+    #[arg(long, hide = true)]
+    pub repair_command: bool,
     /// Where an autostarting client reads why the service did not start; set by the client, not by people.
     #[arg(long, hide = true, value_name = "FILE")]
     pub start_status: Option<PathBuf>,
@@ -309,7 +312,7 @@ pub enum ProjectCommand {
     Update {
         /// Project id, name or path.
         project: String,
-        /// The icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`.
+        /// The icon: `emoji:<emoji>`, `lucide:<name>[:<colour>]` or `image:<PNG file>`.
         #[arg(
             long,
             value_name = "ICON",
@@ -320,6 +323,11 @@ pub enum ProjectCommand {
         /// Removes the icon, so the project shows the default one.
         #[arg(long)]
         clear_icon: bool,
+    },
+    /// Turns a folder project into a git project: `git init` and an empty first commit in its folder. Its folder workspaces stay.
+    InitGit {
+        /// Project id, name or path.
+        project: String,
     },
     /// Shows a project's orca.yaml setup and archive scripts with their hashes and whether each is trusted.
     Scripts {
@@ -392,6 +400,9 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the workspaces of delegated children first, deepest first, with the same checks and flags.
+        #[arg(long)]
+        with_children: bool,
         /// Remove the worktree even when the project's archive script fails or times out.
         #[arg(long)]
         allow_failed_archive: bool,

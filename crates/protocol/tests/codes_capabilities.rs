@@ -70,6 +70,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
     (codes::WORKSPACE_MAIN_WORKTREE, "workspace.main_worktree"),
+    (codes::WORKSPACE_HAS_CHILDREN, "workspace.has_children"),
     (
         codes::WORKSPACE_NAME_NOT_GENERATED,
         "workspace.name_not_generated",

@@ -6,6 +6,7 @@ mod diff;
 mod index;
 mod log;
 mod remote;
+mod remotes;
 mod status;
 mod watch;
 
@@ -40,6 +41,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(commit::register(registries)?);
     handles.extend(branch::register(registries)?);
     handles.extend(remote::register(registries)?);
+    handles.extend(remotes::register(registries)?);
     handles.extend(watch::register(registries)?);
     Ok(handles)
 }

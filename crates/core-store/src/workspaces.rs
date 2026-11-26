@@ -199,6 +199,33 @@ impl Store {
         )
     }
 
+    /// The workspaces delegated writers run in below `workspace_id` (0055), a child's child included, deepest first.
+    /// A child session in its parent's workspace (a read-only one) adds none; `workspace_id` itself is never listed.
+    pub fn list_delegated_child_workspaces(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceRow>, StoreError> {
+        // The depth bound ends a cycle of workspaces, which delegation never makes but a store could hold.
+        self.query_all(
+            &format!(
+                "WITH RECURSIVE tree(child_id, depth) AS (
+                    SELECT ?1, 0
+                    UNION
+                    SELECT child.workspace_id, tree.depth + 1 FROM tree
+                    JOIN agent_sessions parent ON parent.workspace_id = tree.child_id
+                    JOIN agent_sessions child ON child.parent_id = parent.id
+                    WHERE child.workspace_id != parent.workspace_id AND tree.depth < 64
+                ), deepest(child_id, depth) AS (
+                    SELECT child_id, MAX(depth) FROM tree WHERE child_id != ?1 GROUP BY child_id
+                )
+                {SELECT_WORKSPACES} JOIN deepest ON deepest.child_id = workspaces.id
+                ORDER BY deepest.depth DESC, created_at, id"
+            ),
+            [workspace_id],
+            workspace_from_row,
+        )
+    }
+
     /// Returns whether a row changed.
     pub fn set_workspace_state(&self, id: &str, state: WorkspaceState) -> Result<bool, StoreError> {
         let changed = self.lock().execute(

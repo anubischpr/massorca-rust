@@ -5,7 +5,13 @@
 use std::path::Path;
 
 use massorca_client::Client;
+use massorca_core_store::{
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, new_id, now_ms,
+};
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{
+    self, AgentForgetParams, AgentForgotten, AgentSession, AgentSessionRef,
+};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectScript, ProjectScripts,
     ProjectScriptsParams, ProjectTrustScriptParams, ScriptKind,
@@ -15,16 +21,16 @@ use massorca_protocol::methods::workspaces::{
     WorkspaceRemoved, WorkspaceState,
 };
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use super::common::{connect, profile, remote_code, start, stop, temp_home};
 use super::git_fixture::git;
 use super::workspace_setup::{add_project, shown_script, trust};
 
 /// What the archive script leaves in the project folder.
-const ARCHIVED: &str = "archived.txt";
+pub(super) const ARCHIVED: &str = "archived.txt";
 
 /// Copies the worktree's `keep.txt` to `archived.txt` in the project folder, which proves it ran in the worktree
 /// before the worktree was removed.
-fn copy_script() -> &'static str {
+pub(super) fn copy_script() -> &'static str {
     if cfg!(windows) {
         "copy keep.txt \"%MASSORCA_ROOT_PATH%\\archived.txt\""
     } else {
@@ -33,7 +39,7 @@ fn copy_script() -> &'static str {
 }
 
 /// A repository whose committed `orca.yaml` holds `script` as `scripts.archive`, and a committed `keep.txt`.
-fn repo_with_archive(dir: &Path, script: &str) {
+pub(super) fn repo_with_archive(dir: &Path, script: &str) {
     std::fs::create_dir_all(dir).expect("create repository dir");
     git(dir, &["init", "-q"]);
     std::fs::write(dir.join("keep.txt"), "work worth keeping\n").expect("write keep.txt");
@@ -76,6 +82,7 @@ fn remove_params(workspace: &str, allow_failed_archive: bool) -> WorkspaceRemove
         force: false,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
         allow_failed_archive,
     }
 }
@@ -297,5 +304,207 @@ async fn a_folder_workspace_has_no_archive_script() {
     let removed = remove(&client, &created.id).await;
     assert_eq!(removed.archive, None);
     assert!(!folder.join(ARCHIVED).exists());
+    stop(running).await;
+}
+
+/// Writes an exited agent session in workspace `workspace` straight to the store, as the agent tests do (no agent starts).
+fn exited_session(home: &Path, workspace: &str) -> String {
+    let store = Store::open(profile(home, "default").store_path()).expect("the store");
+    let row = AgentSessionRow {
+        id: new_id(),
+        kind: "fake".to_owned(),
+        workspace_id: workspace.to_owned(),
+        parent_id: None,
+        title: None,
+        read_only: false,
+        agent_ref: None,
+        terminal_id: None,
+        request_id: None,
+        created_at: now_ms(),
+        exit: Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: now_ms(),
+        }),
+        activity: None,
+        result: None,
+        brought_back_at: None,
+        holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
+        retained: false,
+        released_at: None,
+    };
+    store.insert_agent_session(&row).expect("the session");
+    row.id
+}
+
+fn forget_params(session: &str) -> AgentForgetParams {
+    AgentForgetParams {
+        session: session.to_owned(),
+        remove_workspace: true,
+        force: false,
+        discard_ignored: false,
+        expect_dirty: None,
+        allow_failed_archive: false,
+    }
+}
+
+#[tokio::test]
+async fn agent_forget_with_failed_archive_script_and_the_waiver_removes_the_workspace() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, "exit 3");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Archive).await;
+    let created = create(&client, &project.id, "feature").await;
+    let session = exited_session(home.path(), &created.id);
+
+    let forgotten: AgentForgotten = client
+        .call(
+            agents::FORGET,
+            &AgentForgetParams {
+                allow_failed_archive: true,
+                ..forget_params(&session)
+            },
+        )
+        .await
+        .expect("agent.forget with the waiver");
+    assert_eq!(forgotten.workspace_error, None);
+    let removed = forgotten
+        .workspace_removed
+        .expect("the waived failure removes the workspace");
+    assert!(matches!(
+        removed.archive,
+        Some(WorkspaceArchive::Failed { .. })
+    ));
+    assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn agent_forget_with_remove_workspace_runs_a_trusted_archive_script_before_removal() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, copy_script());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Archive).await;
+    let created = create(&client, &project.id, "feature").await;
+    let session = exited_session(home.path(), &created.id);
+
+    let forgotten: AgentForgotten = client
+        .call(agents::FORGET, &forget_params(&session))
+        .await
+        .expect("agent.forget");
+    assert_eq!(forgotten.session.id, session);
+    assert_eq!(forgotten.workspace_error, None);
+    let removed = forgotten
+        .workspace_removed
+        .expect("the workspace was removed");
+    let Some(WorkspaceArchive::Succeeded { .. }) = removed.archive else {
+        panic!("the archive did not run: {:?}", removed.archive);
+    };
+    // The script copied the worktree's file, so it ran in the worktree before the worktree was removed.
+    let archived = std::fs::read_to_string(repo.join(ARCHIVED)).expect("the archive script ran");
+    // Git may check the worktree's copy out with CRLF line ends.
+    assert_eq!(archived.replace("\r\n", "\n"), "work worth keeping\n");
+    assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn agent_forget_with_untrusted_archive_script_skips_it_and_removes_the_workspace() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, copy_script());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    let shown = shown_script(&client, &project.id, ScriptKind::Archive).await;
+    let created = create(&client, &project.id, "feature").await;
+    let session = exited_session(home.path(), &created.id);
+
+    let forgotten: AgentForgotten = client
+        .call(agents::FORGET, &forget_params(&session))
+        .await
+        .expect("agent.forget");
+    let removed = forgotten
+        .workspace_removed
+        .expect("the workspace was removed");
+    let Some(WorkspaceArchive::Untrusted { reason, hash }) = removed.archive else {
+        panic!("an untrusted archive was not skipped");
+    };
+    assert_eq!(hash, shown.hash);
+    assert!(
+        reason.contains("massorca project trust-scripts"),
+        "{reason}"
+    );
+    assert!(!repo.join(ARCHIVED).exists());
+    assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn agent_forget_with_failed_archive_script_forgets_the_session_and_keeps_the_workspace() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, "exit 3");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Archive).await;
+    let created = create(&client, &project.id, "feature").await;
+    let session = exited_session(home.path(), &created.id);
+
+    let forgotten: AgentForgotten = client
+        .call(agents::FORGET, &forget_params(&session))
+        .await
+        .expect("the forget itself goes ahead");
+    assert_eq!(forgotten.workspace_removed, None);
+    let refusal = forgotten
+        .workspace_error
+        .expect("the refused archive is reported after the forget");
+    assert_eq!(
+        refusal.code,
+        codes::WORKSPACE_ARCHIVE_FAILED,
+        "{}",
+        refusal.message
+    );
+    let gone = client
+        .call::<_, AgentSession>(
+            agents::SHOW,
+            &AgentSessionRef {
+                session: session.clone(),
+            },
+        )
+        .await
+        .expect_err("the session record is forgotten");
+    assert_eq!(remote_code(&gone), codes::AGENT_NOT_FOUND);
+    let kept: Workspace = client
+        .call(
+            workspaces::SHOW,
+            &workspaces::WorkspaceRef {
+                workspace: created.id.clone(),
+            },
+        )
+        .await
+        .expect("the workspace is still there");
+    assert_eq!(kept.state, WorkspaceState::Ready);
+    assert!(Path::new(&created.path).is_dir());
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, true))
+        .await
+        .expect("workspace.remove still removes it with the waiver");
+    assert!(matches!(
+        removed.archive,
+        Some(WorkspaceArchive::Failed { .. })
+    ));
+    assert!(!Path::new(&created.path).exists());
     stop(running).await;
 }
