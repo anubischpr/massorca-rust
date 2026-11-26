@@ -5,7 +5,7 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_protocol::methods::tasks::Column as WireColumn;
-use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, RoomQuote, TeamRoomMessage};
 use massorca_protocol::methods::teams::{Routine, RoutineCadence};
 
 use super::types::{BotId, Team};
@@ -40,6 +40,8 @@ pub struct RoomLine {
     pub routine: Option<RoomRoutine>,
     /// The choice card the line is (decision 0121).
     pub card: Option<RoomCard>,
+    /// The line it replies to, "Mara: Parsed the headers" (decision 0122).
+    pub quote: Option<String>,
 }
 
 /// The routine a line scheduled, as its "Routine created" card shows it.
@@ -118,7 +120,18 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
             when: routine_when(routine),
         }),
         card: message.card.clone(),
+        quote: message.quoted.as_ref().map(quote_text),
     }
+}
+
+/// A quoted line as a reply shows it: who wrote it, then its text.
+fn quote_text(quote: &RoomQuote) -> String {
+    let who = match (quote.author, quote.bot_name.as_deref()) {
+        (RoomAuthor::Person, _) => "You",
+        (RoomAuthor::Bot, Some(name)) => name,
+        _ => "A removed bot",
+    };
+    format!("{who}: {}", quote.text)
 }
 
 /// When a routine runs, in words, with its zone; the room schedules only one-time routines.
@@ -196,6 +209,33 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_shows_who_wrote_the_line_it_quotes() {
+        let mut reply = message(RoomAuthor::Person, None, "Why so slow?");
+        reply.reply_to = Some("q".to_owned());
+        reply.quoted = Some(RoomQuote {
+            id: "q".to_owned(),
+            author: RoomAuthor::Bot,
+            bot_name: Some("Mara".to_owned()),
+            text: "Parsed the headers".to_owned(),
+        });
+        let room = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
+            room: Ok(vec![reply, message(RoomAuthor::Person, None, "plain")]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&room), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(lines[0].quote.as_deref(), Some("Mara: Parsed the headers"));
+        assert_eq!(lines[1].quote, None);
+    }
+
+    #[test]
     fn a_line_that_scheduled_a_routine_carries_its_card() {
         let routine = Routine {
             id: "r1".to_owned(),
@@ -221,6 +261,8 @@ mod tests {
             team: "t".to_owned(),
             number: 1,
             answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =
@@ -250,6 +292,8 @@ mod tests {
             team: "t".to_owned(),
             number: 1,
             answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Err(Refusal::unavailable("The service is not connected.")),
         };
         assert!(matches!(
@@ -291,6 +335,8 @@ mod tests {
             team: "t".to_owned(),
             number: 1,
             answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Ok(vec![
                 message(RoomAuthor::Person, None, "We need sign-in"),
                 answer,
@@ -337,6 +383,8 @@ mod tests {
             team: "t".to_owned(),
             number: 1,
             answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =

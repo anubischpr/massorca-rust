@@ -1,5 +1,6 @@
 //! A team's Conference room on the service (capability `team-room/1`, decision 0102): its lines, read when the room
 //! opens and again on `team.room_changed`, a person's line posted to it, and a choice card answered (decision 0121).
+//! A host with `team-room/3` also answers replies and says which bots are typing (decision 0122).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -32,6 +33,10 @@ pub struct TeamRoomRead {
     pub number: u64,
     /// The host answers choice cards (`team-room/2`); without it a card shows no options.
     pub answers_cards: bool,
+    /// The host answers a reply or a question in the room (`team-room/3`); without it the room offers neither.
+    pub answers_replies: bool,
+    /// The names of the bots working now, for the typing line.
+    pub typing: Vec<String>,
     pub room: Result<Vec<TeamRoomMessage>, Refusal>,
 }
 
@@ -95,11 +100,14 @@ pub(super) async fn read(
 ) -> Result<TeamRoomRead, ClientError> {
     let number = sequence.next();
     let answers_cards = client.has_capability(capabilities::TEAM_ROOM_CARDS);
+    let answers_replies = client.has_capability(capabilities::TEAM_ROOM_REPLIES);
     if !client.has_capability(capabilities::TEAM_ROOM) {
         return Ok(TeamRoomRead {
             team,
             number,
             answers_cards,
+            answers_replies,
+            typing: Vec::new(),
             room: Err(no_room()),
         });
     }
@@ -112,12 +120,16 @@ pub(super) async fn read(
             team,
             number,
             answers_cards,
+            answers_replies,
+            typing: list.typing.into_iter().map(|bot| bot.bot_name).collect(),
             room: Ok(list.messages),
         }),
         Err(error @ (ClientError::Remote(_) | ClientError::Protocol(_))) => Ok(TeamRoomRead {
             team,
             number,
             answers_cards,
+            answers_replies,
+            typing: Vec::new(),
             room: Err(Refusal::from(&error)),
         }),
         Err(error) => Err(error),
@@ -193,6 +205,8 @@ mod tests {
             team: team.to_owned(),
             number,
             answers_cards: false,
+            answers_replies: false,
+            typing: Vec::new(),
             room: Err(Refusal::Failed {
                 code: "test".to_owned(),
                 message: text.to_owned(),

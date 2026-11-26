@@ -53,6 +53,10 @@ pub(in crate::shell) struct RoomPage {
     answering: Option<String>,
     /// Start at once is off: a person's next task waits in Todo.
     hold: bool,
+    /// The bot line the next line replies to: its team, its id and its quote (decision 0122).
+    reply: Option<(TeamId, String, String)>,
+    /// Just ask is on: the next line asks a bot without making a task.
+    ask: bool,
     /// The room reads asked for, by the service's team id, so each team is read once per open page.
     requested: Option<String>,
     pub(in crate::shell) receiver_menu: Option<OpenReceiverMenu>,
@@ -69,6 +73,8 @@ impl fmt::Debug for RoomPage {
             .field("sending", &self.sending)
             .field("notice", &self.notice)
             .field("hold", &self.hold)
+            .field("reply", &self.reply)
+            .field("ask", &self.ask)
             .field("answering", &self.answering)
             .field("receiver_menu", &self.receiver_menu.is_some())
             .finish_non_exhaustive()
@@ -103,6 +109,14 @@ pub(in crate::shell) struct RoomFrame {
     answering: Option<String>,
     /// The host answers choice cards (`team-room/2`).
     answers_cards: bool,
+    /// The host answers replies and questions (`team-room/3`).
+    answers_replies: bool,
+    /// "Mara is typing…" while a bot works.
+    typing: Option<String>,
+    /// The quote of the bot line the next line replies to.
+    replying: Option<String>,
+    /// Whether Just ask is on.
+    ask: bool,
     shell: WeakEntity<Shell>,
 }
 
@@ -120,7 +134,7 @@ impl Shell {
         };
         let team = self.model.teams().team(team_id)?.clone();
         let key = self.team_key(team_id, cx);
-        let mut answers_cards = false;
+        let (mut answers_cards, mut answers_replies, mut typing) = (false, false, None);
         let view = match (&self.service, &key) {
             (Some(service), Some(key)) => {
                 if self.room_page.requested.as_deref() != Some(key.as_str()) {
@@ -128,10 +142,11 @@ impl Shell {
                     service.read_team_room(key.clone());
                 }
                 let state = self.store.read(cx).state();
-                answers_cards = state
-                    .team_rooms
-                    .get(key)
-                    .is_some_and(|read| read.answers_cards);
+                if let Some(read) = state.team_rooms.get(key) {
+                    answers_cards = read.answers_cards;
+                    answers_replies = read.answers_replies;
+                    typing = typing_text(&read.typing);
+                }
                 room_view(
                     state.team_rooms.get(key),
                     &team,
@@ -165,8 +180,29 @@ impl Shell {
             at_once: !self.room_page.hold,
             answering: self.room_page.answering.clone(),
             answers_cards,
+            answers_replies,
+            typing,
+            replying: self
+                .room_page
+                .reply
+                .as_ref()
+                .filter(|(team, _, _)| *team == team_id && answers_replies)
+                .map(|(_, _, quote)| quote.clone()),
+            ask: self.room_page.ask && answers_replies,
             shell: cx.entity().downgrade(),
         })
+    }
+
+    /// Makes the next line of `team`'s room a reply to the bot line `line`, quoted as `quote`.
+    pub(in crate::shell) fn reply_to_room_line(
+        &mut self,
+        team: TeamId,
+        line: String,
+        quote: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.room_page.reply = Some((team, line, quote));
+        cx.notify();
     }
 
     /// The composer field of `team`'s room; a new team gets a new field.
@@ -244,6 +280,20 @@ impl Shell {
         self.room_page.sending = true;
         self.room_page.notice = None;
         cx.notify();
+        // Only a host with `team-room/3` answers a reply or a question; an older one would make them tasks.
+        let replies = self
+            .store
+            .read(cx)
+            .state()
+            .team_rooms
+            .get(&key)
+            .is_some_and(|read| read.answers_replies);
+        let reply_to = self
+            .room_page
+            .reply
+            .take()
+            .filter(|(reply_team, _, _)| *reply_team == team && replies)
+            .map(|(_, line, _)| line);
         let params = TeamRoomPostParams {
             team: key,
             text: text.clone(),
@@ -252,8 +302,8 @@ impl Shell {
             session: None,
             agent_token: None,
             start: self.room_page.hold.then_some(false),
-            reply_to: None,
-            ask: None,
+            reply_to,
+            ask: (self.room_page.ask && replies).then_some(true),
         };
         cx.spawn(async move |this, cx| {
             let answer = service.post_to_team_room(params).await;
@@ -356,6 +406,15 @@ fn refusal_text(refusal: &Refusal) -> String {
     format!("Not sent: {}", refusal.sentence())
 }
 
+/// The room's typing line: "Mara is typing…", "Mara and Bruno are typing…"; none while no bot works.
+fn typing_text(names: &[String]) -> Option<String> {
+    match names {
+        [] => None,
+        [one] => Some(format!("{one} is typing…")),
+        [rest @ .., last] => Some(format!("{} and {last} are typing…", rest.join(", "))),
+    }
+}
+
 /// The Conference room page.
 pub(in crate::shell) fn conference_page(
     frame: RoomFrame,
@@ -390,19 +449,23 @@ pub(in crate::shell) fn conference_page(
         ))
         .child(div().flex_1())
         .child(bots_row(&frame.team, &theme));
-    let thread = match &frame.view {
-        RoomView::Loading => note("Reading the room…", &theme).into_any_element(),
-        RoomView::Unavailable(sentence) => note(sentence, &theme).into_any_element(),
-        RoomView::Lines(lines) if lines.is_empty() => note(EMPTY_ROOM, &theme)
-            .debug_selector(|| "room-empty".to_owned())
-            .into_any_element(),
-        RoomView::Lines(lines) => div()
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_4))
-            .children(lines.iter().map(|line| line_view(line, &frame, &theme)))
-            .into_any_element(),
-    };
+    let thread =
+        match &frame.view {
+            RoomView::Loading => note("Reading the room…", &theme).into_any_element(),
+            RoomView::Unavailable(sentence) => note(sentence, &theme).into_any_element(),
+            RoomView::Lines(lines) if lines.is_empty() => note(EMPTY_ROOM, &theme)
+                .debug_selector(|| "room-empty".to_owned())
+                .into_any_element(),
+            RoomView::Lines(lines) => div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_4))
+                .children(lines.iter().map(|line| line_view(line, &frame, &theme)))
+                .children(frame.typing.clone().map(|typing| {
+                    note(&typing, &theme).debug_selector(|| "room-typing".to_owned())
+                }))
+                .into_any_element(),
+        };
     let ready = matches!(frame.view, RoomView::Lines(_)) && !frame.team.bots.is_empty();
     div()
         .size_full()
@@ -463,6 +526,7 @@ fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
                     .text_style(TYPE_BODY)
                     .text_color(palette.text.primary)
                     .debug_selector(|| "room-person-line".to_owned())
+                    .children(line.quote.as_deref().map(|quote| quote_view(quote, theme)))
                     .child(line.text.clone()),
             )
             .into_any_element(),
@@ -491,12 +555,29 @@ fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
                         .text_color(palette.text.tertiary)
                         .child(line.time.clone()),
                 );
+            // A bot's own line can be replied to, which asks that bot (decision 0122).
+            let reply = matches!(speaker, Speaker::Bot { .. }) && frame.answers_replies;
+            let meta = meta.when(reply, |meta| {
+                let (shell, team, id) = (shell.clone(), team.id, line.id.clone());
+                let quote = format!("{name}: {}", line.text);
+                meta.child(
+                    Button::new(format!("room-reply-{}", line.id), "Reply")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact)
+                        .on_click(move |_, cx| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.reply_to_room_line(team, id.clone(), quote.clone(), cx);
+                            });
+                        }),
+                )
+            });
             let body = div()
                 .flex()
                 .flex_col()
                 .gap(px(SPACE_1))
                 .min_w_0()
                 .child(meta)
+                .children(line.quote.as_deref().map(|quote| quote_view(quote, theme)))
                 .child(
                     div()
                         .text_style(TYPE_BODY)
@@ -542,6 +623,18 @@ fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
                 .into_any_element()
         }
     }
+}
+
+/// The line a reply quotes, above its text.
+fn quote_view(quote: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .pl(px(SPACE_2))
+        .border_l_1()
+        .border_color(theme.palette.border.subtle)
+        .text_style(TYPE_CAPTION)
+        .text_color(theme.palette.text.secondary)
+        .debug_selector(|| "room-quote".to_owned())
+        .child(quote.to_owned())
 }
 
 /// The card of the task a line is about, with the way to its Board.
@@ -673,7 +766,8 @@ fn choice_card(
     )
 }
 
-/// The composer: the refusal of the last line, the field, the receiver, Start at once and Send.
+/// The composer: the refusal of the last line, the line it replies to, the field, the receiver, Start at once, Just ask
+/// and Send.
 fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
     let team = frame.team.id;
     let (send, pick, hold) = (
@@ -708,6 +802,33 @@ fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
                 .debug_selector(|| "room-notice".to_owned())
                 .child(text)
         }))
+        .children(frame.replying.clone().map(|quote| {
+            let cancel = frame.shell.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .debug_selector(|| "room-replying".to_owned())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(theme.palette.text.secondary)
+                        .child(format!("Replying to {quote}")),
+                )
+                .child(
+                    Button::new("room-reply-cancel", "Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact)
+                        .on_click(move |_, cx| {
+                            let _ = cancel.update(cx, |shell, cx| {
+                                shell.room_page.reply = None;
+                                cx.notify();
+                            });
+                        }),
+                )
+        }))
         .child(frame.field.clone())
         .child(
             div()
@@ -739,6 +860,22 @@ fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
                             }),
                     ),
                 )
+                .when(frame.answers_replies, |row| {
+                    let ask = frame.shell.clone();
+                    row.child(
+                        div().debug_selector(|| "room-ask".to_owned()).child(
+                            Checkbox::new("room-ask", frame.ask)
+                                .label("Just ask")
+                                .disabled(!ready)
+                                .on_change(move |checked, _, cx| {
+                                    let _ = ask.update(cx, |shell, cx| {
+                                        shell.room_page.ask = checked;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                    )
+                })
                 .child(div().flex_1())
                 .child(
                     div().debug_selector(|| "room-send".to_owned()).child(
@@ -904,6 +1041,8 @@ mod tests {
             team: "t1".into(),
             number: 1,
             answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Ok(lines),
         })
     }
@@ -926,6 +1065,8 @@ mod tests {
                 team: "t1".into(),
                 number: 2,
                 answers_cards: true,
+                answers_replies: true,
+                typing: Vec::new(),
                 room: Ok(vec![
                     line(RoomAuthor::Person, None, "We need sign-in"),
                     line(
@@ -1008,6 +1149,8 @@ mod tests {
                 team: "t1".into(),
                 number: 1,
                 answers_cards: true,
+                answers_replies: true,
+                typing: Vec::new(),
                 room: Err(Refusal::Failed {
                     code: "service.capability_missing".into(),
                     message: crate::service::NO_ROOM.into(),
@@ -1132,6 +1275,8 @@ mod tests {
                 team: "t1".into(),
                 number: 2,
                 answers_cards: true,
+                answers_replies: true,
+                typing: Vec::new(),
                 room: Ok(vec![answered]),
             }))
             .expect("the store listens");
@@ -1200,6 +1345,8 @@ mod tests {
                 team: "t1".into(),
                 number: 1,
                 answers_cards: false,
+                answers_replies: false,
+                typing: Vec::new(),
                 room: Ok(vec![card]),
             }))
             .expect("the store listens");
@@ -1210,5 +1357,76 @@ mod tests {
             cx.debug_bounds("button:room-card-asked-0").is_none(),
             "an older host gets no answer"
         );
+    }
+
+    fn replies_read(answers_replies: bool, typing: &[&str]) -> StoreUpdate {
+        StoreUpdate::TeamRoom(TeamRoomRead {
+            team: "t1".into(),
+            number: 1,
+            answers_cards: true,
+            answers_replies,
+            typing: typing.iter().map(|name| (*name).to_owned()).collect(),
+            room: Ok(vec![line(RoomAuthor::Bot, Some(("b1", "Mara")), "Parsed")]),
+        })
+    }
+
+    fn type_line(rig: &crate::shell::service_tests::Rig, cx: &mut VisualTestContext, text: &str) {
+        rig.shell.update_in(cx, |shell, window, cx| {
+            let field = shell
+                .room_page
+                .composer
+                .as_ref()
+                .map(|composer| composer.field.clone())
+                .expect("the room has its composer");
+            field.update(cx, |field, cx| field.set_text(text, window, cx));
+        });
+    }
+
+    #[gpui::test]
+    fn a_working_bot_types_and_a_reply_to_its_line_or_just_ask_asks_without_a_task(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(replies_read(true, &["Mara"]))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-typing").is_some(), "Mara is typing…");
+
+        click(cx, "button:room-reply-Parsed");
+        assert!(cx.debug_bounds("room-replying").is_some());
+        type_line(&rig, cx, "Why so slow?");
+        click(cx, "room-send");
+        let Some(Command::Room(RoomCommand::Post { params, .. })) = rig.script.next() else {
+            panic!("Send posts the reply");
+        };
+        assert_eq!(params.reply_to.as_deref(), Some("Parsed"));
+        assert_eq!(params.ask, None);
+
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-replying").is_none(), "sent once");
+        click(cx, "room-ask");
+        type_line(&rig, cx, "What is left?");
+        click(cx, "room-send");
+        let Some(Command::Room(RoomCommand::Post { params, .. })) = rig.script.next() else {
+            panic!("Send posts the question");
+        };
+        assert_eq!((params.reply_to, params.ask), (None, Some(true)));
+    }
+
+    #[gpui::test]
+    fn a_host_without_replies_offers_no_reply_and_no_just_ask(cx: &mut TestAppContext) {
+        let (rig, cx) = open_room(cx);
+        rig.updates
+            .send(replies_read(false, &[]))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        assert!(cx.debug_bounds("room-bot-line").is_some());
+        assert!(cx.debug_bounds("button:room-reply-Parsed").is_none());
+        assert!(cx.debug_bounds("room-ask").is_none());
+        assert!(cx.debug_bounds("room-typing").is_none());
     }
 }
