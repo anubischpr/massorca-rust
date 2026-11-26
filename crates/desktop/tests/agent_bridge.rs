@@ -220,7 +220,7 @@ async fn the_claude_kind_declares_its_models_and_levels_to_the_store_and_the_pic
 }
 
 #[tokio::test]
-async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_absent() {
+async fn the_service_offers_agent_chat_and_the_bridge_reports_it() {
     let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
@@ -237,8 +237,8 @@ async fn the_service_does_not_offer_agent_chat_yet_so_the_bridge_reports_it_abse
     })
     .await
     .expect("the offer arrives after the connect");
-    // No service ships chat sessions yet, so every start page stays on Terminal.
-    assert!(!offered);
+    // The service runs chat sessions (decision 0101), so the start page can offer Chat where a kind supports it.
+    assert!(offered);
 
     drop(bridge);
     stop_service(service).await;

@@ -78,6 +78,7 @@ mod tests {
             delegation: None,
             fast: None,
             notes: Vec::new(),
+            shared_folder_with: Vec::new(),
         }
     }
 

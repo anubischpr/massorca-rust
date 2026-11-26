@@ -28,6 +28,7 @@ fn sample_terminal() -> terminals::Terminal {
         created_at_ms: 1_767_225_600_000_i64,
         exit: None,
         holds_secrets: false,
+        git_credential_guard: false,
     }
 }
 
@@ -300,6 +301,27 @@ fn terminal_has_the_documented_shape() {
 #[test]
 fn terminal_omits_unset_title_pid_and_exit() {
     assert_wire(&exited_terminal(), &exited_terminal_json());
+}
+
+#[test]
+fn an_agent_terminal_says_it_has_the_git_credential_guard() {
+    let mut guarded_json = sample_terminal_json();
+    guarded_json["git_credential_guard"] = json!(true);
+    assert_wire(
+        &terminals::Terminal {
+            git_credential_guard: true,
+            ..sample_terminal()
+        },
+        &guarded_json,
+    );
+    assert_wire(&sample_terminal(), &sample_terminal_json());
+}
+
+#[test]
+fn a_terminal_from_an_older_service_decodes_without_the_guard_flag() {
+    let decoded: terminals::Terminal =
+        serde_json::from_value(sample_terminal_json()).expect("decodes");
+    assert!(!decoded.git_credential_guard);
 }
 
 #[test]

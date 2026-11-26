@@ -1,7 +1,8 @@
 //! Chat runs and their journal (decision 0101), end to end: the fake agent in its structured mode (`chat`) declared as
-//! kind `fakechat`, which the test service starts as a chat run (`MASSORCA_TEST_CHAT_KINDS`, a test-only hook: no
-//! service serves `agent.chat.start` yet). The session's journal is read through `agent.chat.subscribe` and
-//! `agent.chat.history`; its run is started, stopped and ended through the ordinary agent commands.
+//! kind `fakechat`, which the test service starts as a chat run with the test dialect (`MASSORCA_TEST_CHAT_KINDS`, a
+//! test-only hook; the Claude dialect has its own tests in `agent_chat_claude.rs`). The session's journal is read
+//! through `agent.chat.subscribe` and `agent.chat.history`; its run is started, stopped and ended through the ordinary
+//! agent commands.
 //!
 //! The service gets a temporary home, application-data and XDG folders, and none of the vendor CLIs' own variables.
 
@@ -364,13 +365,13 @@ fn a_chat_run_that_exits_records_its_code_and_leaves_its_turn_unverifiable() {
     let ended = wait_for_exit(&sandbox, &session);
     assert_eq!(ended["execution"]["exit"]["reason"], "exited", "{ended}");
     assert_eq!(ended["execution"]["exit"]["code"], 3, "{ended}");
-    // A chat resumes as a chat, which needs chat starts; it never resumes as a terminal run.
+    // A chat resumes as a chat, with its kind's resume form; this kind declares none.
     let outcome = sandbox
         .run("default", &with_json(&["agent", "resume", &session]))
         .failure();
     let refused = single_document(&outcome);
     assert_eq!(
-        refused["error"]["code"], "agent.chat_unsupported",
+        refused["error"]["code"], "agent.resume_unavailable",
         "{refused}"
     );
     runtime().block_on(async {

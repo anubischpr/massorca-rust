@@ -295,6 +295,10 @@ pub struct AgentStartArgs {
     /// declares no fast mode, or a model that does not take it, refuses the start.
     #[arg(long)]
     pub fast: bool,
+    /// Start the session as a structured chat (`agent.chat.start`) instead of in a terminal. A kind that cannot run as a
+    /// chat (no chat support, or a CLI version outside its range) is refused with agent.chat_unsupported.
+    #[arg(long, conflicts_with = "args")]
+    pub chat: bool,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
@@ -451,24 +455,27 @@ pub async fn execute(
             output.success(&kinds, &kinds_text(&kinds.kinds));
         }
         AgentCommand::Start(args) => {
-            let started = client
-                .agent_start(&AgentStartParams {
-                    workspace: args.workspace,
-                    kind: args.kind,
-                    prompt: args.prompt,
-                    args: args.args,
-                    env: Default::default(),
-                    read_only: args.read_only,
-                    title: args.title,
-                    cols: None,
-                    rows: None,
-                    request_id: None,
-                    permission_mode: args.mode,
-                    model: args.model,
-                    effort: args.effort,
-                    fast: args.fast.then_some(true),
-                })
-                .await?;
+            let params = AgentStartParams {
+                workspace: args.workspace,
+                kind: args.kind,
+                prompt: args.prompt,
+                args: args.args,
+                env: Default::default(),
+                read_only: args.read_only,
+                title: args.title,
+                cols: None,
+                rows: None,
+                request_id: None,
+                permission_mode: args.mode,
+                model: args.model,
+                effort: args.effort,
+                fast: args.fast.then_some(true),
+            };
+            let started = if args.chat {
+                client.agent_chat_start(&params).await?
+            } else {
+                client.agent_start(&params).await?
+            };
             output.success(&started, &agent_text::session_details(&started));
         }
         AgentCommand::List(args) => {

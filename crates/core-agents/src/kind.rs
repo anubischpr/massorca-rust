@@ -81,6 +81,26 @@ pub struct KindDecl {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<InstructionsDecl>,
+    /// How the kind runs as a structured chat (decision 0101). Absent means it runs in a terminal only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatDecl>,
+}
+
+/// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
+pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+
+/// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
+/// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
+/// with a major version above `max_major`, is refused rather than tried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatDecl {
+    /// One of [`CHAT_ADAPTERS`].
+    pub adapter: String,
+    /// The oldest supported version, `MAJOR.MINOR.PATCH`.
+    pub min_version: String,
+    /// The newest supported major version.
+    pub max_major: u64,
 }
 
 /// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
@@ -748,7 +768,33 @@ impl KindDecl {
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
         self.instructions_problems(&mut problems);
+        self.chat_problems(&mut problems);
         problems
+    }
+
+    /// `chat.adapter` names a dialect MassOrca speaks, and its range is a version and a major version no older than it.
+    fn chat_problems(&self, problems: &mut Vec<String>) {
+        let Some(chat) = &self.chat else {
+            return;
+        };
+        if !CHAT_ADAPTERS.contains(&chat.adapter.as_str()) {
+            problems.push(format!(
+                "chat.adapter {:?} must be one of {}",
+                chat.adapter,
+                CHAT_ADAPTERS.join(", ")
+            ));
+        }
+        match crate::chat::version::Version::parse_exact(&chat.min_version) {
+            Some(min) if min.major > chat.max_major => problems.push(format!(
+                "chat.max_major {} must not be below the major version of chat.min_version",
+                chat.max_major
+            )),
+            Some(_) => {}
+            None => problems.push(format!(
+                "chat.min_version {:?} must be MAJOR.MINOR.PATCH",
+                chat.min_version
+            )),
+        }
     }
 
     /// `instructions.args` holds [`TEXT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
@@ -1627,6 +1673,50 @@ mod tests {
         let mut value = minimal();
         patch(&mut value);
         parse(value).problems()
+    }
+
+    #[test]
+    fn a_chat_block_names_a_known_adapter_and_a_version_range() {
+        let valid = problems_of(|value| {
+            value["chat"] = serde_json::json!({
+                "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        for (chat, expected) in [
+            (
+                serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
+                "chat.adapter \"acp\" must be one of claude-stream-json",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),
+                "chat.min_version \"2.1\" must be MAJOR.MINOR.PATCH",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "3.0.0", "max_major": 2 }),
+                "chat.max_major 2 must not be below the major version of chat.min_version",
+            ),
+        ] {
+            let problems = problems_of(|value| value["chat"] = chat.clone());
+            assert_eq!(problems, [expected], "{chat}");
+        }
+    }
+
+    #[test]
+    fn the_built_in_claude_kind_runs_as_a_chat_from_2_1_258_through_2_x() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|kind| kind.id == "claude")
+            .expect("built in");
+        assert_eq!(
+            claude.chat,
+            Some(ChatDecl {
+                adapter: "claude-stream-json".to_owned(),
+                min_version: "2.1.258".to_owned(),
+                max_major: 2,
+            })
+        );
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
     }
 
     #[test]
