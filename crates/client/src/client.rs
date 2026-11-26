@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[cfg(feature = "local")]
 use massorca_profile::Profile;
 use massorca_protocol::methods::events::Subscribed;
-use massorca_protocol::{Message, fits_frame};
+use massorca_protocol::{Frame, Message, fits_frame, fits_stream_bytes};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -31,7 +31,7 @@ const SUBSCRIPTION_CAPACITY: usize = 256;
 pub struct Client {
     shared: Arc<Shared>,
     welcome: Arc<Welcome>,
-    outbound: mpsc::Sender<Message>,
+    outbound: mpsc::Sender<Frame>,
 }
 
 impl fmt::Debug for Client {
@@ -131,11 +131,30 @@ impl Client {
             )));
         }
         self.shared.register(id, pending)?;
-        if self.outbound.send(request).await.is_err() {
+        if self.outbound.send(Frame::Message(request)).await.is_err() {
             self.shared.forget(id);
             return Err(ClientError::Disconnected);
         }
         Ok(())
+    }
+
+    /// Sends stream bytes on a stream the service reads them on (decision 0131). Waits for room in the outbound queue.
+    pub(crate) async fn send_stream_bytes(
+        &self,
+        stream: u64,
+        payload: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        let max_frame_len = self.welcome.max_frame_len;
+        if !fits_stream_bytes(&payload, max_frame_len) {
+            return Err(ClientError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("stream bytes are larger than one frame may hold ({max_frame_len} bytes)"),
+            )));
+        }
+        self.outbound
+            .send(Frame::StreamBytes { stream, payload })
+            .await
+            .map_err(|_| ClientError::Disconnected)
     }
 
     /// Starts the tasks of an established connection: the frame reader and writer, and the pump that routes their frames.

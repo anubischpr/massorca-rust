@@ -8,6 +8,7 @@ mod device_calls;
 mod device_name;
 mod error;
 mod extension_calls;
+mod forward_calls;
 mod git_calls;
 mod handshake;
 mod host_link;
@@ -38,12 +39,14 @@ pub use device_name::default_device_name;
 pub use error::ClientError;
 #[cfg(feature = "local")]
 pub use error::profile_refusal;
+pub use forward_calls::{ForwardEnd, ForwardHandle};
 pub use handshake::Welcome;
 pub use host_link::{HostDial, LiveHost, LiveState};
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::{DeviceRevocation, Hosts, SshInstall};
 pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
+pub use massorca_net::{SpliceEnd, SpliceReport};
 #[cfg(feature = "local")]
 pub use options::{Autostart, ConnectOptions};
 pub use reconnect::{
