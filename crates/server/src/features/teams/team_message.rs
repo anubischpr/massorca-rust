@@ -14,6 +14,7 @@ use massorca_protocol::methods::team_room::{
     MessageType, TO_PARENT, TeamInbox, TeamInboxParams, TeamMessage, TeamMessageReplyParams,
     TeamMessageSendParams, TeamMessageSent, WorkerOutcome,
 };
+use massorca_protocol::methods::teams::ChildReport;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -597,6 +598,24 @@ fn read_inbox(store: &Store, task: &TaskRow, mark_read: bool) -> Result<TeamInbo
         .map(|row| view(store, row))
         .collect::<Result<_, _>>()?;
     Ok(TeamInbox { messages })
+}
+
+/// What `child` last told `parent`: its newest status subject and its `worker_done` outcome (decision 0129).
+pub(super) fn child_report(
+    store: &Store,
+    child: &str,
+    parent: &str,
+) -> Result<ChildReport, ErrorBody> {
+    let status = store
+        .latest_team_message(child, parent, &wire_name(&MessageType::Status))
+        .map_err(store_error)?
+        .map(|row| row.subject);
+    let outcome = store
+        .latest_team_message(child, parent, &wire_name(&MessageType::WorkerDone))
+        .map_err(store_error)?
+        .and_then(|row| row.outcome)
+        .map(|outcome| from_wire::<WorkerOutcome>(&outcome));
+    Ok(ChildReport { status, outcome })
 }
 
 fn view(store: &Store, row: &TeamMessageRow) -> Result<TeamMessage, ErrorBody> {

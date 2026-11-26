@@ -30,6 +30,7 @@ use crate::registry::RegistrationHandle;
 use super::task::{new_task_row, view_of};
 use super::task_start::{Changes, publish_changes, start_gate, start_task, team_mode};
 use super::task_state;
+use super::team_message::child_report;
 use super::{blocking, non_blank, optional_text, selectors, store_error};
 
 /// The longest title a child task takes from its text, in Unicode scalar values.
@@ -380,6 +381,7 @@ fn delegation_list(
                 parent: parent.id.clone(),
                 read_only: child.read_only,
                 child: child.task,
+                report: child.report,
             });
         }
     }
@@ -405,6 +407,7 @@ fn children_of(
         children.push(DelegationChild {
             task: view_of(&row, &task_state::load(agents, &row)?),
             read_only,
+            report: child_report(store, &id, parent)?,
         });
     }
     Ok(children)

@@ -4,6 +4,7 @@ use massorca_protocol::methods::team_room::{
     MessageDelivery, MessagePriority, MessageType, TeamInboxParams, TeamMessage,
     TeamMessageSendParams, WorkerOutcome,
 };
+use massorca_protocol::methods::teams::ChildReport;
 use serde_json::json;
 
 fn send() -> TeamMessageSendParams {
@@ -80,4 +81,17 @@ fn a_message_from_an_older_host_without_delivery_reads_as_inbox() {
     .unwrap();
     assert_eq!(message.delivery, MessageDelivery::Inbox);
     assert!(!message.read);
+}
+
+#[test]
+fn an_empty_child_report_is_left_off_the_wire() {
+    assert!(ChildReport::default().is_empty());
+    let report = ChildReport {
+        status: Some("halfway".to_owned()),
+        outcome: Some(WorkerOutcome::Failed),
+    };
+    assert_eq!(
+        serde_json::to_value(report).unwrap(),
+        json!({ "status": "halfway", "outcome": "failed" })
+    );
 }

@@ -543,6 +543,33 @@ fn a_live_or_unverifiable_parent_run_is_woken_and_an_ended_one_is_not() {
 }
 
 #[test]
+fn the_child_report_is_the_latest_status_and_the_worker_done_outcome() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    assert!(
+        child_report(&tree.store, &tree.child.id, &tree.parent.id)
+            .expect("report")
+            .is_empty()
+    );
+    let status = Draft {
+        subject: "Halfway".to_owned(),
+        ..draft(TO_PARENT, MessageType::Status)
+    };
+    send_as(&tree, &tree.child, status, false, &wakes).expect("status");
+    send_as(
+        &tree,
+        &tree.child,
+        done(WorkerOutcome::Failed),
+        false,
+        &wakes,
+    )
+    .expect("done");
+    let report = child_report(&tree.store, &tree.child.id, &tree.parent.id).expect("report");
+    assert_eq!(report.status.as_deref(), Some("Halfway"));
+    assert_eq!(report.outcome, Some(WorkerOutcome::Failed));
+}
+
+#[test]
 fn the_prompt_frames_the_message_as_a_teammates_data_with_a_reply_hint() {
     let tree = tree();
     let wakes = RefCell::new(Vec::new());
