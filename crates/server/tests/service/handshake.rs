@@ -55,6 +55,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::SKILLS,
             capabilities::TEAM_ROOM,
             capabilities::TEAM_ROOM_CARDS,
+            capabilities::TEAM_ROOM_REPLIES,
             capabilities::TEAMS,
             capabilities::TERMINAL_WAIT,
             capabilities::TERMINALS,

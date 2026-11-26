@@ -151,3 +151,7 @@ fn prompt(
     prompt.push_str(&format!("\nTheir message:\n{text}\n"));
     prompt
 }
+
+#[cfg(test)]
+#[path = "room_reply_tests.rs"]
+mod tests;

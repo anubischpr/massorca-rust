@@ -38,7 +38,7 @@ use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
 use super::task_start::{Changes, publish_changes, start_task};
 use super::{blocking, invalid, non_blank, selectors, store_error, task_state};
-use super::{room_quote, room_reply_end};
+use super::{room_quote, room_reply_end, room_typing};
 
 /// The longest room line, in Unicode scalar values.
 const MAX_TEXT_CHARS: usize = 4000;
@@ -58,6 +58,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::TEAM_ROOM_CARDS, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::TEAM_ROOM_REPLIES, Owner::Core)?,
         methods.register(
             Owner::Core,
             team_room::ROOM_LIST,
@@ -93,9 +96,10 @@ async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomLis
         let rows = store
             .list_team_room(&team.id, Some(limit))
             .map_err(store_error)?;
+        let bots = store.list_bots(&team.id).map_err(store_error)?;
         Ok(TeamRoomList {
             messages: views(store, agents, &team, &rows)?,
-            typing: Vec::new(),
+            typing: room_typing::typing(store, agents, &team, &bots)?,
         })
     })
     .await
