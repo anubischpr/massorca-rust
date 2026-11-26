@@ -8,6 +8,7 @@ pub mod agent_queue;
 pub mod agent_sessions;
 pub mod app_theme;
 pub mod automations;
+pub mod calendar;
 pub mod canvas;
 pub mod chat_transcript;
 pub mod close_confirm;
