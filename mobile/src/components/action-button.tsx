@@ -23,12 +23,14 @@ export function ActionButton({
   variant = 'secondary',
   disabled = false,
   busy = false,
+  testID,
 }: {
   readonly label: string;
   readonly onPress: () => void;
   readonly variant?: ButtonVariant;
   readonly disabled?: boolean;
   readonly busy?: boolean;
+  readonly testID?: string;
 }) {
   const palette = usePalette();
   const style = VARIANT[variant];
@@ -43,6 +45,7 @@ export function ActionButton({
       accessibilityState={{ disabled: inactive, busy }}
       disabled={inactive}
       onPress={onPress}
+      testID={testID}
       style={({ pressed }) => [
         styles.button,
         {

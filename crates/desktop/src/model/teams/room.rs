@@ -228,17 +228,11 @@ mod tests {
     fn message(author: RoomAuthor, bot: Option<(&str, &str)>, text: &str) -> TeamRoomMessage {
         TeamRoomMessage {
             id: text.to_owned(),
-            team_id: "t".to_owned(),
             author,
             bot_id: bot.map(|(id, _)| id.to_owned()),
             bot_name: bot.map(|(_, name)| name.to_owned()),
             text: text.to_owned(),
-            task: None,
-            routine: None,
-            card: None,
-            reply_to: None,
-            quoted: None,
-            created_at_ms: 1_700_000_000_000,
+            ..crate::service::fixtures::base_team_room_message()
         }
     }
 

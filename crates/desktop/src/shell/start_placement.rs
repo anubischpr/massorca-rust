@@ -61,6 +61,23 @@ pub(super) fn pill(
     theme: &Theme,
     focus: FocusHandle,
 ) -> Stateful<Div> {
+    let leading = Icon::new(icon)
+        .size(IconSize::Small)
+        .color(pill_text(enabled, theme).icon)
+        .into_any_element();
+    pill_with(id, leading, label, secondary, enabled, theme, focus)
+}
+
+/// A pill whose leading element is given, such as a project's own mark.
+pub(super) fn pill_with(
+    id: &'static str,
+    leading: gpui::AnyElement,
+    label: String,
+    secondary: Option<String>,
+    enabled: bool,
+    theme: &Theme,
+    focus: FocusHandle,
+) -> Stateful<Div> {
     let text = pill_text(enabled, theme);
     let name = match &secondary {
         Some(secondary) => format!("{label} {secondary}"),
@@ -82,7 +99,7 @@ pub(super) fn pill(
         .px(px(SPACE_2))
         .rounded(px(RADIUS_MD))
         .whitespace_nowrap()
-        .child(Icon::new(icon).size(IconSize::Small).color(text.icon))
+        .child(leading)
         .child(
             div()
                 .text_style(TYPE_LABEL)

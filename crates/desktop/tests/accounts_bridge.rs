@@ -101,10 +101,7 @@ fn bridge_for(home: &Path) -> (ServiceBridge, ServiceHandle, UnboundedReceiver<S
 async fn client_for(home: &Path) -> Client {
     Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects")
@@ -202,7 +199,7 @@ async fn an_import_answers_not_found_without_login_files_and_the_list_follows_a_
         .accounts_import(AccountsImportParams {
             kind: KIND.to_owned(),
             from: Some(source_with(&home, "empty", &[])),
-            label: None,
+            ..base_accounts_import_params()
         })
         .await
         .expect("the import answers");
@@ -271,7 +268,7 @@ async fn an_account_signing_in_refuses_activation_as_busy() {
         .accounts_activate(AccountsActivateParams {
             kind: KIND.to_owned(),
             account: added.account.id.clone(),
-            project: None,
+            ..base_accounts_activate_params()
         })
         .await
         .expect_err("a pending sign-in is not activated");
@@ -280,4 +277,30 @@ async fn an_account_signing_in_refuses_activation_as_busy() {
     drop(bridge);
     // The service closes the sign-in terminal as it stops.
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `AccountsActivateParams` field at its usual value; tests override the fields they vary.
+fn base_accounts_activate_params() -> massorca_protocol::methods::agents::AccountsActivateParams {
+    massorca_protocol::methods::agents::AccountsActivateParams {
+        kind: String::new(),
+        account: String::new(),
+        project: None,
+    }
+}
+
+/// Every `AccountsImportParams` field at its usual value; tests override the fields they vary.
+fn base_accounts_import_params() -> massorca_protocol::methods::agents::AccountsImportParams {
+    massorca_protocol::methods::agents::AccountsImportParams {
+        kind: String::new(),
+        from: None,
+        label: None,
+    }
 }

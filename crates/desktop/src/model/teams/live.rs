@@ -195,7 +195,6 @@ fn column_of(column: WireColumn) -> Option<Column> {
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::tasks::CardState;
     use massorca_protocol::methods::teams::{
         Board, BoardCard, BoardColumn, Team as WireTeam, TeamAccess, TeamCharacter,
         TeamProject as WireProject,
@@ -232,13 +231,8 @@ mod tests {
             title: title.into(),
             bot_id: bot.map(|(id, _)| id.into()),
             bot: bot.map(|(_, name)| name.into()),
-            state: CardState::Working,
-            last_known: false,
             error: error.map(Into::into),
-            error_code: None,
-            workspace_id: None,
-            branch: None,
-            at_ms: 1,
+            ..crate::service::fixtures::base_board_card()
         }
     }
 
@@ -255,11 +249,11 @@ mod tests {
             },
             board: Board {
                 team_id: team.into(),
-                project_id: None,
                 columns: columns
                     .into_iter()
                     .map(|(column, cards)| BoardColumn { column, cards })
                     .collect(),
+                ..crate::service::fixtures::base_board()
             },
             bots: Vec::new(),
             projects: Vec::new(),
@@ -452,12 +446,12 @@ mod tests {
                 code_source: None,
             },
             board: Board {
-                team_id: "t1".into(),
                 project_id: Some("p1".into()),
                 columns: vec![BoardColumn {
                     column: WireColumn::Open,
                     cards: vec![card("k7", "Draft the page", None, None)],
                 }],
+                ..crate::service::fixtures::base_board()
             },
         }];
         let view = live_teams(&numbered(&records), "This PC", &records, &[]);
@@ -493,9 +487,8 @@ mod tests {
                 code_source: None,
             },
             board: Board {
-                team_id: "t1".into(),
                 project_id: Some("p1".into()),
-                columns: Vec::new(),
+                ..crate::service::fixtures::base_board()
             },
         }];
         let view = live_teams(&numbered(&records), "This PC", &records, &[]);

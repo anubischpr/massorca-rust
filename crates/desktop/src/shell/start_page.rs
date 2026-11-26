@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::Shell;
-use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
+use super::start_placement::{host_pill, off_pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
@@ -57,6 +57,8 @@ use massorca_protocol::methods::chat::RunType;
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
 pub(super) struct StartFrame {
+    /// The heading's project icon popover, when it is open for this page's project (decision 0091).
+    pub project_icon: Option<crate::model::project_icon::ProjectIconPopover>,
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
@@ -127,6 +129,48 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
         .child("What should we work on in ")
         .child(project_link)
         .child("?");
+    let heading = {
+        let (open_shell, choose_shell) = (frame.shell.clone(), frame.shell.clone());
+        let (open_project, choose_project) = (page.project_id.clone(), page.project_id.clone());
+        let refusal = frame
+            .project_icon
+            .as_ref()
+            .and_then(|popover| popover.refusal.clone());
+        let icon = massorca_ui::components::project_icon_popover::ProjectIconControl::new(
+            "start-project-icon",
+            super::project_mark::project_mark(&page.icon),
+            frame.project_icon.is_some(),
+            move |open, _, cx| {
+                let _ = open_shell.update(cx, |shell, cx| {
+                    let canvas = shell.model.canvas();
+                    shell.project_icon =
+                        open.then(|| crate::model::project_icon::ProjectIconPopover {
+                            project: open_project.clone(),
+                            refusal: None,
+                            canvas,
+                        });
+                    cx.notify();
+                });
+            },
+            move |choice, _, cx| {
+                let _ = choose_shell.update(cx, |shell, cx| {
+                    shell.choose_project_icon(choose_project.clone(), choice, cx);
+                });
+            },
+        )
+        .current(match &page.icon {
+            crate::model::project_icon::ProjectGlyph::Lucide(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .refusal(refusal.map(gpui::SharedString::from));
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(massorca_ui::tokens::SPACE_3))
+            .child(icon)
+            .child(heading)
+    };
 
     let host = host_pill(
         "start-host",
@@ -136,9 +180,9 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
     );
     let project = {
         let shell = frame.shell.clone();
-        pill(
+        super::start_placement::pill_with(
             "start-project",
-            IconName::Folder,
+            super::project_mark::project_mark(&page.icon),
             page.project.clone(),
             None,
             true,

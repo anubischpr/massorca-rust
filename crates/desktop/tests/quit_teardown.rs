@@ -43,10 +43,7 @@ fn profile(home: &Path) -> Profile {
 }
 
 fn peer() -> PeerInfo {
-    PeerInfo {
-        name: "massorca-test-client".to_owned(),
-        version: "0.0.0-test".to_owned(),
-    }
+    PeerInfo { ..base_peer_info() }
 }
 
 /// Closes the link of `bridge` the way quit does, and reports whether it finished in time and how long that took.
@@ -118,4 +115,12 @@ async fn quitting_while_the_service_is_down_does_not_wait_for_a_retry() {
         elapsed < QUIT_BOUND,
         "quitting waited for a retry: {elapsed:?}"
     );
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
 }
