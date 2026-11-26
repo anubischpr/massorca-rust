@@ -16,8 +16,7 @@ fn package(version: &str, logo: Option<&str>, banner: Option<&str>) -> Extension
     item.listing.logo = logo.map(str::to_owned);
     item.listing.banner = banner.map(|image| Banner {
         image: Some(image.to_owned()),
-        examples: Vec::new(),
-        colors: Vec::new(),
+        ..crate::service::fixtures::base_banner()
     });
     item
 }
@@ -52,10 +51,10 @@ fn catalogue(rig: &Rig, cx: &mut VisualTestContext, number: u64, packages: Vec<E
 /// The service's answer for `path`, with `bytes` base64 as the service sends them.
 fn asset(path: &str, bytes: &[u8]) -> ExtensionAsset {
     ExtensionAsset {
-        id: "acme.notes".to_owned(),
         path: path.to_owned(),
         size: bytes.len() as u64,
         data: STANDARD.encode(bytes),
+        ..crate::service::fixtures::base_extension_asset()
     }
 }
 

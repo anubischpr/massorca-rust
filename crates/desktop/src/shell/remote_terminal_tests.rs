@@ -4,7 +4,7 @@
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_client::AttachUpdate;
 use massorca_protocol::methods::agents::AgentSession;
-use massorca_protocol::methods::terminals::{AttachMode, Terminal, TerminalState};
+use massorca_protocol::methods::terminals::{AttachMode, Terminal};
 
 use super::service_tests::{Rig, click, draw, rig};
 use crate::service::fixtures::{agent, workspace};
@@ -66,18 +66,9 @@ fn local_terminal_calls(script: &mut Script) -> usize {
 fn live(id: &str) -> Terminal {
     Terminal {
         id: id.to_owned(),
-        workspace_id: "w1".to_owned(),
-        state: TerminalState::Live,
-        title: None,
         cols: 120,
         rows: 40,
-        pid: None,
-        shell: "/bin/zsh".to_owned(),
-        cwd: "/repos/fix-login".to_owned(),
-        created_at_ms: 1,
-        exit: None,
-        holds_secrets: false,
-        git_credential_guard: false,
+        ..crate::service::fixtures::base_terminal()
     }
 }
 

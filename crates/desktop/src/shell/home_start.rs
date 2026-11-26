@@ -31,8 +31,8 @@ use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_ca
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
     BranchPill, CHOOSE_A_PROJECT, FOLDER_NO_GIT_REASON, HOME_START, NEW_WORKTREE_REASON,
-    NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, WorkspaceDetails, branch_pill, create_params,
-    folder_start_workspace, home_choice, home_start_params, name_is_derived,
+    NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, NameOffers, WorkspaceDetails, branch_pill,
+    create_params, folder_start_workspace, home_choice, home_start_params, name_is_derived,
     no_project_branch_pill, no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
@@ -388,6 +388,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// "New chat" (title bar): the start page of the current workspace, or of none, with its composer focused. Chat
+    /// becomes the start mode only when the picked agent offers it; otherwise the page keeps its mode.
+    pub(super) fn open_new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.model.current_workspace().map(str::to_owned);
+        self.model.close_session();
+        self.model.select_workspace(workspace.clone());
+        let id = workspace.unwrap_or_else(|| HOME_START.to_owned());
+        let composer = self.start_composer(&id, cx);
+        if self.chat_availability(&id, cx).is_available() {
+            self.set_start_mode(&id, StartMode::Chat, cx);
+        }
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
+        cx.notify();
+    }
+
     /// Opens or closes the branch pill's menu. It starts closed.
     pub(super) fn toggle_branch_menu(&mut self, cx: &mut Context<Self>) {
         self.home_details.branch_menu = !self.home_details.branch_menu;
@@ -559,7 +574,13 @@ impl Shell {
         let grid = self.start_grid(cx);
         // A name derived from the prompt may be made unique by the service; a typed name is never changed.
         let derived = name_is_derived(&details);
-        let unique_offered = self.store.read(cx).state().workspace_unique_name;
+        let offers = {
+            let state = self.store.read(cx).state();
+            NameOffers {
+                unique_name: state.workspace_unique_name,
+                rename: state.workspace_rename,
+            }
+        };
         let existing_folder = match &choice {
             ProjectChoice::Project(id) => {
                 let state = self.store.read(cx).state();
@@ -586,9 +607,8 @@ impl Shell {
                         Some(workspace) => Ok(workspace),
                         None => create_for_start(
                             &service,
-                            create_params(&project, &prompt, &details),
+                            create_params(&project, &prompt, &details, offers),
                             derived,
-                            unique_offered,
                         )
                         .await
                         .map(|workspace| workspace.id),

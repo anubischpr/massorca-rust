@@ -716,9 +716,7 @@ mod tests {
     fn removed() -> ExtensionRemoved {
         ExtensionRemoved {
             id: "massorca.codex".to_owned(),
-            version: "1.0.0".to_owned(),
-            failures: Vec::new(),
-            cli: Vec::new(),
+            ..crate::service::fixtures::base_extension_removed()
         }
     }
 

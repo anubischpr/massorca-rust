@@ -4,10 +4,7 @@
 use super::session_view_tests::{Rig, chat_s1, draw, kind, queue_rig, s1, session_rig};
 use crate::service::{ChatCommand, Command, QueueCommand, Refusal, Script, StoreUpdate};
 use gpui::{Entity, TestAppContext, VisualTestContext};
-use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentQueueList, AgentSession, PromptReceipt,
-    ReceiptKind,
-};
+use massorca_protocol::methods::agents::{Activity, AgentQueueList, AgentSession, PromptReceipt};
 use massorca_protocol::methods::chat::{
     Approval, ApprovalDecision, ApprovalScope, ApprovalState, ApprovalSuggestion,
     ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams,
@@ -28,13 +25,11 @@ fn message(id: &str, position: u64, text: &str) -> ChatItem {
         id: id.to_owned(),
         position,
         seq: position,
-        turn: None,
-        parent: None,
-        at_ms: 0,
         body: ChatItemBody::AssistantMessage {
             text: text.to_owned(),
             state: MessageState::Completed,
         },
+        ..crate::service::fixtures::base_chat_item()
     }
 }
 
@@ -46,8 +41,7 @@ fn snapshot(session: &str, items: Vec<ChatItem>, has_older: bool) -> StoreUpdate
             cursor: cursor(head),
             items,
             has_older,
-            latest_turn: None,
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         })),
     }
 }
@@ -175,9 +169,8 @@ fn older_items_are_asked_for_once_from_the_oldest_held_position_and_join_the_vie
         "before the oldest held item"
     );
     let page = ChatHistoryPage {
-        epoch: "e1".to_owned(),
         items: vec![message("a", 2, "one")],
-        has_older: false,
+        ..crate::service::fixtures::base_chat_history_page()
     };
     // The bridge adds the page to the store, then answers the caller.
     rig.updates
@@ -206,11 +199,7 @@ fn older_items_are_asked_for_once_from_the_oldest_held_position_and_join_the_vie
 fn working_chat() -> AgentSession {
     let mut session = chat_s1(false);
     session.activity = Some(Activity {
-        state: ActivityState::Working,
-        outcome: None,
-        source: ActivitySource::Hook,
-        at_ms: 1,
-        seen_at_ms: None,
+        ..crate::service::fixtures::base_activity()
     });
     session
 }
@@ -260,8 +249,7 @@ fn send_in_a_chat_session_is_an_agent_prompt_the_service_receipts_as_sent_to_cha
     );
     reply
         .send(Ok(PromptReceipt {
-            receipt: ReceiptKind::SentToChat,
-            bytes: 13,
+            ..crate::service::fixtures::base_prompt_receipt()
         }))
         .expect("the shell waits for the receipt");
     cx.run_until_parked();
@@ -281,8 +269,7 @@ fn while_a_turn_runs_send_queues_the_prompt_as_it_does_in_a_terminal_session(
         vec![kind(false)],
         vec![working_chat()],
         Some(vec![AgentQueueList {
-            session: "s1".to_owned(),
-            items: Vec::new(),
+            ..crate::service::fixtures::base_agent_queue_list()
         }]),
     );
 
@@ -322,8 +309,7 @@ fn stop_in_a_working_chat_interrupts_the_turn_and_never_stops_the_run(cx: &mut T
     assert_eq!(session, "s1");
     reply
         .send(Ok(ChatInterrupted {
-            interrupted: true,
-            turn: None,
+            ..crate::service::fixtures::base_chat_interrupted()
         }))
         .expect("the shell waits for the answer");
     cx.run_until_parked();
@@ -390,12 +376,6 @@ fn the_chat_composer_hides_attach_and_the_model_chip_until_the_service_offers_th
 /// A pending permission request in the transcript, as the stream delivers it: item `ap` at `seq` 5.
 fn pending_approval() -> ChatItem {
     ChatItem {
-        id: "ap".to_owned(),
-        position: 3,
-        seq: 5,
-        turn: None,
-        parent: None,
-        at_ms: 0,
         body: ChatItemBody::Approval(Approval {
             request_id: "r-1".to_owned(),
             tool: "Bash".to_owned(),
@@ -404,14 +384,14 @@ fn pending_approval() -> ChatItem {
             tool_use_id: Some("toolu_1".to_owned()),
             can_always: true,
             suggestions: vec![ApprovalSuggestion {
-                kind: "addRules".to_owned(),
                 rules: vec!["Bash(touch probe.txt)".to_owned()],
-                destination: "localSettings".to_owned(),
+                ..crate::service::fixtures::base_approval_suggestion()
             }],
             state: ApprovalState::Pending,
             scope: None,
             settled_at_ms: None,
         }),
+        ..crate::service::fixtures::base_chat_item()
     }
 }
 
@@ -560,7 +540,7 @@ fn the_item_the_stream_settles_replaces_the_card_with_its_one_line(cx: &mut Test
             event: ChatEvent::Batch(ChatBatch {
                 cursor: cursor(6),
                 updates: vec![ChatUpdate::Item { item: settled }],
-                activity: None,
+                ..crate::service::fixtures::base_chat_batch()
             }),
         },
     );
