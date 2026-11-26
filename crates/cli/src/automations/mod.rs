@@ -249,13 +249,21 @@ async fn create_params(
         args.base_branch.clone(),
     ) {
         Some(given) => (Some(given), None),
-        None => match destination::enclosing(client, paths).await? {
-            Some(workspace) => (
-                Some(destination::existing(&workspace)),
-                Some(workspace.project_id),
-            ),
-            None => (None, None),
-        },
+        None if destination::default_allowed(
+            client.has_capability(capabilities::AUTOMATION_DESTINATIONS),
+            paths.is_remote(),
+        ) =>
+        {
+            match destination::enclosing(client, paths).await? {
+                Some(workspace) => (
+                    Some(destination::existing(&workspace)),
+                    Some(workspace.project_id),
+                ),
+                None => (None, None),
+            }
+        }
+        // An older host would refuse the destination, so the create keeps its own place and needs --project.
+        None => (None, None),
     };
     let project = match (
         args.project.clone(),

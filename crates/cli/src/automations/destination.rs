@@ -38,8 +38,13 @@ pub fn existing(workspace: &Workspace) -> AutomationDestination {
     }
 }
 
-/// The MassOrca workspace the current directory is in, if one resolves. A remote host cannot see this computer's
-/// directory, so there is none then.
+/// Whether a create with no destination flag looks for the enclosing workspace. An older host would refuse the
+/// destination it names, and a remote host cannot see this computer's directory, so neither gets the default.
+pub fn default_allowed(has_destinations: bool, remote: bool) -> bool {
+    has_destinations && !remote
+}
+
+/// The MassOrca workspace the current directory is in, if one resolves.
 pub async fn enclosing(client: &Client, paths: PathRules) -> Result<Option<Workspace>, CliError> {
     if paths.is_remote() {
         return Ok(None);
@@ -65,5 +70,24 @@ pub async fn enclosing(client: &Client, paths: PathRules) -> Result<Option<Works
                 Err(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_allowed;
+
+    #[test]
+    fn the_enclosing_default_needs_a_host_with_destinations_and_a_local_directory() {
+        assert!(default_allowed(true, false));
+        assert!(
+            !default_allowed(false, false),
+            "an old host refuses the default"
+        );
+        assert!(
+            !default_allowed(true, true),
+            "a remote host cannot see this directory"
+        );
+        assert!(!default_allowed(false, true));
     }
 }
