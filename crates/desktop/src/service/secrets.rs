@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::secrets::{
-    SecretDecline, SecretEntry, SecretLink, SecretListParams, SecretRemove, SecretRemoved,
-    SecretRequest, SecretRequestsParams, SecretSet,
+    SecretDecline, SecretEntry, SecretLink, SecretListParams, SecretName, SecretRemove,
+    SecretRemoved, SecretRequest, SecretRequestsParams, SecretSet,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -108,6 +108,11 @@ pub(crate) enum SecretCommand {
         params: SecretLink,
         reply: oneshot::Sender<Result<SecretEntry, Refusal>>,
     },
+    /// Removes one scope's link to a name. The owner keeps the secret; only the link goes.
+    Unlink {
+        params: SecretName,
+        reply: oneshot::Sender<Result<SecretRemoved, Refusal>>,
+    },
     /// Declines a pending request. No secret changes.
     Decline {
         params: SecretDecline,
@@ -132,6 +137,12 @@ impl ServiceHandle {
     /// `secret.link`: links a name to the owned secret of another scope. The service answers a request for it too.
     pub async fn secret_link(&self, params: SecretLink) -> Result<SecretEntry, Refusal> {
         self.ask(|reply| Command::Secret(SecretCommand::Link { params, reply }))
+            .await
+    }
+
+    /// `secret.unlink`: removes one scope's link to a name. The list follows the refetch that the answer triggers.
+    pub async fn secret_unlink(&self, params: SecretName) -> Result<SecretRemoved, Refusal> {
+        self.ask(|reply| Command::Secret(SecretCommand::Unlink { params, reply }))
             .await
     }
 
@@ -164,6 +175,11 @@ pub(super) fn spawn_call(
         SecretCommand::Link { params, reply } => {
             write(client, updates, order, reply, move |client| async move {
                 client.secret_link(&params).await
+            })
+        }
+        SecretCommand::Unlink { params, reply } => {
+            write(client, updates, order, reply, move |client| async move {
+                client.secret_unlink(&params).await
             })
         }
         SecretCommand::Decline { params, reply } => {
@@ -204,6 +220,9 @@ pub(super) fn refuse_while_down(command: SecretCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         SecretCommand::Link { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        SecretCommand::Unlink { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         SecretCommand::Decline { reply, .. } => {

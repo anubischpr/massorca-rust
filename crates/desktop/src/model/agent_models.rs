@@ -21,6 +21,8 @@ pub struct DeclaredModel {
     pub default_effort: usize,
     /// Whether the picker preselects this model.
     pub default: bool,
+    /// Whether the model takes fast mode at start (decision 0165).
+    pub fast: bool,
 }
 
 fn level(levels: &[KindEffortLevel], id: &str) -> Option<DeclaredEffort> {
@@ -77,6 +79,7 @@ pub fn declared_models(kind: &AgentKind) -> Vec<DeclaredModel> {
                 efforts,
                 default_effort,
                 default: choice.default,
+                fast: choice.fast,
             }
         })
         .collect()
