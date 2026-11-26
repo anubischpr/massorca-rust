@@ -83,7 +83,7 @@ fn recent_logs(root: &Path, depth: usize, now_ms: i64) -> io::Result<Option<Vec<
     let since = system_time(now_ms).checked_sub(LOOKBACK);
     let mut found = Vec::new();
     collect(entries, depth, since, &mut found);
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     found.truncate(MAX_FILES);
     Ok(Some(found.into_iter().map(|(_, path)| path).collect()))
 }

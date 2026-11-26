@@ -155,8 +155,7 @@ fn reading(records: &[Record], now_ms: i64) -> UsageReading {
         session.tokens = Some(in_block.clone().map(|record| record.tokens).sum());
         if let Some(limit) = in_block
             .filter_map(|record| record.limit)
-            .filter(|limit| !limit.weekly)
-            .last()
+            .rfind(|limit| !limit.weekly)
         {
             mark_limited(&mut session, limit.resets_at_ms.or(Some(end)), now_ms);
         }
@@ -164,8 +163,7 @@ fn reading(records: &[Record], now_ms: i64) -> UsageReading {
     if let Some(limit) = records
         .iter()
         .filter_map(|record| record.limit)
-        .filter(|limit| limit.weekly)
-        .last()
+        .rfind(|limit| limit.weekly)
     {
         mark_limited(&mut weekly, limit.resets_at_ms, now_ms);
     }
