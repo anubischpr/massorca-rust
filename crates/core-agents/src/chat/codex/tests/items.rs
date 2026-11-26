@@ -1,6 +1,7 @@
 use massorca_protocol::methods::agents::Outcome;
 use massorca_protocol::methods::chat::{
-    ChatItemBody, DiffStatus, MessageState, NoticeLevel, TokenUsage, ToolStatus, TurnState,
+    ChatItemBody, DiffStatus, MAX_SUMMARY_BYTES, MessageState, NoticeLevel, TokenUsage, ToolStatus,
+    TurnState,
 };
 use serde_json::{Value, json};
 
@@ -165,4 +166,32 @@ fn an_unknown_message_or_item_is_skipped_with_one_notice_naming_it() {
     assert_eq!(item.len(), 1);
     assert!(feed(&mut adapter, notify("thread/status/changed", json!({}))).is_empty());
     assert!(feed(&mut adapter, notify("codex/event/task_started", json!({}))).is_empty());
+}
+
+#[test]
+fn a_command_output_is_kept_to_the_summary_bound_and_output_past_it_replaces_nothing() {
+    let (mut adapter, _) = opened(&[]);
+    feed(
+        &mut adapter,
+        notify(
+            "item/started",
+            json!({ "item": { "type": "commandExecution", "id": "c2", "command": "yes", "status": "inProgress" } }),
+        ),
+    );
+    let output = |delta: &str| {
+        notify(
+            "item/commandExecution/outputDelta",
+            json!({ "itemId": "c2", "delta": delta }),
+        )
+    };
+    let flood = "y".repeat(MAX_SUMMARY_BYTES + 100);
+    let first = feed(&mut adapter, output(&flood));
+    assert!(
+        matches!(&first[0], JournalOp::Replace { body: ChatItemBody::ToolUse(tool), .. }
+        if tool.output_summary.as_ref().is_some_and(|text| text.len() == MAX_SUMMARY_BYTES) && tool.truncated)
+    );
+    // Past the bound the item shows the same text, so no replacement is written and no more output is kept.
+    assert!(feed(&mut adapter, output("more")).is_empty());
+    assert!(feed(&mut adapter, output("")).is_empty());
+    assert!(adapter.tools["c2"].output.len() <= MAX_SUMMARY_BYTES);
 }
