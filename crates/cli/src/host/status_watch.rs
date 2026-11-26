@@ -1,9 +1,12 @@
 //! `massorca host status --watch`: keeps a live link to each host (REM-07) and prints its state each time it changes,
-//! until interrupted. A lost host is retried with the network backoff; a refusal or a changed key is not.
+//! until interrupted. A lost host is retried with the network backoff; a refusal or a changed key is not, and once every
+//! host has ended so, the watch exits with the failure.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use massorca_client::{Backoff, HostDial, Hosts, LiveHost, LiveState};
+use massorca_client::{Backoff, ClientError, HostDial, Hosts, LiveHost, LiveState};
 use massorca_profile::Profile;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -25,7 +28,8 @@ pub struct WatchedStatus {
     pub retry_in_ms: Option<u64>,
 }
 
-/// `host status --watch [NAME]`: one line per change, a JSON document per line with `--json`.
+/// `host status --watch [NAME]`: one line per change, a JSON document per line with `--json`. Runs until interrupted,
+/// or until every host has ended with a failure a retry would not fix, which is then the command's failure.
 pub async fn execute(
     profile: &Profile,
     name: Option<&str>,
@@ -57,8 +61,7 @@ pub async fn execute(
         tokio::spawn(async move {
             loop {
                 let state = states.borrow_and_update().clone();
-                if changes.send(watched(&name, &state)).is_err() || states.changed().await.is_err()
-                {
+                if changes.send((name.clone(), state)).is_err() || states.changed().await.is_err() {
                     return;
                 }
             }
@@ -66,10 +69,33 @@ pub async fn execute(
         links.push(link);
     }
     drop(changes);
-    while let Some(status) = changed.recv().await {
+    let mut ended: BTreeMap<String, Option<Arc<ClientError>>> = BTreeMap::new();
+    while let Some((name, state)) = changed.recv().await {
+        let status = watched(&name, &state);
         output.success(&status, &[watch_line(&status)]);
+        let failure = match state {
+            LiveState::Ended { error } => Some(error),
+            _ => None,
+        };
+        ended.insert(name, failure);
+        if let Some(error) = all_ended(&ended, links.len()) {
+            return Err(CliError::from(error.duplicate()));
+        }
     }
     Ok(())
+}
+
+/// The failure of the first host by name once every followed host has ended: nothing can change any more.
+fn all_ended(
+    ended: &BTreeMap<String, Option<Arc<ClientError>>>,
+    followed: usize,
+) -> Option<&ClientError> {
+    if ended.len() < followed {
+        return None;
+    }
+    let mut failures = ended.values();
+    let first = failures.next()?.as_deref()?;
+    failures.all(Option::is_some).then_some(first)
 }
 
 /// A link state in the words of `host status`.
@@ -124,10 +150,6 @@ pub fn watch_line(watched: &WatchedStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use massorca_client::ClientError;
-
     use super::*;
 
     #[test]
@@ -165,5 +187,26 @@ mod tests {
         );
         assert_eq!(ended.status.state, "error");
         assert_eq!(ended.attempt, None);
+    }
+
+    #[test]
+    fn the_watch_ends_only_once_every_host_has_ended() {
+        let refused = || Some(Arc::new(ClientError::HostNotFound("b".into())));
+        let mut ended = BTreeMap::new();
+        ended.insert("b".to_owned(), refused());
+        assert!(
+            all_ended(&ended, 2).is_none(),
+            "a host not heard from may still change"
+        );
+        ended.insert("a".to_owned(), None);
+        assert!(
+            all_ended(&ended, 2).is_none(),
+            "a host still followed may still change"
+        );
+        ended.insert("a".to_owned(), Some(Arc::new(ClientError::Disconnected)));
+        assert!(
+            matches!(all_ended(&ended, 2), Some(ClientError::Disconnected)),
+            "the first host by name"
+        );
     }
 }

@@ -66,7 +66,7 @@ fn pair(server: &Sandbox, profile: &str, client: &Sandbox, name: &str) {
 
 /// A running watch and the lines it printed, read on their own thread.
 struct Watch {
-    _child: ChildGuard,
+    child: ChildGuard,
     lines: Receiver<String>,
 }
 
@@ -81,7 +81,7 @@ impl Watch {
             .expect("the watch starts");
         let stdout = child.stdout.take().expect("stdout");
         Self {
-            _child: ChildGuard::new(child),
+            child: ChildGuard::new(child),
             lines: read_lines(stdout),
         }
     }
@@ -177,8 +177,32 @@ fn a_host_with_another_server_key_is_reported_once_and_not_retried() {
     let watch = Watch::start(&client, &["host", "status", "--watch", "srv"]);
     let seen = watch.until(|line| line.starts_with("srv: identity mismatch: "));
     assert_eq!(seen[0], "srv: connecting", "{seen:?}");
-    let more = watch.lines.recv_timeout(Duration::from_secs(3));
-    assert!(more.is_err(), "nothing more is tried: {more:?}");
+    let mut watch = watch;
+    // Nothing more can change: the watch ends, with the exit code of the mismatch.
+    assert_eq!(watch.child.wait_for_exit().code(), Some(4));
+    assert!(
+        watch.lines.recv_timeout(Duration::from_secs(1)).is_err(),
+        "nothing more is printed"
+    );
+}
+
+#[test]
+fn a_watch_of_a_device_revoked_on_its_host_ends_once_nothing_can_change() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let listen = format!("localhost:{}", free_port());
+    let _service = start_server(&server, "server", &listen);
+    pair(&server, "server", &client, "srv");
+
+    let mut watch = Watch::start(&client, &["--json", "host", "status", "--watch", "srv"]);
+    watch.until_state("connected");
+    server.json_ok("server", &["--no-autostart", "device", "revoke", "laptop"]);
+    let refused = watch.until_state("refused");
+    let last = &refused[refused.len() - 1]["result"];
+    assert_eq!(last["detail"], "auth.device_revoked", "{last}");
+    assert_eq!(watch.child.wait_for_exit().code(), Some(4));
+    let failure = watch.next();
+    assert_eq!(document(&failure)["ok"], false, "{failure}");
 }
 
 #[test]
