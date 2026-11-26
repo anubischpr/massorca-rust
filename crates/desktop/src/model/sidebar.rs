@@ -359,6 +359,7 @@ mod tests {
             prototypes: 0,
             service_status: None,
             service_notice: None,
+            preflight: None,
         }
     }
 

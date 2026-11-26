@@ -17,6 +17,7 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
+use massorca_protocol::methods::service::GitStatus as ServiceGitStatus;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -34,6 +35,8 @@ use crate::model::chat_transcript::ChatTranscript;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreUpdate {
     Connection(ConnectionState),
+    /// The host's git as `service.info` reported it on this connection; None when the service reports none.
+    ServiceGit(Option<ServiceGitStatus>),
     /// Every project and workspace, after a connect or an overflow. Replaces what was held.
     Resync {
         projects: Vec<Project>,
@@ -254,6 +257,9 @@ pub struct StoreState {
     pub agents_answered: bool,
     /// When the link last stopped being connected, while it is not.
     pub down_since: Option<Instant>,
+    /// The host's git as `service.info` reported it on this connection; None while not connected, and for a service
+    /// that predates the field.
+    pub service_git: Option<ServiceGitStatus>,
     /// The git state of each workspace the store holds, by workspace id.
     pub git: BTreeMap<String, WorkspaceGit>,
     /// Every team with its Board, once a read answered; `None` while the service cannot list them.
@@ -327,6 +333,7 @@ impl Default for StoreState {
             loaded: false,
             agents_answered: false,
             down_since: None,
+            service_git: None,
             git: BTreeMap::new(),
             teams: None,
             team_read: 0,
@@ -372,9 +379,11 @@ impl StoreState {
                 if !state.is_connected() {
                     self.teams = None;
                     self.extensions = None;
+                    self.service_git = None;
                 }
                 self.connection = state;
             }
+            StoreUpdate::ServiceGit(git) => self.service_git = git,
             StoreUpdate::Resync {
                 projects,
                 workspaces,
@@ -1182,6 +1191,29 @@ mod tests {
         );
         state.apply(StoreUpdate::Connection(up), later);
         assert_eq!(state.down_since, None);
+    }
+
+    #[test]
+    fn the_service_git_is_kept_while_connected_and_cleared_when_the_link_drops() {
+        let mut state = StoreState::default();
+        let t0 = Instant::now();
+        let up = ConnectionState::Connected {
+            server: "s".into(),
+            version: "1".into(),
+        };
+        state.apply(StoreUpdate::Connection(up), t0);
+        assert_eq!(state.service_git, None, "not read yet");
+        state.apply(
+            StoreUpdate::ServiceGit(Some(ServiceGitStatus::Missing)),
+            t0,
+        );
+        assert_eq!(state.service_git, Some(ServiceGitStatus::Missing));
+        let down = ConnectionState::Reconnecting {
+            attempt: 1,
+            retry_at: t0,
+        };
+        state.apply(StoreUpdate::Connection(down), t0);
+        assert_eq!(state.service_git, None, "a lost link reports no git");
     }
 
     #[test]

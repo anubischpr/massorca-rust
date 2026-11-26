@@ -16,6 +16,7 @@ mod marketplace;
 mod pairing;
 mod palette;
 mod path_field;
+mod preflight_banner;
 mod project_icon;
 mod project_mark;
 mod project_sidebar;
@@ -116,6 +117,8 @@ mod marketplace_accounts_tests;
 mod pairing_tests;
 #[cfg(test)]
 mod path_field_tests;
+#[cfg(test)]
+mod preflight_banner_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
@@ -999,6 +1002,10 @@ impl Render for Shell {
             .service_notice
             .as_ref()
             .map(|notice| service_banner::service_banner(notice, &shell));
+        let preflight = self
+            .model
+            .preflight()
+            .map(|notice| preflight_banner::preflight_banner(notice, &shell));
         let theme_banner = self
             .theme_notice
             .as_deref()
@@ -1033,6 +1040,7 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
+                    .when_some(preflight, |el, banner| el.child(banner))
                     .when_some(theme_banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),

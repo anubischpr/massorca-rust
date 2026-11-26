@@ -931,6 +931,11 @@ impl Link {
         let Ok(mut events) = listed else {
             return SessionEnd::Lost;
         };
+        // The host's git rides on `service.info` (PLAT-08); a failed read, or a service that predates the field, reports none.
+        let Some(info) = until_closed(&mut closing, client.service_info()).await else {
+            return SessionEnd::Stop;
+        };
+        self.emit(StoreUpdate::ServiceGit(info.ok().and_then(|info| info.git)));
         let writes = terminals::spawn_writes(client.clone());
         // The watches end with this connection; the ones the UI still follows start again here.
         let mut watches = Watches::default();

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
 use super::hosts::{HostTone, host_state};
+use super::preflight::preflight_notice;
 use super::project_icon::ProjectGlyph;
 use super::shell::{
     Agent, AgentState, HostGroup, HostReach, PlaceholderRow, ProjectGroup, ServiceNotice,
@@ -111,6 +112,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         prototypes: 0,
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
+        preflight: preflight_notice(state.connection.is_connected(), state.service_git.as_ref()),
     }
 }
 

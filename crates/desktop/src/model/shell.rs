@@ -1,6 +1,8 @@
 //! The view models the shell renders from (decision 0023). A `DataSource`
 //! fills them; views never read anything else.
 
+use super::preflight::PreflightNotice;
+
 /// An agent the app can run. Mapped to `massorca_ui` icons by the views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Agent {
@@ -317,6 +319,8 @@ pub struct ShellSnapshot {
     /// The service link, when the data comes from a service. Sample data has none.
     pub service_status: Option<ServiceStatus>,
     pub service_notice: Option<ServiceNotice>,
+    /// The startup preflight notice for git, when the service reports it missing or too old (PLAT-08).
+    pub preflight: Option<PreflightNotice>,
 }
 
 #[cfg(test)]
