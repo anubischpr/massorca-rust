@@ -405,6 +405,19 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         comment: Option<String>,
     },
+    /// Renames a workspace whose name the service chose, and its unpublished branch. The folder keeps its name.
+    Rename {
+        /// Workspace id, name or path.
+        workspace: String,
+        /// The new name; a taken one moves on to `NAME-2` .. `NAME-100`.
+        new_name: String,
+        /// Required: only a name the service chose (a generated or derived one) is renamed.
+        #[arg(long, required = true)]
+        from_generated: bool,
+        /// Refuse unless the worktree is still on this branch.
+        #[arg(long, value_name = "BRANCH")]
+        expected_branch: Option<String>,
+    },
     /// Checks that a workspace's folder exists and is readable and, for a worktree, that git still lists it.
     Check {
         /// Workspace id, name or path.
@@ -442,6 +455,14 @@ pub struct WorkspaceCreateArgs {
     /// Do not run the setup script of the new worktree's `orca.yaml`.
     #[arg(long)]
     pub no_setup: bool,
+    /// When the name, its branch or its folder is taken, use the next free `NAME-2` .. `NAME-100` instead of refusing.
+    /// Not with `--branch`, `--existing-branch` or `--path`.
+    #[arg(long)]
+    pub unique: bool,
+    /// Marks NAME as derived by a script, not typed, so `workspace rename --from-generated` may replace it. Ignored with
+    /// `--branch` or `--existing-branch`. For scripts and tests.
+    #[arg(long)]
+    pub name_generated: bool,
 }
 
 #[derive(Debug, Args)]

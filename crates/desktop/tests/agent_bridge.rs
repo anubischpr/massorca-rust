@@ -470,6 +470,8 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created")
@@ -864,6 +866,8 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     };
     let first_workspace = handle
         .create_workspace(params.clone())

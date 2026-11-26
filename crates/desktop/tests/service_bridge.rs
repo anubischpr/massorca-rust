@@ -164,6 +164,8 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 
