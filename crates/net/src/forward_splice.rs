@@ -2,17 +2,18 @@
 //! one side, and the encoded [`Chunk`]s of its `host.forward_connect` stream on the other.
 //!
 //! Each direction may have at most `window` data chunks unacknowledged; a chunk is acknowledged once it is written to the
-//! receiving socket, so a slow reader slows the sender instead of filling a queue. End of data is half-closed: the
-//! receiver shuts its socket's write side and keeps reading.
+//! receiving socket, so a slow reader slows the sender instead of filling a queue, and a peer past the window ends the
+//! tunnel. Acknowledgements are handled apart from socket writes, so two sides that both send bulk data never wait on
+//! each other. End of data is half-closed: the receiver shuts its socket's write side and keeps reading.
 
 use std::future::Future;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use massorca_protocol::methods::forwards::Chunk;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 
 /// The limits of one tunnel.
@@ -66,14 +67,15 @@ where
     let credits = Semaphore::new(limits.window as usize);
     let sent = AtomicU64::new(0);
     let received = AtomicU64::new(0);
+    // Data chunks the peer sent that are not yet written and acknowledged; the window bounds them.
+    let unacknowledged = AtomicU32::new(0);
     let progress = Progress {
         start: Instant::now(),
         last_activity_ms: AtomicU64::new(0),
-        peer_eof: AtomicBool::new(false),
-        sent_eof: AtomicBool::new(false),
-        peer_eof_seen: Notify::new(),
     };
     let touch = || progress.touch();
+    // The peer's data waits here for the socket. One slot more than the window holds end of data.
+    let (writes, mut queued) = mpsc::channel::<Write>(limits.window as usize + 1);
 
     // Socket to peer: one chunk per credit, so at most `window` chunks wait for an acknowledgement.
     let upstream = async {
@@ -87,7 +89,6 @@ where
             touch();
             let Some(bytes) = buffer.get(..read).filter(|bytes| !bytes.is_empty()) else {
                 send(&outgoing, Chunk::Eof).await?;
-                progress.sent_eof.store(true, Ordering::Relaxed);
                 return Ok(());
             };
             send(&outgoing, Chunk::Data(bytes)).await?;
@@ -95,32 +96,39 @@ where
         }
     };
 
-    // Peer to socket. It runs until the peer's stream ends, since acknowledgements keep coming after end of data.
-    let downstream = async {
+    // The peer's chunks. Acknowledgements are taken here at once, apart from socket writes, so a socket that does not
+    // read never holds back this side's credit. It runs until the peer's stream ends.
+    let inbound = async {
+        let writes = writes;
+        let mut peer_eof = false;
         while let Some(payload) = incoming.recv().await {
             touch();
             match Chunk::decode(&payload) {
                 Ok(Chunk::Data(bytes)) if bytes.len() <= limits.max_chunk => {
-                    if progress.peer_eof.load(Ordering::Relaxed) {
+                    if peer_eof {
                         return SpliceEnd::Protocol("data after end of data".to_owned());
                     }
-                    if let Err(error) = writer.write_all(bytes).await {
-                        return SpliceEnd::Io(error);
+                    if unacknowledged.fetch_add(1, Ordering::Relaxed) >= limits.window {
+                        return SpliceEnd::Protocol(
+                            "more chunks than the window allows".to_owned(),
+                        );
                     }
-                    received.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                    if let Err(end) = send(&outgoing, Chunk::Ack(1)).await {
-                        return end;
+                    if writes.try_send(Write::Data(payload)).is_err() {
+                        return SpliceEnd::Protocol(
+                            "more chunks than the window allows".to_owned(),
+                        );
                     }
                 }
                 Ok(Chunk::Data(bytes)) => {
                     return SpliceEnd::Protocol(format!("a chunk of {} bytes", bytes.len()));
                 }
-                Ok(Chunk::Eof) => {
-                    // A socket whose peer already closed fails to shut down; the end of data still holds.
-                    let _ = writer.shutdown().await;
-                    progress.peer_eof.store(true, Ordering::Relaxed);
-                    progress.peer_eof_seen.notify_one();
+                Ok(Chunk::Eof) if !peer_eof => {
+                    peer_eof = true;
+                    if writes.try_send(Write::Eof).is_err() {
+                        return SpliceEnd::Protocol("end of data past the window".to_owned());
+                    }
                 }
+                Ok(Chunk::Eof) => return SpliceEnd::Protocol("end of data twice".to_owned()),
                 Ok(Chunk::Ack(count)) => {
                     let after = credits.available_permits().saturating_add(count as usize);
                     if after > limits.window as usize {
@@ -133,10 +141,43 @@ where
                 Err(error) => return SpliceEnd::Protocol(error.to_string()),
             }
         }
+        // Dropping the queue's sender lets the socket writer finish what is queued, then stop.
+        drop(writes);
         SpliceEnd::PeerGone
     };
 
-    let end = supervise(upstream, downstream, stop, limits.idle, &progress).await;
+    // Peer to socket: writes queued data in order, acknowledging each chunk once written.
+    let socket_writer = async {
+        while let Some(write) = queued.recv().await {
+            match write {
+                Write::Data(payload) => {
+                    let bytes = payload.get(1..).unwrap_or_default();
+                    writer.write_all(bytes).await.map_err(SpliceEnd::Io)?;
+                    received.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                    unacknowledged.fetch_sub(1, Ordering::Relaxed);
+                    touch();
+                    // A peer that already finished both ways needs no acknowledgement; the queued data is still written.
+                    let _ = send(&outgoing, Chunk::Ack(1)).await;
+                }
+                Write::Eof => {
+                    // A socket whose peer already closed fails to shut down; the end of data still holds.
+                    let _ = writer.shutdown().await;
+                    return Ok(Written::Eof);
+                }
+            }
+        }
+        Ok(Written::Drained)
+    };
+
+    let end = supervise(
+        upstream,
+        inbound,
+        socket_writer,
+        stop,
+        limits.idle,
+        &progress,
+    )
+    .await;
     SpliceReport {
         end,
         sent: sent.load(Ordering::Relaxed),
@@ -144,13 +185,25 @@ where
     }
 }
 
-/// What both directions of a tunnel share: when it last moved, and whether the peer sent end of data.
+/// A queued write to the socket.
+enum Write {
+    /// A whole data payload, tag byte included.
+    Data(Vec<u8>),
+    Eof,
+}
+
+/// How the socket writer stopped without failing.
+enum Written {
+    /// It wrote end of data.
+    Eof,
+    /// The peer's stream ended and everything queued was written.
+    Drained,
+}
+
+/// When a tunnel last moved.
 struct Progress {
     start: Instant,
     last_activity_ms: AtomicU64,
-    peer_eof: AtomicBool,
-    sent_eof: AtomicBool,
-    peer_eof_seen: Notify,
 }
 
 impl Progress {
@@ -165,20 +218,27 @@ impl Progress {
     }
 }
 
+/// Runs the three parts until the tunnel closes (both sides sent end of data), one fails, the peer goes, `stop` resolves
+/// or it idles. A peer that goes after both ends of data closes cleanly once its queued data is written.
 async fn supervise(
     upstream: impl Future<Output = Result<(), SpliceEnd>>,
-    downstream: impl Future<Output = SpliceEnd>,
+    inbound: impl Future<Output = SpliceEnd>,
+    socket_writer: impl Future<Output = Result<Written, SpliceEnd>>,
     stop: impl Future<Output = ()>,
     idle: Duration,
     progress: &Progress,
 ) -> SpliceEnd {
-    tokio::pin!(upstream, downstream, stop);
-    let mut upstream_done = false;
+    tokio::pin!(upstream, inbound, socket_writer, stop);
+    let (mut upstream_done, mut peer_gone, mut written, mut peer_eof) =
+        (false, false, false, false);
     let check_every = (idle / 4).max(Duration::from_millis(10));
     let mut ticks = tokio::time::interval(check_every);
     loop {
-        if upstream_done && progress.peer_eof.load(Ordering::Relaxed) {
+        if upstream_done && peer_eof {
             return SpliceEnd::Closed;
+        }
+        if peer_gone && written {
+            return SpliceEnd::PeerGone;
         }
         tokio::select! {
             () = &mut stop => return SpliceEnd::Stopped,
@@ -186,17 +246,15 @@ async fn supervise(
                 Ok(()) => upstream_done = true,
                 Err(end) => return end,
             },
-            // A peer that finished both ways may leave before the last acknowledgements: that is a clean close.
-            end = &mut downstream => {
-                let both_ended = progress.sent_eof.load(Ordering::Relaxed)
-                    && progress.peer_eof.load(Ordering::Relaxed);
-                return if both_ended && matches!(end, SpliceEnd::PeerGone) {
-                    SpliceEnd::Closed
-                } else {
-                    end
-                };
-            }
-            () = progress.peer_eof_seen.notified() => {}
+            end = &mut inbound, if !peer_gone => match end {
+                SpliceEnd::PeerGone => peer_gone = true,
+                end => return end,
+            },
+            result = &mut socket_writer, if !written => match result {
+                Ok(Written::Eof) => (written, peer_eof) = (true, true),
+                Ok(Written::Drained) => written = true,
+                Err(end) => return end,
+            },
             _ = ticks.tick() => {
                 if progress.quiet_for() >= idle {
                     return SpliceEnd::Idle;
@@ -331,5 +389,99 @@ mod tests {
         };
         let report = splice(socket, out, incoming, std::future::pending(), idle).await;
         assert!(matches!(report.end, SpliceEnd::Idle), "{report:?}");
+    }
+
+    const BULK: SpliceLimits = SpliceLimits {
+        window: 4,
+        max_chunk: 1024,
+        idle: Duration::from_secs(30),
+    };
+
+    /// Bulk data both ways at once, against a target that writes all of its bulk before it reads anything. While its
+    /// socket write waits, acknowledgements must still flow, or the target's own data runs out of credit and both sides
+    /// hang until the idle timeout.
+    #[tokio::test]
+    async fn bulk_both_ways_with_a_target_that_only_writes_for_a_while_does_not_deadlock() {
+        let (client_app, client_socket) = duplex(1024);
+        let (target_app, target_socket) = duplex(1024);
+        let (client_out, target_in) = mpsc::channel(16);
+        let (target_out, client_in) = mpsc::channel(16);
+        let client = tokio::spawn(splice(
+            client_socket,
+            client_out,
+            client_in,
+            std::future::pending(),
+            BULK,
+        ));
+        let target = tokio::spawn(splice(
+            target_socket,
+            target_out,
+            target_in,
+            std::future::pending(),
+            BULK,
+        ));
+        let bulk: Vec<u8> = (0..512 * 1024).map(|at| (at % 251) as u8).collect();
+        // The client writes and reads at the same time.
+        let client_side = async {
+            let (mut read, mut write) = tokio::io::split(client_app);
+            let writing = async {
+                write.write_all(&bulk).await.expect("the client writes");
+                write.shutdown().await.expect("the client ends its data");
+            };
+            let mut got = Vec::new();
+            let ((), read) = tokio::join!(writing, read.read_to_end(&mut got));
+            read.expect("the client reads");
+            got
+        };
+        // The target writes everything first, and only then reads.
+        let target_side = async {
+            let (mut read, mut write) = tokio::io::split(target_app);
+            write.write_all(&bulk).await.expect("the target writes");
+            write.shutdown().await.expect("the target ends its data");
+            let mut got = Vec::new();
+            read.read_to_end(&mut got).await.expect("the target reads");
+            got
+        };
+        let both = async { tokio::join!(client_side, target_side) };
+        let (at_client, at_target) = tokio::time::timeout(Duration::from_secs(20), both)
+            .await
+            .expect("bulk both ways finishes without a deadlock");
+        let ends = (client.await.unwrap(), target.await.unwrap());
+        let first = |got: &[u8]| got.iter().zip(&bulk).position(|(a, b)| a != b);
+        assert!(
+            at_client == bulk && at_target == bulk,
+            "the bulk came back changed: client {} bytes, first difference {:?}; target {} bytes, first difference {:?}",
+            at_client.len(),
+            first(&at_client),
+            at_target.len(),
+            first(&at_target)
+        );
+        let (client, target) = ends;
+        assert!(matches!(client.end, SpliceEnd::Closed), "{client:?}");
+        assert!(matches!(target.end, SpliceEnd::Closed), "{target:?}");
+    }
+
+    /// A peer that sends more unacknowledged chunks than the window allows breaks the rules and ends the tunnel, instead of
+    /// queueing without limit behind a socket that does not read.
+    #[tokio::test]
+    async fn a_peer_past_the_window_is_a_protocol_error() {
+        let (_app, socket) = duplex(1);
+        let (out, _peer_in) = mpsc::channel(64);
+        let (peer_out, incoming) = mpsc::channel(64);
+        let task = tokio::spawn(splice(
+            socket,
+            out,
+            incoming,
+            std::future::pending(),
+            LIMITS,
+        ));
+        for _ in 0..=LIMITS.window {
+            peer_out.send(Chunk::Data(b"abcd").encode()).await.unwrap();
+        }
+        let report = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the tunnel ends")
+            .unwrap();
+        assert!(matches!(report.end, SpliceEnd::Protocol(_)), "{report:?}");
     }
 }

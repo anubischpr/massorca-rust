@@ -46,9 +46,10 @@ reach it: a database, a dev server, an admin page.
   or when the connection is lost (exit 4). Saving forwards per host and restoring them on reconnect is the desktop's
   part of REM-16 and is not built here.
 - D7 Backpressure and close. Each direction may have at most 16 data chunks unacknowledged; a chunk is acknowledged once
-  written to the receiving socket, so a slow reader slows the sender and no queue grows without limit. The service hands
-  client bytes to a stream without waiting; a client that ignores the window fills the stream's queue and the stream
-  ends with `stream.inbound_overflow`. End of data half-closes: the receiver shuts its socket's write side and keeps
+  written to the receiving socket, so a slow reader slows the sender and no queue grows without limit. A side that
+  receives a 17th unacknowledged data chunk ends the tunnel as a protocol error. Acknowledgements are taken apart from
+  socket writes (a writer fed by a queue the size of the window), so a target that writes without reading never starves
+  the other direction of credit, and data queued before the peer leaves is still written. End of data half-closes: the receiver shuts its socket's write side and keeps
   reading. The tunnel ends when both sides sent end of data, either side fails or cancels, the forward stops, or it is
   idle. Closing either socket therefore closes the other.
 - D8 Limits. 16 forwards per connection and 64 connections per forward at a time (`forward.limit`); the CLI closes a
