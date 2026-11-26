@@ -16,6 +16,7 @@ use crate::args::RunArgs;
 use crate::error::CliError;
 use crate::logging::init_service_logging;
 use crate::output::Output;
+use crate::readiness::{ReadinessRecord, lines};
 use crate::service::parent_watch;
 
 /// Runs the service of `profile` until a stop request or a stop signal arrives. A failure before the service accepts
@@ -103,20 +104,18 @@ fn network_config(args: &RunArgs) -> Result<NetworkConfig, CliError> {
     Ok(NetworkConfig { listen })
 }
 
+/// Prints the readiness record once the listeners have settled (never before they are bound), then serves until stopped.
 async fn serve(running: RunningService, output: Output) -> Result<(), CliError> {
     let info = running.info();
     tracing::info!(profile = %info.profile, pid = info.pid, "service started");
-    output.success(
-        &info,
-        &[format!(
-            "service running for profile {} (pid {})",
-            info.profile, info.pid
-        )],
-    );
 
     stop_on_signal(running.shutdown_handle());
     if let Some(pid) = parent_watch::parent_pid() {
         parent_watch::stop_with_parent(pid, running.shutdown_handle());
+    }
+    if let Some(ready) = running.ready().await {
+        let record = ReadinessRecord::new(info, ready);
+        output.success(&record, &lines(&record));
     }
     running.wait().await?;
     tracing::info!("service stopped");

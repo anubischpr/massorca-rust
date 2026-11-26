@@ -9,10 +9,10 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentKind,
-    AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
-    AgentWatchParams, KindEffort, KindModel, ModelSource,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentForkParams,
+    AgentKind, AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams,
+    AgentWatchEvent, AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -65,6 +65,21 @@ pub enum AgentCommand {
         /// The terminal's rows; the service default without it.
         #[arg(long, value_name = "ROWS")]
         rows: Option<u16>,
+    },
+    /// Starts a new session from a copy of an exited session's conversation, with the kind's fork arguments, in the same
+    /// workspace. The source session keeps its own conversation.
+    Fork {
+        /// The source session: id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// The new session's first prompt, at most 8 KiB.
+        #[arg(long, allow_hyphen_values = true)]
+        prompt: Option<String>,
+        /// The new run's permission mode; the kind's default without it.
+        #[arg(long, value_name = "MODE")]
+        mode: Option<String>,
+        /// The new session's title; the source's title without it.
+        #[arg(long)]
+        title: Option<String>,
     },
     /// Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
     Mode {
@@ -616,6 +631,22 @@ pub async fn execute(
                 lines.push("unhidden: the resume shows the session in agent list again".to_owned());
             }
             output.success(&resumed, &lines);
+        }
+        AgentCommand::Fork {
+            session,
+            prompt,
+            mode,
+            title,
+        } => {
+            let forked = client
+                .agent_fork(&AgentForkParams {
+                    session,
+                    prompt,
+                    permission_mode: mode,
+                    title,
+                })
+                .await?;
+            output.success(&forked, &agent_text::session_details(&forked));
         }
         AgentCommand::Mode {
             session,

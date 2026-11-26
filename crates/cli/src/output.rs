@@ -33,6 +33,16 @@ impl Output {
         }
     }
 
+    /// Prints `lines` on stdout in text mode only. A command that fails after printing its report uses this, then
+    /// [`Output::failure`] for the one JSON document.
+    pub fn text_lines(self, lines: &[String]) {
+        if !self.json {
+            for line in lines {
+                write_stdout(line);
+            }
+        }
+    }
+
     /// Prints a progress line on stderr in text mode; JSON mode stays silent, so stdout holds one document.
     pub fn progress(self, line: &str) {
         if !self.json {

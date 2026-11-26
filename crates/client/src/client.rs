@@ -62,6 +62,11 @@ impl Client {
             .any(|offered| offered == name)
     }
 
+    /// Resolves once the connection has ended: the service closed it, or it was lost. Cancel-safe.
+    pub async fn closed(&self) {
+        self.shared.closed().await;
+    }
+
     /// Calls a method and decodes its result. A failure the service reports is `ClientError::Remote`.
     pub async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, ClientError>
     where
