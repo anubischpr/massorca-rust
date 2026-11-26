@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The emulator step of the Android emulator flow (decision 0080, task A11). It installs the release APK, whose JavaScript
 # is bundled (no Metro server), records the device log, makes a pairing offer the emulator can dial at 10.0.2.2, and runs
-# the Maestro flow with it. The offer is masked in the job log and replaced in every file the job keeps.
+# the Maestro flow with it. The offer is masked in the job log and replaced in every file the job keeps. A failed run
+# also keeps the terminal's screen as text: the server's view of the shell the flow typed into.
 set -euo pipefail
 
 cd "$GITHUB_WORKSPACE"
@@ -10,6 +11,7 @@ readonly PORT=7347
 readonly FLOW=mobile/.maestro/pairing-home-workspaces.yaml
 readonly LOGCAT="$RUNNER_TEMP/logcat-full.txt"
 readonly CRASHLOG="$RUNNER_TEMP/logcat-crash.txt"
+readonly SCREENLOG="$RUNNER_TEMP/terminal-screen.txt"
 readonly DEBUG_DIR="$RUNNER_TEMP/maestro-debug"
 offer=""
 logcat_pid=""
@@ -29,12 +31,18 @@ for name in sys.argv[2:]:
         data = path.read_bytes()
         if secret in data:
             path.write_bytes(data.replace(secret, b"<pairing offer redacted>"))
-' "$offer" "$LOGCAT" "$CRASHLOG" "$DEBUG_DIR" || true
+' "$offer" "$LOGCAT" "$CRASHLOG" "$SCREENLOG" "$DEBUG_DIR" || true
 }
 
 cleanup() {
+  local status=$?
   if [ -n "$logcat_pid" ]; then kill "$logcat_pid" 2>/dev/null || true; fi
   adb logcat -d -b crash >"$CRASHLOG" 2>/dev/null || true
+  # Only a failed run keeps the screen: the text the server holds for the terminal, not the phone's drawing of it.
+  if [ "$status" -ne 0 ] && [ -n "${MASSORCA_E2E_TERMINAL:-}" ]; then
+    "$MASSORCA_BIN" --json terminal screen "$MASSORCA_E2E_TERMINAL" 2>/dev/null |
+      jq -r '.result.lines[]' >"$SCREENLOG" 2>/dev/null || true
+  fi
   redact
 }
 trap cleanup EXIT
@@ -48,9 +56,7 @@ adb logcat -v threadtime AndroidRuntime:E ReactNative:V ReactNativeJS:V ReactHos
 logcat_pid=$!
 adb install -r "$apk"
 
-offer="$("$MASSORCA_BIN" --json pair offer --ttl 900 | jq -r '.result.offer')"
-test -n "$offer"
-offer="$(printf '%s' "$offer" | python3 scripts/ci/rewrite-offer-address.py --address "10.0.2.2:$PORT")"
+offer="$("$MASSORCA_BIN" --json pair offer --ttl 900 --address "10.0.2.2:$PORT" | jq -r '.result.offer')"
 test -n "$offer"
 echo "::add-mask::$offer"
 
