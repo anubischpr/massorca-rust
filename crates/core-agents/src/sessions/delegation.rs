@@ -1223,6 +1223,7 @@ then report"
                 pending_switch: None,
                 account: None,
                 typed_since_report: false,
+                settle_until: None,
                 switching: false,
                 delivering: false,
                 finished: false,

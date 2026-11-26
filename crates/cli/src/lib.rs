@@ -11,6 +11,8 @@ pub mod agent_text;
 pub mod agent_title;
 pub mod app;
 pub mod args;
+pub mod automations;
+pub mod calendar;
 pub mod cli_install;
 pub mod config;
 pub mod connect;

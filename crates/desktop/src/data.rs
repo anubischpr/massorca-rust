@@ -35,6 +35,7 @@ fn session(ws: Ws, id: &str, title: &str, agent: Agent, state: AgentState) -> Se
         own_worktree: false,
         can_bring_back: false,
         unread: false,
+        archived: false,
         children: Vec::new(),
     }
 }

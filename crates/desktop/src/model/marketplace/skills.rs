@@ -15,6 +15,8 @@ pub struct SkillRow {
     pub agents: Vec<&'static str>,
     /// The label of the root the skill was read from.
     pub source: String,
+    /// Whether MassOrca may place this skill: only a skill in an agent tool's home folder is copied.
+    pub placeable: bool,
     /// Whether a copy of the skill is installed in an agent folder.
     pub installed: bool,
 }
@@ -46,6 +48,7 @@ fn skill_row(skill: &DiscoveredSkill) -> SkillRow {
         description: skill.description.clone(),
         agents: agent_labels(&skill.providers),
         source: skill.source_label.clone(),
+        placeable: skill.source_kind == SkillSourceKind::Home,
         installed: skill.installed,
     }
 }

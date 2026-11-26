@@ -4,12 +4,13 @@
 use std::collections::BTreeSet;
 
 use super::Shell;
+use super::session_rename::SessionRename;
 use super::sidebar_rows::{nav_row, tree_item};
 use super::teams;
 use super::tooltip::with_tooltip;
 use crate::model::morph::ease;
 use crate::model::shell_state::ShellModel;
-use crate::model::sidebar::{NavRow, SidebarContent, TreeRow, collapse_projects};
+use crate::model::sidebar::{NavRow, SidebarContent, TreeRow, collapse_projects, session_indent};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Div, Entity, FocusHandle, IntoElement,
     MouseButton, SharedString, Stateful, Window, div, prelude::*, px,
@@ -24,12 +25,20 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
+/// What the Sidebar shows beyond its tree: the collapsed projects, the session title being edited, and the Show archived
+/// toggle, drawn only while the service offers `agent-archive/1` (`archive` is its state then; decision 0163).
+pub(super) struct SidebarView<'a> {
+    pub(super) collapsed: &'a BTreeSet<String>,
+    pub(super) renaming: Option<&'a SessionRename>,
+    pub(super) archive: Option<bool>,
+}
+
 /// The Sidebar column. Inline it sits beside the Canvas; as the overlay it floats over the
 /// Canvas when the window is too narrow for it (X1). `switch` is the mode switch in progress,
 /// if any: its content fades in over it.
 pub(super) fn sidebar(
     model: &ShellModel,
-    collapsed: &BTreeSet<String>,
+    view: SidebarView<'_>,
     search: &Entity<SearchField>,
     overlay: bool,
     switch: Option<u64>,
@@ -74,14 +83,16 @@ pub(super) fn sidebar(
         SidebarContent::Workspaces { nav, tree } => {
             let content = content.child(create_button(&shell)).child(search.clone());
             let content = nav_rows(content, &nav, "nav", &shell, window, cx);
+            let archive = view.archive.map(|shown| archive_toggle(&shell, shown));
             content
-                .child(projects_header(&theme))
+                .child(projects_header(&theme, archive))
                 .child(tree_list(
-                    &collapse_projects(tree, collapsed),
+                    &collapse_projects(tree, view.collapsed),
                     &shell,
                     window,
                     cx,
                     &theme,
+                    view.renaming,
                 ))
                 .child(footer())
         }
@@ -144,7 +155,7 @@ fn create_button(shell: &gpui::WeakEntity<Shell>) -> impl IntoElement {
         })
 }
 
-pub(super) fn projects_header(theme: &Theme) -> impl IntoElement {
+pub(super) fn projects_header(theme: &Theme, archive: Option<AnyElement>) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -184,8 +195,35 @@ pub(super) fn projects_header(theme: &Theme) -> impl IntoElement {
                     "sidebar-new-project",
                     IconName::Plus,
                     "New project",
-                )),
+                ))
+                .when_some(archive, |buttons, toggle| buttons.child(toggle)),
         )
+}
+
+/// The Show archived toggle: pressed while archived sessions are listed (decision 0163).
+fn archive_toggle(shell: &gpui::WeakEntity<Shell>, shown: bool) -> AnyElement {
+    let shell = shell.clone();
+    let icon = if shown {
+        IconName::Eye
+    } else {
+        IconName::EyeOff
+    };
+    div()
+        .debug_selector(|| "sidebar-show-archived".to_owned())
+        .child(with_tooltip(
+            IconButton::new("sidebar-show-archived", icon, "Show archived")
+                .size(ButtonSize::Compact)
+                .toggle(shown)
+                .on_click(move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        let show = !shell.model.show_archived();
+                        shell.model.set_show_archived(show);
+                        cx.notify();
+                    });
+                }),
+            "Show archived",
+        ))
+        .into_any_element()
 }
 
 fn header_button(id: &'static str, icon: IconName, label: &'static str) -> impl IntoElement {
@@ -195,13 +233,32 @@ fn header_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
     )
 }
 
-/// The project tree, scrollable on its own. Empty, it says so (A10).
+/// A session row whose title is being edited: the field takes the row's place, and Escape closes it (A97).
+fn rename_row(rename: &SessionRename, depth: usize, shell: &gpui::WeakEntity<Shell>) -> AnyElement {
+    let (shell, selector) = (shell.clone(), format!("sidebar-rename-{}", rename.session));
+    div()
+        .debug_selector(move || selector.clone())
+        .flex()
+        .items_center()
+        .pl(px(session_indent(depth)))
+        .pr(px(SPACE_2))
+        .on_key_down(move |event, _, cx| {
+            if event.keystroke.key == "escape" {
+                let _ = shell.update(cx, |shell, cx| shell.finish_session_rename(false, cx));
+            }
+        })
+        .child(rename.field.clone())
+        .into_any_element()
+}
+
+/// The project tree, scrollable on its own. Empty, it says so (A10). A session being renamed shows its field.
 fn tree_list(
     tree: &[TreeRow],
     shell: &gpui::WeakEntity<Shell>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
+    renaming: Option<&SessionRename>,
 ) -> Stateful<Div> {
     let mut list = div()
         .id("sidebar-tree")
@@ -222,6 +279,12 @@ fn tree_list(
         );
     }
     for (index, row) in tree.iter().enumerate() {
+        if let (Some(rename), TreeRow::Session { id, depth, .. }) = (renaming, row)
+            && rename.session == *id
+        {
+            list = list.child(rename_row(rename, *depth, shell));
+            continue;
+        }
         let focus = row_focus(window, cx, format!("tree-{index}"));
         list = list.child(tree_item(row, index, &focus, shell));
     }
