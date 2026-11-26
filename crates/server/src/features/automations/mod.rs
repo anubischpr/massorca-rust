@@ -1,10 +1,12 @@
 //! Scheduled automations: their definitions (decision 0123), `automation.create`, `list`, `show`, `update`, `rm`,
 //! `enable` and `disable` under capability `automations/1`; and their runs (decision 0125): the timer, the agent launch,
-//! completion, `automation.run_now` and `automation.runs` under capability `automation-runs/1`.
+//! completion, `automation.run_now` and `automation.runs` under capability `automation-runs/1`. Where runs work is a
+//! destination (decision 0127), under capability `automation-destinations/1`.
 
 mod calls;
 mod completion;
 mod definition;
+mod destination;
 mod launch;
 mod occurrences;
 mod run_calls;
@@ -84,6 +86,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AUTOMATION_RUNS, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::AUTOMATION_DESTINATIONS, Owner::Core)?,
         methods.register(
             Owner::Core,
             automations::RUN_NOW,

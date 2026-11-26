@@ -47,6 +47,10 @@ fn store_with(next_run_at: i64, with_project: bool) -> (Store, String) {
         creation_key: None,
         next_run_at: Some(next_run_at),
         last_run_at: None,
+        destination: massorca_core_store::destination::PROJECT_DEFAULT.to_owned(),
+        destination_workspace_id: None,
+        destination_path: None,
+        base_branch: None,
         created_at: 1,
         updated_at: 1,
     };
@@ -57,10 +61,15 @@ fn store_with(next_run_at: i64, with_project: bool) -> (Store, String) {
 /// Runs one check whose launch only notes the runs it was given.
 fn check(store: &Store, now: i64) -> Vec<AutomationRunRow> {
     let mut launched = Vec::new();
-    tick(store, now, &mut |_automation, run| {
-        launched.push(run.clone());
-        None
-    })
+    tick(
+        store,
+        now,
+        &mut |_automation| None,
+        &mut |_automation, run| {
+            launched.push(run.clone());
+            None
+        },
+    )
     .unwrap();
     launched
 }

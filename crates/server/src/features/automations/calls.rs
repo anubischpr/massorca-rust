@@ -11,6 +11,7 @@ use massorca_protocol::{ErrorBody, codes};
 use super::definition::{
     HostZone, cadence_name, check, check_grace, keep_for, next_run, time_kept, weekday_name,
 };
+use super::destination::{self, Stored};
 use super::selectors::automation;
 use super::view::automation_view;
 use crate::context::RequestCtx;
@@ -174,6 +175,7 @@ fn new_row(
     key: Option<String>,
 ) -> Result<AutomationRow, ErrorBody> {
     let (project_id, _) = project_of(domain, &params.project)?;
+    let stored = destination::check(domain, &project_id, params.destination.as_ref())?;
     let cadence = cadence_name(params.cadence)?;
     let weekday = params
         .weekday
@@ -198,6 +200,10 @@ fn new_row(
         creation_key: key,
         next_run_at: None,
         last_run_at: None,
+        destination: stored.kind.to_owned(),
+        destination_workspace_id: stored.workspace_id,
+        destination_path: stored.path,
+        base_branch: stored.base_branch,
         created_at: now,
         updated_at: now,
     })
@@ -214,6 +220,13 @@ fn apply_edit(
     let before = schedule_fields(row);
     if let Some(selector) = params.project.as_deref() {
         row.project_id = Some(project_of(domain, selector)?.0);
+        // A destination names a workspace or repository of the old project, so it is set again with the new one.
+        if params.destination.is_none() && row.destination != Stored::project_default().kind {
+            return Err(ErrorBody::new(
+                codes::AUTOMATION_DESTINATION_INVALID,
+                "changing the project needs its destination given again",
+            ));
+        }
     }
     if let Some(name) = &params.name {
         row.name = non_blank(name, "the automation name")?;
@@ -250,6 +263,19 @@ fn apply_edit(
     }
     if params.grace_minutes.is_some() {
         row.grace_minutes = check_grace(params.grace_minutes)?;
+    }
+    if let Some(given) = &params.destination {
+        let project_id = row.project_id.clone().ok_or_else(|| {
+            ErrorBody::new(
+                codes::AUTOMATION_NO_PROJECT,
+                "the automation has no project, so it cannot take a destination",
+            )
+        })?;
+        let stored = destination::check(domain, &project_id, Some(given))?;
+        row.destination = stored.kind.to_owned();
+        row.destination_workspace_id = stored.workspace_id;
+        row.destination_path = stored.path;
+        row.base_branch = stored.base_branch;
     }
     row.updated_at = now;
     Ok(before != schedule_fields(row))

@@ -21,8 +21,9 @@ use crate::shutdown::ShutdownSignal;
 
 use super::completion::follow_runs;
 use super::definition::compile;
+use super::destination::{Refusal, refusal};
 use super::launch::dispatch;
-use super::runs::{TRIGGER_SCHEDULE, missed_run, new_run, prune, publish};
+use super::runs::{TRIGGER_SCHEDULE, missed_run, placed_run, prune, publish};
 
 /// How often the host checks for due automations (AUTO-03).
 const CHECK_EVERY: Duration = Duration::from_secs(60);
@@ -98,9 +99,12 @@ async fn check(state: &Arc<AppState>) {
     let now = now_ms();
     let workspaces = Arc::clone(&state.workspaces);
     let outcome = blocking_state(state, move |store, agents| {
-        tick(store, now, &mut |automation, run| {
-            dispatch(store, agents, &workspaces, automation, run)
-        })
+        tick(
+            store,
+            now,
+            &mut |automation| refusal(&workspaces, automation),
+            &mut |automation, run| dispatch(store, agents, &workspaces, automation, run),
+        )
     })
     .await;
     match outcome {
@@ -123,6 +127,8 @@ async fn check(state: &Arc<AppState>) {
 
 /// Starts a stored dispatching run; returns the workspace it made. The timer passes `dispatch`.
 pub(super) type Launch<'a> = dyn FnMut(&AutomationRow, &AutomationRunRow) -> Option<String> + 'a;
+/// The refusal an automation's destination meets now, if any; the timer passes `refusal`.
+pub(super) type Refuse<'a> = dyn FnMut(&AutomationRow) -> Option<Refusal> + 'a;
 
 /// What one claimed automation changed.
 pub(super) struct Changed {
@@ -135,11 +141,13 @@ pub(super) struct Changed {
 pub(super) fn tick(
     store: &Store,
     now: i64,
+    refuse: &mut Refuse<'_>,
     launch: &mut Launch<'_>,
 ) -> Result<Vec<Changed>, ErrorBody> {
     let mut changed = Vec::new();
     for automation in store.due_automations(now).map_err(store_error)? {
-        let runs = match claim(store, &automation, now) {
+        let refused = refuse(&automation);
+        let runs = match claim(store, &automation, now, refused) {
             Ok(Some(runs)) => runs,
             Ok(None) => continue,
             Err(error) => {
@@ -169,6 +177,7 @@ fn claim(
     store: &Store,
     automation: &AutomationRow,
     now: i64,
+    refused: Option<Refusal>,
 ) -> Result<Option<Vec<AutomationRunRow>>, ErrorBody> {
     let Some(stored) = automation.next_run_at else {
         return Ok(None);
@@ -196,7 +205,7 @@ fn claim(
     }
     let grace = automation.grace_minutes.unwrap_or(DEFAULT_GRACE_MINUTES);
     let latest = if runs_within_grace(scheduled_for, now, grace, CHECK_EVERY_MS) {
-        new_run(automation, TRIGGER_SCHEDULE, scheduled_for, now)
+        placed_run(automation, TRIGGER_SCHEDULE, scheduled_for, refused, now)
     } else {
         missed_run(
             automation,

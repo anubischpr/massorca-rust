@@ -9,6 +9,7 @@ use massorca_protocol::methods::automations::{
 };
 use massorca_protocol::methods::events::ChangeEvent;
 
+use super::destination::{NO_PROJECT, Refusal};
 use crate::context::AppState;
 
 /// Final runs kept per automation; runs in progress are never evicted (AUTO-03, as pv96 keeps them).
@@ -16,17 +17,18 @@ pub(super) const KEPT_FINAL_RUNS: usize = 100;
 /// The most characters of a run's result text kept, its most recent ones.
 pub(super) const MAX_RESULT_CHARS: usize = 16_384;
 
-const NO_PROJECT: &str = "The automation has no project, so the run did not start.";
 const NO_USAGE: &str = "the agent session reports no token usage";
 
 pub(super) const TRIGGER_SCHEDULE: &str = "schedule";
 pub(super) const TRIGGER_MANUAL: &str = "manual";
 
-/// A run about to be stored for `automation`: dispatching when it has a project, otherwise skipped as unavailable.
-pub(super) fn new_run(
+/// A run about to be stored for `automation`: dispatching when it can start, otherwise skipped as unavailable with
+/// the refusal it meets (decision 0127). An automation without a project is refused as such.
+pub(super) fn placed_run(
     automation: &AutomationRow,
     trigger: &str,
     scheduled_for: i64,
+    refused: Option<Refusal>,
     now: i64,
 ) -> AutomationRunRow {
     let run = AutomationRunRow {
@@ -39,16 +41,26 @@ pub(super) fn new_run(
         created_at: now,
         ..AutomationRunRow::default()
     };
-    if automation.project_id.is_some() {
-        return run;
+    match refused.or_else(|| automation.project_id.is_none().then_some(NO_PROJECT)) {
+        None => run,
+        Some(refusal) => skipped(
+            run,
+            run_state::SKIPPED_UNAVAILABLE,
+            refusal.code,
+            refusal.sentence,
+            now,
+        ),
     }
-    skipped(
-        run,
-        run_state::SKIPPED_UNAVAILABLE,
-        codes::AUTOMATION_NO_PROJECT,
-        NO_PROJECT,
-        now,
-    )
+}
+
+/// A run about to be stored for `automation` that is not refused by its destination; see [`placed_run`].
+pub(super) fn new_run(
+    automation: &AutomationRow,
+    trigger: &str,
+    scheduled_for: i64,
+    now: i64,
+) -> AutomationRunRow {
+    placed_run(automation, trigger, scheduled_for, None, now)
 }
 
 /// `occurrences` missed occurrences from `scheduled_for`, folded into one row with `reason`.
