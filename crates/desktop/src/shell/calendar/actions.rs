@@ -13,6 +13,7 @@ use crate::model::canvas::Canvas;
 use crate::model::navigation::Page;
 use crate::model::teams::{TeamId, TeamPage};
 use crate::service::{CAPABILITY_MISSING, Refusal};
+use crate::ui_state;
 
 /// What the page says when no service is connected.
 const NOT_CONNECTED: &str = "Connect to MassOrca to read the calendar.";
@@ -63,6 +64,7 @@ impl Shell {
 
     pub(in crate::shell) fn set_calendar_show_done(&mut self, show: bool, cx: &mut Context<Self>) {
         self.calendar.set_show_done(show);
+        ui_state::remember_calendar_show_done(cx, show);
         self.request_calendar(cx);
     }
 

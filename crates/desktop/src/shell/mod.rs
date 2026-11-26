@@ -608,7 +608,12 @@ impl Shell {
             automations: Default::default(),
             automation_editor: None,
             automations_loading: false,
-            calendar: crate::model::calendar::CalendarState::new(crate::model::calendar::today()),
+            calendar: {
+                let mut calendar =
+                    crate::model::calendar::CalendarState::new(crate::model::calendar::today());
+                calendar.set_show_done(ui_state::saved_calendar_show_done(cx));
+                calendar
+            },
             calendar_on_screen: false,
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,

@@ -1,4 +1,5 @@
-//! The desktop's remembered UI state (SET-02): the theme last applied and the regions left open. It is saved in
+//! The desktop's remembered UI state (SET-02): the theme last applied, the regions left open and the Calendar's Show
+//! done switch. It is saved in
 //! `desktop/state/ui-state.json` of the profile, so the first frame of a start already uses the saved theme.
 
 use std::collections::BTreeMap;
@@ -28,6 +29,8 @@ pub struct UiState {
     pub marketplace_host: Option<HostTarget>,
     /// The explicit permission mode last picked on a start page, by agent kind id; picking the CLI's default clears it.
     pub start_permission_modes: BTreeMap<String, String>,
+    /// The Calendar's Show done switch as the viewer last left it; off until it is switched on.
+    pub calendar_show_done: bool,
 }
 
 impl Default for UiState {
@@ -37,6 +40,7 @@ impl Default for UiState {
             open_regions: RegionState::default().open().to_vec(),
             marketplace_host: None,
             start_permission_modes: BTreeMap::new(),
+            calendar_show_done: false,
         }
     }
 }
@@ -121,6 +125,16 @@ pub fn remember_start_mode(cx: &mut App, kind: &str, mode: Option<&str>) {
     });
 }
 
+/// Whether the Calendar's Show done switch was last left on, so the page opens as it was. Off without a kept profile.
+pub fn saved_calendar_show_done(cx: &App) -> bool {
+    cx.has_global::<UiStateStore>() && cx.global::<UiStateStore>().saved.calendar_show_done
+}
+
+/// Remembers whether the Calendar's Show done switch is on for this viewer. Does nothing when no profile is kept.
+pub fn remember_calendar_show_done(cx: &mut App, show: bool) {
+    remember(cx, move |state| state.calendar_show_done = show);
+}
+
 fn save(profile: &Profile, state: &UiState) -> io::Result<()> {
     let folder = open_desktop_state_dir(profile).map_err(io::Error::other)?;
     folder.write_file(UI_STATE_FILE, encode(state).as_bytes())
@@ -158,6 +172,13 @@ struct Stored {
         skip_serializing_if = "Option::is_none"
     )]
     start_permission_modes: Option<BTreeMap<String, String>>,
+    /// The Calendar's Show done switch, written only while it is on.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    calendar_show_done: Option<bool>,
 }
 
 /// A member of the wrong type reads as missing, so the others still apply.
@@ -184,6 +205,7 @@ fn encode(state: &UiState) -> String {
         marketplace_host: state.marketplace_host.as_ref().map(HostTarget::key),
         start_permission_modes: (!state.start_permission_modes.is_empty())
             .then(|| state.start_permission_modes.clone()),
+        calendar_show_done: state.calendar_show_done.then_some(true),
     };
     let mut text = serde_json::to_string_pretty(&stored).unwrap_or_default();
     text.push('\n');
@@ -228,6 +250,7 @@ fn decode(text: &str) -> Option<UiState> {
         open_regions,
         marketplace_host,
         start_permission_modes: stored.start_permission_modes.unwrap_or_default(),
+        calendar_show_done: stored.calendar_show_done.unwrap_or(false),
     })
 }
 
@@ -285,8 +308,9 @@ mod tests {
         let state = UiState {
             theme: Appearance::Light,
             open_regions: vec![Region::WorkPanel, Region::Sidebar],
-            marketplace_host: None,
             start_permission_modes: BTreeMap::from([("claude".to_owned(), "plan".to_owned())]),
+            calendar_show_done: true,
+            ..UiState::default()
         };
 
         save(&profile, &state).expect("saved");
@@ -345,9 +369,7 @@ mod tests {
             load(&profile),
             UiState {
                 theme: Appearance::Light,
-                open_regions: UiState::default().open_regions,
-                marketplace_host: None,
-                start_permission_modes: BTreeMap::new(),
+                ..UiState::default()
             }
         );
 
@@ -490,5 +512,66 @@ mod tests {
             load(&profile).start_permission_modes,
             BTreeMap::from([("codex".to_owned(), "read-only".to_owned())])
         );
+    }
+
+    #[test]
+    fn the_calendar_show_done_switch_is_saved_and_read_back() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        let state = UiState {
+            calendar_show_done: true,
+            ..UiState::default()
+        };
+
+        save(&profile, &state).expect("saved");
+
+        assert_eq!(load(&profile), state);
+        let text = fs::read_to_string(profile.ui_state_path()).expect("the file");
+        assert!(text.contains("\"calendar_show_done\": true"), "{text}");
+    }
+
+    #[test]
+    fn a_switch_left_off_is_not_written_and_an_older_or_damaged_file_reads_it_off() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        save(&profile, &UiState::default()).expect("saved");
+        let text = fs::read_to_string(profile.ui_state_path()).expect("the file");
+        assert!(!text.contains("calendar_show_done"), "{text}");
+
+        write_raw(&profile, r#"{"version": 1, "theme": "light"}"#);
+        assert!(
+            !load(&profile).calendar_show_done,
+            "a file from before the switch"
+        );
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "theme": "light", "calendar_show_done": "yes"}"#,
+        );
+        assert_eq!(
+            load(&profile),
+            UiState {
+                theme: Appearance::Light,
+                ..UiState::default()
+            }
+        );
+    }
+
+    #[gpui::test]
+    fn the_show_done_switch_is_remembered_for_this_viewer(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            install(cx, profile.clone(), UiState::default());
+            assert!(!saved_calendar_show_done(cx), "off until it is switched on");
+            remember_calendar_show_done(cx, true);
+            assert!(saved_calendar_show_done(cx));
+        });
+        assert!(load(&profile).calendar_show_done);
+
+        cx.update(|cx| remember_calendar_show_done(cx, false));
+
+        assert!(!load(&profile).calendar_show_done);
     }
 }
