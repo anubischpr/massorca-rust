@@ -44,8 +44,8 @@ project_id="$("$bin" --json project add "$project_dir" --folder --name e2e-folde
 test -n "$project_id"
 workspace_id="$("$bin" --json workspace create "$project_id" e2e-folder | jq -r '.result.id')"
 test -n "$workspace_id"
-# One live terminal: the workspace's Terminal view opens it at once, so the flow needs no tap to start a shell.
-terminal_id="$("$bin" --json terminal create "$workspace_id" | jq -r '.result.id')"
+# One live terminal in bash, so its prompt ends in $, which the flow waits for. The Terminal view opens it at once.
+terminal_id="$("$bin" --json terminal create "$workspace_id" --shell /bin/bash | jq -r '.result.id')"
 test -n "$terminal_id"
 printf 'MASSORCA_E2E_TERMINAL=%s\n' "$terminal_id" >> "$GITHUB_ENV"
 echo "service listening on localhost:$PORT with the e2e-folder workspace and its terminal"
