@@ -49,7 +49,7 @@ fn unreadable() -> Vec<JournalOp> {
 }
 
 impl ChatAdapter for TestAdapter {
-    fn launch_args(&self, planned: Vec<String>) -> Vec<String> {
+    fn launch_args(&mut self, planned: Vec<String>) -> Vec<String> {
         std::iter::once(TEST_CHAT_ARG.to_owned())
             .chain(planned)
             .collect()

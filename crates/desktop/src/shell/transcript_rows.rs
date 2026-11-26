@@ -244,6 +244,7 @@ mod tests {
                 user_item: None,
                 completed_at_ms: None,
                 outcome: None,
+                usage: None,
             }),
         )
     }
