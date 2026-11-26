@@ -570,6 +570,10 @@ pub enum HostCommand {
     Status {
         /// Host name. Without it, every host is checked.
         name: Option<String>,
+        /// Keeps a connection to each host open and prints its state each time it changes, reconnecting by itself,
+        /// until interrupted.
+        #[arg(long)]
+        watch: bool,
     },
     /// Lists the online Tailscale peers, and which of them run massorca.
     Discover,
