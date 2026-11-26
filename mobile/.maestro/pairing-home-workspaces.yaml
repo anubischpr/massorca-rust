@@ -49,7 +49,8 @@ appId: dev.massorca.app
     timeout: 60000
 - back
 # The workspace opens on its Changes view. Its Terminal view opens the workspace's only live terminal at once.
-- tapOn: "e2e-folder, No Git"
+# The middle of the row is the No Git badge, which would open the sheet again, so the folder's name is tapped.
+- tapOn: "^e2e-folder$"
 - tapOn:
     id: "workspace-view-terminal"
 # Screen 6: the shell's prompt shows once the terminal page is ready and attached. Until then the input takes no text.
