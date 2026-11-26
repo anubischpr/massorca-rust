@@ -4,7 +4,7 @@
 
 use rusqlite::{OptionalExtension, Row, Transaction, params};
 
-use crate::agent_sessions::{AgentSessionRow, RunExit};
+use crate::agent_sessions::RunExit;
 use crate::error::StoreError;
 use crate::store::Store;
 
@@ -135,23 +135,6 @@ fn next_seq(transaction: &Transaction<'_>, session: &str) -> rusqlite::Result<Op
 }
 
 impl Store {
-    /// Inserts a session whose run is a chat run with id `run_id`, in one transaction with its row.
-    pub fn insert_chat_agent_session(
-        &self,
-        row: &AgentSessionRow,
-        run_id: &str,
-    ) -> Result<(), StoreError> {
-        let connection = self.lock();
-        let transaction = connection.unchecked_transaction()?;
-        Self::insert_agent_session_in(&transaction, row)?;
-        transaction.execute(
-            "UPDATE agent_sessions SET run_type = 'chat', run_id = ?2 WHERE id = ?1",
-            params![row.id, run_id],
-        )?;
-        transaction.commit()?;
-        Ok(())
-    }
-
     /// The run type of a session and its chat run id; `None` when there is no such session.
     pub fn agent_session_run(&self, id: &str) -> Result<Option<SessionRun>, StoreError> {
         self.query_optional(
@@ -461,7 +444,9 @@ fn head_from_row(row: &Row<'_>) -> rusqlite::Result<ChatJournalHead> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_sessions::{RunExitReason, RunMode};
+    use crate::agent_sessions::{
+        AgentSessionRow, RunExitReason, RunMode, SessionDetails, SessionOrigin,
+    };
     use crate::projects::{ProjectKind, ProjectRow};
     use crate::workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
     use crate::{new_id, now_ms};
@@ -519,11 +504,37 @@ mod tests {
             released_at: None,
         };
         if chat {
-            store.insert_chat_agent_session(&row, "run-1").unwrap();
+            store
+                .insert_agent_session_with_origin(&row, &SessionOrigin::default(), Some("run-1"))
+                .unwrap();
         } else {
             store.insert_agent_session(&row).unwrap();
         }
         (store, row.id)
+    }
+
+    /// A preview is the first characters of the newest message, however many chunks follow them (decision 0168): the
+    /// read takes at most as many chunks as it has characters, and every chunk holds at least one.
+    #[test]
+    fn a_preview_is_the_first_characters_of_a_message_with_many_chunks() {
+        let (store, session) = store_with_session(true);
+        store.open_chat_journal(&session, "epoch-1").unwrap();
+        store
+            .add_chat_item(&session, &message("1", Some("a")), 100)
+            .unwrap();
+        for _ in 0..499 {
+            store.append_chat_item_text(&session, "1", "b").unwrap();
+        }
+        let expected = format!("a{}", "b".repeat(399));
+        assert_eq!(
+            store
+                .agent_session_details(&session)
+                .unwrap()
+                .unwrap()
+                .last_message
+                .as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     fn message<'a>(id: &'a str, text: Option<&'a str>) -> NewChatItem<'a> {
@@ -780,5 +791,103 @@ mod tests {
         assert!(store.delete_agent_session(&session).unwrap());
         assert_eq!(store.chat_journal_head(&session).unwrap(), None);
         assert_eq!(store.chat_item(&session, "1").unwrap(), None);
+    }
+
+    /// A view's details (decision 0168): the origin written with the row, the workspace's branch, and the start of the
+    /// newest user or assistant message with text, its appended chunks included.
+    #[test]
+    fn details_carry_the_origin_the_branch_and_the_newest_message() {
+        let (store, session) = store_with_session(true);
+        let details = store.agent_session_details(&session).unwrap().unwrap();
+        assert_eq!(details, SessionDetails::default(), "nothing recorded yet");
+        assert_eq!(store.agent_session_details("missing").unwrap(), None);
+
+        store.open_chat_journal(&session, "epoch-1").unwrap();
+        let mut question = message("1", Some("first question"));
+        question.item_type = "user_message";
+        store.add_chat_item(&session, &question, 100).unwrap();
+        assert_eq!(
+            store
+                .agent_session_details(&session)
+                .unwrap()
+                .unwrap()
+                .last_message
+                .as_deref(),
+            Some("first question")
+        );
+        store
+            .add_chat_item(&session, &message("2", Some("")), 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .agent_session_details(&session)
+                .unwrap()
+                .unwrap()
+                .last_message
+                .as_deref(),
+            Some("first question"),
+            "an answer with no text yet is skipped"
+        );
+        store.append_chat_item_text(&session, "2", "the ").unwrap();
+        store
+            .append_chat_item_text(&session, "2", "answer")
+            .unwrap();
+        let mut thinking = message("3", Some("not a message"));
+        thinking.item_type = "thinking";
+        store.add_chat_item(&session, &thinking, 100).unwrap();
+        assert_eq!(
+            store
+                .agent_session_details(&session)
+                .unwrap()
+                .unwrap()
+                .last_message
+                .as_deref(),
+            Some("the answer")
+        );
+    }
+
+    #[test]
+    fn an_origin_is_written_with_its_row_and_the_branch_follows_the_workspace() {
+        let (store, existing) = store_with_session(false);
+        let mut row = store.get_agent_session(&existing).unwrap().unwrap();
+        row.id = new_id();
+        let origin = SessionOrigin {
+            model: Some("model-a".to_owned()),
+            effort: Some("high".to_owned()),
+            forked_from: Some(existing.clone()),
+        };
+        store
+            .insert_agent_session_with_origin(&row, &origin, Some("run-9"))
+            .unwrap();
+        assert_eq!(
+            store.agent_session_origin(&row.id).unwrap(),
+            Some(origin.clone())
+        );
+        assert_eq!(
+            store
+                .agent_session_run(&row.id)
+                .unwrap()
+                .unwrap()
+                .run_id
+                .as_deref(),
+            Some("run-9")
+        );
+        store
+            .lock()
+            .execute(
+                "UPDATE workspaces SET branch = 'feature-x' WHERE id = ?1",
+                [&row.workspace_id],
+            )
+            .unwrap();
+        let details = store.agent_session_details(&row.id).unwrap().unwrap();
+        assert_eq!(details.origin, origin);
+        assert_eq!(details.branch.as_deref(), Some("feature-x"));
+        // A conflicting id inserts nothing, the origin included.
+        assert!(
+            store
+                .insert_agent_session_with_origin(&row, &SessionOrigin::default(), None)
+                .is_err()
+        );
+        assert_eq!(store.agent_session_origin(&row.id).unwrap(), Some(origin));
     }
 }

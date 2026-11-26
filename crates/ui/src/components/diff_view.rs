@@ -1035,6 +1035,11 @@ pub enum DiffStatus {
         before: SharedString,
         after: SharedString,
     },
+    /// A submodule whose recorded commit moved: git's pointer line, and whether its checkout has changes.
+    Submodule {
+        summary: SharedString,
+        dirty: Option<bool>,
+    },
 }
 
 /// The changes of one file: toolbar, review bar, body and change ruler (DiffView.md).
@@ -1438,6 +1443,33 @@ impl RenderOnce for DiffView {
                     .on_click(on(&handler, DiffAction::OpenAsSource)),
             )
             .into_any_element(),
+            DiffStatus::Submodule { summary, dirty } => div()
+                .debug_selector(|| "diff-submodule".to_owned())
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .p(px(SPACE_3))
+                .child(
+                    div()
+                        .text_color(p.text.secondary)
+                        .child("Submodule pointer changed"),
+                )
+                .child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.tertiary)
+                        .child(summary.clone()),
+                )
+                .when(matches!(dirty, Some(true)), |body| {
+                    body.child(
+                        div()
+                            .debug_selector(|| "diff-submodule-dirty".to_owned())
+                            .text_style(TYPE_CAPTION)
+                            .text_color(p.text.tertiary)
+                            .child("The submodule has uncommitted changes."),
+                    )
+                })
+                .into_any_element(),
             DiffStatus::Binary { before, after } => div()
                 .flex()
                 .flex_col()
@@ -1722,6 +1754,39 @@ mod view_tests {
             hunks: vec![hunk],
             hidden_after: Vec::new(),
         })
+    }
+
+    /// Draws a diff whose file is a submodule pointer change, in the status given.
+    struct PointerHarness {
+        status: DiffStatus,
+    }
+
+    impl Render for PointerHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(640.))
+                .h(px(400.))
+                .child(DiffView::new("diff", hidden_model()).status(self.status.clone()))
+        }
+    }
+
+    #[gpui::test]
+    fn a_submodule_pointer_change_draws_its_pointer_and_a_dirty_note(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+            status: DiffStatus::Submodule {
+                summary: "Subproject commit 1111111aaaaaaa..2222222bbbbbbb".into(),
+                dirty: Some(true),
+            },
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("diff-submodule").is_some(),
+            "the pointer is drawn"
+        );
+        assert!(
+            cx.debug_bounds("diff-submodule-dirty").is_some(),
+            "a checkout with changes says so"
+        );
     }
 
     struct Harness {

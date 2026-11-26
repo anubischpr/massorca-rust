@@ -3,6 +3,10 @@
 
 use massorca_client::Client;
 use massorca_protocol::capabilities;
+use massorca_protocol::methods::skill_placement::{
+    ManagedSkill, PlacementAgent, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
+    SkillsManagedParams,
+};
 use massorca_protocol::methods::skills::{SkillDiscovery, SkillsDiscoverParams};
 use tokio::sync::mpsc;
 
@@ -110,4 +114,102 @@ pub(super) fn spawn_host_read(
             listing,
         }));
     });
+}
+
+/// A call about placed skills on This computer (SKL-02): a preview, a placement, a removal, or the list of placed skills.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlacementCall {
+    /// What placing the skill for these agents would do. Changes nothing.
+    Preview {
+        skill_id: String,
+        agents: Vec<PlacementAgent>,
+    },
+    Place {
+        skill_id: String,
+        agents: Vec<PlacementAgent>,
+    },
+    /// Removes the copies MassOrca placed for the skill; a copy the user changed stays.
+    Unplace {
+        name: String,
+    },
+    Managed,
+}
+
+/// What a placement call answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlacementOutcome {
+    Preview(SkillPlacementResult),
+    Changed(SkillPlacementResult),
+    Managed(Vec<ManagedSkill>),
+    Refused(Refusal),
+}
+
+/// The answer to a placement call, tagged with its request; the newest request is the one shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacementAnswer {
+    pub request: u64,
+    pub outcome: PlacementOutcome,
+}
+
+impl ServiceHandle {
+    /// Previews, places or removes skills on This computer, or lists them; the answer arrives tagged with `request`.
+    pub fn skill_placement(&self, request: u64, call: PlacementCall) {
+        self.send(Command::SkillPlacement { request, call });
+    }
+}
+
+/// Runs one placement call on its own task, so a copy of a large skill never holds up events.
+pub(super) fn spawn_placement(
+    client: &Client,
+    request: u64,
+    call: PlacementCall,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        let changes = matches!(
+            call,
+            PlacementCall::Place { .. } | PlacementCall::Unplace { .. }
+        );
+        let outcome = placement(&client, call).await;
+        let refresh = changes && matches!(outcome, PlacementOutcome::Changed(_));
+        let _ = updates.send(StoreUpdate::SkillPlacement(PlacementAnswer {
+            request,
+            outcome,
+        }));
+        if refresh {
+            // Why: a change also refreshes the placed list, under the same request, so the list never shows a stale copy.
+            let managed = placement(&client, PlacementCall::Managed).await;
+            let _ = updates.send(StoreUpdate::SkillPlacement(PlacementAnswer {
+                request,
+                outcome: managed,
+            }));
+        }
+    });
+}
+
+async fn placement(client: &Client, call: PlacementCall) -> PlacementOutcome {
+    let answered = match call {
+        PlacementCall::Preview { skill_id, agents } => client
+            .skills_place_preview(&SkillPlaceParams { skill_id, agents })
+            .await
+            .map(PlacementOutcome::Preview),
+        PlacementCall::Place { skill_id, agents } => client
+            .skills_place(&SkillPlaceParams { skill_id, agents })
+            .await
+            .map(PlacementOutcome::Changed),
+        PlacementCall::Unplace { name } => client
+            .skills_unplace(&SkillUnplaceParams {
+                name,
+                agents: Vec::new(),
+            })
+            .await
+            .map(PlacementOutcome::Changed),
+        PlacementCall::Managed => client
+            .skills_managed(&SkillsManagedParams::default())
+            .await
+            .map(|managed| PlacementOutcome::Managed(managed.skills)),
+    };
+    answered.unwrap_or_else(|error| PlacementOutcome::Refused(Refusal::from(&error)))
 }

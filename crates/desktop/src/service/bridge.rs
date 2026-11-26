@@ -34,8 +34,12 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams, GitPushed,
+};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+    ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
@@ -51,6 +55,8 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::automations::{self, AutomationCommand};
+use super::calendar::{self, CalendarCommand};
 use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
@@ -110,6 +116,16 @@ pub(crate) enum Command {
         params: ProjectInspectParams,
         reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
     },
+    /// `project.remove`, answered on its oneshot with the removed project.
+    RemoveProject {
+        params: ProjectRemoveParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    /// `project.set_base`, answered on its oneshot with the project as it now stands.
+    SetProjectBase {
+        params: ProjectSetBaseParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
@@ -122,6 +138,10 @@ pub(crate) enum Command {
     Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
+    /// A scheduled automation call (decision 0123), answered on its oneshot.
+    Automation(AutomationCommand),
+    /// A calendar call (decision 0124), answered on its oneshot.
+    Calendar(CalendarCommand),
     /// A paired host's Marketplace lists, read on the host's live connection; answered as a store update.
     HostRead {
         host: String,
@@ -143,6 +163,11 @@ pub(crate) enum Command {
         host: String,
         request: u64,
         refresh: bool,
+    },
+    /// Previews, places, removes or lists placed skills on This computer; the answer is a store update tagged with `request`.
+    SkillPlacement {
+        request: u64,
+        call: skills::PlacementCall,
     },
     Secret(SecretCommand),
     /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
@@ -198,6 +223,18 @@ pub(crate) enum Command {
         params: ForgetSessionParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// `agent.rename` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentRename {
+        session: String,
+        title: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.archive_session` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentArchive {
+        session: String,
+        archived: bool,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
     AgentResume {
         params: AgentResumeParams,
@@ -230,6 +267,18 @@ pub(crate) enum Command {
     GitCommit {
         params: GitCommitParams,
         reply: oneshot::Sender<Result<GitCommitted, Refusal>>,
+    },
+    GitFetch {
+        params: GitFetchParams,
+        reply: oneshot::Sender<Result<GitFetched, Refusal>>,
+    },
+    GitPull {
+        params: GitPullParams,
+        reply: oneshot::Sender<Result<GitPulled, Refusal>>,
+    },
+    GitPush {
+        params: GitPushParams,
+        reply: oneshot::Sender<Result<GitPushed, Refusal>>,
     },
     /// Follows a workspace's git state until `GitUnwatch`, across reconnects.
     GitWatch {
@@ -407,6 +456,18 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.set_base`. A blank base clears it. The project list changes through the resulting event.
+    pub async fn set_project_base(&self, params: ProjectSetBaseParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::SetProjectBase { params, reply })
+            .await
+    }
+
+    /// `project.remove`. The project list changes through the resulting event, not from this answer.
+    pub async fn remove_project(&self, params: ProjectRemoveParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::RemoveProject { params, reply })
+            .await
     }
 
     /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
@@ -942,9 +1003,18 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
             massorca_protocol::capabilities::WORKSPACE_RENAME,
         )));
+        self.emit(StoreUpdate::GitSyncOffered(
+            client.has_capability(massorca_protocol::capabilities::GIT),
+        ));
+        self.emit(StoreUpdate::ProjectEditsOffered(
+            client.has_capability(massorca_protocol::capabilities::PROJECTS),
+        ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
+        self.emit(StoreUpdate::ProgramUpdateOffered(client.has_capability(
+            massorca_protocol::capabilities::EXTENSIONS_PROGRAMS,
+        )));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1038,11 +1108,20 @@ impl Link {
                                     &self.extension_reads,
                                 );
                             }
+                            Some(Command::Automation(command)) => {
+                                automations::spawn_call(client, command);
+                            }
+                            Some(Command::Calendar(command)) => {
+                                calendar::spawn_call(client, command);
+                            }
                             Some(Command::HostedServices { command, .. }) => {
                                 hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
+                            }
+                            Some(Command::SkillPlacement { request, call }) => {
+                                skills::spawn_placement(client, request, call, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -1308,6 +1387,24 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::SetProjectBase { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectSetBaseParams, Project>(projects::SET_BASE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::RemoveProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectRemoveParams, Project>(projects::REMOVE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::InspectProject { params, reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1411,6 +1508,16 @@ fn spawn_call(
         Command::AgentForget { params, reply } => {
             agents::spawn_forget(&client, params, reply, updates);
         }
+        Command::AgentRename {
+            session,
+            title,
+            reply,
+        } => agents::spawn_rename(&client, session, title, reply, updates),
+        Command::AgentArchive {
+            session,
+            archived,
+            reply,
+        } => agents::spawn_archive(&client, session, archived, reply, updates),
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1429,6 +1536,8 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Routine(_)
+        | Command::Automation(_)
+        | Command::Calendar(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1483,6 +1592,12 @@ fn refuse_while_down(command: Command) {
         Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::RemoveProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::SetProjectBase { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1493,12 +1608,14 @@ fn refuse_while_down(command: Command) {
         Command::Room(command) => team_room::refuse(command, refusal),
         Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
+        Command::Automation(command) => automations::refuse(command, refusal),
+        Command::Calendar(command) => calendar::refuse(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
         Command::HostAgentStop { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::Skills { .. } | Command::HostSkills { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } | Command::SkillPlacement { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1522,7 +1639,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::AgentStop { reply, .. }
         | Command::AgentResume { reply, .. }
-        | Command::AgentForget { reply, .. } => {
+        | Command::AgentForget { reply, .. }
+        | Command::AgentRename { reply, .. }
+        | Command::AgentArchive { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

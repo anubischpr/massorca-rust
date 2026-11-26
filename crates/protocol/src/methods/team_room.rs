@@ -1,16 +1,19 @@
 //! The Conference room of a team (capability `team-room/1`, decision 0102): the lines a person and the team's bots
-//! post, and the task a person's line becomes.
+//! post, and the task a person's line becomes. `team-room/3` adds conversation replies and the typing line (decision 0122).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use super::tasks::Task;
+use super::teams::Routine;
 
 /// Params: [`TeamRoomListParams`]. Result: [`TeamRoomList`], oldest first.
 pub const ROOM_LIST: &str = "team.room_list";
 /// Params: [`TeamRoomPostParams`]. Result: [`TeamRoomPosted`].
 pub const ROOM_POST: &str = "team.room_post";
+/// Params: [`TeamRoomAnswerParams`]. Result: [`TeamRoomAnswered`]. Answers a choice card once (decision 0121).
+pub const ROOM_ANSWER: &str = "team.room_answer";
 
 /// Who wrote a room line. A value this build does not know decodes as `Unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +42,74 @@ pub struct TeamRoomMessage {
     /// The task the line is about, as the Board shows it now; absent once the task was removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<Task>,
+    /// The one-time routine the line scheduled (decision 0121); absent once the routine was removed, and from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<Routine>,
+    /// The choice card the line is (decision 0121); absent on any other line, and from older hosts, which read the
+    /// line's text alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<RoomCard>,
+    /// The line this one replies to (decision 0122); absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// The line it replies to, as the room shows it; absent once that line was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted: Option<RoomQuote>,
     pub created_at_ms: i64,
+}
+
+/// The line a reply quotes (decision 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomQuote {
+    pub id: String,
+    pub author: RoomAuthor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_name: Option<String>,
+    /// At most 200 characters of its text.
+    pub text: String,
+}
+
+/// A bot of the team that works on a room reply or a room task now (decision 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomTyping {
+    pub bot_id: String,
+    pub bot_name: String,
+}
+
+/// A choice card: the room could not tell who takes a person's request and asks where it goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomCard {
+    /// The person's line the card asks about.
+    pub request_id: String,
+    pub options: Vec<RoomChoice>,
+    /// The `choice` it was answered with; absent while it waits for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
+/// One option of a choice card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomChoice {
+    /// What `team.room_answer` sends: `bot:<id>`, `team:<id>` or `todo`.
+    pub choice: String,
+    pub kind: RoomChoiceKind,
+    /// The bot's or the team's name, or "Keep in this team's Todo".
+    pub label: String,
+}
+
+/// Where an option sends the request. A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomChoiceKind {
+    /// A bot of this team takes it, as a line naming that bot would.
+    Bot,
+    /// Another team's Board gets it, in Todo.
+    Team,
+    /// This team's Board gets it in Todo, with no bot.
+    Todo,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Params of `team.room_list`. `limit` keeps the newest that many lines.
@@ -55,11 +125,18 @@ pub struct TeamRoomListParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamRoomList {
     pub messages: Vec<TeamRoomMessage>,
+    /// The bots working on a reply or a room task now, in team order (decision 0122); empty from older hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typing: Vec<RoomTyping>,
 }
 
 /// Params of `team.room_post`. Without `bot`, a person posts and the line becomes a task for a bot of the team: the bot
-/// named with `@name` at the start of a word, else `to`, else the team's lead, else its first bot. With `bot`, that bot
-/// posts. An agent run sends its `session` and `agent_token`, and then posts only as the bot of its own task.
+/// named with `@name` at the start of a word, else `to`, else the team's lead, else its only bot. With several bots and
+/// none of those, the room answers with a choice card instead (decision 0121). A line that names one
+/// day and one time becomes a one-time routine of that bot instead (decision 0121). With `bot`, that bot
+/// posts. An agent run sends its `session` and `agent_token`, and then posts only as the bot of its own task or reply.
+/// With `ask`, or `reply_to` a bot's line, the line is a conversation: one bot answers it once and no task is made
+/// (decision 0122).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamRoomPostParams {
     /// Team id or exact name.
@@ -77,6 +154,16 @@ pub struct TeamRoomPostParams {
     /// The run token of `session` (`MASSORCA_AGENT_TOKEN`). `Debug` never prints it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
+    /// `false` leaves a person's task in Todo (the Board's Open column) instead of starting it; absent starts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<bool>,
+    /// The line this one replies to, kept as its context (decision 0122).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// `true` asks a bot without making a task; `false` makes a reply to a bot's line a task. Absent: a reply to a bot's
+    /// line is a conversation and any other line is a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<bool>,
 }
 
 impl fmt::Debug for TeamRoomPostParams {
@@ -86,6 +173,9 @@ impl fmt::Debug for TeamRoomPostParams {
             .field("text", &self.text)
             .field("bot", &self.bot)
             .field("to", &self.to)
+            .field("start", &self.start)
+            .field("reply_to", &self.reply_to)
+            .field("ask", &self.ask)
             .field("session", &self.session)
             .field(
                 "agent_token",
@@ -101,6 +191,24 @@ pub struct TeamRoomPosted {
     pub messages: Vec<TeamRoomMessage>,
 }
 
+/// Params of `team.room_answer`: answers the choice card `message` of `team` with one of its options' `choice`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRoomAnswerParams {
+    /// Team id or exact name.
+    pub team: String,
+    /// The card's line id.
+    pub message: String,
+    /// One option's `choice`: `bot:<id>`, `team:<id>` or `todo`.
+    pub choice: String,
+}
+
+/// Result of `team.room_answer`: the card with its answer, and the lines the answer added, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRoomAnswered {
+    pub card: TeamRoomMessage,
+    pub messages: Vec<TeamRoomMessage>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +220,25 @@ mod tests {
     }
 
     #[test]
+    fn a_line_from_an_older_host_has_no_card_and_an_unknown_choice_kind_decodes_as_unknown() {
+        let line: TeamRoomMessage = serde_json::from_value(serde_json::json!({
+            "id": "m1", "team_id": "t1", "author": "bot", "text": "Who should take this?",
+            "created_at_ms": 1
+        }))
+        .unwrap();
+        assert_eq!(line.card, None);
+        assert_eq!((line.reply_to, line.quoted), (None, None));
+        let list: TeamRoomList =
+            serde_json::from_value(serde_json::json!({"messages": []})).unwrap();
+        assert!(list.typing.is_empty(), "an older host sends no typing line");
+        let choice: RoomChoice = serde_json::from_value(
+            serde_json::json!({"choice": "new_bot", "kind": "new_bot", "label": "Create a bot"}),
+        )
+        .unwrap();
+        assert_eq!(choice.kind, RoomChoiceKind::Unknown);
+    }
+
+    #[test]
     fn a_post_without_a_bot_omits_it_on_the_wire() {
         let mut params = TeamRoomPostParams {
             team: "Desarrollo".to_owned(),
@@ -120,6 +247,9 @@ mod tests {
             to: None,
             session: None,
             agent_token: None,
+            start: None,
+            reply_to: None,
+            ask: None,
         };
         let wire = serde_json::to_value(&params).unwrap();
         assert_eq!(

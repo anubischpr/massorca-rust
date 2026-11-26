@@ -618,6 +618,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.fork",
+            "Start a new agent session from a copy of an exited session's conversation",
+            "agent.fork",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "permission_mode": { "type": "string" },
+                    "title": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "agent.mode",
             "Switch an agent session's permission mode, live or at its next resume",
             "agent.set_mode",
@@ -628,6 +643,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "session": { "type": "string" },
                     "permission_mode": { "type": "string" },
                     "force": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.set-options",
+            "Change an agent session's model, effort or fast mode, live where its kind allows or at its next resume",
+            "agent.set_options",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "fast": { "type": "boolean" }
                 }
             }),
         ),

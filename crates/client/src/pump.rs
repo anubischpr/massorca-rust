@@ -189,6 +189,8 @@ pub(crate) async fn run(
     shared.close();
     reader.abort();
     writer.abort();
+    // Timing only, no payloads: says when the client noticed the connection end.
+    tracing::debug!("client pump ended");
 }
 
 fn overflow() -> ErrorBody {

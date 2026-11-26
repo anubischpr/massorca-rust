@@ -592,6 +592,85 @@ ALTER TABLE workspaces ADD COLUMN name_generated INTEGER NOT NULL DEFAULT 0 CHEC
 "#,
         foreign_keys_off: false,
     },
+    // A session's start options and lineage (decision 0168): the model and the effort it was started with, kept across
+    // resumes, and the session it was forked from. Plain text, not a foreign key: forgetting the source keeps the fork.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN model TEXT;
+ALTER TABLE agent_sessions ADD COLUMN effort TEXT;
+ALTER TABLE agent_sessions ADD COLUMN forked_from TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line about the one-time routine it scheduled (decision 0121); the routine's removal keeps the line.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN routine_id TEXT REFERENCES team_routines(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that is a choice card, with its options and the answer it got once (decision 0121).
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN card TEXT;
+ALTER TABLE team_room_messages ADD COLUMN card_answer TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that replies to another, and a person's conversation line with its bot, reply run and reply state
+    // (decision 0122). A removed line or bot keeps the reply, unlinked.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN reply_to TEXT REFERENCES team_room_messages(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_session TEXT;
+ALTER TABLE team_room_messages ADD COLUMN reply_state TEXT CHECK(reply_state IN ('open','answered','closed'));
+CREATE INDEX team_room_by_reply_session ON team_room_messages(reply_session);
+"#,
+        foreign_keys_off: false,
+    },
+    // A bot's skills (decision 0120): skill names in the order chosen; a bot's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE bot_skills (
+    bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    skill TEXT NOT NULL,
+    PRIMARY KEY (bot_id, position),
+    UNIQUE (bot_id, skill)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Scheduled automation definitions (decision 0123): what runs, with which agent and when. `next_run_at` is the next
+    // occurrence to start, NULL while disabled. Removing a project leaves its automations without one.
+    Migration {
+        sql: r#"
+CREATE TABLE automations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    agent_kind TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('hourly','daily','weekdays','weekly','cron')),
+    time TEXT NOT NULL,
+    weekday TEXT CHECK(weekday IN ('monday','tuesday','wednesday','thursday','friday','saturday','sunday')),
+    cron TEXT,
+    zone TEXT,
+    grace_minutes INTEGER CHECK(grace_minutes IS NULL OR grace_minutes BETWEEN 0 AND 10080),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    creation_key TEXT UNIQUE,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((cadence = 'weekly') = (weekday IS NOT NULL)),
+    CHECK ((cadence = 'cron') = (cron IS NOT NULL))
+);
+CREATE INDEX automations_by_created ON automations (created_at, id);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

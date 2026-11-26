@@ -1,4 +1,6 @@
-use massorca_protocol::methods::secrets::{SecretDecline, SecretLink, SecretSet, SecretStatus};
+use massorca_protocol::methods::secrets::{
+    SecretDecline, SecretLink, SecretName, SecretSet, SecretStatus,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
@@ -141,5 +143,23 @@ async fn a_decline_names_the_request_and_carries_no_value() {
         panic!("the service received no decline");
     };
     assert_eq!(params.request, "request-1");
+    call.abort();
+}
+
+#[tokio::test]
+async fn an_unlink_names_only_the_scope_and_the_name_of_the_link() {
+    let (handle, mut script) = ServiceHandle::scripted();
+    let params = SecretName {
+        ..crate::service::fixtures::base_secret_name()
+    };
+    let call = tokio::spawn(async move { handle.secret_unlink(params).await });
+    tokio::task::yield_now().await;
+    let Some(Command::Secret(SecretCommand::Unlink { params, .. })) = script.next() else {
+        panic!("the service received no unlink");
+    };
+    assert_eq!(
+        (params.scope.as_str(), params.name.as_str()),
+        ("project:p1", "OPENAI_API_KEY")
+    );
     call.abort();
 }

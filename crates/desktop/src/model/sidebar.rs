@@ -163,6 +163,29 @@ pub fn sidebar_content(snapshot: &ShellSnapshot, mode: Mode) -> SidebarContent {
     }
 }
 
+/// The snapshot without its archived sessions and the children under them: what the Sidebar lists while Show archived
+/// is off (decision 0163).
+pub fn without_archived(snapshot: &ShellSnapshot) -> ShellSnapshot {
+    let mut visible = snapshot.clone();
+    for project in &mut visible.projects {
+        for host in &mut project.hosts {
+            host.sessions = unarchived(&host.sessions);
+        }
+    }
+    visible
+}
+
+fn unarchived(sessions: &[SessionRow]) -> Vec<SessionRow> {
+    sessions
+        .iter()
+        .filter(|session| !session.archived)
+        .map(|session| SessionRow {
+            children: unarchived(&session.children),
+            ..session.clone()
+        })
+        .collect()
+}
+
 /// The row tooltip of a session: "branch · worktree path", the path alone for a folder (A97).
 pub fn tooltip_of(session: &SessionRow) -> Option<String> {
     tooltip_for(session.branch.as_deref(), session.path.as_deref())
@@ -322,6 +345,7 @@ mod tests {
             own_worktree: false,
             can_bring_back: false,
             unread: false,
+            archived: false,
             children: Vec::new(),
         }
     }

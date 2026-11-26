@@ -102,9 +102,11 @@ jobs:
               crates/protocol/*|crates/client/*|crates/server/*|crates/core-*/*|crates/profile/*|crates/cli/*) core=true; deps=true ;;
               crates/*) core=true ;;
             esac
-            # The emulator flow (decision 0080) runs only for these paths, because it is slow.
+            # The emulator flow (decision 0080) is slow: on pull requests it runs only when the phone's own code or the
+            # flow's scripts change. Client and protocol changes reach the phone through client-ffi, which the Kotlin
+            # bindings job covers; every push to main still runs the flow.
             case "$f" in
-              crates/client*/*|crates/protocol/*|mobile/*|.github/workflows/*) emulator=true ;;
+              crates/client-ffi/*|mobile/*|scripts/ci/install-maestro.sh|scripts/ci/run-emulator-flow.sh|scripts/ci/start-massorca-service.sh) emulator=true ;;
             esac
           done <<< "$files"
           if [ "$all" = true ]; then core=true; ui=true; mobile=true; fi
@@ -293,6 +295,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6.4.1
         with:
           gradle-version: 8.14.3
+      # Robolectric downloads its android-all jar from Maven Central while the tests run, outside Gradle's
+      # resolution and cache; keep it across runs, keyed on the build file that pins Robolectric and the SDK.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('mobile/android/bindings-test/build.gradle') }}
       - name: Generate the Kotlin bindings, start a server and run the JVM tests
         run: scripts/ci/kotlin-bindings-test.sh
 
@@ -302,7 +310,7 @@ jobs:
   android-apk:
     name: Android debug APK
     needs: changes
-    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.emulator == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -366,8 +374,9 @@ jobs:
 
   # The phone app on an Android emulator (decision 0080, task A11): the release APK from `android-apk` (JavaScript bundled,
   # no Metro) runs on an x86_64 emulator, the massorca service runs on the runner, and a Maestro flow pairs the app with
-  # it at 10.0.2.2, the emulator's alias for the runner's loopback. Slow (KVM, emulator boot), so it runs only for the
-  # client, the protocol, the phone app and this workflow. The pairing offer is masked and redacted from every kept log.
+  # it at 10.0.2.2 (the emulator's alias for the runner's loopback), then types into the e2e-folder terminal and checks
+  # its output on screen. Slow (KVM, emulator boot), so it runs only for the client, the protocol, the phone app and this
+  # workflow. The pairing offer is masked and redacted from every kept log.
   android-emulator:
     name: Android emulator flow
     needs: [changes, android-apk]
@@ -400,7 +409,7 @@ jobs:
           key: android-emulator
       - name: Build the massorca CLI
         run: cargo build --locked -p massorca-cli --bin massorca
-      - name: Start the service on the runner with the flow's project
+      - name: Start the service on the runner with the flow's project and terminal
         run: bash scripts/ci/start-massorca-service.sh
       - name: Run the Maestro flow on an x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2.38.0
@@ -425,6 +434,8 @@ jobs:
             ${{ runner.temp }}/massorca-service.log
             ${{ runner.temp }}/logcat-full.txt
             ${{ runner.temp }}/logcat-crash.txt
+            ${{ runner.temp }}/terminal-screen.txt
+            ${{ runner.temp }}/phone-screen-text.txt
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

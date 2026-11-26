@@ -120,9 +120,12 @@ wrong key. CI runs `scripts/ci/kotlin-bindings-test.sh` (needs `uniffi-bindgen` 
 - **Device name:** every phone calls itself "Android phone" to its hosts (`src/binding/index.ts`). A per-device name
   needs a choice from the owner.
 - **Starting a terminal:** the binding lists a workspace's terminals but has no terminal create, so the workspace's
-  Terminal view opens the one live terminal, or lists the ones that exist. It cannot start one.
-- **Not checked on a device:** the terminal page runs in the WebView only under Jest (a double). Key sequences, the
-  Ctrl key, resizing and the WebView's file URL need a run on a phone or an emulator.
+  Terminal view opens the one live terminal, or lists the ones that exist. The app cannot start one; the emulator job
+  starts its terminal through the CLI.
+- **Not checked on a device:** the emulator flow loads the terminal page and types one line. Key sequences, the Ctrl key
+  and resizing still need a run on a phone or an emulator.
 - Emulator flow (A11): the `android-emulator` job in `.github/workflows/ci.yml` runs `.maestro/pairing-home-workspaces.yaml`
-  (screens 1, 2 and 4) against a massorca service on the runner, reached at `10.0.2.2`. Screen 6 waits for the terminal
-  entry point above. The phone validation (A12) is not started.
+  (screens 1, 2, 4 and 6) against a massorca service on the runner, reached at `10.0.2.2`. The job starts one shell in the
+  `e2e-folder` workspace. The flow opens it from the workspace's Terminal view, types `echo ma''rker6` and waits for
+  `marker6` on screen. A failed run keeps the terminal's screen text (`terminal-screen.txt`). The phone validation (A12)
+  is not started.
