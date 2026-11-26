@@ -8,8 +8,8 @@ use massorca_protocol::methods::agents::{AgentSetOptionsParams, OptionApplied, O
 use crate::kind::KindDecl;
 use crate::sessions::{AgentError, resume_unavailable};
 
-/// The options a session keeps for its next run (decision 0171), in memory: the values `agent.set_options` chose last. A
-/// resume launches with them, and the service forgets them with its own state when it stops.
+/// Options a session keeps in memory (decision 0171): the values `agent.set_options` chose for its next run, and the values
+/// its live run started with. The service forgets them with the session, as it forgets its other state in memory.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ChosenOptions {
     pub(crate) model: Option<String>,
@@ -30,13 +30,15 @@ pub(crate) struct Plan {
     pub(crate) fast_typed: Option<bool>,
 }
 
-/// Works out what `request` does to a session of kind `decl`. `running` is whether its terminal run is live,
-/// `recorded_fast` whether that run was started with fast mode on, and `chosen` the options it keeps now. Values are
-/// validated as `agent.start` validates them, so a refused value is an error and nothing is planned.
+/// Works out what `request` does to a session of kind `decl`. `running` is whether its terminal run is live, and then
+/// `started` holds the options that run started with (the ones it has now, after its live changes); a stopped session is
+/// checked against `chosen`, what its next run keeps. `recorded_fast` is whether the live run was started with fast mode
+/// on. Values are validated as `agent.start` validates them, so a refused value is an error and nothing is planned.
 pub(crate) fn plan(
     decl: &KindDecl,
     session: &str,
     request: &AgentSetOptionsParams,
+    started: &ChosenOptions,
     chosen: &ChosenOptions,
     running: bool,
     recorded_fast: bool,
@@ -47,11 +49,12 @@ pub(crate) fn plan(
             "name at least one option to change: model, effort or fast",
         ));
     }
-    // The values the session would run with: the ones the call names, else the ones it keeps. They are checked as
+    // The values the session would run with: the ones the call names, else the ones it runs or keeps. They are checked as
     // `agent.start` checks them, before anything is typed or stored.
-    let model = request.model.as_deref().or(chosen.model.as_deref());
-    let effort = request.effort.as_deref().or(chosen.effort.as_deref());
-    let fast = request.fast.or(chosen.fast).unwrap_or(false);
+    let base = if running { started } else { chosen };
+    let model = request.model.as_deref().or(base.model.as_deref());
+    let effort = request.effort.as_deref().or(base.effort.as_deref());
+    let fast = request.fast.or(base.fast).unwrap_or(false);
     decl.option_args(model, effort)?;
     decl.fast_for(model, fast)?;
 
@@ -218,6 +221,7 @@ mod tests {
             "s-1",
             &asks(Some("opus"), None, None),
             &ChosenOptions::default(),
+            &ChosenOptions::default(),
             true,
             false,
         )
@@ -235,6 +239,7 @@ mod tests {
             "s-1",
             &asks(Some("opus"), None, None),
             &ChosenOptions::default(),
+            &ChosenOptions::default(),
             false,
             false,
         )
@@ -250,6 +255,7 @@ mod tests {
             &claude(),
             "s-1",
             &asks(Some("opus"), None, None),
+            &opus(),
             &opus(),
             false,
             false,
@@ -307,6 +313,7 @@ mod tests {
             "s-1",
             &asks(None, Some("high"), None),
             &opus(),
+            &opus(),
             true,
             false,
         )
@@ -322,6 +329,7 @@ mod tests {
             &claude(),
             "s-1",
             &asks(None, None, Some(true)),
+            &opus(),
             &opus(),
             true,
             false,
@@ -341,6 +349,7 @@ mod tests {
                 fast: Some(true),
                 ..ChosenOptions::default()
             },
+            &opus(),
             true,
             true,
         )
@@ -352,11 +361,12 @@ mod tests {
 
     #[test]
     fn a_running_fast_mode_the_run_already_has_is_not_applied_again() {
-        // The run was started with fast mode on, which the session keeps no record of, so `chosen` says off.
+        // The run was started in fast mode, which the session keeps no record of in `chosen`, so `chosen` says off.
         let plan = plan(
             &claude(),
             "s-1",
             &asks(None, None, Some(true)),
+            &opus(),
             &ChosenOptions {
                 model: Some("opus".to_owned()),
                 fast: Some(false),
@@ -372,15 +382,46 @@ mod tests {
     }
 
     #[test]
+    fn a_running_session_checks_fast_mode_against_the_model_its_run_has() {
+        // The run started on opus; the session keeps no model for its next run.
+        let plan = plan(
+            &claude(),
+            "s-1",
+            &asks(None, None, Some(true)),
+            &opus(),
+            &ChosenOptions::default(),
+            true,
+            false,
+        )
+        .expect("planned, since opus takes fast mode");
+        assert_eq!(plan.typed, ["/fast"]);
+    }
+
+    #[test]
+    fn a_stopped_session_checks_fast_mode_against_the_model_its_next_run_keeps() {
+        // The run started on opus, but the session would resume on the kind's default, which does not take fast mode.
+        assert_eq!(
+            refused(plan(
+                &claude(),
+                "s-1",
+                &asks(None, None, Some(true)),
+                &opus(),
+                &ChosenOptions::default(),
+                false,
+                false,
+            )),
+            codes::AGENT_OPTION_UNSUPPORTED
+        );
+    }
+
+    #[test]
     fn a_fast_mode_the_run_lacks_waits_for_the_next_resume_when_no_toggle_fits() {
         let plan = plan(
             &claude(),
             "s-1",
             &asks(None, None, Some(true)),
-            &ChosenOptions {
-                model: Some("opus".to_owned()),
-                ..ChosenOptions::default()
-            },
+            &ChosenOptions::default(),
+            &opus(),
             false,
             false,
         )
@@ -398,6 +439,7 @@ mod tests {
                 "s-1",
                 &asks(None, Some("turbo"), None),
                 &opus(),
+                &opus(),
                 true,
                 false,
             )),
@@ -405,21 +447,10 @@ mod tests {
         );
         assert_eq!(
             refused(plan(
-                &claude(),
-                "s-1",
-                &asks(None, None, Some(true)),
-                &ChosenOptions::default(),
-                true,
-                false,
-            )),
-            codes::AGENT_OPTION_UNSUPPORTED,
-            "the default model of claude does not take fast mode"
-        );
-        assert_eq!(
-            refused(plan(
                 &one_shot(),
                 "s-1",
                 &asks(Some("haiku"), None, Some(true)),
+                &ChosenOptions::default(),
                 &ChosenOptions::default(),
                 true,
                 false,
@@ -436,6 +467,7 @@ mod tests {
                 "s-1",
                 &asks(None, None, None),
                 &opus(),
+                &opus(),
                 true,
                 false,
             )),
@@ -451,6 +483,7 @@ mod tests {
                 "s-1",
                 &asks(None, Some("low"), None),
                 &ChosenOptions::default(),
+                &ChosenOptions::default(),
                 false,
                 false,
             )),
@@ -460,6 +493,7 @@ mod tests {
             &one_shot(),
             "s-1",
             &asks(Some("opus"), None, None),
+            &ChosenOptions::default(),
             &ChosenOptions::default(),
             true,
             false,

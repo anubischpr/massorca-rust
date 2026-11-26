@@ -28,8 +28,8 @@ use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
     AgentOptionsSet, AgentSession, AgentSetOptionsParams, AgentStartParams, Execution,
-    MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource, OptionsApplied, PromptReceipt, ReceiptKind,
-    ResumeState, SessionFast,
+    MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource, OptionApplied, OptionsApplied, PromptReceipt,
+    ReceiptKind, ResumeState, SessionFast,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -71,6 +71,10 @@ pub use delegation::{
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long a typed live command holds non-forced input and the queue, when no accepted hook report ends the hold first. A
+/// slash command may send no report at all, so the hold must end by itself (decision 0171).
+pub const TYPED_COMMAND_SETTLE: Duration = Duration::from_secs(2);
 
 /// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
@@ -307,6 +311,10 @@ struct Inner {
     /// The options `agent.set_options` chose for each session, which its next run launches with (decision 0171). Held in
     /// memory: the service forgets them when it stops, as it forgets the other state it holds in memory.
     chosen: Mutex<HashMap<String, ChosenOptions>>,
+    /// The options each live run started with, updated by its live changes (decision 0171): a change is checked against them
+    /// while the run is live. A resume launches with the kind's default, not with these (decision 0094), so a stopped session
+    /// reads `chosen` instead.
+    started: Mutex<HashMap<String, ChosenOptions>>,
     /// How long a model listing may run before it is stopped (decision 0166).
     listing_timeout: Duration,
     /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
@@ -335,6 +343,9 @@ pub(crate) struct LiveRun {
     /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
     /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
     typed_since_report: bool,
+    /// A typed live command holds non-forced input (prompts, live changes, the queue) until this instant, unless an accepted
+    /// hook report ends the hold first. A slash command may send no report at all (decision 0171).
+    settle_until: Option<Instant>,
     /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
     /// two writes never interleave in the terminal.
     switching: bool,
@@ -416,6 +427,7 @@ impl Agents {
                 found_transcripts: resume_state::FoundTranscripts::default(),
                 models: crate::model_catalog::ModelCache::default(),
                 chosen: Mutex::new(HashMap::new()),
+                started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
                     std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
                         .ok()
@@ -743,6 +755,7 @@ impl Agents {
                     pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -847,6 +860,15 @@ impl Agents {
             }
         };
         session.secrets_withheld = withheld(grant);
+        // Noted only once the start has succeeded, so a start that failed leaves no options behind (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: params.model.clone(),
+                effort: params.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -1061,6 +1083,7 @@ impl Agents {
                     pending: None,
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -1150,6 +1173,15 @@ impl Agents {
             }
         }
         session.secrets_withheld = withheld(grant);
+        // Noted only once the resume has succeeded (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: chosen.model.clone(),
+                effort: chosen.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -1277,6 +1309,8 @@ impl Agents {
         let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            // Any accepted report ends a settle window early (decision 0171).
+            run.settle_until = None;
             match row
                 .activity
                 .as_ref()
@@ -1537,16 +1571,24 @@ impl Agents {
         let row = self.resolve(&request.session)?;
         let decl = self.declared_kind(&row.kind)?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
-        let chosen = self.chosen_of(&row.id);
-        let recorded_fast = fast_mode::of_run(&run_dir).is_some();
-        // Planned under the status lock, where the run's liveness is read; the text is typed outside it, as a prompt is,
-        // because the write can wait for the agent to read.
+        // Planned under the status lock, where the run's liveness and recorded fast mode are read, so two calls never plan
+        // the same toggle. The text is typed outside the lock, as a prompt is, because the write can wait for the agent.
         let mut live = lock(&self.inner.status);
         let row = self.reload(&row.id)?;
         let session = self.view_with(&mut live, row)?;
         let running = live.contains_key(&session.id) && session.terminal_id.is_some();
-        let plan =
-            session_options::plan(&decl, &session.id, request, &chosen, running, recorded_fast)?;
+        let recorded_fast = fast_mode::of_run(&run_dir).is_some();
+        let chosen = self.chosen_of(&session.id);
+        let started = self.started_of(&session.id);
+        let plan = session_options::plan(
+            &decl,
+            &session.id,
+            request,
+            &started,
+            &chosen,
+            running,
+            recorded_fast,
+        )?;
         let typing = if plan.typed.is_empty() {
             None
         } else {
@@ -1573,6 +1615,13 @@ impl Agents {
             let written: Result<(), TerminalError> = bytes
                 .iter()
                 .try_for_each(|bytes| self.inner.config.terminals.input(&terminal, bytes));
+            if written.is_ok() {
+                // Recorded before the run is free again, so the next call and the queue see what was typed.
+                if let Some(on) = plan.fast_typed {
+                    fast_mode::record(&run_dir, on);
+                }
+                self.note_typed(&session.id, &plan, request);
+            }
             self.end_switching(&session.id);
             self.drain_queue(&session.id);
             if let Err(error) = written {
@@ -1581,9 +1630,6 @@ impl Agents {
                     other => AgentError::from(other),
                 });
             }
-        }
-        if let Some(on) = plan.fast_typed {
-            fast_mode::record(&run_dir, on);
         }
         let changed = plan.applied != OptionsApplied::default();
         {
@@ -1601,6 +1647,63 @@ impl Agents {
             applied: plan.applied,
             session,
         })
+    }
+
+    /// Records what a live change typed (decision 0171): its settle window, and the options the run now runs with.
+    fn note_typed(&self, id: &str, plan: &session_options::Plan, request: &AgentSetOptionsParams) {
+        self.settle_after_typed(id);
+        let mut started = lock(&self.inner.started);
+        let entry = started.entry(id.to_owned()).or_default();
+        if plan.applied.model == Some(OptionApplied::Live) {
+            entry.model = request.model.clone();
+        }
+        if let Some(on) = plan.fast_typed {
+            entry.fast = Some(on);
+        }
+    }
+
+    /// Starts the settle window of a typed live command (decision 0171): until it ends, non-forced prompts, live changes and
+    /// the queue wait. A timer ends the window when no report does, and then drains the queue it held.
+    fn settle_after_typed(&self, id: &str) {
+        let until = Instant::now() + TYPED_COMMAND_SETTLE;
+        if let Some(run) = lock(&self.inner.status).get_mut(id) {
+            run.settle_until = Some(until);
+        }
+        let weak = Arc::downgrade(&self.inner);
+        let id = id.to_owned();
+        thread::spawn(move || {
+            thread::sleep(until.saturating_duration_since(Instant::now()));
+            if let Some(inner) = weak.upgrade() {
+                Agents { inner }.end_settle(&id, until);
+            }
+        });
+    }
+
+    /// Ends the settle window `until`, if no report ended it first, and drains the queue it held (decision 0171).
+    fn end_settle(&self, id: &str, until: Instant) {
+        let ended = match lock(&self.inner.status).get_mut(id) {
+            Some(run) if run.settle_until == Some(until) => {
+                run.settle_until = None;
+                true
+            }
+            _ => false,
+        };
+        if ended {
+            self.drain_queue(id);
+        }
+    }
+
+    /// The options session `id`'s live run started with, as its live changes have moved them (decision 0171).
+    fn started_of(&self, id: &str) -> ChosenOptions {
+        lock(&self.inner.started)
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Records the options a run of session `id` started with (decision 0171).
+    fn note_started(&self, id: &str, options: ChosenOptions) {
+        lock(&self.inner.started).insert(id.to_owned(), options);
     }
 
     /// The options `agent.set_options` chose for session `id`, which its next run launches with (decision 0171).
@@ -1809,6 +1912,7 @@ impl Agents {
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
         lock(&self.inner.chosen).remove(&session.id);
+        lock(&self.inner.started).remove(&session.id);
         self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -2480,6 +2584,15 @@ fn input_refusal(
             ),
         ));
     }
+    // A typed live command holds non-forced input for its settle window (decision 0171). `force` and `send_now` pass.
+    if !force && run.settle_until.is_some_and(|until| Instant::now() < until) {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "session {session} is settling after a typed command: try again in a moment, or use force"
+            ),
+        ));
+    }
     if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
         return Some(AgentError::new(
             codes::AGENT_BUSY,
@@ -2916,6 +3029,7 @@ pub(crate) mod tests {
             pending: None,
             pending_switch: None,
             typed_since_report: false,
+            settle_until: None,
             switching,
             delivering: false,
             finished: false,
@@ -2933,6 +3047,20 @@ pub(crate) mod tests {
         assert!(
             input_refusal(&run(false), "s", working, true).is_none(),
             "force types anyway"
+        );
+        // A typed live command settles the run for its window (decision 0171): unforced input waits, forced input goes
+        // through, and a window that has ended refuses nothing.
+        let mut settling = run(false);
+        settling.settle_until = Some(Instant::now() + Duration::from_secs(3600));
+        assert!(input_refusal(&settling, "s", idle, false).is_some());
+        assert!(
+            input_refusal(&settling, "s", idle, true).is_none(),
+            "force goes through"
+        );
+        settling.settle_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(
+            input_refusal(&settling, "s", idle, false).is_none(),
+            "an ended window refuses nothing"
         );
     }
 
@@ -2956,6 +3084,7 @@ pub(crate) mod tests {
                 due,
             }),
             typed_since_report: false,
+            settle_until: None,
             switching: false,
             delivering: false,
             finished: false,
@@ -3048,6 +3177,7 @@ pub(crate) mod tests {
                 pending: None,
                 pending_switch: None,
                 typed_since_report: false,
+                settle_until: None,
                 switching: false,
                 delivering: false,
                 finished: false,
