@@ -4,6 +4,7 @@ mod desktop_dir;
 mod desktop_instance;
 mod endpoint;
 mod error;
+mod local_stream;
 mod private_dir;
 mod profile;
 mod root_access;
@@ -36,6 +37,7 @@ pub use endpoint::local_socket_name;
 #[cfg(unix)]
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
+pub use local_stream::LocalStream;
 pub use private_dir::{LOCK_FILE, PrivateDir, TOMBSTONE_PREFIX, is_leftover, open_private_dir};
 pub use profile::{Profile, UI_STATE_FILE, ensure_dir};
 pub use root_access::{
