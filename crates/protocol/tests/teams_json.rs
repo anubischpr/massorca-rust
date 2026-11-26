@@ -357,6 +357,7 @@ fn delegate(read_only: bool) -> TeamDelegateParams {
         read_only,
         session: Some("session-1".to_owned()),
         agent_token: Some("secret-token".to_owned()),
+        request_id: None,
     }
 }
 

@@ -1,7 +1,8 @@
-use rusqlite::{Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
+use crate::tasks::{TaskRow, insert_task_row};
 
 /// One row of `teams`. `character` and `access` hold the protocol's names; the service validates them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,19 +120,37 @@ impl Store {
 }
 
 impl Store {
-    /// Links `child` to the `parent` task that delegated it (decision 0128). A child has one parent.
-    pub fn insert_task_delegation(
+    /// Stores a delegated child and its link in one transaction (decision 0128). A `request_id` the `parent` already used
+    /// stores nothing and returns the child it made first; otherwise the child is stored and `None` is returned.
+    pub fn insert_delegated_task(
         &self,
-        child: &str,
+        child: &TaskRow,
         parent: &str,
         read_only: bool,
+        request_id: Option<&str>,
         now: i64,
-    ) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO task_delegations (child_task_id, parent_task_id, read_only, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![child, parent, read_only, now],
+    ) -> Result<Option<String>, StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        if let Some(request) = request_id {
+            let first = transaction
+                .query_row(
+                    "SELECT child_task_id FROM task_delegations WHERE parent_task_id = ?1 AND request_id = ?2",
+                    params![parent, request],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if first.is_some() {
+                return Ok(first);
+            }
+        }
+        insert_task_row(&transaction, child)?;
+        transaction.execute(
+            "INSERT INTO task_delegations (child_task_id, parent_task_id, read_only, request_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![child.id, parent, read_only, request_id, now],
         )?;
-        Ok(())
+        transaction.commit()?;
+        Ok(None)
     }
 
     /// The parent task of `child` and whether the child only reads in it; `None` for a task nobody delegated.
@@ -146,6 +165,20 @@ impl Store {
         )
     }
 
+    /// The number of delegations above `task`: 0 for a task nobody delegated (decision 0128).
+    pub fn task_delegation_depth(&self, task: &str) -> Result<u32, StoreError> {
+        let mut depth = 0;
+        let mut current = task.to_owned();
+        while let Some((parent, _)) = self.task_delegation_parent(&current)? {
+            depth += 1;
+            if depth > MAX_DELEGATION_WALK {
+                break;
+            }
+            current = parent;
+        }
+        Ok(depth)
+    }
+
     /// The child tasks `parent` delegated, oldest first.
     pub fn task_delegation_children(&self, parent: &str) -> Result<Vec<String>, StoreError> {
         self.query_all(
@@ -155,3 +188,6 @@ impl Store {
         )
     }
 }
+
+/// Links above a task that a walk follows before it stops; a stored chain is never this long.
+const MAX_DELEGATION_WALK: u32 = 64;

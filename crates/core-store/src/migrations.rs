@@ -714,6 +714,14 @@ CREATE INDEX task_delegations_by_parent ON task_delegations (parent_task_id, cre
 "#,
         foreign_keys_off: false,
     },
+    // A delegation's request id (decision 0128): a repeated call from the same parent returns the child it made first.
+    Migration {
+        sql: r#"
+ALTER TABLE task_delegations ADD COLUMN request_id TEXT;
+CREATE UNIQUE INDEX task_delegations_by_request ON task_delegations (parent_task_id, request_id) WHERE request_id IS NOT NULL;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

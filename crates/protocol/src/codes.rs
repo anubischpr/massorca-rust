@@ -316,6 +316,10 @@ pub const TEAM_DELEGATE_NOT_A_BOT: &str = "team.delegate_not_a_bot";
 pub const TEAM_DELEGATE_NO_BOT: &str = "team.delegate_no_bot";
 /// `team.delegate` naming the bot its own run is; a bot never delegates to itself.
 pub const TEAM_DELEGATE_SELF: &str = "team.delegate_self";
+/// `team.delegate` from a child already `agents.delegation_depth` levels below its root; its data names the limit.
+pub const TEAM_DELEGATE_DEPTH_EXCEEDED: &str = "team.delegate_depth_exceeded";
+/// `team.delegate` with `read_only` to another team: a read-only child shares its parent's workspace, so it stays in its team.
+pub const TEAM_DELEGATE_READS_OTHER_TEAM: &str = "team.delegate_reads_other_team";
 
 /// `marketplace.service.*` names a service this build does not know.
 pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";

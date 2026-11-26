@@ -635,6 +635,9 @@ pub struct TeamDelegateParams {
     /// The run token of `session` (`MASSORCA_AGENT_TOKEN`). `Debug` never prints it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
+    /// A key for this call: a repeat from the same parent task returns the child the first call made (decision 0128).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl fmt::Debug for TeamDelegateParams {
@@ -644,6 +647,7 @@ impl fmt::Debug for TeamDelegateParams {
             .field("text", &"[redacted]")
             .field("team", &self.team)
             .field("read_only", &self.read_only)
+            .field("request_id", &self.request_id)
             .field("session", &self.session)
             .field(
                 "agent_token",
