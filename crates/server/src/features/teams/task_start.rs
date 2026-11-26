@@ -477,6 +477,7 @@ pub(super) fn start_reply_run(
             request_id: Some(request.to_owned()),
             permission_mode: team_mode(agents, team, bot),
             model: None,
+            fast: None,
             effort: None,
         },
         grant,

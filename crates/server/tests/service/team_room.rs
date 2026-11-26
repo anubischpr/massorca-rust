@@ -53,6 +53,7 @@ async fn team_with(client: &massorca_client::Client, team: &str, bots: &[(&str, 
                 model: None,
                 effort: None,
                 lead,
+                skills: Vec::new(),
             })
             .await
             .expect("team.bot_add");
