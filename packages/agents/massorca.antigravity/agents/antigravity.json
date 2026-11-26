@@ -44,7 +44,11 @@
     }
   ],
   "default_permission_mode": "auto",
-  "model": { "flag": "--model", "choices": [] },
+  "model": {
+    "flag": "--model",
+    "choices": [],
+    "discover": { "args": ["models"], "format": "lines" }
+  },
   "effort": {
     "flag": "--effort",
     "levels": [
