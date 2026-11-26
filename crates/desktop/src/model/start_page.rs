@@ -141,6 +141,8 @@ pub struct WorkspaceStart {
     pub project_id: String,
     /// The project's name, or a plain word when the service no longer lists the project.
     pub project: String,
+    /// The project's icon, drawn in the heading (decision 0091).
+    pub icon: crate::model::project_icon::ProjectGlyph,
     pub host: &'static str,
     pub path: String,
     pub branch: Option<String>,
@@ -284,6 +286,13 @@ pub fn workspace_start(state: &StoreState, workspace_id: &str) -> Option<Workspa
         name: workspace.name.clone(),
         project_id: workspace.project_id.clone(),
         project,
+        icon: state
+            .projects
+            .iter()
+            .find(|project| project.id == workspace.project_id)
+            .map_or_else(Default::default, |project| {
+                crate::model::project_icon::ProjectGlyph::of(project.icon.as_ref())
+            }),
         host: LOCAL_HOST,
         path: workspace.path.clone(),
         branch: workspace.branch.clone(),
@@ -328,8 +337,7 @@ mod tests {
         let busy =
             crate::service::Refusal::from(&massorca_client::ClientError::Remote(ErrorBody {
                 code: codes::AGENT_WORKSPACE_BUSY.to_owned(),
-                message: "session x already writes in this workspace".to_owned(),
-                data: None,
+                ..crate::service::fixtures::base_error_body()
             }));
         let sentence = super::start_refusal_sentence(&busy);
         assert!(sentence.starts_with("Another session is already working in this workspace"));
@@ -458,8 +466,7 @@ mod tests {
         KindChat {
             supported,
             reason,
-            version: None,
-            range: None,
+            ..crate::service::fixtures::base_kind_chat()
         }
     }
 
