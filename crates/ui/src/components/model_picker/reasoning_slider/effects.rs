@@ -1,4 +1,4 @@
-//! The reasoning slider's effects: the particles and the shimmer band that rise inside the fill at the
+//! The reasoning slider's effects: the particles and the shimmer band that rise inside the track at the
 //! top level, the rule that decides when a frame is requested, and the bounded move of the thumb and
 //! the fill to a new stop. Nothing loops below the top level, and nothing loops while the popover is
 //! closed.
@@ -9,10 +9,7 @@ use std::f32::consts::TAU;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use gpui::{
-    Bounds, Corners, Pixels, Window, fill, hsla, linear_color_stop, linear_gradient, point, px,
-    size,
-};
+use gpui::{Bounds, Corners, Pixels, Window, fill, hsla, point, px, size};
 
 use crate::tokens::{DURATION_SLIDER_MOVE, DURATION_SLIDER_SHIMMER};
 
@@ -174,53 +171,140 @@ pub fn request_frame(window: &mut Window) {
     window.request_animation_frame();
 }
 
-/// Paints the top level's particles and shimmer band into the fill `bounds`. Under reduced motion the clock is
-/// frozen at 0 and the band rests at the top of the fill, so the frame holds still.
-pub fn paint_top(bounds: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &mut Window) {
-    let height = f32::from(bounds.size.height);
-    let width = f32::from(bounds.size.width);
-    let origin = bounds.origin;
+/// A track's outline: a rectangle whose two ends are half circles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pill {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Pill {
+    /// The radius of the two ends, half the width.
+    pub fn radius(&self) -> f32 {
+        self.width.min(self.height) / 2.0
+    }
+
+    /// The outline's left and right edges in the row `y` px down from its top.
+    pub fn span_at(&self, y: f32) -> (f32, f32) {
+        let radius = self.radius();
+        let depth = if y < radius {
+            radius - y
+        } else if y > self.height - radius {
+            y - (self.height - radius)
+        } else {
+            return (0.0, self.width);
+        };
+        let half = (radius * radius - depth * depth).max(0.0).sqrt();
+        (self.width / 2.0 - half, self.width / 2.0 + half)
+    }
+
+    /// The centre of a disc of radius `r` at (`x`, `y`), moved the least it takes to lie wholly inside.
+    pub fn inset_centre(&self, x: f32, y: f32, r: f32) -> (f32, f32) {
+        let radius = self.radius();
+        let cap = if y < radius {
+            radius
+        } else if y > self.height - radius {
+            self.height - radius
+        } else {
+            return (x.max(r).min(self.width - r), y);
+        };
+        let (dx, dy) = (x - self.width / 2.0, y - cap);
+        let limit = (radius - r).max(0.0);
+        let distance = (dx * dx + dy * dy).sqrt();
+        if distance <= limit {
+            (x, y)
+        } else {
+            (
+                self.width / 2.0 + dx * limit / distance,
+                cap + dy * limit / distance,
+            )
+        }
+    }
+}
+
+/// One device pixel row of the shimmer band, from `top` to `bottom` px down the track, between `left`
+/// and `right`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stripe {
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
+    pub alpha: f32,
+}
+
+/// The band's rows at `scale` device pixels per px. Each row is one device pixel tall and spans only the
+/// outline at its height, so the band never paints past the rounded ends.
+pub fn shimmer_stripes(pill: Pill, elapsed: f32, reduced: bool, scale: f32) -> Vec<Stripe> {
     let band_bottom = if reduced {
-        held_shimmer_offset(height)
+        held_shimmer_offset(pill.height)
     } else {
-        shimmer_offset(elapsed, height)
+        shimmer_offset(elapsed, pill.height)
     };
-    let band_top = height - band_bottom - SHIMMER_BAND;
-    let half = SHIMMER_BAND / 2.0;
-    let white = hsla(0.0, 0.0, 1.0, SHIMMER_ALPHA);
-    let clear = hsla(0.0, 0.0, 1.0, 0.0);
-    let lower = Bounds::new(
-        point(origin.x, origin.y + px(band_top + half)),
-        size(px(width), px(half)),
-    );
-    let upper = Bounds::new(
-        point(origin.x, origin.y + px(band_top)),
-        size(px(width), px(half)),
-    );
-    window.paint_quad(fill(
-        lower,
-        linear_gradient(
-            0.,
-            linear_color_stop(clear, 0.),
-            linear_color_stop(white, 1.),
-        ),
-    ));
-    window.paint_quad(fill(
-        upper,
-        linear_gradient(
-            0.,
-            linear_color_stop(white, 0.),
-            linear_color_stop(clear, 1.),
-        ),
-    ));
+    let band_top = pill.height - band_bottom - SHIMMER_BAND;
+    let first = (band_top.max(0.0) * scale).floor() as i32;
+    let last = ((band_top + SHIMMER_BAND).min(pill.height) * scale).ceil() as i32;
+    (first..last)
+        .filter_map(|row| {
+            let top = row as f32 / scale;
+            let bottom = ((row + 1) as f32 / scale).min(pill.height);
+            let centre = (top + bottom) / 2.0;
+            let alpha = band_alpha(centre, band_top);
+            if alpha <= 0.0 || bottom <= top {
+                return None;
+            }
+            let (left, right) = pill.span_at(centre);
+            Some(Stripe {
+                top,
+                bottom,
+                left,
+                right,
+                alpha,
+            })
+        })
+        .collect()
+}
+
+/// The band's alpha at `y`: nothing at its top and bottom edges, `SHIMMER_ALPHA` at its middle.
+fn band_alpha(y: f32, band_top: f32) -> f32 {
+    let t = (y - band_top) / (SHIMMER_BAND / 2.0);
+    if (0.0..=2.0).contains(&t) {
+        SHIMMER_ALPHA * (1.0 - (t - 1.0).abs())
+    } else {
+        0.0
+    }
+}
+
+/// The particle's centre at `elapsed`, pulled inside the rounded ends where it would cross them.
+pub fn particle_centre(pill: Pill, particle: &Particle, elapsed: f32) -> (f32, f32) {
+    let y = pill.height - particle_offset(particle, pill.height, elapsed);
+    pill.inset_centre(particle.x, y, particle.radius)
+}
+
+/// Paints the top level's shimmer band and particles inside the rounded track `track`. Every row and
+/// particle stays inside the outline, so no square corner shows at any frame. Under reduced motion the
+/// clock is frozen at 0 and the band rests at the top of the track, so the frame holds still.
+pub fn paint_top(track: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &mut Window) {
+    let pill = Pill {
+        width: f32::from(track.size.width),
+        height: f32::from(track.size.height),
+    };
+    let origin = track.origin;
+    for stripe in shimmer_stripes(pill, elapsed, reduced, window.scale_factor()) {
+        let at = Bounds::new(
+            point(origin.x + px(stripe.left), origin.y + px(stripe.top)),
+            size(
+                px(stripe.right - stripe.left),
+                px(stripe.bottom - stripe.top),
+            ),
+        );
+        window.paint_quad(fill(at, hsla(0.0, 0.0, 1.0, stripe.alpha)));
+    }
     for particle in particles() {
-        let centre_y = height - particle_offset(&particle, height, elapsed);
+        let (x, y) = particle_centre(pill, &particle, elapsed);
         let radius = particle.radius;
         let at = Bounds::new(
-            point(
-                origin.x + px(particle.x - radius),
-                origin.y + px(centre_y - radius),
-            ),
+            point(origin.x + px(x - radius), origin.y + px(y - radius)),
             size(px(2.0 * radius), px(2.0 * radius)),
         );
         let alpha = particle_alpha(&particle, elapsed);
@@ -233,6 +317,115 @@ pub fn paint_top(bounds: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The track's outline at the reasoning column's size: 28 px wide and 220 px tall.
+    fn outline() -> Pill {
+        Pill {
+            width: 28.0,
+            height: 220.0,
+        }
+    }
+
+    fn distance(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+        ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn the_track_ends_are_half_circles_as_wide_as_the_track() {
+        let pill = outline();
+        assert_eq!(pill.radius(), 14.0);
+        assert_eq!(pill.span_at(110.0), (0.0, 28.0), "the sides run full width");
+        let (left, right) = pill.span_at(0.5);
+        assert!(
+            left > 0.0 && right < 28.0,
+            "the top row sits inside the rounded end"
+        );
+    }
+
+    #[test]
+    fn no_band_row_in_a_rounded_end_reaches_the_track_edge() {
+        let pill = outline();
+        for scale in [1.0, 1.25, 1.5] {
+            for elapsed in [0.0, 0.4, 0.8, 1.2, 1.4316, 1.5999] {
+                for stripe in shimmer_stripes(pill, elapsed, false, scale) {
+                    let centre = (stripe.top + stripe.bottom) / 2.0;
+                    if centre < pill.radius() || centre > pill.height - pill.radius() {
+                        assert!(
+                            stripe.left > 0.0 && stripe.right < pill.width,
+                            "the row at {centre} px spans {}..{} at {scale}x: a square corner",
+                            stripe.left,
+                            stripe.right
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_held_frame_paints_no_square_corner() {
+        let stripes = shimmer_stripes(outline(), 0.0, true, 1.0);
+        assert!(
+            !stripes.is_empty(),
+            "the band rests at the top of the track"
+        );
+        for stripe in stripes.iter().filter(|stripe| stripe.top < 14.0) {
+            assert!(
+                stripe.left > 0.0 && stripe.right < 28.0,
+                "the held band's top rows are rounded"
+            );
+        }
+    }
+
+    #[test]
+    fn the_band_crossing_the_top_end_paints_no_square_corner() {
+        let stripes = shimmer_stripes(outline(), 1.4316, false, 1.0);
+        assert!(
+            stripes.iter().any(|stripe| stripe.top < 14.0),
+            "the band reaches the rounded top"
+        );
+        for stripe in stripes.iter().filter(|stripe| stripe.top < 14.0) {
+            assert!(stripe.left > 0.0 && stripe.right < 28.0);
+        }
+    }
+
+    #[test]
+    fn band_rows_are_whole_device_pixels_so_neighbouring_rows_meet_without_seams() {
+        for scale in [1.0, 1.25, 1.5] {
+            for stripe in shimmer_stripes(outline(), 0.7, false, scale) {
+                for edge in [stripe.top * scale, stripe.bottom * scale] {
+                    assert!(
+                        (edge - edge.round()).abs() < 1e-3,
+                        "the edge at {edge} device px is not whole at {scale}x"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_particle_at_a_rounded_end_is_pulled_inside_the_track() {
+        let pill = outline();
+        let radius = pill.radius();
+        for step in 0..200 {
+            let elapsed = step as f32 * 0.07;
+            for particle in particles() {
+                let (x, y) = particle_centre(pill, &particle, elapsed);
+                let r = particle.radius;
+                let inside = if y < radius {
+                    distance(x, y, radius, radius) <= radius - r + 1e-3
+                } else if y > pill.height - radius {
+                    distance(x, y, radius, pill.height - radius) <= radius - r + 1e-3
+                } else {
+                    x >= r - 1e-3 && x <= pill.width - r + 1e-3
+                };
+                assert!(
+                    inside,
+                    "a particle at ({x}, {y}) of radius {r} crosses the rounded end at {elapsed} s"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_top_level_has_46_particles_in_the_spec_ranges() {
