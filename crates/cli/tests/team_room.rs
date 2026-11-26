@@ -215,6 +215,11 @@ fn a_line_goes_to_the_receiver_named_with_to_and_a_false_agent_token_is_refused(
         .as_str()
         .expect("linked session")
         .to_owned();
+    // The room shows its bot typing while the task works (decision 0122).
+    eventually("bruno to type", || {
+        let listed = sandbox.json_ok("default", &["team", "room", "list", "alpha"]);
+        (listed["typing"][0]["bot_name"] == "bruno").then_some(())
+    });
 
     // Inside an agent run, the CLI sends the run's session and token; a token that is not the run's is refused.
     sandbox.set_env("MASSORCA_AGENT_SESSION", &session);
