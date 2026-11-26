@@ -110,3 +110,5 @@ pub const CALENDAR: &str = "calendar/1";
 /// Automation runs (`automation.run_now`, `automation.runs` and the `automation.changed` topic, decision 0125). A host
 /// that has it also keeps `automations/1`.
 pub const AUTOMATION_RUNS: &str = "automation-runs/1";
+/// Messages between the bots of a delegation (`team.message_send`, `team.message_reply`, `team.inbox`, decision 0129).
+pub const TEAM_MESSAGES: &str = "team-messages/1";

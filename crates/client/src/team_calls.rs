@@ -6,7 +6,8 @@ use massorca_protocol::methods::tasks::{
     TaskUpdateParams,
 };
 use massorca_protocol::methods::team_room::{
-    self, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
+    self, TeamInbox, TeamInboxParams, TeamMessageReplyParams, TeamMessageSendParams,
+    TeamMessageSent, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
     TeamRoomPostParams, TeamRoomPosted,
 };
 use massorca_protocol::methods::teams::{
@@ -144,6 +145,28 @@ impl Client {
         params: &TeamRef,
     ) -> Result<DelegationList, ClientError> {
         self.call(teams::DELEGATION_LIST, params).await
+    }
+
+    /// `team.message_send`: a bot's run messages its parent's or a child's bot (decision 0129). Capability
+    /// `team-messages/1`.
+    pub async fn team_message_send(
+        &self,
+        params: &TeamMessageSendParams,
+    ) -> Result<TeamMessageSent, ClientError> {
+        self.call(team_room::MESSAGE_SEND, params).await
+    }
+
+    /// `team.message_reply`: answers a message in the run's inbox on its thread (capability `team-messages/1`).
+    pub async fn team_message_reply(
+        &self,
+        params: &TeamMessageReplyParams,
+    ) -> Result<TeamMessageSent, ClientError> {
+        self.call(team_room::MESSAGE_REPLY, params).await
+    }
+
+    /// `team.inbox`: the run's unread messages, oldest first (capability `team-messages/1`).
+    pub async fn team_inbox(&self, params: &TeamInboxParams) -> Result<TeamInbox, ClientError> {
+        self.call(team_room::INBOX, params).await
     }
 
     /// `team.room_answer`: answers a room's choice card once (decision 0121).

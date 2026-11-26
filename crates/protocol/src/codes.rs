@@ -396,3 +396,15 @@ pub const AUTOMATION_RUN_INTERRUPTED: &str = "automation.run_interrupted";
 pub const AUTOMATION_RUN_EXITED: &str = "automation.run_exited";
 /// An automation run's agent session is gone, so how it ended cannot be known.
 pub const AUTOMATION_RUN_STRANDED: &str = "automation.run_stranded";
+/// A team message call that is not an agent run of a bot's task with its run token (decision 0129).
+pub const TEAM_MESSAGE_NOT_A_BOT: &str = "team.message_not_a_bot";
+/// A team message to a task that is neither the sender's parent nor one of its children (decision 0129).
+pub const TEAM_MESSAGE_NO_EDGE: &str = "team.message_no_edge";
+/// A `worker_done` naming a task that does not exist.
+pub const TEAM_MESSAGE_UNKNOWN_TASK: &str = "team.message_unknown_task";
+/// A `worker_done` naming a task that is not the sender's own task delegated by the recipient.
+pub const TEAM_MESSAGE_NOT_YOUR_CHILD: &str = "team.message_not_your_child";
+/// A `worker_done` for a task that already ended with another outcome; its data names that outcome.
+pub const TEAM_MESSAGE_ALREADY_SETTLED: &str = "team.message_already_settled";
+/// A reply to, or a `reply_to` naming, a message that is not in the caller's conversations.
+pub const TEAM_MESSAGE_UNKNOWN: &str = "team.message_unknown";
