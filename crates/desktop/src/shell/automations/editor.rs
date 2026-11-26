@@ -23,7 +23,9 @@ pub(in crate::shell) struct AutomationEditor {
     name: Entity<TextField>,
     project: Entity<TextField>,
     destination: Entity<SelectView>,
-    workspace: Entity<TextField>,
+    /// The workspace select's options, as the ids the form sends, in the select's order.
+    workspace_ids: Vec<String>,
+    workspace: Entity<SelectView>,
     base_branch: Entity<TextField>,
     prompt: Entity<TextField>,
     agent: Entity<TextField>,
@@ -36,8 +38,20 @@ pub(in crate::shell) struct AutomationEditor {
 
 impl AutomationEditor {
     /// The editor on `automation`'s values, or on a new automation's starting values.
-    pub(in crate::shell) fn new(automation: Option<&Automation>, cx: &mut Context<Shell>) -> Self {
+    /// `workspaces` are the (label, workspace id) choices of the workspace select.
+    pub(in crate::shell) fn new(
+        automation: Option<&Automation>,
+        workspaces: &[(String, String)],
+        cx: &mut Context<Shell>,
+    ) -> Self {
         let form = automation.map_or_else(AutomationForm::starting, AutomationForm::of);
+        let workspace_ids: Vec<String> = workspaces.iter().map(|(_, id)| id.clone()).collect();
+        let workspace_index = match &form.destination {
+            FormDestination::Workspace { workspace } => {
+                workspace_ids.iter().position(|id| id == workspace)
+            }
+            _ => None,
+        };
         let cadence_index = Cadence::ALL
             .iter()
             .position(|cadence| *cadence == form.cadence);
@@ -51,15 +65,11 @@ impl AutomationEditor {
                 SelectView::new(FormDestination::LABELS, cx)
                     .selected(Some(form.destination.index()))
             }),
-            workspace: text_field(
-                cx,
-                "Workspace",
-                "Its id, name or path",
-                match &form.destination {
-                    FormDestination::Workspace { workspace } => workspace.as_str(),
-                    _ => "",
-                },
-            ),
+            workspace_ids,
+            workspace: cx.new(|cx| {
+                SelectView::new(workspaces.iter().map(|(label, _)| label.clone()), cx)
+                    .selected(workspace_index)
+            }),
             base_branch: text_field(
                 cx,
                 "Base branch",
@@ -122,7 +132,11 @@ impl AutomationEditor {
             destination: FormDestination::from_choice(
                 self.destination.read(cx).selected_index(),
                 self.base_branch.read(cx).text().to_owned(),
-                self.workspace.read(cx).text().to_owned(),
+                self.workspace
+                    .read(cx)
+                    .selected_index()
+                    .and_then(|index| self.workspace_ids.get(index).cloned())
+                    .unwrap_or_default(),
             ),
         }
     }
