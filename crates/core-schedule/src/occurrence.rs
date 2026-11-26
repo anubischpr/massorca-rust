@@ -10,6 +10,9 @@ use crate::zone::ZoneSource;
 /// Days a search walks before it gives up. Every valid recurring cadence occurs within 31 days.
 pub const MAX_SEARCH_DAYS: u32 = 370;
 
+/// Days a cron search walks: nine years, since the longest gap between two leap days is eight years (2096 to 2104).
+pub const MAX_CRON_SEARCH_DAYS: u32 = 3_294;
+
 /// A validated schedule with its zone resolved. Instants are UTC epoch milliseconds.
 #[derive(Debug, Clone)]
 pub struct CompiledSchedule {
@@ -52,7 +55,7 @@ impl CompiledSchedule {
         // A day early: a resolved instant can land on the neighbouring local date.
         let start = self.zone.to_datetime(after).date();
         let mut date = start.yesterday().unwrap_or(start);
-        for _ in 0..MAX_SEARCH_DAYS {
+        for _ in 0..self.search_days() {
             if self.matches(date) {
                 // Resolved instants rise with the wall time, so the first one after `after` is found by bisection.
                 let not_after = self.times.partition_point(|time| {
@@ -81,7 +84,7 @@ impl CompiledSchedule {
         }
         let start = self.zone.to_datetime(limit).date();
         let mut date = start.tomorrow().unwrap_or(start);
-        for _ in 0..MAX_SEARCH_DAYS {
+        for _ in 0..self.search_days() {
             if self.matches(date) {
                 let not_after = self.times.partition_point(|time| {
                     self.resolve(date, *time).is_some_and(|at| at <= limit)
@@ -99,6 +102,13 @@ impl CompiledSchedule {
         None
     }
 
+    fn search_days(&self) -> u32 {
+        match self.rule {
+            Rule::Cron(_) => MAX_CRON_SEARCH_DAYS,
+            _ => MAX_SEARCH_DAYS,
+        }
+    }
+
     fn matches(&self, date: Date) -> bool {
         match self.rule {
             Rule::Daily => true,
@@ -106,6 +116,7 @@ impl CompiledSchedule {
             Rule::Weekly(weekday) => date.weekday() == weekday,
             Rule::Monthly(day) => date.day() == day,
             Rule::Once(once) => date == once,
+            Rule::Cron(days) => days.matches(date),
         }
     }
 

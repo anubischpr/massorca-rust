@@ -4,6 +4,7 @@ use jiff::civil::{Date, Time};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
+use crate::cron::CronDays;
 use crate::occurrence::CompiledSchedule;
 use crate::zone::{ZoneSource, host_zone};
 
@@ -88,6 +89,16 @@ pub enum ScheduleError {
     UnknownZone(String),
     #[error("time zone name is {0} characters, more than 64")]
     ZoneTooLong(usize),
+    #[error("a cron expression has five fields, but this one has {0}")]
+    CronFieldCount(usize),
+    #[error("the cron {field} {text:?} is not valid")]
+    CronField { field: &'static str, text: String },
+    #[error("the cron {field} step {step} is larger than the field's range")]
+    CronStepTooLarge { field: &'static str, step: u8 },
+    #[error("this cron expression can never occur, such as 30 February")]
+    CronNeverOccurs,
+    #[error("cron expression is {0} characters, more than the limit of 256")]
+    CronTooLong(usize),
 }
 
 /// The cadence with its parameters checked.
@@ -98,6 +109,7 @@ pub(crate) enum Rule {
     Weekly(jiff::civil::Weekday),
     Monthly(i8),
     Once(Date),
+    Cron(CronDays),
 }
 
 impl Schedule {
