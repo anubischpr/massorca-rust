@@ -575,6 +575,12 @@ pub enum HostCommand {
         #[arg(long)]
         watch: bool,
     },
+    /// Checks one paired host step by step (address, port, key, protocol, pairing, service, round trip) and names
+    /// the step that fails and how to fix it. Exit code 0 only when every check passes.
+    SelfTest {
+        /// Host name.
+        name: String,
+    },
     /// Lists the online Tailscale peers, and which of them run massorca.
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
