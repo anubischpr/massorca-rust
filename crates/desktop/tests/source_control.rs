@@ -826,3 +826,54 @@ async fn the_base_branch_is_set_and_cleared_through_the_service() {
     assert_eq!(cleared.base_ref, None);
     session.stop().await;
 }
+
+#[tokio::test]
+async fn a_moved_submodule_pointer_reaches_the_diff_with_both_commits() {
+    let home = temp_home();
+    let (session, worktree) = Session::start(&home).await;
+    let sub = home.path().with_file_name("sub");
+    repo(&sub);
+    let sub_path = sub.to_str().expect("a UTF-8 path");
+    git(
+        &worktree,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            sub_path,
+            "sub",
+        ],
+    );
+    git(&worktree, &["commit", "-q", "-m", "add the submodule"]);
+    git(
+        &worktree.join("sub"),
+        &["commit", "-q", "--allow-empty", "-m", "move the pointer"],
+    );
+
+    let diff = session
+        .handle
+        .git_diff_file(GitDiffFileParams {
+            workspace: session.id().to_owned(),
+            path: "sub".into(),
+            ..base_git_diff_file_params()
+        })
+        .await
+        .expect("the pointer diff is read");
+    let pointer = diff
+        .submodule
+        .expect("the pointer is named, not left as an empty diff");
+    assert!(diff.patch.is_none(), "a pointer carries no patch text");
+    assert_ne!(pointer.old_commit, pointer.new_commit, "the pointer moved");
+    assert_eq!(
+        pointer.dirty,
+        Some(false),
+        "the submodule's checkout is clean"
+    );
+    assert!(
+        pointer.summary.starts_with("Subproject commit "),
+        "{}",
+        pointer.summary
+    );
+    session.stop().await;
+}

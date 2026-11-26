@@ -1309,6 +1309,16 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Every `SubmodulePointer` field at its usual value; tests override the fields they vary.
+    pub fn base_submodule_pointer() -> massorca_protocol::methods::git::diff::SubmodulePointer {
+        massorca_protocol::methods::git::diff::SubmodulePointer {
+            old_commit: Some("1111111aaaaaaa".to_owned()),
+            new_commit: Some("2222222bbbbbbb".to_owned()),
+            dirty: Some(false),
+            summary: "Subproject commit 1111111aaaaaaa..2222222bbbbbbb".to_owned(),
+        }
+    }
+
     /// Every `GitLog` field at its usual value; tests override the fields they vary.
     pub fn base_git_log() -> massorca_protocol::methods::git::log::GitLog {
         massorca_protocol::methods::git::log::GitLog {
