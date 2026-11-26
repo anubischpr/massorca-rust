@@ -538,6 +538,7 @@ mod tests {
                     efforts: levels,
                     default_effort: 1,
                     fast: false,
+                    fast_reason: None,
                 }],
             }],
             Choice {
@@ -823,6 +824,7 @@ mod tests {
                 efforts: Vec::new(),
                 default_effort: 0,
                 fast: false,
+                fast_reason: None,
             }],
         }
     }
