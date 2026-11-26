@@ -85,6 +85,10 @@ mod tests {
             creation_key: None,
             next_run_at: None,
             last_run_at: None,
+            destination: "project_default".to_owned(),
+            destination_workspace_id: None,
+            destination_path: None,
+            base_branch: None,
             created_at: 1,
             updated_at: 1,
         };
