@@ -14,9 +14,6 @@ use crate::error::ClientError;
 use crate::host_storage::HostStorage;
 use crate::reconnect::{Backoff, Connect, RECONNECT_RESET_AFTER, is_transient, jittered};
 
-/// How long one attempt may take, end to end, before the host counts as unreachable.
-pub const HOST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Where a host's link stands.
 #[derive(Clone, Debug)]
 pub enum LiveState {
@@ -45,7 +42,8 @@ impl LiveState {
     }
 }
 
-/// Connects to a paired host as this device, once per attempt, within [`HOST_ATTEMPT_TIMEOUT`].
+/// Connects to a paired host as this device, once per attempt. Each address and the handshake have their own time
+/// limits, so a silent first address still leaves time for the next, and a changed key there is reported as such.
 #[derive(Clone, Debug)]
 pub struct HostDial<H> {
     hosts: H,
@@ -65,15 +63,7 @@ impl<H> HostDial<H> {
 
 impl<H: HostStorage + Clone + 'static> Connect for HostDial<H> {
     async fn connect(&mut self) -> Result<Client, ClientError> {
-        let attempt = Client::connect_host(&self.hosts, &self.name, &self.peer);
-        tokio::time::timeout(HOST_ATTEMPT_TIMEOUT, attempt)
-            .await
-            .unwrap_or_else(|_| {
-                Err(ClientError::HostUnreachable(format!(
-                    "no answer within {} seconds",
-                    HOST_ATTEMPT_TIMEOUT.as_secs()
-                )))
-            })
+        Client::connect_host(&self.hosts, &self.name, &self.peer).await
     }
 }
 

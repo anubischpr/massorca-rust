@@ -39,7 +39,7 @@ pub use error::ClientError;
 #[cfg(feature = "local")]
 pub use error::profile_refusal;
 pub use handshake::Welcome;
-pub use host_link::{HOST_ATTEMPT_TIMEOUT, HostDial, LiveHost, LiveState};
+pub use host_link::{HostDial, LiveHost, LiveState};
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::{DeviceRevocation, Hosts};
