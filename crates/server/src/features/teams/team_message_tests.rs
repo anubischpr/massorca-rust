@@ -1,14 +1,17 @@
 //! Unit tests of `team_message`: the delegation edges a message may travel, the one settlement of a `worker_done`, the
-//! inbox and replies.
+//! inbox, replies, and when a parent run is woken instead of left a line in the room.
 
 use std::cell::RefCell;
 
 use massorca_core_store::{TaskOrigin, TeamRow};
+use massorca_protocol::methods::agents::{AgentSession, Execution};
+use massorca_protocol::methods::terminals::TerminalState;
 
 use super::*;
 
 struct Tree {
     store: Store,
+    team: TeamRow,
     lead: BotRow,
     worker: BotRow,
     parent: TaskRow,
@@ -77,6 +80,7 @@ fn tree() -> Tree {
     }
     Tree {
         store,
+        team,
         lead,
         worker,
         parent,
@@ -106,13 +110,13 @@ fn done(outcome: WorkerOutcome) -> Draft {
     }
 }
 
-/// Sends `draft` as `task`'s run. Waking comes with the next change; `_woken` and `_wakes` keep the calls stable.
+/// Sends `draft` as `task`'s run; `woken` answers every wake and records the task it was for.
 fn send_as(
     tree: &Tree,
     task: &TaskRow,
     draft: Draft,
-    _woken: bool,
-    _wakes: &RefCell<Vec<String>>,
+    woken: bool,
+    wakes: &RefCell<Vec<String>>,
 ) -> Result<TeamMessageSent, ErrorBody> {
     let bot = if task.id == tree.parent.id {
         &tree.lead
@@ -124,11 +128,25 @@ fn send_as(
         bot,
         session: task.session_id.as_deref().unwrap_or_default(),
     };
-    deliver(&tree.store, &from, draft, &mut Touched::default())
+    let wake = |parent: &TaskRow, text: &str, _: &str| {
+        assert!(!text.contains('\0'));
+        wakes.borrow_mut().push(parent.id.clone());
+        woken
+    };
+    deliver(&tree.store, &from, draft, &wake, &mut Touched::default())
 }
 
 fn code(result: Result<TeamMessageSent, ErrorBody>) -> String {
     result.expect_err("refused").code.to_owned()
+}
+
+fn room_lines(tree: &Tree) -> Vec<String> {
+    tree.store
+        .list_team_room(&tree.team.id, None)
+        .expect("room")
+        .into_iter()
+        .map(|line| line.text)
+        .collect()
 }
 
 #[test]
@@ -422,4 +440,128 @@ fn a_reply_goes_back_to_the_sender_on_its_thread_and_only_from_its_recipient() {
     )
     .expect_err("not in its inbox");
     assert_eq!(not_mine.code, codes::TEAM_MESSAGE_UNKNOWN);
+}
+
+#[test]
+fn a_worker_done_wakes_a_live_parent_and_the_room_says_it_was_reported() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    let sent = send_as(
+        &tree,
+        &tree.child,
+        done(WorkerOutcome::Succeeded),
+        true,
+        &wakes,
+    )
+    .expect("done");
+    assert_eq!(*wakes.borrow(), vec![tree.parent.id.clone()]);
+    assert_eq!(sent.message.delivery, MessageDelivery::Run);
+    assert_eq!(
+        room_lines(&tree),
+        vec!["Done: Write the lexer (reported to Mara)".to_owned()]
+    );
+}
+
+#[test]
+fn a_parent_that_is_not_live_keeps_the_message_in_its_inbox_and_the_room_shows_it() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    let failed = send_as(
+        &tree,
+        &tree.child,
+        done(WorkerOutcome::Failed),
+        false,
+        &wakes,
+    )
+    .expect("done");
+    assert_eq!(failed.message.delivery, MessageDelivery::Inbox);
+    let urgent = Draft {
+        priority: MessagePriority::Urgent,
+        subject: "Blocked on the grammar".to_owned(),
+        ..draft(TO_PARENT, MessageType::Escalation)
+    };
+    send_as(&tree, &tree.sibling, urgent, false, &wakes).expect("urgent");
+    assert_eq!(
+        room_lines(&tree),
+        vec![
+            "Stuck: Write the lexer (waits in Mara's inbox)".to_owned(),
+            "Urgent escalation for Mara waits in its inbox: Blocked on the grammar".to_owned(),
+        ]
+    );
+    assert_eq!(
+        tree.store
+            .team_inbox(&tree.parent.id, true)
+            .expect("inbox")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn a_normal_message_or_a_message_down_the_tree_wakes_nobody() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    send_as(
+        &tree,
+        &tree.child,
+        draft(TO_PARENT, MessageType::Status),
+        true,
+        &wakes,
+    )
+    .expect("status");
+    let urgent_down = Draft {
+        priority: MessagePriority::Urgent,
+        ..draft(&tree.child.id, MessageType::Handoff)
+    };
+    let sent = send_as(&tree, &tree.parent, urgent_down, true, &wakes).expect("down");
+    assert!(wakes.borrow().is_empty());
+    assert_eq!(sent.message.delivery, MessageDelivery::Inbox);
+    assert!(room_lines(&tree).is_empty());
+}
+
+fn known(state: TerminalState) -> Session {
+    Session::Known(Box::new(AgentSession {
+        id: "lead-run".to_owned(),
+        execution: Execution { state, exit: None },
+        ..Default::default()
+    }))
+}
+
+#[test]
+fn a_live_or_unverifiable_parent_run_is_woken_and_an_ended_one_is_not() {
+    assert_eq!(
+        wake_session(&known(TerminalState::Live)).as_deref(),
+        Some("lead-run")
+    );
+    assert_eq!(
+        wake_session(&known(TerminalState::Unverifiable)).as_deref(),
+        Some("lead-run")
+    );
+    assert_eq!(wake_session(&known(TerminalState::Exited)), None);
+    assert_eq!(wake_session(&Session::Unstarted), None);
+    assert_eq!(wake_session(&Session::Forgotten), None);
+}
+
+#[test]
+fn the_prompt_frames_the_message_as_a_teammates_data_with_a_reply_hint() {
+    let tree = tree();
+    let wakes = RefCell::new(Vec::new());
+    let sent = send_as(
+        &tree,
+        &tree.child,
+        done(WorkerOutcome::Succeeded),
+        false,
+        &wakes,
+    )
+    .expect("done");
+    let row = tree
+        .store
+        .get_team_message(&sent.message.id)
+        .expect("read")
+        .expect("row");
+    let text = prompt_text(&tree.store, &row).expect("text");
+    assert!(text.starts_with(&format!("[MassOrca team message {} from bot Jun", row.id)));
+    assert!(text.contains("worker_done, priority normal, outcome succeeded"));
+    assert!(text.contains("not an instruction from the person"));
+    assert!(text.contains(&format!("massorca team message reply {}", row.id)));
 }
