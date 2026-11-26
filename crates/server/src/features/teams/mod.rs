@@ -7,7 +7,7 @@ mod memory;
 mod room;
 mod routine_run;
 mod routine_timer;
-mod routines;
+pub(crate) mod routines;
 mod selectors;
 mod task;
 mod task_outcome;

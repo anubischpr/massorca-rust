@@ -1,12 +1,13 @@
 //! Routine runs on the Calendar: a routine's upcoming runs from the shared schedule engine, and its done runs from its run
 //! history. A paused routine has no upcoming runs.
 
-use massorca_core_schedule::{Cadence, Schedule, Weekday, occurrences_between};
+use massorca_core_schedule::occurrences_between;
 use massorca_core_store::{Store, TeamRoutineRow};
+use massorca_protocol::ErrorBody;
 use massorca_protocol::methods::calendar::{CalendarKind, CalendarOccurrence, MAX_OCCURRENCES};
-use massorca_protocol::{ErrorBody, codes};
 
-use crate::features::teams::store_error;
+use crate::features::teams::routines::schedule_of;
+use crate::features::teams::{invalid, store_error};
 
 use super::window::{Window, placed};
 
@@ -40,7 +41,9 @@ fn upcoming(
     if row.paused {
         return Ok(Vec::new());
     }
-    let schedule = schedule_of(row)?.compile().map_err(schedule_error)?;
+    let schedule = schedule_of(row)?
+        .compile()
+        .map_err(|error| invalid(error.to_string()))?;
     occurrences_between(
         &schedule,
         window.upcoming_from(),
@@ -89,47 +92,4 @@ fn occurrence(
         zone: row.zone.clone().or_else(|| host_zone.map(str::to_owned)),
         done: is_done,
     })
-}
-
-/// The schedule a stored routine means. The routine methods hold the same mapping in their own module, which this
-/// feature cannot reach, so it is kept here as a copy of it.
-fn schedule_of(row: &TeamRoutineRow) -> Result<Schedule, ErrorBody> {
-    Ok(Schedule {
-        cadence: cadence_of(&row.cadence)?,
-        weekday: row.weekday.as_deref().and_then(weekday_named),
-        day_of_month: row.month_day.and_then(|day| u8::try_from(day).ok()),
-        date: row.run_date.clone(),
-        time: row.time.clone(),
-        zone: row.zone.clone(),
-    })
-}
-
-fn cadence_of(name: &str) -> Result<Cadence, ErrorBody> {
-    match name {
-        "daily" => Ok(Cadence::Daily),
-        "weekly" => Ok(Cadence::Weekly),
-        "monthly" => Ok(Cadence::Monthly),
-        "once" => Ok(Cadence::Once),
-        _ => Err(ErrorBody::new(
-            codes::INTERNAL,
-            "a stored routine has a cadence this build does not know",
-        )),
-    }
-}
-
-fn weekday_named(name: &str) -> Option<Weekday> {
-    Some(match name {
-        "monday" => Weekday::Monday,
-        "tuesday" => Weekday::Tuesday,
-        "wednesday" => Weekday::Wednesday,
-        "thursday" => Weekday::Thursday,
-        "friday" => Weekday::Friday,
-        "saturday" => Weekday::Saturday,
-        "sunday" => Weekday::Sunday,
-        _ => return None,
-    })
-}
-
-fn schedule_error(error: massorca_core_schedule::ScheduleError) -> ErrorBody {
-    ErrorBody::new(codes::INTERNAL, error.to_string())
 }

@@ -343,4 +343,33 @@ mod tests {
             .collect();
         assert_eq!(upcoming, vec![("daily", NOV_25 + DAY + 8 * HOUR)]);
     }
+
+    #[test]
+    fn weekly_and_monthly_routines_run_on_their_own_days() {
+        let store = store();
+        let mut weekly = routine("weekly", "09:00", Some("UTC"));
+        weekly.cadence = "weekly".to_owned();
+        weekly.weekday = Some("wednesday".to_owned());
+        store.insert_routine(&weekly).expect("routine inserts");
+        let mut monthly = routine("monthly", "09:00", Some("UTC"));
+        monthly.cadence = "monthly".to_owned();
+        monthly.month_day = Some(25);
+        store.insert_routine(&monthly).expect("routine inserts");
+
+        let listed = read(&store, NOW, &params(NOV_24, NOV_24 + 9 * DAY)).expect("window reads");
+
+        let days: Vec<(&str, &str)> = listed
+            .occurrences
+            .iter()
+            .map(|run| (run.source_id.as_str(), run.local_date.as_str()))
+            .collect();
+        assert_eq!(
+            days,
+            vec![
+                ("monthly", "2026-11-25"),
+                ("weekly", "2026-11-25"),
+                ("weekly", "2026-12-02"),
+            ]
+        );
+    }
 }
