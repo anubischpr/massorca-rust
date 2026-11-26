@@ -16,10 +16,7 @@ use tokio::time::timeout;
 const WAIT: Duration = Duration::from_secs(30);
 
 fn peer() -> PeerInfo {
-    PeerInfo {
-        name: "massorca-test-client".to_owned(),
-        version: "0.0.0-test".to_owned(),
-    }
+    PeerInfo { ..base_peer_info() }
 }
 
 fn profile(home: &Path) -> Profile {
@@ -30,13 +27,20 @@ fn profile(home: &Path) -> Profile {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let output = massorca_process::command("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
-        .status()
+        .current_dir(dir)
+        .output()
         .expect("git runs");
-    assert!(status.success(), "git {args:?} failed");
+    assert!(output.status.success(), "git {args:?} failed");
 }
 
 fn repo(dir: &Path) {
@@ -128,9 +132,7 @@ async fn a_project_icon_set_through_the_bridge_reads_back_from_project_list() {
         .add_project(ProjectAddParams {
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
-            workspaces_root: None,
-            icon: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added")
@@ -156,4 +158,23 @@ async fn a_project_icon_set_through_the_bridge_reads_back_from_project_list() {
     assert_eq!(listed_icon(&home, &project).await, None);
     drop(bridge);
     stop_service(running).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

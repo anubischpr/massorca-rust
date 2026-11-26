@@ -191,16 +191,26 @@ pub fn no_project_branch_pill() -> BranchPill {
     }
 }
 
+/// What the service offers for a derived name (decision 0111): a free name when the derived one is taken
+/// (`workspace-unique-name/1`), and a rename of it later (`workspace-rename/1`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NameOffers {
+    pub unique_name: bool,
+    pub rename: bool,
+}
+
 /// The `workspace.create` that Send asks for: a new worktree in `project`, from the base the popover names when it
 /// names one; without one the service starts from the project's base.
 pub fn create_params(
     project: &str,
     prompt: &str,
     details: &WorkspaceDetails,
+    offers: NameOffers,
 ) -> WorkspaceCreateParams {
-    WorkspaceCreateParams {
+    let typed = non_empty(&details.name);
+    let mut params = WorkspaceCreateParams {
         project: project.to_owned(),
-        name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
+        name: typed.unwrap_or_else(|| workspace_name_seed(prompt)),
         branch: None,
         base: non_empty(&details.base),
         existing_branch: false,
@@ -208,7 +218,19 @@ pub fn create_params(
         path: None,
         request_id: None,
         no_setup: false,
-    }
+        unique_name: false,
+        name_generated: false,
+    };
+    set_name_options(&mut params, name_is_derived(details), offers);
+    params
+}
+
+/// Sets `unique_name` and `name_generated` on a create (decision 0111). Only a name the desktop derived from the prompt is
+/// made free or renamed, and a named or existing branch is the person's, so its name is never renamed.
+pub fn set_name_options(params: &mut WorkspaceCreateParams, derived: bool, offers: NameOffers) {
+    params.unique_name = derived && offers.unique_name;
+    params.name_generated =
+        derived && offers.rename && params.branch.is_none() && !params.existing_branch;
 }
 
 /// The text trimmed, or `None` when nothing is left of it.
@@ -365,7 +387,7 @@ mod tests {
 
     #[test]
     fn the_create_call_names_the_workspace_from_the_prompt() {
-        let params = create_params("p1", "fix the login", &WorkspaceDetails::default());
+        let params = from_prompt(NameOffers::default());
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
         assert_eq!(params.branch, None);
@@ -382,9 +404,14 @@ mod tests {
             name: String::new(),
             base: " release ".into(),
         };
-        let params = create_params("p1", "fix the login", &details);
+        let offers = NameOffers {
+            unique_name: false,
+            rename: true,
+        };
+        let params = create_params("p1", "fix the login", &details, offers);
         assert_eq!(params.base.as_deref(), Some("release"));
         assert_eq!(params.branch, None);
+        assert!(params.name_generated);
         assert!(!params.existing_branch);
     }
 
@@ -395,7 +422,7 @@ mod tests {
             ..WorkspaceDetails::default()
         };
         assert_eq!(
-            create_params("p1", "fix the login", &details).name,
+            create_params("p1", "fix the login", &details, NameOffers::default()).name,
             "login-fix"
         );
     }
@@ -413,8 +440,73 @@ mod tests {
 
     #[test]
     fn a_blank_name_with_no_prompt_words_asks_the_service_for_one() {
-        let params = create_params("p1", "  ", &WorkspaceDetails::default());
+        let params = from_prompt_with("  ", NameOffers::default());
         assert_eq!(params.name, "");
+    }
+
+    fn from_prompt(offers: NameOffers) -> WorkspaceCreateParams {
+        from_prompt_with("fix the login", offers)
+    }
+
+    fn from_prompt_with(prompt: &str, offers: NameOffers) -> WorkspaceCreateParams {
+        create_params("p1", prompt, &WorkspaceDetails::default(), offers)
+    }
+
+    #[test]
+    fn a_derived_name_is_renamable_only_when_the_service_offers_the_rename() {
+        let offers = NameOffers {
+            unique_name: false,
+            rename: true,
+        };
+        assert!(from_prompt(offers).name_generated);
+        assert!(
+            !from_prompt(NameOffers::default()).name_generated,
+            "no rename offered: the name is not marked as the service's"
+        );
+    }
+
+    #[test]
+    fn a_derived_name_is_made_unique_only_when_the_service_offers_it() {
+        let offers = NameOffers {
+            unique_name: true,
+            rename: false,
+        };
+        assert!(from_prompt(offers).unique_name);
+        assert!(!from_prompt(NameOffers::default()).unique_name);
+    }
+
+    #[test]
+    fn a_typed_name_is_never_renamable_or_made_unique() {
+        let typed = WorkspaceDetails {
+            name: "mine".into(),
+            ..WorkspaceDetails::default()
+        };
+        let offers = NameOffers {
+            unique_name: true,
+            rename: true,
+        };
+        let params = create_params("p1", "fix the login", &typed, offers);
+        assert!(!params.name_generated);
+        assert!(!params.unique_name);
+    }
+
+    #[test]
+    fn a_named_or_existing_branch_is_never_renamed() {
+        let offers = NameOffers {
+            unique_name: false,
+            rename: true,
+        };
+        let mut named = from_prompt(offers);
+        named.branch = Some("feat/mine".to_owned());
+        set_name_options(&mut named, true, offers);
+        assert!(!named.name_generated, "a named branch is the person's");
+        let mut existing = from_prompt(offers);
+        existing.existing_branch = true;
+        set_name_options(&mut existing, true, offers);
+        assert!(
+            !existing.name_generated,
+            "an existing branch is the person's"
+        );
     }
 
     #[test]

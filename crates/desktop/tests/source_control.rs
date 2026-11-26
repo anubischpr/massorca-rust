@@ -13,7 +13,7 @@ use massorca_desktop::service::{
 };
 use massorca_profile::Profile;
 use massorca_protocol::methods::git::commit::GitCommitParams;
-use massorca_protocol::methods::git::diff::{DiffTarget, GitDiffFileParams};
+use massorca_protocol::methods::git::diff::GitDiffFileParams;
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitPathsParams};
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::git::{ChangeKind, LineCounts};
@@ -110,19 +110,14 @@ fn repo(dir: &Path) {
 async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspace) {
     let client = Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
     let project = client
         .project_add(&ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: Some(
                 repo_dir
                     .parent()
@@ -131,6 +126,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
                     .display()
                     .to_string(),
             ),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -138,13 +134,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
         .workspace_create(&WorkspaceCreateParams {
             project: project.id.clone(),
             name: "feature".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created");
@@ -389,9 +379,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
     assert_eq!(
         readme.unstaged_lines,
         Some(LineCounts {
-            added: 1,
-            removed: 0,
-            binary: false
+            ..base_line_counts()
         })
     );
     session
@@ -406,10 +394,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         .handle
         .git_diff_file(GitDiffFileParams {
             workspace: id.clone(),
-            target: DiffTarget::Worktree,
-            path: "README.md".into(),
-            original_path: None,
-            max_bytes: None,
+            ..base_git_diff_file_params()
         })
         .await
         .expect("the diff is read");
@@ -422,7 +407,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         .git_stage(GitPathsParams {
             workspace: id.clone(),
             paths: vec!["README.md".into()],
-            all: false,
+            ..base_git_paths_params()
         })
         .await
         .expect("the file is staged");
@@ -442,8 +427,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         .git_commit(GitCommitParams {
             workspace: id.clone(),
             message: Some("update the readme".into()),
-            amend: false,
-            allow_published: false,
+            ..base_git_commit_params()
         })
         .await
         .expect("the staged file is committed");
@@ -458,8 +442,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         .git_commit(GitCommitParams {
             workspace: id.clone(),
             message: Some("nothing here".into()),
-            amend: false,
-            allow_published: false,
+            ..base_git_commit_params()
         })
         .await
         .expect_err("nothing is staged");
@@ -499,10 +482,7 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
         .git_discard(GitDiscardParams {
             workspace: id.clone(),
             paths: vec!["notes.txt".into()],
-            all: false,
-            delete_untracked: false,
-            include_staged: false,
-            dry_run: false,
+            ..base_git_discard_params()
         })
         .await
         .expect_err("an untracked file is not deleted unseen");
@@ -523,10 +503,8 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
         .git_discard(GitDiscardParams {
             workspace: id.clone(),
             paths: vec!["notes.txt".into()],
-            all: false,
             delete_untracked: true,
-            include_staged: false,
-            dry_run: false,
+            ..base_git_discard_params()
         })
         .await
         .expect("the waiver deletes the file");
@@ -592,4 +570,91 @@ async fn a_reconnect_re_establishes_the_watch_with_one_subscription_per_workspac
     );
 
     session.stop().await;
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+    }
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+/// Every `GitCommitParams` field at its usual value; tests override the fields they vary.
+fn base_git_commit_params() -> massorca_protocol::methods::git::commit::GitCommitParams {
+    massorca_protocol::methods::git::commit::GitCommitParams {
+        workspace: String::new(),
+        message: None,
+        amend: false,
+        allow_published: false,
+    }
+}
+
+/// Every `GitDiffFileParams` field at its usual value; tests override the fields they vary.
+fn base_git_diff_file_params() -> massorca_protocol::methods::git::diff::GitDiffFileParams {
+    massorca_protocol::methods::git::diff::GitDiffFileParams {
+        workspace: String::new(),
+        target: massorca_protocol::methods::git::diff::DiffTarget::Worktree,
+        path: "README.md".into(),
+        original_path: None,
+        max_bytes: None,
+    }
+}
+
+/// Every `GitDiscardParams` field at its usual value; tests override the fields they vary.
+fn base_git_discard_params() -> massorca_protocol::methods::git::index::GitDiscardParams {
+    massorca_protocol::methods::git::index::GitDiscardParams {
+        workspace: String::new(),
+        paths: Vec::new(),
+        all: false,
+        delete_untracked: false,
+        include_staged: false,
+        dry_run: false,
+    }
+}
+
+/// Every `GitPathsParams` field at its usual value; tests override the fields they vary.
+fn base_git_paths_params() -> massorca_protocol::methods::git::index::GitPathsParams {
+    massorca_protocol::methods::git::index::GitPathsParams {
+        workspace: String::new(),
+        paths: Vec::new(),
+        all: false,
+    }
+}
+
+/// Every `LineCounts` field at its usual value; tests override the fields they vary.
+fn base_line_counts() -> massorca_protocol::methods::git::LineCounts {
+    massorca_protocol::methods::git::LineCounts {
+        added: 1,
+        removed: 0,
+        binary: false,
+    }
 }

@@ -16,6 +16,8 @@ pub const REMOVE: &str = "workspace.remove";
 pub const UPDATE: &str = "workspace.update";
 /// Params: [`WorkspaceRef`]. Result: [`WorkspaceCheck`].
 pub const CHECK: &str = "workspace.check";
+/// Params: [`WorkspaceRenameParams`]. Result: [`Workspace`].
+pub const RENAME: &str = "workspace.rename";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +61,14 @@ pub struct WorkspaceCreateParams {
     /// Does not run the project's setup script in the new worktree (decision 0086).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_setup: bool,
+    /// A taken typed name, branch or folder moves on to `name-2` .. `name-100` instead of being refused; the result
+    /// carries the name used. Only for a service-derived branch and folder (`workspace-unique-name/1`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unique_name: bool,
+    /// The client derived `name` itself (from a prompt, say), so `workspace.rename` may replace it later. Ignored with
+    /// `branch` or `existing_branch`, whose branch is the person's (`workspace-rename/1`, decision 0111).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_generated: bool,
 }
 
 /// Params of `workspace.list`.
@@ -172,6 +182,22 @@ pub struct WorkspaceUpdateParams {
     pub comment: Option<String>,
 }
 
+/// Params of `workspace.rename` (decision 0111): replaces a name the service chose, and its unpublished branch. The
+/// folder keeps its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRenameParams {
+    /// Id, name or path.
+    pub workspace: String,
+    /// The new name, checked as a created name is; a taken one moves on to `name-2` .. `name-100`.
+    pub name: String,
+    /// Must be true: only a workspace whose `name_generated` holds is renamed.
+    #[serde(default)]
+    pub from_generated: bool,
+    /// Refuses the rename with `workspace.branch_changed` unless the worktree is still on this branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_branch: Option<String>,
+}
+
 /// Result of `workspace.check`. `ok` holds only when every check passes; `reason` names the first that did not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceCheck {
@@ -224,6 +250,9 @@ pub struct Workspace {
     /// Only in the reply of a create whose new worktree has a setup script: what became of it (decision 0086).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<WorkspaceSetup>,
+    /// The service chose the name (decision 0111), so `workspace.rename` may replace it; a typed name is never renamed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_generated: bool,
 }
 
 /// What a create did with the project's setup script. A setup that cannot start never fails the create.

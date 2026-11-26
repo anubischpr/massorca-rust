@@ -101,27 +101,19 @@ fn declare_fake_kind(home: &Path) {
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: repo_dir
                 .parent()
                 .map(|parent| parent.join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created")
@@ -131,19 +123,10 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
     handle
         .agent_start(AgentStartParams {
             workspace: Some(workspace.to_owned()),
-            kind: "fake".to_owned(),
-            prompt: None,
-            args: Vec::new(),
             env: BTreeMap::new(),
-            read_only: false,
-            title: None,
             cols: Some(100),
             rows: Some(30),
-            request_id: None,
-            permission_mode: None,
-            model: None,
-            fast: None,
-            effort: None,
+            ..base_agent_start_params()
         })
         .await
         .expect("the session starts")
@@ -191,13 +174,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
         .create_workspace(WorkspaceCreateParams {
             project: workspace.project_id.clone(),
             name: "second".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the second workspace is created");
@@ -205,15 +182,9 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
     handle
         .agent_delegate(AgentDelegateParams {
             parent: first.id.clone(),
-            prompt: "look".to_owned(),
             kind: Some("fake".to_owned()),
-            name: None,
             title: Some("Check".to_owned()),
-            read_only: true,
-            same_workspace: false,
-            token: None,
-            request_id: None,
-            permission_mode: None,
+            ..base_agent_delegate_params()
         })
         .await
         .expect("the child starts under its parent");
@@ -295,4 +266,68 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
 
     drop(bridge);
     stop_service(service).await;
+}
+
+/// Every `AgentDelegateParams` field at its usual value; tests override the fields they vary.
+fn base_agent_delegate_params() -> massorca_protocol::methods::agents::AgentDelegateParams {
+    massorca_protocol::methods::agents::AgentDelegateParams {
+        parent: String::new(),
+        prompt: "look".to_owned(),
+        kind: None,
+        name: None,
+        title: None,
+        read_only: true,
+        same_workspace: false,
+        token: None,
+        request_id: None,
+        permission_mode: None,
+    }
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
+    }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

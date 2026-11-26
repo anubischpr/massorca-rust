@@ -656,18 +656,16 @@ mod tests {
 #[cfg(test)]
 mod glyph_tests {
     use super::*;
-    use massorca_protocol::methods::projects::{Project, ProjectIcon as StoredIcon, ProjectKind};
+    use massorca_protocol::methods::projects::{Project, ProjectIcon as StoredIcon};
 
     fn project(id: &str, icon: Option<StoredIcon>) -> Project {
         Project {
             id: id.into(),
-            kind: ProjectKind::Git,
             path: format!("/repos/{id}"),
             name: id.into(),
             workspaces_root: format!("/repos/{id}-worktrees"),
-            added_at_ms: 1,
-            base_ref: None,
             icon,
+            ..crate::service::fixtures::base_project()
         }
     }
 
