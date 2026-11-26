@@ -74,6 +74,8 @@ pub struct CodexAdapter {
     waiting: Vec<String>,
     /// The turn the app-server runs, once it named it.
     turn: Option<String>,
+    /// The turns the app-server ended: an answer that names one of them names no running turn.
+    ended: HashSet<String>,
     /// Turns MassOrca interrupted: the service already ended them, so what they still send is skipped.
     interrupted: HashSet<String>,
     /// An interrupt asked for before the app-server named the turn.
@@ -103,6 +105,7 @@ impl CodexAdapter {
             sent: HashMap::new(),
             waiting: Vec::new(),
             turn: None,
+            ended: HashSet::new(),
             interrupted: HashSet::new(),
             interrupt_wanted: false,
             seen: HashSet::new(),
@@ -155,9 +158,11 @@ impl CodexAdapter {
             .collect()
     }
 
-    /// Forgets what the adapter follows within a turn.
+    /// Forgets what the adapter follows within a turn, and an interrupt still waiting for one: it was asked for the turn
+    /// that just ended.
     fn end_of_turn(&mut self) {
         self.turn = None;
+        self.interrupt_wanted = false;
         self.seen.clear();
         self.tools.clear();
         self.error_shown = false;
