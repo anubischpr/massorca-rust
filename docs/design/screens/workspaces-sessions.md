@@ -12,6 +12,8 @@ Each screen has: purpose, layout (regions and components, with sizes), content a
 
 Common frame, used by every session artboard: Activity rail 48 px on `surface.frame`; Sidebar 256 px (200 to 400) on the same fill; Title bar 36 px (Windows and Linux; macOS 40 with the traffic lights at the left); the Canvas on `surface.canvas` with `radius.canvas` (12 px) on its top-left corner only; Status bar 24 px at the bottom of the Canvas column. Regions on the Canvas, left to right: Conversation, Session summary, Work panel, Project sidebar, separated by 1 px `border.subtle` lines (the splitter hit area is 6 px).
 
+Title bar actions (owner ruling 2026-11-25): the right group reads New chat, Terminal, Session summary, Work panel, Open in Work panel, Project sidebar. New chat opens the start page of the current workspace with its composer focused, and Chat becomes the start mode only where the picked agent offers it. Terminal opens a new terminal in the current workspace's Work panel, through the same create as the start page's "Open terminal". Open in Work panel shows the Work panel with the open session's terminal selected, and is hidden without a session terminal (a chat session has none). A Terminal start still opens its session in the Canvas. Split is left out until split panes exist (TERM-03 not started), so the bar has no dead control for it. The Work panel toggle stays in the bar; the artboard does not draw it, so removing it is a separate decision.
+
 ## Artboard index
 
 Folder: `scratchpad/screens/project/`. All artboards are static comps (no interaction), 1440 by 900 unless stated.

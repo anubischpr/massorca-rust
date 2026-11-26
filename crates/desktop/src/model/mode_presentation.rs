@@ -68,13 +68,8 @@ mod tests {
         PermissionMode {
             id: id.into(),
             label: label.into(),
-            description: None,
             bypass,
-            live_switch: false,
-            may_fall_back: false,
-            icon: None,
-            tone: None,
-            selectable: true,
+            ..crate::service::fixtures::base_permission_mode()
         }
     }
 

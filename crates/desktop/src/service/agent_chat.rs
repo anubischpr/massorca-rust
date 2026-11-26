@@ -31,8 +31,7 @@ mod tests {
         KindChat {
             supported,
             reason,
-            version: None,
-            range: None,
+            ..crate::service::fixtures::base_kind_chat()
         }
     }
 
@@ -40,10 +39,9 @@ mod tests {
     fn a_kind_offers_the_chat_support_the_service_lists_for_it() {
         let mut claude = agent_kind("claude", "Claude", PackageState::Enabled);
         let chat = KindChat {
-            supported: true,
-            reason: None,
             version: Some("2.2.0".to_owned()),
             range: Some(">=2.1.0, <2.3.0".to_owned()),
+            ..crate::service::fixtures::base_kind_chat()
         };
         claude.chat = Some(chat.clone());
 

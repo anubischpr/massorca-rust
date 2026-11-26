@@ -34,6 +34,8 @@ pub mod picker;
 pub mod plan_view;
 pub mod popover;
 pub mod progress;
+pub mod project_icon_popover;
+pub mod project_mark;
 pub mod project_sidebar_tabs;
 pub mod queued_message;
 pub mod radio;
