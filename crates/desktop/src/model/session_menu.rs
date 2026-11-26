@@ -147,4 +147,27 @@ mod tests {
         assert!(!session_menu(facts(ENDED, true, false)).contains(&item(Delete)));
         assert!(!session_menu(facts(None, true, true)).contains(&item(Delete)));
     }
+
+    #[test]
+    fn a_session_on_a_paired_host_offers_stop_and_copy_path_only() {
+        // A remote row's facts: never This PC's folder or terminal, and no Delete while the run may still be live.
+        let running = SessionMenuFacts {
+            session: Some(SessionFacts {
+                running: true,
+                has_terminal: false,
+            }),
+            local: false,
+            delete_offered: false,
+        };
+        assert_eq!(session_menu(running), vec![item(Stop), item(CopyPath)]);
+        let ended = SessionMenuFacts {
+            session: Some(SessionFacts {
+                running: false,
+                has_terminal: false,
+            }),
+            local: false,
+            delete_offered: false,
+        };
+        assert_eq!(session_menu(ended), vec![item(CopyPath)]);
+    }
 }

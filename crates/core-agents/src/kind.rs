@@ -199,6 +199,37 @@ pub struct ModelDecl {
     /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<ModelChoiceDecl>,
+    /// How the vendor CLI lists the models the account can use (decision 0166). Absent: the picker shows `choices` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discover: Option<DiscoverDecl>,
+}
+
+/// The listing a kind's vendor CLI prints its models in (decision 0166): the arguments after the kind's program, the text
+/// written to its stdin, and the format its output is read in. The listing runs with the account's home and never with
+/// the run identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoverDecl {
+    /// The arguments after the kind's program, such as `["models"]`. Never empty.
+    pub args: Vec<String>,
+    /// Text written to the listing's stdin and then closed: a request the CLI answers without starting a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<String>,
+    /// How the output is read.
+    pub format: ListingFormat,
+}
+
+/// Longest `stdin` a model listing may declare; a longer one is a problem with the declaration.
+pub const MAX_DISCOVER_STDIN: usize = 4096;
+
+/// The format a model listing's output is read in (decision 0166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListingFormat {
+    /// One model per line: its id, a tab, then its label.
+    Lines,
+    /// A stream-json `control_response` whose `models` lists the CLI's picker rows.
+    ClaudeControl,
 }
 
 /// One model a kind's picker offers.
@@ -386,7 +417,7 @@ fn valid_option_flag(text: &str) -> bool {
 
 /// A value a start may name for `model` or `effort`: 1 to [`MAX_OPTION_VALUE_LEN`] letters, digits, `-`, `_`, `.`, `:` or
 /// `/`, never starting with `-`, so it cannot be read as a flag.
-fn valid_option_value(text: &str) -> bool {
+pub(crate) fn valid_option_value(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= MAX_OPTION_VALUE_LEN
         && !text.starts_with('-')
@@ -1123,6 +1154,20 @@ impl KindDecl {
             model.args.as_deref(),
             problems,
         );
+        if let Some(discover) = &model.discover {
+            if discover.args.is_empty() {
+                problems.push("model.discover.args names no command to list the models".to_owned());
+            }
+            if discover
+                .stdin
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_DISCOVER_STDIN)
+            {
+                problems.push(format!(
+                    "model.discover.stdin is longer than {MAX_DISCOVER_STDIN} bytes"
+                ));
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         let mut defaults = 0;
         for choice in &model.choices {
@@ -2806,6 +2851,84 @@ mod tests {
         let (code, message) = refusal(plain.option_args(Some("opus"), None));
         assert_eq!(code, codes::AGENT_OPTION_UNSUPPORTED);
         assert_eq!(message, "kind fake declares no flag for a model");
+    }
+
+    #[test]
+    fn a_model_listing_needs_a_command_and_a_known_format() {
+        let valid = problems_of(|value| {
+            value["model"] = serde_json::json!({
+                "flag": "--model",
+                "discover": { "args": ["models"], "format": "lines" }
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        let no_command = problems_of(|value| {
+            value["model"] = serde_json::json!({
+                "flag": "--model",
+                "discover": { "args": [], "format": "lines" }
+            });
+        });
+        assert!(
+            no_command
+                .iter()
+                .any(|problem| problem.contains("model.discover")),
+            "{no_command:?}"
+        );
+        let unknown: Result<DiscoverDecl, _> =
+            serde_json::from_value(serde_json::json!({ "args": ["models"], "format": "table" }));
+        assert!(unknown.is_err(), "an unknown format is refused");
+    }
+
+    #[test]
+    fn the_built_in_kinds_list_models_only_where_their_vendor_has_a_listing() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        let discover = claude
+            .model
+            .as_ref()
+            .and_then(|model| model.discover.as_ref())
+            .expect("claude lists its models");
+        assert_eq!(discover.format, ListingFormat::ClaudeControl);
+        assert_eq!(
+            discover.args,
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose"
+            ]
+        );
+        assert!(
+            discover
+                .stdin
+                .as_deref()
+                .is_some_and(|text| text.contains("list_models"))
+        );
+
+        let antigravity = KindDecl::from_json(include_str!("../kinds/antigravity.json"))
+            .expect("antigravity parses");
+        let discover = antigravity
+            .model
+            .as_ref()
+            .and_then(|model| model.discover.as_ref())
+            .expect("agy lists its models");
+        assert_eq!(discover.format, ListingFormat::Lines);
+        assert_eq!(discover.args, ["models"]);
+        assert_eq!(discover.stdin, None);
+
+        for text in [
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ] {
+            let kind = KindDecl::from_json(text).expect("parses");
+            assert!(
+                kind.model
+                    .as_ref()
+                    .is_none_or(|model| model.discover.is_none())
+            );
+        }
     }
 
     #[test]

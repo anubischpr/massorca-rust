@@ -5,11 +5,15 @@
 use super::Shell;
 use super::service_tests::{Rig, click, draw, rig, setup};
 use crate::data::{DataSource, SampleDataSource};
+use crate::model::canvas::Canvas;
+use crate::model::session_menu::SessionMenuId;
 use crate::model::shell::ShellSnapshot;
+use crate::model::sidebar::{SidebarContent, TreeRow};
 use crate::model::teams::SampleTeamsSource;
-use crate::service::StoreUpdate;
 use crate::service::fixtures::{agent, workspace};
+use crate::service::{Command, HostAgents, HostLink, HostSessionsRead, StoreUpdate};
 use gpui::{Modifiers, MouseButton, TestAppContext, VisualTestContext};
+use massorca_client::HostRecord;
 use massorca_protocol::methods::agents::AgentSession;
 
 /// Creates workspace w2 on the rig's project p1 with the Claude kind chosen and no session yet.
@@ -180,5 +184,165 @@ fn clicking_a_project_row_folds_its_sessions_and_clicking_again_shows_them(
     assert!(
         cx.debug_bounds("sidebar-session-a1").is_some(),
         "expanded again"
+    );
+}
+
+fn paired_host(name: &str) -> HostRecord {
+    HostRecord {
+        name: name.to_owned(),
+        server: "vps-server".to_owned(),
+        addresses: vec!["127.0.0.1:1".to_owned()],
+        pin: "sha256:test".to_owned(),
+        device_id: "device".to_owned(),
+        device_name: "desk".to_owned(),
+        scopes: Vec::new(),
+        paired_at_ms: 0,
+    }
+}
+
+/// The tree's session rows of host `vps` as (id, dimmed, state), read from the Sidebar model.
+fn host_session_rows(shell: &Shell) -> Vec<(String, bool, crate::model::shell::AgentState)> {
+    let SidebarContent::Workspaces { tree, .. } = shell.model.sidebar() else {
+        panic!("the workspaces sidebar is shown");
+    };
+    let host = tree
+        .iter()
+        .position(|row| matches!(row, TreeRow::RemoteHost { name, .. } if name == "vps"))
+        .expect("the paired host is listed");
+    tree[host + 1..]
+        .iter()
+        .map_while(|row| match row {
+            TreeRow::Session {
+                id, dimmed, state, ..
+            } => Some((id.clone(), *dimmed, *state)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[gpui::test]
+fn a_paired_host_lists_its_sessions_under_its_row_and_keeps_them_unverifiable_when_unreached(
+    cx: &mut TestAppContext,
+) {
+    use crate::model::shell::AgentState;
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::HostsResync(vec![paired_host("vps")]))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::HostLinkChanged {
+            name: "vps".into(),
+            link: HostLink::Connected {
+                server: "vps-server".into(),
+                version: "0.0.0-test".into(),
+            },
+        })
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::HostSessions(HostSessionsRead {
+            host: "vps".into(),
+            request: 1,
+            answer: Some(HostAgents {
+                sessions: vec![agent("r1", "w1", 1)],
+                workspaces: vec![workspace("w1", "p1", "feat", 1)],
+            }),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-session-r1").is_some());
+    rig.shell.read_with(cx, |shell, _| {
+        let rows = host_session_rows(shell);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].1, "a reached host is not dimmed");
+    });
+
+    rig.updates
+        .send(StoreUpdate::HostSessions(HostSessionsRead {
+            host: "vps".into(),
+            request: 2,
+            answer: None,
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-session-r1").is_some(),
+        "the last known session stays listed while the host is unreached"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            host_session_rows(shell),
+            vec![("r1".to_owned(), true, AgentState::Unreachable)],
+            "dimmed and unverifiable, never exited"
+        );
+    });
+}
+
+/// Pairs host `vps` and lists its session `r1` as reached, so the Sidebar draws the host's row and session.
+fn host_with_session(rig: &Rig, cx: &mut VisualTestContext) {
+    rig.updates
+        .send(StoreUpdate::HostsResync(vec![paired_host("vps")]))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::HostLinkChanged {
+            name: "vps".into(),
+            link: HostLink::Connected {
+                server: "vps-server".into(),
+                version: "0.0.0-test".into(),
+            },
+        })
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::HostSessions(HostSessionsRead {
+            host: "vps".into(),
+            request: 1,
+            answer: Some(HostAgents {
+                sessions: vec![agent("r1", "w1", 1)],
+                workspaces: vec![workspace("w1", "p1", "feat", 1)],
+            }),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui::test]
+fn a_click_on_a_paired_hosts_session_opens_it_in_the_canvas_with_its_host(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    host_with_session(&rig, cx);
+    click(cx, "sidebar-session-r1");
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.model.open_remote_session(), Some(("vps", "r1")));
+        assert!(matches!(shell.model.canvas(), Canvas::Session(_)));
+    });
+}
+
+#[gpui::test]
+fn stop_on_a_paired_hosts_session_reaches_that_host_and_never_this_pcs_service(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    host_with_session(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_remote_session_action("vps", "r1", None, SessionMenuId::Stop, cx)
+    });
+    cx.run_until_parked();
+    let mut commands = Vec::new();
+    while let Some(command) = rig.script.next() {
+        commands.push(command);
+    }
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            Command::HostAgentStop { host, session, .. } if host == "vps" && session == "r1"
+        )),
+        "the stop goes to the host's connection"
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| matches!(command, Command::AgentStop { .. })),
+        "This PC's service is never asked to stop a paired host's session"
     );
 }

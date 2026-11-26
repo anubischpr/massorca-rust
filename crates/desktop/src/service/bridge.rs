@@ -50,12 +50,15 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
+use super::host_sessions::{self, Followed};
+use super::host_terminal::{self, HostAttach};
 use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
@@ -180,6 +183,14 @@ pub(crate) enum Command {
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// `agent.stop` on a paired host's own connection, answered on its oneshot; never sent to This PC's service.
+    HostAgentStop {
+        host: String,
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// A terminal of a paired host, attached over that host's own connection; its items and writes are the attach's.
+    HostTerminalAttach(HostAttach),
     /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
     AgentForget {
         params: ForgetSessionParams,
@@ -196,6 +207,8 @@ pub(crate) enum Command {
     },
     /// A prompt queue call (decision 0084), answered on its oneshot.
     AgentQueue(QueueCommand),
+    /// A chat session call, or a change of the chat session whose transcript is followed (decision 0101).
+    Chat(ChatCommand),
     GitDiffFile {
         params: GitDiffFileParams,
         reply: oneshot::Sender<Result<GitDiffFile, Refusal>>,
@@ -556,6 +569,8 @@ impl ServiceBridge {
             updates: updates_tx,
             connection: connection_tx,
             watching: BTreeSet::new(),
+            chat_watching: BTreeSet::new(),
+            chat_mirrors: ChatMirrors::default(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
             room_reads: Arc::new(Sequence::default()),
@@ -563,6 +578,7 @@ impl ServiceBridge {
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
             closing: closing.subscribe(),
+            followed: Followed::default(),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -656,6 +672,10 @@ struct Link {
     connection: watch::Sender<ConnectionState>,
     /// The workspaces the UI follows. Kept across connections, so a reconnect watches them again.
     watching: BTreeSet<String>,
+    /// The chat sessions whose transcripts the UI follows. Kept across connections, as `watching` is.
+    chat_watching: BTreeSet<String>,
+    /// What each followed transcript looked like when the stream last applied an event.
+    chat_mirrors: ChatMirrors,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
@@ -670,11 +690,18 @@ struct Link {
     accounts_order: Arc<AccountsFreshness>,
     /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
     closing: watch::Receiver<bool>,
+    /// The paired hosts a task follows, so the poll leaves them to it (STAT-16).
+    followed: Followed,
 }
 
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
+        hosts::check_hosts_again(
+            self.profile.clone(),
+            self.updates.clone(),
+            self.followed.clone(),
+        );
         let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
@@ -725,7 +752,24 @@ impl Link {
             | Command::RemoveHost { .. }
             | Command::CountHostLoss { .. }
             | Command::AcceptOffer { .. } => {
-                hosts::spawn(self.profile.clone(), command, self.updates.clone());
+                hosts::spawn(
+                    self.profile.clone(),
+                    command,
+                    self.updates.clone(),
+                    &self.followed,
+                );
+                None
+            }
+            Command::HostAgentStop {
+                host,
+                session,
+                reply,
+            } => {
+                host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
+                None
+            }
+            Command::HostTerminalAttach(attach) => {
+                host_terminal::spawn_attach(self.profile.clone(), attach);
                 None
             }
             Command::HostedServices {
@@ -799,7 +843,12 @@ impl Link {
                     None => return None,
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -824,7 +873,12 @@ impl Link {
                     }
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -921,6 +975,10 @@ impl Link {
         for workspace in &self.watching {
             watches.start(client, workspace, &self.updates, &self.freshness);
         }
+        let mut chat_watches = ChatWatches::default();
+        for session in &self.chat_watching {
+            chat_watches.start(client, session, &self.chat_mirrors, &self.updates);
+        }
         loop {
             let outcome = tokio::select! {
                 event = events.next_as::<ChangeEvent>() => match event {
@@ -988,6 +1046,27 @@ impl Link {
                                     &self.updates,
                                     &self.accounts_order,
                                 );
+                            }
+                            Some(Command::Chat(ChatCommand::Watch { session })) => {
+                                chat_watches.start(
+                                    client,
+                                    &session,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                                self.chat_watching.insert(session);
+                            }
+                            Some(Command::Chat(ChatCommand::Unwatch { session })) => {
+                                chat_watches.stop(&session);
+                                chat::note_unwatch(
+                                    &session,
+                                    &mut self.chat_watching,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                            }
+                            Some(Command::Chat(command)) => {
+                                chat::spawn_call(client, command, &self.updates);
                             }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
@@ -1344,8 +1423,19 @@ fn spawn_call(
 }
 
 /// While the link is down a watch still changes what the bridge follows; the next connection starts it.
-fn decline_while_down(watching: &mut BTreeSet<String>, command: Command) {
+fn decline_while_down(
+    watching: &mut BTreeSet<String>,
+    chat: (&mut BTreeSet<String>, &ChatMirrors),
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    command: Command,
+) {
     match command {
+        Command::Chat(ChatCommand::Watch { session }) => {
+            chat.0.insert(session);
+        }
+        Command::Chat(ChatCommand::Unwatch { session }) => {
+            chat::note_unwatch(&session, chat.0, chat.1, updates);
+        }
         Command::GitWatch { workspace } => {
             watching.insert(workspace);
         }
@@ -1387,6 +1477,9 @@ fn refuse_while_down(command: Command) {
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::HostAgentStop { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Skills { .. } | Command::HostSkills { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
@@ -1433,6 +1526,7 @@ fn refuse_while_down(command: Command) {
         }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
+        Command::Chat(command) => chat::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }

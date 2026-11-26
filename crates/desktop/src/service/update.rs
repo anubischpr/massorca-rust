@@ -9,6 +9,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountSummary, AgentKind, AgentQueueList, AgentSession, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::{ChatEvent, ChatHistoryPage};
 use massorca_protocol::methods::config::{ConfigValue, DEFAULT_OWNER};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::extensions::ExtensionItem;
@@ -23,10 +24,12 @@ use massorca_protocol::methods::workspaces::Workspace;
 use super::agent_chat::KindChat;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
+use super::host_sessions::{HostSessions, HostSessionsRead};
 use super::refusal::Refusal;
 use super::skills::SkillsRead;
 use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
+use crate::model::chat_transcript::ChatTranscript;
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,6 +102,8 @@ pub enum StoreUpdate {
     ConfigChanged(ConfigValue),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
+    /// What one check of a paired host learned about its agent sessions; `None` answers mean it was not reached.
+    HostSessions(HostSessionsRead),
     /// What a probe or a call learned about one paired host's connection.
     HostLinkChanged {
         name: String,
@@ -116,6 +121,23 @@ pub enum StoreUpdate {
     Accounts {
         kind: String,
         result: Result<Vec<AccountSummary>, Refusal>,
+    },
+    /// One event of a followed chat session's stream (decision 0101, D4).
+    Chat {
+        session: String,
+        event: ChatEvent,
+    },
+    /// A page of older items the service sent for a followed chat session.
+    ChatHistory {
+        session: String,
+        page: ChatHistoryPage,
+    },
+    /// The session's transcript is no longer followed; the store drops what it held.
+    ChatClosed(String),
+    /// The service refused the session's stream (it is not a chat, or it is gone).
+    ChatRefused {
+        session: String,
+        refusal: Refusal,
     },
 }
 
@@ -263,6 +285,8 @@ pub struct StoreState {
     pub extensions: Option<ExtensionsRead>,
     /// The newest Marketplace answer of each paired host, by host name.
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
+    /// The agent sessions each paired host last reported, by host name (STAT-16).
+    pub host_sessions: BTreeMap<String, HostSessions>,
     /// The newest skills answer of This computer (None) and of each paired host, by host name.
     pub skills: BTreeMap<Option<String>, SkillsRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
@@ -289,6 +313,10 @@ pub struct StoreState {
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
+    /// The transcript of each followed chat session, by session id (decision 0101).
+    pub chat: BTreeMap<String, ChatTranscript>,
+    /// Why the service refused the stream of a chat session, by session id.
+    pub chat_refused: BTreeMap<String, Refusal>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
@@ -321,6 +349,7 @@ impl Default for StoreState {
             extension_read: 0,
             extensions: None,
             host_listings: BTreeMap::new(),
+            host_sessions: BTreeMap::new(),
             skills: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
@@ -333,6 +362,8 @@ impl Default for StoreState {
             workspace_unique_name: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
+            chat: BTreeMap::new(),
+            chat_refused: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
         }
@@ -445,6 +476,22 @@ impl StoreState {
             }
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
+            StoreUpdate::Chat { session, event } => {
+                self.chat_refused.remove(&session);
+                self.chat.entry(session).or_default().apply(event);
+            }
+            StoreUpdate::ChatHistory { session, page } => {
+                if let Some(transcript) = self.chat.get_mut(&session) {
+                    transcript.prepend(page);
+                }
+            }
+            StoreUpdate::ChatClosed(session) => {
+                self.chat.remove(&session);
+                self.chat_refused.remove(&session);
+            }
+            StoreUpdate::ChatRefused { session, refusal } => {
+                self.chat_refused.insert(session, refusal);
+            }
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -459,6 +506,7 @@ impl StoreState {
             StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
+            StoreUpdate::HostSessions(read) => self.apply_host_sessions(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
@@ -554,6 +602,24 @@ impl StoreState {
         self.host_listings.insert(read.host.clone(), read);
     }
 
+    /// Keeps the newest check of each host's sessions. A check that did not reach the host keeps the sessions it
+    /// last saw, marked unreached, so they show as unverifiable rather than gone.
+    fn apply_host_sessions(&mut self, read: HostSessionsRead) {
+        let held = self.host_sessions.entry(read.host).or_default();
+        if held.request > read.request {
+            return;
+        }
+        held.request = read.request;
+        match read.answer {
+            Some(agents) => {
+                held.reached = true;
+                held.sessions = agents.sessions;
+                held.workspaces = agents.workspaces;
+            }
+            None => held.reached = false,
+        }
+    }
+
     /// Keeps the newest skills answer of each host, so an answer to an older request never replaces a newer one.
     fn apply_skills(&mut self, read: SkillsRead) {
         if self
@@ -583,6 +649,8 @@ impl StoreState {
             })
             .collect();
         hosts.sort_by(|a, b| a.record.name.cmp(&b.record.name));
+        self.host_sessions
+            .retain(|name, _| hosts.iter().any(|entry| &entry.record.name == name));
         self.hosts = hosts;
     }
 

@@ -2,12 +2,30 @@
 //! field and the multi-line area both implement (decision 0021); [`layout`] and [`text_area`]
 //! add the wrapped multi-line surface.
 
+use gpui::actions;
+
 pub(crate) mod input;
+pub(crate) mod keymap;
 pub mod layout;
 pub(crate) mod masking;
 pub mod text_area;
+pub(crate) mod undo_history;
 
 pub use super::text_field::TextBuffer;
+
+actions!(
+    text_editing,
+    [
+        Undo,
+        Redo,
+        MoveWordLeft,
+        MoveWordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        DeleteWordBackward,
+        DeleteWordForward,
+    ]
+);
 
 /// Line breaks as a multi-line surface stores them: `\n` only.
 pub fn normalize_line_breaks(text: &str) -> String {

@@ -192,6 +192,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
+    assert_eq!(capabilities::AGENT_MODELS, "agent-models/1");
     assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
     assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");

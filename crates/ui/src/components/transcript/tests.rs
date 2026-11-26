@@ -1,7 +1,7 @@
 //! Element tests of the transcript: each row kind draws in timeline order, the answers reach only a pending and reachable
 //! request, an opened thinking row shows its text, and the list keeps the newest row in view while rows arrive.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::{
@@ -17,14 +17,18 @@ struct Host {
     rows: Rc<Vec<TranscriptRow>>,
     host: Option<SharedString>,
     asked: Rc<RefCell<Vec<TranscriptAction>>>,
+    /// How many times the list said its first row is in view.
+    reached: Rc<Cell<u32>>,
 }
 
 impl Render for Host {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let asked = self.asked.clone();
+        let reached = self.reached.clone();
         TranscriptView::new("transcript", self.rows.clone())
             .host_unreachable(self.host.clone())
             .on_action(move |action, _, _| asked.borrow_mut().push(action))
+            .on_reach_top(move |_, _| reached.set(reached.get() + 1))
     }
 }
 
@@ -47,6 +51,7 @@ fn open(
         rows: Rc::new(rows),
         host,
         asked: sink,
+        reached: Rc::default(),
     });
     draw(cx);
     (view, asked, cx)
@@ -78,6 +83,11 @@ fn approval(id: &str, state: ApprovalState, can_always: bool) -> TranscriptRow {
             truncated: false,
             state,
             can_always,
+            suggestions: if can_always {
+                vec!["Bash(cargo test) for this session".into()]
+            } else {
+                Vec::new()
+            },
         },
     }
 }
@@ -294,5 +304,44 @@ fn assert_newest_in_view(cx: &mut VisualTestContext, row: &'static str) {
     assert!(
         newest.bottom() <= viewport.bottom() + px(1.0),
         "{row} is below the viewport: {newest:?} in {viewport:?}"
+    );
+}
+
+#[gpui::test]
+fn an_always_approval_lists_what_it_would_write_and_a_plain_one_lists_nothing(
+    cx: &mut TestAppContext,
+) {
+    let rows = vec![
+        approval("plain", ApprovalState::Pending, false),
+        approval("offered", ApprovalState::Pending, true),
+    ];
+    let (_view, _asked, cx) = open(cx, rows, None);
+
+    assert!(cx.debug_bounds("approval-always-offered").is_some());
+    assert!(cx.debug_bounds("approval-always-plain").is_none());
+}
+
+fn numbered(range: std::ops::Range<u32>) -> Vec<TranscriptRow> {
+    range
+        .map(|i| prose(&format!("p{i}"), &format!("Paragraph {i}.")))
+        .collect()
+}
+
+#[gpui::test]
+fn rows_added_above_keep_the_newest_in_view_and_ask_for_nothing(cx: &mut TestAppContext) {
+    let (view, _asked, cx) = open(cx, numbered(40..80), None);
+    assert_newest_in_view(cx, "transcript-row-p79");
+
+    view.update(cx, |host, cx| {
+        host.rows = Rc::new(numbered(0..80));
+        cx.notify();
+    });
+    draw(cx);
+
+    assert_newest_in_view(cx, "transcript-row-p79");
+    assert_eq!(
+        view.read_with(cx, |host, _| host.reached.get()),
+        0,
+        "drawing rows never asks for older ones; only a scroll to the first row does"
     );
 }
