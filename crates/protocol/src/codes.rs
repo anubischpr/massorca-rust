@@ -394,3 +394,5 @@ pub const AUTOMATION_PATH_CHANGED: &str = "automation.path_changed";
 /// An automation's destination cannot be used: a workspace of another project, a worktree per run in a folder
 /// project, or a blank base branch (decision 0127).
 pub const AUTOMATION_DESTINATION_INVALID: &str = "automation.destination_invalid";
+/// A new worktree per run names a base branch that is not a commit of its project's repository (decision 0127).
+pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown";

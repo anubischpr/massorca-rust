@@ -304,4 +304,8 @@ fn the_destination_capability_and_refusal_codes_have_their_wire_values() {
         codes::AUTOMATION_DESTINATION_INVALID,
         "automation.destination_invalid"
     );
+    assert_eq!(
+        codes::AUTOMATION_BASE_BRANCH_UNKNOWN,
+        "automation.base_branch_unknown"
+    );
 }
