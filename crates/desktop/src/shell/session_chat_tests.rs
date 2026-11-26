@@ -4,10 +4,7 @@
 use super::session_view_tests::{Rig, chat_s1, draw, kind, queue_rig, s1, session_rig};
 use crate::service::{ChatCommand, Command, QueueCommand, Refusal, Script, StoreUpdate};
 use gpui::{Entity, TestAppContext, VisualTestContext};
-use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentQueueList, AgentSession, PromptReceipt,
-    ReceiptKind,
-};
+use massorca_protocol::methods::agents::{Activity, AgentQueueList, AgentSession, PromptReceipt};
 use massorca_protocol::methods::chat::{
     Approval, ApprovalDecision, ApprovalScope, ApprovalState, ApprovalSuggestion,
     ChatApprovalAnswerParams, ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams,
@@ -202,11 +199,7 @@ fn older_items_are_asked_for_once_from_the_oldest_held_position_and_join_the_vie
 fn working_chat() -> AgentSession {
     let mut session = chat_s1(false);
     session.activity = Some(Activity {
-        state: ActivityState::Working,
-        outcome: None,
-        source: ActivitySource::Hook,
-        at_ms: 1,
-        seen_at_ms: None,
+        ..crate::service::fixtures::base_activity()
     });
     session
 }
@@ -256,8 +249,7 @@ fn send_in_a_chat_session_is_an_agent_prompt_the_service_receipts_as_sent_to_cha
     );
     reply
         .send(Ok(PromptReceipt {
-            receipt: ReceiptKind::SentToChat,
-            bytes: 13,
+            ..crate::service::fixtures::base_prompt_receipt()
         }))
         .expect("the shell waits for the receipt");
     cx.run_until_parked();
@@ -277,8 +269,7 @@ fn while_a_turn_runs_send_queues_the_prompt_as_it_does_in_a_terminal_session(
         vec![kind(false)],
         vec![working_chat()],
         Some(vec![AgentQueueList {
-            session: "s1".to_owned(),
-            items: Vec::new(),
+            ..crate::service::fixtures::base_agent_queue_list()
         }]),
     );
 

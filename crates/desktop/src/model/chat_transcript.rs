@@ -215,7 +215,7 @@ impl ChatTranscript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use massorca_protocol::methods::agents::{ActivitySource, ActivityState};
+    use massorca_protocol::methods::agents::ActivityState;
     use massorca_protocol::methods::chat::{MessageState, ResetReason, Turn, TurnState};
 
     fn cursor(seq: u64) -> ChatCursor {
@@ -638,10 +638,7 @@ mod tests {
     fn activity(state: ActivityState) -> Activity {
         Activity {
             state,
-            outcome: None,
-            source: ActivitySource::Hook,
-            at_ms: 1,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         }
     }
 

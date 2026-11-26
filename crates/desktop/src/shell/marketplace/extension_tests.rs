@@ -79,9 +79,8 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
         },
         sha256: "0123abcd".to_owned(),
         permissions: vec![Permission {
-            kind: "files:read".to_owned(),
             reason: "Reads the notes.".to_owned(),
-            scope: None,
+            ..crate::service::fixtures::base_permission()
         }],
         risk: Risk {
             level: RiskLevel::Medium,
@@ -576,11 +575,7 @@ fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
     item.listing.category = "agents".to_owned();
     item.agents = vec![massorca_protocol::methods::extensions::AgentItem {
         id: kind.to_owned(),
-        detected: false,
-        program_path: None,
-        path_source: None,
-        cli_installed_by_package: false,
-        cli: None,
+        ..crate::service::fixtures::base_agent_item()
     }];
     item
 }

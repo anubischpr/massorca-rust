@@ -944,13 +944,149 @@ pub(crate) mod fixtures {
             truncated: false,
         }
     }
+
+    /// Every `Activity` field at its usual value; tests override the fields they vary.
+    pub fn base_activity() -> massorca_protocol::methods::agents::Activity {
+        massorca_protocol::methods::agents::Activity {
+            state: massorca_protocol::methods::agents::ActivityState::Working,
+            outcome: None,
+            source: massorca_protocol::methods::agents::ActivitySource::Hook,
+            at_ms: 1,
+            seen_at_ms: None,
+        }
+    }
+
+    /// Every `AgentItem` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_item() -> massorca_protocol::methods::extensions::AgentItem {
+        massorca_protocol::methods::extensions::AgentItem {
+            id: "claude".to_owned(),
+            detected: false,
+            program_path: None,
+            path_source: None,
+            cli_installed_by_package: false,
+            cli: None,
+        }
+    }
+
+    /// Every `AgentModeSet` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_mode_set() -> massorca_protocol::methods::agents::AgentModeSet {
+        massorca_protocol::methods::agents::AgentModeSet {
+            applied: massorca_protocol::methods::agents::ModeApplied::NextResume,
+            session: crate::service::fixtures::base_agent_session(),
+        }
+    }
+
+    /// Every `AgentQueueList` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_queue_list() -> massorca_protocol::methods::agents::AgentQueueList {
+        massorca_protocol::methods::agents::AgentQueueList {
+            session: "s1".to_owned(),
+            items: Vec::new(),
+        }
+    }
+
+    /// Every `AgentSession` field at its usual value; tests override the fields they vary.
+    pub fn base_agent_session() -> massorca_protocol::methods::agents::AgentSession {
+        massorca_protocol::methods::agents::AgentSession {
+            id: String::new(),
+            kind: String::new(),
+            workspace_id: String::new(),
+            title: None,
+            read_only: false,
+            parent_id: None,
+            brought_back_at_ms: None,
+            agent_ref: None,
+            terminal_id: None,
+            run: massorca_protocol::methods::chat::RunType::Terminal,
+            created_at_ms: 0,
+            execution: crate::service::fixtures::base_execution(),
+            activity: None,
+            result: None,
+            holds_secrets: false,
+            secrets_withheld: None,
+            permission_mode: None,
+            mode_confirmed: false,
+            mode_source: None,
+            pending_permission_mode: None,
+            retained: false,
+            released: false,
+            archived: false,
+            resume: None,
+            delegation: None,
+            notes: Vec::new(),
+            fast: None,
+            shared_folder_with: Vec::new(),
+        }
+    }
+
+    /// Every `BringBackResult` field at its usual value; tests override the fields they vary.
+    pub fn base_bring_back_result() -> massorca_protocol::methods::agents::BringBackResult {
+        massorca_protocol::methods::agents::BringBackResult {
+            child: crate::service::fixtures::base_agent_session(),
+            merged: true,
+            merge_commit: None,
+            prompt_delivered: true,
+            note: None,
+        }
+    }
+
+    /// Every `Execution` field at its usual value; tests override the fields they vary.
+    pub fn base_execution() -> massorca_protocol::methods::agents::Execution {
+        massorca_protocol::methods::agents::Execution {
+            state: massorca_protocol::methods::terminals::TerminalState::Live,
+            exit: None,
+        }
+    }
+
+    /// Every `Permission` field at its usual value; tests override the fields they vary.
+    pub fn base_permission() -> massorca_protocol::methods::extensions::Permission {
+        massorca_protocol::methods::extensions::Permission {
+            kind: "files:read".to_owned(),
+            reason: "Keeps its notes.".to_owned(),
+            scope: None,
+        }
+    }
+
+    /// Every `PermissionMode` field at its usual value; tests override the fields they vary.
+    pub fn base_permission_mode() -> massorca_protocol::methods::agents::PermissionMode {
+        massorca_protocol::methods::agents::PermissionMode {
+            id: "bypassPermissions".to_owned(),
+            label: "Bypass permissions".to_owned(),
+            description: None,
+            bypass: true,
+            live_switch: false,
+            may_fall_back: false,
+            icon: None,
+            tone: None,
+            selectable: true,
+        }
+    }
+
+    /// Every `PromptReceipt` field at its usual value; tests override the fields they vary.
+    pub fn base_prompt_receipt() -> massorca_protocol::methods::agents::PromptReceipt {
+        massorca_protocol::methods::agents::PromptReceipt {
+            receipt: massorca_protocol::methods::agents::ReceiptKind::SentToChat,
+            bytes: 13,
+        }
+    }
+
+    /// Every `QueuedPrompt` field at its usual value; tests override the fields they vary.
+    pub fn base_queued_prompt() -> massorca_protocol::methods::agents::QueuedPrompt {
+        massorca_protocol::methods::agents::QueuedPrompt {
+            id: String::new(),
+            session: "s1".into(),
+            position: 1,
+            text: String::new(),
+            state: massorca_protocol::methods::agents::QueueState::Waiting,
+            reason: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::agents::{
-        Activity, ActivitySource, ActivityState, PackageState,
-    };
+    use massorca_protocol::methods::agents::{Activity, PackageState};
 
     use super::fixtures::{agent, agent_kind, project, queued, team, workspace};
     use super::*;
@@ -1239,11 +1375,8 @@ mod tests {
         state.apply(StoreUpdate::AgentsResync(vec![agent("s1", "w1", 10)]), now);
         let mut working = agent("s1", "w1", 10);
         working.activity = Some(Activity {
-            state: ActivityState::Working,
-            outcome: None,
-            source: ActivitySource::Hook,
             at_ms: 11,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         });
         state.apply(StoreUpdate::AgentChanged(Box::new(working.clone())), now);
         assert_eq!(state.agents, vec![working]);

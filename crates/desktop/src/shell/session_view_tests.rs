@@ -14,9 +14,9 @@ use crate::store::ServiceStore;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentPromptParams,
-    AgentQueueList, AgentSession, AgentSetModeParams, AgentStartParams, ModeApplied, ModeSource,
-    PackageState, PromptReceipt, QUEUE_REASON_PAUSED_STOPPED, QueuedPrompt, ReceiptKind,
+    Activity, ActivityState, AgentKind, AgentModeSet, AgentPromptParams, AgentQueueList,
+    AgentSession, AgentSetModeParams, AgentStartParams, ModeSource, PackageState, PromptReceipt,
+    QUEUE_REASON_PAUSED_STOPPED, QueuedPrompt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::composer::Composer;
@@ -123,10 +123,7 @@ pub(super) fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
     }
     session.activity = state.map(|state| Activity {
         state,
-        outcome: None,
-        source: ActivitySource::Hook,
-        at_ms: 1,
-        seen_at_ms: None,
+        ..crate::service::fixtures::base_activity()
     });
     session
 }
@@ -379,15 +376,7 @@ fn resume_params(
 fn a_resume_names_the_session_and_carries_a_pending_bypass_mode(cx: &mut TestAppContext) {
     let mut claude = kind(true);
     claude.permission_modes = vec![massorca_protocol::methods::agents::PermissionMode {
-        id: "bypassPermissions".to_owned(),
-        label: "Bypass permissions".to_owned(),
-        description: None,
-        bypass: true,
-        live_switch: false,
-        may_fall_back: false,
-        icon: None,
-        tone: None,
-        selectable: true,
+        ..crate::service::fixtures::base_permission_mode()
     }];
     let mut session = s1(true, Some(ActivityState::Done));
     session.pending_permission_mode = Some("bypassPermissions".to_owned());
@@ -510,8 +499,8 @@ fn after_a_resume_the_session_view_attaches_the_terminal_of_the_new_run(cx: &mut
 /// s1's queue as the service lists it.
 fn s1_queue(items: Vec<QueuedPrompt>) -> Option<Vec<AgentQueueList>> {
     Some(vec![AgentQueueList {
-        session: "s1".to_owned(),
         items,
+        ..crate::service::fixtures::base_agent_queue_list()
     }])
 }
 
@@ -610,8 +599,8 @@ fn the_dock_draws_the_stores_queue_and_follows_its_changes(cx: &mut TestAppConte
     assert_eq!(dock_texts(&rig, cx), ["prompt q1", "prompt q2"]);
     rig.updates
         .send(StoreUpdate::AgentQueueChanged(AgentQueueList {
-            session: "s1".to_owned(),
             items: vec![queued("q2", "s1", 2)],
+            ..crate::service::fixtures::base_agent_queue_list()
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -623,8 +612,7 @@ fn the_dock_draws_the_stores_queue_and_follows_its_changes(cx: &mut TestAppConte
     );
     rig.updates
         .send(StoreUpdate::AgentQueueChanged(AgentQueueList {
-            session: "s1".to_owned(),
-            items: Vec::new(),
+            ..crate::service::fixtures::base_agent_queue_list()
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -727,13 +715,8 @@ fn kind_with_modes() -> AgentKind {
     let mode = |id: &str, label: &str, bypass: bool| PermissionMode {
         id: id.into(),
         label: label.into(),
-        description: None,
         bypass,
-        live_switch: false,
-        may_fall_back: false,
-        icon: None,
-        tone: None,
-        selectable: true,
+        ..crate::service::fixtures::base_permission_mode()
     };
     let mut kind = kind(true);
     kind.permission_modes = vec![
@@ -917,8 +900,8 @@ fn a_session_in_the_vendors_default_shows_it_and_a_pick_asks_the_service(cx: &mu
     session.pending_permission_mode = Some("plan".into());
     reply
         .send(Ok(AgentModeSet {
-            applied: ModeApplied::NextResume,
             session: session.clone(),
+            ..crate::service::fixtures::base_agent_mode_set()
         }))
         .expect("the shell waits for the answer");
     rig.updates

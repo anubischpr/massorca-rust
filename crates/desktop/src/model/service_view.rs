@@ -316,7 +316,7 @@ mod tests {
         fixtures::{agent, project, workspace},
     };
     use massorca_client::HostRecord;
-    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
+    use massorca_protocol::methods::agents::{Activity, ActivityState, Outcome};
     use massorca_protocol::methods::config::ConfigValue;
 
     fn connected() -> ConnectionState {
@@ -917,9 +917,7 @@ mod tests {
         let report = |state, outcome| Activity {
             state,
             outcome,
-            source: ActivitySource::Hook,
-            at_ms: 1,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         };
         let mut working = agent("s1", "w1", 10);
         working.activity = Some(report(ActivityState::Working, None));

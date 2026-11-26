@@ -94,9 +94,8 @@ pub(super) mod tests {
             },
             sha256: "abc123".to_owned(),
             permissions: vec![Permission {
-                kind: "files:read".to_owned(),
                 reason: "Reads the project.".to_owned(),
-                scope: None,
+                ..crate::service::fixtures::base_permission()
             }],
             risk: Risk {
                 level: RiskLevel::High,

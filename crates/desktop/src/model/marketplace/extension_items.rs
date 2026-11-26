@@ -358,12 +358,7 @@ pub(super) mod tests {
         let mut agent = package("massorca.claude", "agents", ExtensionState::Available);
         agent.publisher = "massorca".to_owned();
         agent.agents = vec![massorca_protocol::methods::extensions::AgentItem {
-            id: "claude".to_owned(),
-            detected: false,
-            program_path: None,
-            path_source: None,
-            cli_installed_by_package: false,
-            cli: None,
+            ..crate::service::fixtures::base_agent_item()
         }];
         let found = items(&[], std::slice::from_ref(&agent), &["claude"]);
         assert!(found.is_empty(), "the agent kind stands for the package");
@@ -380,13 +375,11 @@ pub(super) mod tests {
         entry.permissions = vec![
             Permission {
                 kind: "storage".to_owned(),
-                reason: "Keeps its notes.".to_owned(),
-                scope: None,
+                ..crate::service::fixtures::base_permission()
             },
             Permission {
-                kind: "files:read".to_owned(),
                 reason: "Reads them.".to_owned(),
-                scope: None,
+                ..crate::service::fixtures::base_permission()
             },
         ];
         entry.listing.banner = Some(Banner {
@@ -559,12 +552,7 @@ pub(super) mod tests {
 
         let mut claude = package("massorca.claude", "agents", ExtensionState::Available);
         claude.agents = vec![AgentItem {
-            id: "claude".to_owned(),
-            detected: false,
-            program_path: None,
-            path_source: None,
-            cli_installed_by_package: false,
-            cli: None,
+            ..crate::service::fixtures::base_agent_item()
         }];
         let notes = package("acme.notes", "extensions", ExtensionState::Enabled);
         let mut source = ServiceMarketplace::default();
@@ -597,11 +585,7 @@ pub(super) mod tests {
         entry.publisher = FIRST_PARTY.to_owned();
         entry.agents = vec![massorca_protocol::methods::extensions::AgentItem {
             id: kind.to_owned(),
-            detected: false,
-            program_path: None,
-            path_source: None,
-            cli_installed_by_package: false,
-            cli: None,
+            ..crate::service::fixtures::base_agent_item()
         }];
         entry
     }
