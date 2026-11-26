@@ -48,6 +48,14 @@ struct OpenForward {
 }
 
 impl ForwardTable {
+    /// The ports open forwards target, for `host.ports`.
+    pub(crate) fn forwarded_ports(&self) -> Vec<u16> {
+        lock(&self.open)
+            .values()
+            .map(|open| open.info.port)
+            .collect()
+    }
+
     fn list(&self) -> Vec<ForwardInfo> {
         let mut forwards: Vec<ForwardInfo> = lock(&self.open)
             .values()

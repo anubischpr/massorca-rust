@@ -22,6 +22,7 @@ use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
 use crate::features::forwards::{self, ForwardTable};
+use crate::features::port_urls::advertised_url;
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -33,6 +34,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     let memory_samples = Arc::new(SampleCache::default());
     let port_samples = Arc::new(SampleCache::default());
     let forward_table = Arc::new(ForwardTable::default());
+    let forwards_for_ports = Arc::clone(&forward_table);
     let mut handles = forwards::register(registries, &forward_table)?;
     handles.extend([
         registries
@@ -55,11 +57,23 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             move |ctx: RequestCtx, _params: NoParams| {
                 let samples = Arc::clone(&port_samples);
-                async move { ports(&samples, &ctx).await }
+                let forwards = Arc::clone(&forwards_for_ports);
+                async move {
+                    let mut answer = ports(&samples, &ctx).await?;
+                    mark_forwarded(&mut answer, &forwards.forwarded_ports());
+                    Ok::<_, ErrorBody>(answer)
+                }
             },
         )?,
     ]);
     Ok(handles)
+}
+
+/// Marks the ports an open forward targets. Read at each call, since forwards change between samples.
+fn mark_forwarded(answer: &mut HostPorts, forwarded: &[u16]) {
+    for port in &mut answer.ports {
+        port.forwarded = forwarded.contains(&port.port);
+    }
 }
 
 /// Samples on the blocking pool: listing processes and reading each one are system calls, never a spawned program.
@@ -139,19 +153,34 @@ fn sample_ports(terminals: &TerminalManager, agents: &Agents) -> Result<HostPort
         .map(|process| (process.pid, process.name.clone()))
         .collect();
     let sessions = sessions_by_terminal(agents);
-    let (ports, statuses, unverifiable) = ports_answer(
+    let (mut ports, statuses, unverifiable) = ports_answer(
         &members,
         listening.as_ref(),
         &names,
         &sessions,
         listing_complete(&table),
     );
+    add_urls(&mut ports, |terminal_id| terminals.text(terminal_id).ok());
     Ok(HostPorts {
         ports,
         terminals: statuses,
         unverifiable,
         sampled_at_ms: now_ms(),
     })
+}
+
+/// Gives each port the URL its terminal printed for it, or a guessed one (decision 0131). Each terminal's screen is read
+/// once.
+fn add_urls(ports: &mut [HostPort], screen_of: impl Fn(&str) -> Option<String>) {
+    let mut screens: HashMap<String, String> = HashMap::new();
+    for port in ports {
+        let screen = screens
+            .entry(port.terminal_id.clone())
+            .or_insert_with(|| screen_of(&port.terminal_id).unwrap_or_default());
+        let (url, printed) = advertised_url(screen, port.port, &port.connect_host);
+        port.url = Some(url);
+        port.url_printed = printed;
+    }
 }
 
 /// One live terminal's members for ports: `listed` as the membership read them (`None` when they cannot be listed), and
@@ -231,6 +260,9 @@ fn ports_answer(
             terminal_id: terminal.terminal_id.clone(),
             workspace_id: terminal.workspace_id.clone(),
             session_id: sessions.get(&terminal.terminal_id).cloned(),
+            url: None,
+            url_printed: false,
+            forwarded: false,
         }));
     }
     (ports, statuses, false)
@@ -607,6 +639,9 @@ mod ports_tests {
                 terminal_id: "t-1".to_owned(),
                 workspace_id: "w-1".to_owned(),
                 session_id: Some("s-1".to_owned()),
+                url: None,
+                url_printed: false,
+                forwarded: false,
             }
         );
         assert_eq!(ports[1].connect_host, "::1");

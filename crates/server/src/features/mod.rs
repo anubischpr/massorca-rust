@@ -17,6 +17,7 @@ mod git;
 mod glab_login;
 mod host;
 mod hosted_services;
+mod port_urls;
 mod projects;
 mod script_trust;
 mod secret_params;

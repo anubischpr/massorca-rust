@@ -1,0 +1,128 @@
+//! The URL a listening port is opened at (decision 0131): the last `http(s)` URL with that port that its terminal printed,
+//! as dev servers print `Local: http://localhost:5173/`, else a guess from the socket's address.
+
+/// The URL for `port`, and whether the terminal printed it. A printed URL on a loopback or wildcard host wins over one on
+/// another host (a dev server's `Network:` line); among equals the last one printed wins.
+pub(crate) fn advertised_url(screen: &str, port: u16, connect_host: &str) -> (String, bool) {
+    let mut local = None;
+    let mut other = None;
+    for url in printed_urls(screen) {
+        let Some((host, url_port)) = authority(url) else {
+            continue;
+        };
+        if url_port != port {
+            continue;
+        }
+        if is_local_host(host) {
+            local = Some(url);
+        } else {
+            other = Some(url);
+        }
+    }
+    match local.or(other) {
+        Some(url) => (url.to_owned(), true),
+        None => (guessed_url(connect_host, port), false),
+    }
+}
+
+fn guessed_url(connect_host: &str, port: u16) -> String {
+    if connect_host.contains(':') {
+        format!("http://[{connect_host}]:{port}/")
+    } else {
+        format!("http://{connect_host}:{port}/")
+    }
+}
+
+/// Every `http://` and `https://` URL in `text`, up to the first space, quote or closing bracket, without trailing
+/// sentence punctuation.
+fn printed_urls(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        loop {
+            let start = ["http://", "https://"]
+                .iter()
+                .filter_map(|scheme| rest.find(scheme))
+                .min()?;
+            let candidate = &rest[start..];
+            let end = candidate
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | '`')
+                })
+                .unwrap_or(candidate.len());
+            let url = candidate[..end].trim_end_matches(['.', ',', ';', ':']);
+            rest = &candidate[end..];
+            if url.len() > "https://".len() {
+                return Some(url);
+            }
+        }
+    })
+}
+
+/// The host and explicit port of a URL; `None` without a port.
+fn authority(url: &str) -> Option<(&str, u16)> {
+    let after_scheme = url.split_once("://")?.1;
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let (host, port) = authority.rsplit_once(':')?;
+    if host.starts_with('[') != host.ends_with(']') {
+        return None;
+    }
+    Some((
+        host.trim_start_matches('[').trim_end_matches(']'),
+        port.parse().ok()?,
+    ))
+}
+
+fn is_local_host(host: &str) -> bool {
+    matches!(host, "localhost" | "0.0.0.0" | "::" | "::1") || host.starts_with("127.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::advertised_url;
+
+    #[test]
+    fn a_printed_local_url_with_the_port_wins_over_a_network_one() {
+        let screen = "  VITE ready\n  ➜  Local:   http://localhost:5173/app/\n  ➜  Network: http://192.168.1.5:5173/app/\n";
+        assert_eq!(
+            advertised_url(screen, 5173, "localhost"),
+            ("http://localhost:5173/app/".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn the_scheme_path_and_last_print_are_kept_and_other_ports_ignored() {
+        let screen = "listening on https://127.0.0.1:8443/old\nother http://localhost:3000/\nnow at https://127.0.0.1:8443/new.";
+        assert_eq!(
+            advertised_url(screen, 8443, "127.0.0.1"),
+            ("https://127.0.0.1:8443/new".to_owned(), true)
+        );
+        let network_only = "Network: http://10.0.0.2:4000";
+        assert_eq!(
+            advertised_url(network_only, 4000, "localhost"),
+            ("http://10.0.0.2:4000".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn without_a_printed_url_it_is_guessed_from_the_address() {
+        assert_eq!(
+            advertised_url(
+                "no url here http://localhost/ (\"https://",
+                3000,
+                "localhost"
+            ),
+            ("http://localhost:3000/".to_owned(), false)
+        );
+        assert_eq!(
+            advertised_url("", 3000, "::1"),
+            ("http://[::1]:3000/".to_owned(), false)
+        );
+        assert_eq!(
+            advertised_url("see http://[::1]:3000/x", 3000, "::1"),
+            ("http://[::1]:3000/x".to_owned(), true)
+        );
+    }
+}
