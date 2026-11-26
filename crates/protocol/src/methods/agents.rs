@@ -585,7 +585,7 @@ pub struct AgentResumeParams {
 
 /// Params of `agent.fork` (decision 0168): a new session that continues a copy of `session`'s conversation, in the same
 /// workspace, with the kind's fork arguments. The source keeps its own conversation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentForkParams {
     /// The source session: id, or a unique prefix of at least 8 characters. Its run must have exited.
     pub session: String,
@@ -801,7 +801,7 @@ pub struct CredentialsRemoved {
 }
 
 /// Whether the session's current or last run is there; the terminal vocabulary (0052).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Execution {
     pub state: TerminalState,
     /// How the last run ended, once it has.
@@ -869,7 +869,7 @@ pub struct Activity {
 }
 
 /// One agent session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSession {
     /// UUID v7.
     pub id: String,

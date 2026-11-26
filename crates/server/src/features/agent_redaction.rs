@@ -55,37 +55,18 @@ mod tests {
             id: "s1".to_owned(),
             kind: "fake".to_owned(),
             workspace_id: "w1".to_owned(),
-            title: None,
-            read_only: false,
-            parent_id: None,
-            brought_back_at_ms: None,
-            agent_ref: None,
-            terminal_id: None,
-            run: Default::default(),
             created_at_ms: 1,
             execution: Execution {
                 state: TerminalState::Exited,
                 exit: None,
             },
-            activity: None,
             result: Some("agent-output-placeholder".to_owned()),
             holds_secrets,
-            secrets_withheld: None,
-            permission_mode: None,
-            mode_confirmed: false,
-            mode_source: None,
-            pending_permission_mode: None,
-            retained: false,
-            released: false,
-            archived: false,
-            resume: None,
-            delegation: None,
-            notes: Vec::new(),
-            shared_folder_with: Vec::new(),
             meta: SessionMeta {
                 preview: Some("agent-output-placeholder".to_owned()),
                 ..SessionMeta::default()
             },
+            ..Default::default()
         }
     }
 
