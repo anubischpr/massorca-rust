@@ -3669,6 +3669,7 @@ dependencies = [
 name = "massorca-core-agents"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "libc",
  "massorca-core-git",
  "massorca-core-store",
