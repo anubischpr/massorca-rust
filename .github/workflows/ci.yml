@@ -238,6 +238,8 @@ jobs:
         with:
           key: ui
           save-if: false
+      # `--test '*'` builds no examples, and the bridge tests run the desktop's fake agent example.
+      - run: cargo build -p massorca-desktop --examples --locked
       - run: cargo test -p massorca-desktop --test '*' --locked
 
   # The phone's binding (decision 0080, task A3): it must keep cross-compiling for both Android ABIs, with the NDK the
