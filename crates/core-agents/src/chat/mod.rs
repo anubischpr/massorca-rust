@@ -3,6 +3,7 @@
 //!
 //! - [`adapter`]: the [`ChatAdapter`] a kind's dialect implements, and the [`JournalOp`]s it produces.
 //! - [`claude`]: the adapter of Claude Code's stream-json dialect.
+//! - [`codex`]: the adapter of Codex's app-server dialect (decision 0173).
 //! - [`version`]: the probe of a chat kind's CLI version and its supported range.
 //! - [`test_adapter`]: the adapter of the fake structured agent's tiny dialect, for MassOrca's own tests.
 //! - `journal`: the journal writer and readers over the store (snapshot, replay, history).
@@ -10,6 +11,7 @@
 
 pub mod adapter;
 pub mod claude;
+pub mod codex;
 pub(crate) mod journal;
 pub(crate) mod pipe;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -20,6 +22,7 @@ use std::time::Duration;
 
 pub use adapter::{ApprovalAnswer, ChatAdapter, JournalOp, approval_key};
 pub use claude::ClaudeAdapter;
+pub use codex::CodexAdapter;
 use massorca_protocol::methods::chat::ChatBatch;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use test_adapter::TestAdapter;
