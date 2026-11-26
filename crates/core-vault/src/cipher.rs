@@ -55,6 +55,12 @@ impl Aad {
         Self::from_parts(id, scope, name)
     }
 
+    /// The associated data of a row the vault keeps for the service itself, such as an agent kind's settings, whose scope
+    /// text no secret scope parses to. The caller has checked the id, scope and name.
+    pub(crate) fn for_internal_row(id: &str, scope: &str, name: &str) -> Self {
+        Self::from_parts(id, scope, name)
+    }
+
     fn from_parts(id: &str, scope: &str, name: &str) -> Self {
         let mut bytes =
             Vec::with_capacity(AAD_PREFIX.len() + id.len() + scope.len() + name.len() + 3);
