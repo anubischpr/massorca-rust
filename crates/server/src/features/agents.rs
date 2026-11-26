@@ -13,8 +13,8 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
-    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
+    AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
     AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
     AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
     AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
@@ -32,7 +32,7 @@ use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
 use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::{NoParams, sees_account_details};
+use crate::features::{NoParams, first_prompt_rename, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
 use crate::permission::{Permission, Principal, authorize};
@@ -70,6 +70,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_FAST, Owner::Core)?,
+        // `agent.fork` (decision 0168).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_FORK, Owner::Core)?,
         // Import source detection, and an import without a folder (decision 0097).
         registries
             .capabilities
@@ -162,6 +166,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             resume,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::FORK,
+            capabilities::AGENT_FORK,
+            Permission::Workspace,
+            fork,
         )?,
         methods.register(
             Owner::Core,
@@ -388,7 +399,9 @@ async fn models(ctx: RequestCtx, params: AgentModelsParams) -> Result<AgentModel
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
     let grant = secret_grant(&ctx);
+    let (model, prompt) = (params.model.clone(), params.prompt.clone());
     let session = on_agents(&ctx, move |agents| agents.start(params, grant)).await?;
+    first_prompt_rename::note_started(&ctx.state, &session, model, prompt.as_deref());
     Ok(for_caller(&ctx, session))
 }
 
@@ -580,6 +593,20 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
             params.cols,
             params.rows,
         )
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Forks an exited session into a new one (decision 0168). The fork copies the source's conversation, so a source holding
+/// vault secrets needs host-admin scope, as its resume does.
+async fn fork(ctx: RequestCtx, params: AgentForkParams) -> Result<AgentSession, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let grant = secret_grant(&ctx);
+    let session = on_agents(&ctx, move |agents| {
+        // As a start, the fork waits for task starts and for done, reopen and bot changes.
+        let _gate = start_gate();
+        agents.fork(params, grant)
     })
     .await?;
     Ok(for_caller(&ctx, session))

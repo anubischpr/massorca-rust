@@ -82,6 +82,10 @@ pub enum StoreUpdate {
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
     WorkspaceRenameOffered(bool),
+    /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
+    GitSyncOffered(bool),
+    /// Whether the service offers `projects/1`: Remove project and the project's base branch.
+    ProjectEditsOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
@@ -313,6 +317,10 @@ pub struct StoreState {
     pub workspace_unique_name: bool,
     /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
     pub workspace_rename: bool,
+    /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
+    pub git_sync: bool,
+    /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
+    pub project_edits: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
@@ -365,6 +373,8 @@ impl Default for StoreState {
             agent_fast: false,
             workspace_unique_name: false,
             workspace_rename: false,
+            git_sync: false,
+            project_edits: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             chat: BTreeMap::new(),
@@ -480,6 +490,8 @@ impl StoreState {
                 self.workspace_unique_name = offered;
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
+            StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
+            StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::Chat { session, event } => {
@@ -740,34 +752,12 @@ pub(crate) mod fixtures {
             id: id.into(),
             kind: "claude".into(),
             workspace_id: workspace_id.into(),
-            title: None,
-            read_only: false,
-            parent_id: None,
-            brought_back_at_ms: None,
-            agent_ref: None,
-            terminal_id: None,
-            run: Default::default(),
             created_at_ms: created,
             execution: Execution {
                 state: TerminalState::Live,
                 exit: None,
             },
-            activity: None,
-            result: None,
-            holds_secrets: false,
-            secrets_withheld: None,
-            permission_mode: None,
-            mode_confirmed: false,
-            mode_source: None,
-            pending_permission_mode: None,
-            retained: false,
-            released: false,
-            archived: false,
-            resume: None,
-            delegation: None,
-            fast: None,
-            notes: Vec::new(),
-            shared_folder_with: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -1020,6 +1010,7 @@ pub(crate) mod fixtures {
             resume: None,
             delegation: None,
             notes: Vec::new(),
+            meta: massorca_protocol::methods::agents::SessionMeta::default(),
             fast: None,
             shared_folder_with: Vec::new(),
         }
@@ -1245,6 +1236,17 @@ pub(crate) mod fixtures {
             updated_at_ms: None,
             cli_installed: None,
             detail: None,
+        }
+    }
+
+    /// A push answer for `feat/scm` with the outcome given. Tests set `upstream_set` when they need it.
+    pub fn git_pushed(
+        outcome: massorca_protocol::methods::git::remote::PushOutcome,
+    ) -> massorca_protocol::methods::git::remote::GitPushed {
+        massorca_protocol::methods::git::remote::GitPushed {
+            remote_branch: "feat/scm".into(),
+            outcome,
+            upstream_set: false,
         }
     }
 

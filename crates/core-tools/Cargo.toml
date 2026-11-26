@@ -13,6 +13,7 @@ massorca-core-terminal.workspace = true
 massorca-protocol.workspace = true
 
 [dev-dependencies]
+massorca-process = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 
 [lints]

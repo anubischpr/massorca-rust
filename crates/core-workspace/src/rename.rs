@@ -24,6 +24,23 @@ impl Workspaces {
         &self,
         params: WorkspaceRenameParams,
     ) -> Result<Workspace, DomainError> {
+        self.rename_generated(params, false)
+    }
+
+    /// The first-prompt trigger's rename (decision 0118): [`Workspaces::rename_workspace`], and the name is then the
+    /// person's, so no later run renames it. Not offered on the wire.
+    pub fn rename_from_first_prompt(
+        &self,
+        params: WorkspaceRenameParams,
+    ) -> Result<Workspace, DomainError> {
+        self.rename_generated(params, true)
+    }
+
+    fn rename_generated(
+        &self,
+        params: WorkspaceRenameParams,
+        settle: bool,
+    ) -> Result<Workspace, DomainError> {
         if !params.from_generated {
             return Err(invalid(
                 "from_generated must be true: only a name the service chose is renamed",
@@ -56,7 +73,8 @@ impl Workspaces {
             }
         };
         let name = self.free_name(&project, &base, Search::Rename(&row))?;
-        if name == row.name {
+        // A settling rename still writes the flag when the name stays, so the trigger's name is the person's.
+        if name == row.name && !settle {
             return Ok(views::workspace(&row));
         }
         let moved = match current {
@@ -80,7 +98,7 @@ impl Workspaces {
             .or_else(|| row.branch.clone());
         if let Err(error) = self
             .store
-            .rename_workspace(&row.id, &name, branch.as_deref())
+            .rename_workspace(&row.id, &name, branch.as_deref(), !settle)
         {
             let error = refused_write(error);
             return Err(match &moved {
@@ -90,6 +108,7 @@ impl Workspaces {
         }
         row.name = name;
         row.branch = branch;
+        row.name_generated = !settle;
         Ok(views::workspace(&row))
     }
 

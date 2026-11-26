@@ -19,8 +19,10 @@ mod pairing_qr;
 mod palette;
 mod path_field;
 mod preflight_banner;
+mod project_base;
 mod project_icon;
 mod project_mark;
+mod project_remove;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;
@@ -39,6 +41,7 @@ mod sidebar;
 mod sidebar_rows;
 mod source_control;
 mod source_control_dialogs;
+mod source_control_sync;
 mod start_page;
 mod start_placement;
 mod status_bar;
@@ -127,6 +130,10 @@ mod path_field_tests;
 #[cfg(test)]
 mod preflight_banner_tests;
 #[cfg(test)]
+mod project_base_tests;
+#[cfg(test)]
+mod project_remove_tests;
+#[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
 mod remote_terminal_tests;
@@ -148,6 +155,8 @@ mod settings_tests;
 mod shared_folder_tests;
 #[cfg(test)]
 mod sidebar_session_rows_tests;
+#[cfg(test)]
+mod source_control_sync_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -268,6 +277,10 @@ pub struct Shell {
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
+    /// The Remove project dialog's flow, while the dialog is open.
+    project_remove: Option<crate::model::project_remove::ProjectRemoveFlow>,
+    /// The base-branch dialog, while it is open: its flow and the field the branch is typed into.
+    project_base: Option<project_base::ProjectBase>,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
@@ -672,6 +685,8 @@ impl Shell {
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
+            project_remove: None,
+            project_base: None,
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
@@ -1171,6 +1186,14 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let base_dialog = self
+            .project_base
+            .as_ref()
+            .map(|base| project_base::project_base_dialog(base, &shell, cx));
+        let remove_project = self
+            .project_remove
+            .as_ref()
+            .map(|flow| project_remove::project_remove_dialog(flow, &shell, cx));
         let discard = self
             .source_control
             .discard
@@ -1300,6 +1323,8 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
+            .when_some(remove_project, |el, dialog| el.child(dialog))
+            .when_some(base_dialog, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_switch, |el, menu| el.child(menu))
