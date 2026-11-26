@@ -241,6 +241,16 @@ async fn bad_targets_are_refused_and_stop_ends_the_forward() {
         .await
         .expect_err("another connection's forward");
     assert_eq!(remote_code(&foreign), codes::FORWARD_NOT_FOUND);
+    // Stopping reaches every caller's forwards, so an unknown id is not said to be someone else's.
+    let unknown = other
+        .forward_stop("f-999")
+        .await
+        .expect_err("no such forward");
+    assert_eq!(remote_code(&unknown), codes::FORWARD_NOT_FOUND);
+    let ClientError::Remote(body) = &unknown else {
+        panic!("expected a refusal, got {unknown:?}");
+    };
+    assert_eq!(body.message, "no open forward is named f-999", "{body:?}");
     let stopped = other.forward_stop(&id).await.expect("host.forward_stop");
     assert_eq!(stopped.forward.id, id);
     match timeout(WAIT, forward.ended())

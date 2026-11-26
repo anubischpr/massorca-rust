@@ -226,7 +226,7 @@ async fn hold(
 
 fn stop(table: &ForwardTable, id: &str) -> Result<ForwardStopped, ErrorBody> {
     let open = lock(&table.open);
-    let forward = open.get(id).ok_or_else(|| not_found(id))?;
+    let forward = open.get(id).ok_or_else(|| not_found(id, false))?;
     let _ = forward.stop.send(true);
     Ok(ForwardStopped {
         forward: forward.info.clone(),
@@ -245,7 +245,7 @@ async fn connect(
         let forward = open
             .get_mut(id)
             .filter(|forward| forward.connection_id == ctx.connection_id)
-            .ok_or_else(|| not_found(id))?;
+            .ok_or_else(|| not_found(id, true))?;
         if forward.info.connections as usize >= MAX_CONNECTIONS_PER_FORWARD {
             return Err(ErrorBody::new(
                 codes::FORWARD_LIMIT,
@@ -357,11 +357,14 @@ async fn dial(port: u16, address: Option<IpAddr>) -> Result<TcpStream, ErrorBody
     ))
 }
 
-fn not_found(id: &str) -> ErrorBody {
-    ErrorBody::new(
-        codes::FORWARD_NOT_FOUND,
-        format!("no open forward named {id} is open to this caller"),
-    )
+/// No forward has the id; for a connection, none that this connection opened, since only it may connect through one.
+fn not_found(id: &str, on_this_connection: bool) -> ErrorBody {
+    let message = if on_this_connection {
+        format!("this connection opened no forward named {id}")
+    } else {
+        format!("no open forward is named {id}")
+    };
+    ErrorBody::new(codes::FORWARD_NOT_FOUND, message)
 }
 
 fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
