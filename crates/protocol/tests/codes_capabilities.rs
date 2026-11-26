@@ -152,7 +152,6 @@ const ERROR_CODES: &[(&str, &str)] = &[
         "automation.schedule_invalid",
     ),
     (codes::AUTOMATION_ZONE_INVALID, "automation.zone_invalid"),
-    (codes::CALENDAR_WINDOW_INVALID, "calendar.window_invalid"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -191,5 +190,4 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
     assert_eq!(capabilities::AUTOMATIONS, "automations/1");
-    assert_eq!(capabilities::CALENDAR, "calendar/1");
 }
