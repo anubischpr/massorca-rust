@@ -36,6 +36,7 @@ name = "massorca-fake-vendor"
 path = "examples/massorca-fake-vendor.rs"
 
 [dependencies]
+qrcode.workspace = true
 massorca-process.workspace = true
 clap.workspace = true
 crossterm.workspace = true

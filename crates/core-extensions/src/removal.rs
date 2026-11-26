@@ -277,7 +277,7 @@ impl Extensions {
             match command {
                 None => CliAction::NoCommand,
                 Some(command) if !uninstall_cli => CliAction::Offered { command },
-                Some(command) => self.run_uninstall(id, command),
+                Some(command) => self.run_uninstall(id, command, &cli.binary),
             }
         };
         CliRemoval {
@@ -287,8 +287,8 @@ impl Extensions {
         }
     }
 
-    fn run_uninstall(&self, id: &str, command: Vec<String>) -> CliAction {
-        if !massorca_ext_package::manifest::agent::is_vendor_program(&command) {
+    fn run_uninstall(&self, id: &str, command: Vec<String>, binary: &str) -> CliAction {
+        if !massorca_ext_package::manifest::agent::is_uninstall_program(&command, binary) {
             return CliAction::Failed {
                 message: "its program is not on the vendor allowlist".to_owned(),
                 command,

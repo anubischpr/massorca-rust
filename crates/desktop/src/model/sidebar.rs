@@ -41,6 +41,8 @@ pub enum TreeRow {
         emoji: Option<String>,
         /// The owner or org shown after the name, when the project has one (A10).
         owner: Option<String>,
+        /// A folder that is not a Git repository: its row shows the No Git marker (WS-02).
+        plain_folder: bool,
         /// Whether its rows are listed below it (A10).
         expanded: bool,
     },
@@ -75,6 +77,8 @@ pub enum TreeRow {
         dimmed: bool,
         /// Its host is This PC, so the row's folder can be opened here (Open folder).
         local: bool,
+        /// The paired host the session runs on; None for a session of This PC (STAT-16).
+        host: Option<String>,
     },
     /// A workspace with no session yet: one idle row where its first session will appear (A97).
     Placeholder {
@@ -197,6 +201,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             name: project.name.clone(),
             emoji: project.emoji.clone(),
             owner: project.owner.clone(),
+            plain_folder: project.plain_folder,
             expanded: true,
         });
         for host in &project.hosts {
@@ -239,6 +244,7 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
                 name,
                 emoji,
                 owner,
+                plain_folder,
                 ..
             } => {
                 let expanded = !collapsed.contains(&id);
@@ -248,6 +254,7 @@ pub fn collapse_projects(tree: Vec<TreeRow>, collapsed: &BTreeSet<String>) -> Ve
                     name,
                     emoji,
                     owner,
+                    plain_folder,
                     expanded,
                 });
             }
@@ -279,6 +286,7 @@ fn push_session(
         workspace_id: session.workspace_id.clone(),
         dimmed,
         local,
+        host: None,
     });
     for child in &session.children {
         push_session(rows, child, depth + 1, active, dimmed, local);
@@ -402,6 +410,7 @@ mod tests {
                 name: "massorca-rust".into(),
                 emoji: None,
                 owner: None,
+                plain_folder: false,
                 expanded: true,
             }
         );
@@ -533,6 +542,7 @@ mod tests {
             name: "massorca".into(),
             emoji: Some("🚀".into()),
             owner: None,
+            plain_folder: false,
             hosts: Vec::new(),
         }];
         assert_eq!(
@@ -542,6 +552,7 @@ mod tests {
                 name: "massorca".into(),
                 emoji: Some("🚀".into()),
                 owner: None,
+                plain_folder: false,
                 expanded: true,
             }
         );
@@ -556,6 +567,7 @@ mod tests {
             name: NO_PROJECT_LABEL.into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![host_with(Vec::new(), HostReach::Connected)],
         };
         assert!(tree_of(&snapshot_of(vec![empty.clone()])).is_empty());
@@ -578,6 +590,7 @@ mod tests {
             name: "p".into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![host],
         }]));
         assert_eq!(rows.len(), 4, "project, host, the session, the placeholder");
@@ -603,6 +616,7 @@ mod tests {
             name: "p".into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![
                 host_with(vec![sample_session("s1")], HostReach::Connected),
                 remote,
@@ -627,6 +641,7 @@ mod tests {
             name: "p".into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![host],
         }]));
         assert!(matches!(
@@ -644,6 +659,7 @@ mod tests {
             name: NO_PROJECT_LABEL.into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![host],
         };
         let rows = tree_of(&snapshot_of(vec![group]));
@@ -657,6 +673,7 @@ mod tests {
             name: "oppm".into(),
             emoji: None,
             owner: Some("acme".into()),
+            plain_folder: false,
             hosts: Vec::new(),
         }];
         let tree = flatten(&groups, None);
@@ -673,6 +690,36 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_folder_project_row_carries_the_no_git_marker_through_collapsing() {
+        let folder = ProjectGroup {
+            id: "notes".into(),
+            name: "notes".into(),
+            emoji: None,
+            owner: None,
+            plain_folder: true,
+            hosts: Vec::new(),
+        };
+        let tree = flatten(&[folder], None);
+        assert!(matches!(
+            &tree[0],
+            TreeRow::Project {
+                plain_folder: true,
+                ..
+            }
+        ));
+        let collapsed = BTreeSet::from(["notes".to_owned()]);
+        let folded = collapse_projects(tree, &collapsed);
+        assert!(matches!(
+            &folded[0],
+            TreeRow::Project {
+                plain_folder: true,
+                expanded: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn a_stopped_session_stays_listed_however_many_sessions_there_are() {
         let sessions: Vec<SessionRow> = (1..=9).map(|n| sample_session(&format!("s{n}"))).collect();
         let snapshot = snapshot_of(vec![ProjectGroup {
@@ -680,6 +727,7 @@ mod tests {
             name: "p".into(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![host_with(sessions, HostReach::Connected)],
         }]);
         let listed = tree_of(&snapshot)

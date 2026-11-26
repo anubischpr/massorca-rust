@@ -11,6 +11,35 @@ fn output(feed: &mut TerminalFeed, offset: u64, bytes: &[u8]) -> Result<FeedOutc
     feed.apply(FeedEvent::Output { offset, bytes })
 }
 
+#[test]
+fn a_changed_scrollback_applies_from_the_next_output() {
+    text_preferences::set(text_preferences::TextPreferences {
+        scrollback_lines: 1000,
+        ..Default::default()
+    });
+    let mut feed = attached_feed(20, 4, 0);
+    let lines: Vec<u8> = (0..300)
+        .flat_map(|number| format!("{number}\r\n").into_bytes())
+        .collect();
+    output(&mut feed, 0, &lines).expect("the first output");
+    assert!(
+        feed.term.grid().history_size() > 200,
+        "the first output keeps its history"
+    );
+
+    text_preferences::set(text_preferences::TextPreferences {
+        scrollback_lines: 100,
+        ..Default::default()
+    });
+    output(&mut feed, lines.len() as u64, b"tail\r\n").expect("the next output");
+
+    assert!(
+        feed.term.grid().history_size() <= 100,
+        "the next output applies the smaller scrollback"
+    );
+    text_preferences::set(text_preferences::TextPreferences::default());
+}
+
 fn screen_row(feed: &TerminalFeed, row: usize) -> String {
     let grid = feed.term.grid();
     let text: String = (0..feed.columns())

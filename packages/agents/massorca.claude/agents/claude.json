@@ -13,6 +13,19 @@
     "args": ["--append-system-prompt", "{text}"],
     "supported_when": { "args": ["--help"], "contains": "--append-system-prompt" }
   },
+  "oneshot": {
+    "args": ["-p", "{prompt}", "--output-format", "text"],
+    "model_flag_reuse": true,
+    "optional_args": [
+      { "flag": "--max-turns", "values": ["1"] },
+      { "flag": "--permission-mode", "values": ["default"] },
+      { "flag": "--strict-mcp-config" },
+      { "flag": "--mcp-config", "values": ["{\"mcpServers\":{}}"] },
+      { "flag": "--disallowedTools", "values": ["Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task"] },
+      { "flag": "--tools", "values": [""] },
+      { "flag": "--no-session-persistence" }
+    ]
+  },
   "chat": { "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2 },
   "strip_inherited_env": [
     "CLAUDE_CODE_CHILD_SESSION",
@@ -91,7 +104,8 @@
       "id": "default",
       "label": "Manual",
       "description": "Asks before file edits and commands; reads in the working directories run without asking.",
-      "args": ["--permission-mode", "default"],
+      "args": ["--permission-mode", "{value}"],
+      "launch_values": ["default", "manual"],
       "icon": "hand",
       "tone": "normal"
     },
@@ -135,10 +149,15 @@
     "flag": "--model",
     "choices": [
       { "id": "fable", "label": "Fable" },
-      { "id": "opus", "label": "Opus" },
+      { "id": "opus", "label": "Opus", "fast": true },
       { "id": "sonnet", "label": "Sonnet", "default": true },
       { "id": "haiku", "label": "Haiku", "efforts": [] }
-    ]
+    ],
+    "discover": {
+      "args": ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"],
+      "stdin": "{\"type\":\"control_request\",\"request_id\":\"massorca-model-discovery\",\"request\":{\"subtype\":\"list_models\"}}\n",
+      "format": "claude-control"
+    }
   },
   "effort": {
     "flag": "--effort",
@@ -150,5 +169,11 @@
       { "id": "max", "label": "Max" }
     ],
     "default": "high"
+  },
+  "fast": {
+    "settings": { "fastMode": true },
+    "settings_flag": "--settings",
+    "live": "/fast",
+    "toggle": true
   }
 }
