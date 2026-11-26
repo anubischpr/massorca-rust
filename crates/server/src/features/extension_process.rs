@@ -491,6 +491,9 @@ impl Sink {
 mod tests {
     use std::fs;
 
+    #[cfg(unix)]
+    use massorca_process::test_executable::write_executable;
+
     use super::*;
 
     const LONG: Duration = Duration::from_secs(60);
@@ -1010,12 +1013,10 @@ mod tests {
         )
         .expect("a program");
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = dir.path().join("printpath");
-            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
-        }
+        write_executable(
+            &dir.path().join("printpath"),
+            "#!/bin/sh\necho \"PATH=$PATH\"\n",
+        );
         let host = HostPrograms::searching(SearchEnv {
             path: Some(dir.path().as_os_str().to_owned()),
             pathext: windows_pathext(),
@@ -1046,12 +1047,10 @@ mod tests {
         )
         .expect("a program");
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = dir.path().join("printpath");
-            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
-        }
+        write_executable(
+            &dir.path().join("printpath"),
+            "#!/bin/sh\necho \"PATH=$PATH\"\n",
+        );
         let search = std::env::join_paths([
             PathBuf::from("."),
             PathBuf::from("bin"),

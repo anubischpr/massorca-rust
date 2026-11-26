@@ -69,6 +69,7 @@ mod tests {
     use std::path::Path;
 
     use massorca_core_agents::SearchEnv;
+    use massorca_process::test_executable::write_executable;
 
     use super::*;
 
@@ -81,13 +82,7 @@ mod tests {
             fs::write(bin.join("glab.cmd"), script).expect("the fake glab");
         } else {
             let script = "#!/bin/sh\nd=${0%/*}\nprintf '%s\\n' \"$*\" >\"$d/args.txt\"\nwhile IFS= read -r l || [ -n \"$l\" ]; do printf '%s\\n' \"$l\"; done >\"$d/stdin.txt\"\n[ -e \"$d/reject\" ] && exit 1\nexit 0\n";
-            let path = bin.join("glab");
-            fs::write(&path, script).expect("the fake glab");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
-            }
+            write_executable(&bin.join("glab"), script);
         }
     }
 
