@@ -38,7 +38,8 @@ pub use live::{agent_of_kind, live_teams};
 pub use new_project::{NewProject, ProjectDraft};
 pub use page::TeamPage;
 pub use room::{
-    EMPTY_ROOM, NO_BOTS, RoomLine, RoomTask, RoomView, Speaker, clock_text, receiver, room_view,
+    EMPTY_ROOM, NO_BOTS, RoomChild, RoomLine, RoomTask, RoomView, Speaker, clock_text, receiver,
+    room_view,
 };
 pub use routine_form::{
     MONTH_DAYS, ROUTINE_NAME_LIMIT, ROUTINE_PROMPT_LIMIT, RoutineDraft, RoutineField,

@@ -9,8 +9,8 @@ use super::super::Shell;
 use super::{team_pill, team_shape};
 use crate::model::canvas::Canvas;
 use crate::model::teams::{
-    BotId, EMPTY_ROOM, NO_BOTS, RoomLine, RoomTask, RoomView, Speaker, Team, TeamId, TeamPage,
-    receiver, room_view,
+    BotId, EMPTY_ROOM, NO_BOTS, RoomChild, RoomLine, RoomTask, RoomView, Speaker, Team, TeamId,
+    TeamPage, receiver, room_view,
 };
 use crate::service::{NO_CARDS, Refusal};
 use gpui::{
@@ -587,7 +587,7 @@ fn line_view(line: &RoomLine, frame: &RoomFrame, theme: &Theme) -> AnyElement {
                 .children(
                     line.task
                         .as_ref()
-                        .map(|task| task_card(task, team.id, &line.id, shell)),
+                        .map(|task| task_card(task, team.id, &line.id, shell, theme)),
                 )
                 .children(line.routine.as_ref().map(|routine| {
                     routine_card(
@@ -637,31 +637,49 @@ fn quote_view(quote: &str, theme: &Theme) -> impl IntoElement {
         .child(quote.to_owned())
 }
 
-/// The card of the task a line is about, with the way to its Board.
+/// The card of the task a line is about, with the way to its Board and the children it delegated (decision 0128).
 fn task_card(
     task: &RoomTask,
     team: TeamId,
     line: &str,
     shell: &WeakEntity<Shell>,
+    theme: &Theme,
 ) -> impl IntoElement {
     let shell = shell.clone();
+    let mut card = Card::new(format!("room-task-{line}"))
+        .padding(CardPadding::Compact)
+        .title(task.title.clone())
+        .child(Badge::tag(task.column));
+    for child in &task.children {
+        card = card.child(delegated_child_row(child, theme));
+    }
     div().max_w(px(420.)).child(
-        Card::new(format!("room-task-{line}"))
-            .padding(CardPadding::Compact)
-            .title(task.title.clone())
-            .child(Badge::tag(task.column))
-            .footer_action(
-                Button::new(format!("room-open-board-{line}"), "Open on Board")
-                    .variant(ButtonVariant::Ghost)
-                    .size(ButtonSize::Compact)
-                    .on_click(move |_, cx| {
-                        let _ = shell.update(cx, |shell, cx| {
-                            shell.model.open_team_page(TeamPage::Board(team));
-                            cx.notify();
-                        });
-                    }),
-            ),
+        card.footer_action(
+            Button::new(format!("room-open-board-{line}"), "Open on Board")
+                .variant(ButtonVariant::Ghost)
+                .size(ButtonSize::Compact)
+                .on_click(move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.model.open_team_page(TeamPage::Board(team));
+                        cx.notify();
+                    });
+                }),
+        ),
     )
+}
+
+/// One child a task card lists: its title, its state, and that it reads in its parent's workspace.
+fn delegated_child_row(child: &RoomChild, theme: &Theme) -> impl IntoElement {
+    let reads = if child.read_only {
+        " · reads in the parent's workspace"
+    } else {
+        ""
+    };
+    div()
+        .text_style(TYPE_CAPTION)
+        .text_color(theme.palette.text.secondary)
+        .debug_selector(|| "room-delegated-child".to_owned())
+        .child(format!("{} · {}{}", child.title, child.column, reads))
 }
 
 /// The "Routine created" card of a routine a line scheduled (audit C5), with the way to the team's Routines.
@@ -1044,6 +1062,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Ok(lines),
         })
     }
@@ -1068,6 +1087,7 @@ mod tests {
                 answers_cards: true,
                 answers_replies: true,
                 typing: Vec::new(),
+                delegations: Vec::new(),
                 room: Ok(vec![
                     line(RoomAuthor::Person, None, "We need sign-in"),
                     line(
@@ -1152,6 +1172,7 @@ mod tests {
                 answers_cards: true,
                 answers_replies: true,
                 typing: Vec::new(),
+                delegations: Vec::new(),
                 room: Err(Refusal::Failed {
                     code: "service.capability_missing".into(),
                     message: crate::service::NO_ROOM.into(),
@@ -1278,6 +1299,7 @@ mod tests {
                 answers_cards: true,
                 answers_replies: true,
                 typing: Vec::new(),
+                delegations: Vec::new(),
                 room: Ok(vec![answered]),
             }))
             .expect("the store listens");
@@ -1348,6 +1370,7 @@ mod tests {
                 answers_cards: false,
                 answers_replies: false,
                 typing: Vec::new(),
+                delegations: Vec::new(),
                 room: Ok(vec![card]),
             }))
             .expect("the store listens");
@@ -1367,6 +1390,7 @@ mod tests {
             answers_cards: true,
             answers_replies,
             typing: typing.iter().map(|name| (*name).to_owned()).collect(),
+            delegations: Vec::new(),
             room: Ok(vec![line(RoomAuthor::Bot, Some(("b1", "Mara")), "Parsed")]),
         })
     }
