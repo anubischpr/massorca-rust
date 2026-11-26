@@ -63,6 +63,7 @@ export function TerminalInputDock({
       <TextInput
         accessibilityLabel={TYPE_COMMAND}
         autoCapitalize="none"
+        testID="terminal-input"
         autoCorrect={false}
         editable={!disabled}
         onChangeText={onChangeText}
@@ -76,7 +77,7 @@ export function TerminalInputDock({
         ]}
         value={value}
       />
-      <ActionButton label={SEND_TO_TERMINAL} onPress={onSend} disabled={disabled} variant="primary" />
+      <ActionButton label={SEND_TO_TERMINAL} onPress={onSend} disabled={disabled} variant="primary" testID="terminal-send" />
     </View>
   );
 }

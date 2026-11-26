@@ -374,8 +374,9 @@ jobs:
 
   # The phone app on an Android emulator (decision 0080, task A11): the release APK from `android-apk` (JavaScript bundled,
   # no Metro) runs on an x86_64 emulator, the massorca service runs on the runner, and a Maestro flow pairs the app with
-  # it at 10.0.2.2, the emulator's alias for the runner's loopback. Slow (KVM, emulator boot), so it runs only for the
-  # client, the protocol, the phone app and this workflow. The pairing offer is masked and redacted from every kept log.
+  # it at 10.0.2.2 (the emulator's alias for the runner's loopback), then types into the e2e-folder terminal and checks
+  # its output on screen. Slow (KVM, emulator boot), so it runs only for the client, the protocol, the phone app and this
+  # workflow. The pairing offer is masked and redacted from every kept log.
   android-emulator:
     name: Android emulator flow
     needs: [changes, android-apk]
@@ -408,7 +409,7 @@ jobs:
           key: android-emulator
       - name: Build the massorca CLI
         run: cargo build --locked -p massorca-cli --bin massorca
-      - name: Start the service on the runner with the flow's project
+      - name: Start the service on the runner with the flow's project and terminal
         run: bash scripts/ci/start-massorca-service.sh
       - name: Run the Maestro flow on an x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2.38.0
@@ -433,6 +434,8 @@ jobs:
             ${{ runner.temp }}/massorca-service.log
             ${{ runner.temp }}/logcat-full.txt
             ${{ runner.temp }}/logcat-crash.txt
+            ${{ runner.temp }}/terminal-screen.txt
+            ${{ runner.temp }}/phone-screen-text.txt
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
