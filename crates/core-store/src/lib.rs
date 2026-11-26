@@ -37,7 +37,7 @@ pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
 pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,
 };
-pub use automations::AutomationRow;
+pub use automations::{AutomationRow, destination};
 pub use automations_runs::{AutomationRunRow, run_state};
 pub use bots::BotRow;
 pub use devices::DeviceRow;

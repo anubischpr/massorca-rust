@@ -77,8 +77,12 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<AutomationRunRow> {
     })
 }
 
-/// Inserts `row` with the next number of its automation, and writes that number back into `row`.
+/// Inserts `row` with the next number of its automation, and writes that number back into `row`. A refusal that repeats
+/// the newest run's refusal folds into that run instead (decision 0127); see [`fold_refusal`].
 fn insert_run(connection: &Connection, row: &mut AutomationRunRow) -> Result<(), StoreError> {
+    if fold_refusal(connection, row)? {
+        return Ok(());
+    }
     connection.execute(
         "INSERT INTO automation_runs (id, automation_id, number, trigger, scheduled_for, occurrences, state, outcome, session_id, workspace_id, reason, reason_code, result, input_tokens, output_tokens, started_at, ended_at, created_at) \
          VALUES (?1, ?2, (SELECT COALESCE(MAX(number), 0) + 1 FROM automation_runs WHERE automation_id = ?2), ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
@@ -108,6 +112,37 @@ fn insert_run(connection: &Connection, row: &mut AutomationRunRow) -> Result<(),
         |found| found.get(0),
     )?;
     Ok(())
+}
+
+/// Folds `row`, an unavailable refusal, into the newest run of its automation when that run is the same refusal: its
+/// count grows, and `row` takes its id and number. Numbers are never given twice, as no row is deleted. Returns whether
+/// it folded.
+fn fold_refusal(connection: &Connection, row: &mut AutomationRunRow) -> Result<bool, StoreError> {
+    if row.state != run_state::SKIPPED_UNAVAILABLE || row.reason_code.is_none() {
+        return Ok(false);
+    }
+    let newest: Option<(String, i64, String, Option<String>, i64)> = connection
+        .query_row(
+            "SELECT id, number, state, reason_code, occurrences FROM automation_runs WHERE automation_id = ?1 ORDER BY number DESC LIMIT 1",
+            [&row.automation_id],
+            |found| Ok((found.get(0)?, found.get(1)?, found.get(2)?, found.get(3)?, found.get(4)?)),
+        )
+        .optional()?;
+    let Some((id, number, state, code, occurrences)) = newest else {
+        return Ok(false);
+    };
+    if state != run_state::SKIPPED_UNAVAILABLE || code != row.reason_code {
+        return Ok(false);
+    }
+    let total = occurrences + row.occurrences;
+    connection.execute(
+        "UPDATE automation_runs SET occurrences = ?2, scheduled_for = ?3, ended_at = ?4 WHERE id = ?1",
+        params![id, total, row.scheduled_for, row.ended_at],
+    )?;
+    row.id = id;
+    row.number = number;
+    row.occurrences = total;
+    Ok(true)
 }
 
 fn set_last_run(

@@ -690,6 +690,18 @@ CREATE INDEX automation_runs_by_session ON automation_runs (session_id);
 "#,
         foreign_keys_off: false,
     },
+    // Automation destinations (decision 0127): where each run works. Automations stored before this step keep the
+    // project's own place, as decision 0125 chose it. A destination workspace is an id; its path is kept so a moved
+    // folder is noticed, and a base branch starts a new worktree per run.
+    Migration {
+        sql: r#"
+ALTER TABLE automations ADD COLUMN destination TEXT NOT NULL DEFAULT 'project_default' CHECK(destination IN ('project_default','project_worktree_per_run','existing_workspace'));
+ALTER TABLE automations ADD COLUMN destination_workspace_id TEXT;
+ALTER TABLE automations ADD COLUMN destination_path TEXT;
+ALTER TABLE automations ADD COLUMN base_branch TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
@@ -1139,6 +1151,34 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("fresh.db.bak")),
             "a new database has nothing to back up"
+        );
+    }
+
+    #[test]
+    fn an_automation_stored_before_destinations_keeps_the_project_place() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate(
+            &mut connection,
+            None,
+            &super::MIGRATIONS[..super::MIGRATIONS.len() - 1],
+        )
+        .unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO automations (id, name, prompt, agent_kind, cadence, time, created_at, updated_at)                  VALUES ('old', 'Morning PRs', 'Summarise', 'claude', 'daily', '09:00', 1, 1);",
+            )
+            .unwrap();
+        migrate(&mut connection, None, super::MIGRATIONS).unwrap();
+        let (kind, workspace, path, base): (String, Option<String>, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT destination, destination_workspace_id, destination_path, base_branch FROM automations WHERE id = 'old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (kind.as_str(), workspace, path, base),
+            ("project_default", None, None, None)
         );
     }
 }

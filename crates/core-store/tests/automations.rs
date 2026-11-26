@@ -42,6 +42,10 @@ fn automation(project_id: Option<&str>, name: &str, created_at: i64) -> Automati
         creation_key: None,
         next_run_at: Some(1_000),
         last_run_at: None,
+        destination: "project_default".to_owned(),
+        destination_workspace_id: None,
+        destination_path: None,
+        base_branch: None,
         created_at,
         updated_at: created_at,
     }
