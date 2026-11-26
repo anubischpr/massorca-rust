@@ -3,6 +3,8 @@
 mod routine;
 mod text;
 
+mod delegate;
+use delegate::DelegateArgs;
 use routine::RoutineCommand;
 
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
@@ -68,6 +70,8 @@ pub enum TeamCommand {
         #[command(subcommand)]
         command: TeamRoomCommand,
     },
+    /// Hands a task to a teammate from inside a bot's agent run: the child starts in its own workspace (decision 0128).
+    Delegate(DelegateArgs),
     /// Lists, adds, changes, pauses, runs and removes a team's routines: schedules that start a bot on a task.
     Routine {
         #[command(subcommand)]
@@ -415,6 +419,10 @@ pub async fn execute(
     command: TeamCommand,
     output: Output,
 ) -> Result<(), CliError> {
+    // Checked before connecting: outside an agent run there is no service call to make.
+    if let TeamCommand::Delegate(args) = command {
+        return delegate::run(target, autostart, args, output).await;
+    }
     let client = connect(target, autostart).await?;
     match command {
         TeamCommand::Create(args) => {
@@ -462,6 +470,7 @@ pub async fn execute(
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
         TeamCommand::Room { command } => run_room(&client, command, output).await?,
         TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
+        TeamCommand::Delegate(_) => unreachable!("team delegate is handled before connecting"),
         TeamCommand::Board {
             team,
             project,
