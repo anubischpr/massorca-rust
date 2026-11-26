@@ -34,6 +34,7 @@ mod session_child_wait;
 mod session_grid;
 mod session_rename;
 mod session_view;
+mod setting_rows;
 mod settings;
 mod settings_remove_dialog;
 mod settings_secret_dialog;
@@ -148,6 +149,8 @@ mod session_chat_tests;
 mod session_menu_tests;
 #[cfg(test)]
 mod session_view_tests;
+#[cfg(test)]
+mod setting_rows_tests;
 #[cfg(test)]
 mod settings_git_tests;
 #[cfg(test)]
@@ -386,6 +389,8 @@ pub struct Shell {
     _appearance_changes: Subscription,
     /// The projects the Sidebar shows collapsed; saved in the UI state (SET-02).
     collapsed_projects: BTreeSet<String>,
+    /// The last refused write of a live Settings row, as `(key, the service's sentence)` (SET-01).
+    setting_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -754,6 +759,7 @@ impl Shell {
             applied_status_items: crate::model::status_items::StatusItem::ALL.to_vec(),
             _appearance_changes: appearance_changes,
             collapsed_projects: BTreeSet::new(),
+            setting_notice: None,
         }
     }
 
@@ -1016,6 +1022,8 @@ impl Render for Shell {
                 crate::model::git_availability::git_row(state.service_git.as_ref())
             },
             request_notice: self.request_notice.clone(),
+            config: self.store.read(cx).state().config.clone(),
+            setting_notice: self.setting_notice.clone(),
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),
