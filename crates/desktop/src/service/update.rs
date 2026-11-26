@@ -1378,6 +1378,62 @@ pub(crate) mod fixtures {
             at_ms: 2,
         }
     }
+
+    /// Every `Board` field at its usual value; tests override the fields they vary.
+    pub fn base_board() -> massorca_protocol::methods::teams::Board {
+        massorca_protocol::methods::teams::Board {
+            team_id: "t1".into(),
+            project_id: None,
+            columns: Vec::new(),
+        }
+    }
+
+    /// Every `BoardCard` field at its usual value; tests override the fields they vary.
+    pub fn base_board_card() -> massorca_protocol::methods::teams::BoardCard {
+        massorca_protocol::methods::teams::BoardCard {
+            id: String::new(),
+            title: String::new(),
+            bot_id: None,
+            bot: None,
+            state: massorca_protocol::methods::tasks::CardState::Working,
+            last_known: false,
+            error: None,
+            error_code: None,
+            workspace_id: None,
+            branch: None,
+            at_ms: 1,
+        }
+    }
+
+    /// Every `TeamProject` field at its usual value; tests override the fields they vary.
+    pub fn base_team_project() -> massorca_protocol::methods::teams::TeamProject {
+        massorca_protocol::methods::teams::TeamProject {
+            id: "p1".into(),
+            team_id: "t1".into(),
+            name: "Checkout".into(),
+            goal: String::new(),
+            brief: "Old".into(),
+            created_at_ms: 1,
+            source_project: None,
+            source_project_name: None,
+            source_kind: None,
+            code_source: None,
+        }
+    }
+
+    /// Every `TeamRoomMessage` field at its usual value; tests override the fields they vary.
+    pub fn base_team_room_message() -> massorca_protocol::methods::team_room::TeamRoomMessage {
+        massorca_protocol::methods::team_room::TeamRoomMessage {
+            id: String::new(),
+            team_id: "t".to_owned(),
+            author: massorca_protocol::methods::team_room::RoomAuthor::Person,
+            bot_id: None,
+            bot_name: None,
+            text: String::new(),
+            task: None,
+            created_at_ms: 1_700_000_000_000,
+        }
+    }
 }
 
 #[cfg(test)]

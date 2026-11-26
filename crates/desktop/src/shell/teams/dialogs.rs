@@ -1654,9 +1654,8 @@ mod tests {
         record.projects.push(ProjectRecord {
             project: checkout(),
             board: Board {
-                team_id: "t1".into(),
                 project_id: Some("p1".into()),
-                columns: Vec::new(),
+                ..crate::service::fixtures::base_board()
             },
         });
         record
@@ -1664,16 +1663,7 @@ mod tests {
 
     fn checkout() -> TeamProject {
         TeamProject {
-            id: "p1".into(),
-            team_id: "t1".into(),
-            name: "Checkout".into(),
-            goal: String::new(),
-            brief: "Old".into(),
-            created_at_ms: 1,
-            source_project: None,
-            source_project_name: None,
-            source_kind: None,
-            code_source: None,
+            ..crate::service::fixtures::base_team_project()
         }
     }
 
