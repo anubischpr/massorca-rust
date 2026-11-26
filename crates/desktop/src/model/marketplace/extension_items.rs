@@ -259,34 +259,19 @@ pub(super) mod tests {
             state,
             installed: None,
             listing: Listing {
-                logo: None,
                 category: category.to_owned(),
-                developer: None,
-                mention: None,
-                banner: None,
-                connections: Vec::new(),
-                website: None,
-                privacy: None,
-                terms: None,
+                ..crate::service::fixtures::base_listing()
             },
             permissions: Vec::new(),
             risk: Risk {
-                level: RiskLevel::Low,
-                reasons: Vec::new(),
+                ..crate::service::fixtures::base_risk()
             },
             readme: None,
             agents: Vec::new(),
             detected: None,
             settings: Vec::new(),
             uninstall: UninstallEffects {
-                package_files: true,
-                storage: false,
-                settings: Vec::new(),
-                secret_names: Vec::new(),
-                secrets_unscoped: false,
-                connections: Vec::new(),
-                cli_binaries: Vec::new(),
-                offered_agent_homes: Vec::new(),
+                ..crate::service::fixtures::base_uninstall_effects()
             },
             problem: None,
         }
@@ -383,20 +368,18 @@ pub(super) mod tests {
             },
         ];
         entry.listing.banner = Some(Banner {
-            image: None,
-            colors: Vec::new(),
             examples: vec![
                 BannerExample {
-                    kind: "mention".to_owned(),
                     text: Some("@notes".to_owned()),
-                    caption: "Ask it".to_owned(),
+                    ..crate::service::fixtures::base_banner_example()
                 },
                 BannerExample {
                     kind: "usage".to_owned(),
-                    text: None,
                     caption: "Other".to_owned(),
+                    ..crate::service::fixtures::base_banner_example()
                 },
             ],
+            ..crate::service::fixtures::base_banner()
         });
         let found = items(&[], &[entry], &[]);
         assert_eq!(
@@ -435,14 +418,11 @@ pub(super) mod tests {
 
         let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
         entry.installed = Some(InstalledInfo {
-            version: "1.0.0".to_owned(),
             source: SourceRef {
                 kind: SourceKind::Dir,
                 reference: "notes".to_owned(),
             },
-            sha256: "abc123".to_owned(),
-            installed_at_ms: 0,
-            cli: Vec::new(),
+            ..crate::service::fixtures::base_installed_info()
         });
         let found = items(&[], &[entry], &[]);
         let rows = crate::model::marketplace::advanced_rows(&found[0]);
@@ -676,14 +656,12 @@ pub(super) mod tests {
             let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
             entry.uninstall.cli_binaries = vec!["claude".to_owned()];
             entry.installed = Some(InstalledInfo {
-                version: "1.0.0".to_owned(),
                 source: SourceRef {
                     kind: SourceKind::Catalogue,
                     reference: "acme.notes".to_owned(),
                 },
-                sha256: "abc123".to_owned(),
-                installed_at_ms: 0,
                 cli,
+                ..crate::service::fixtures::base_installed_info()
             });
             entry
         };

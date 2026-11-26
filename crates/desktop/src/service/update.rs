@@ -1434,6 +1434,173 @@ pub(crate) mod fixtures {
             created_at_ms: 1_700_000_000_000,
         }
     }
+
+    /// Every `Banner` field at its usual value; tests override the fields they vary.
+    pub fn base_banner() -> massorca_protocol::methods::extensions::Banner {
+        massorca_protocol::methods::extensions::Banner {
+            image: None,
+            examples: Vec::new(),
+            colors: Vec::new(),
+        }
+    }
+
+    /// Every `BannerExample` field at its usual value; tests override the fields they vary.
+    pub fn base_banner_example() -> massorca_protocol::methods::extensions::BannerExample {
+        massorca_protocol::methods::extensions::BannerExample {
+            kind: "mention".to_owned(),
+            text: None,
+            caption: "Ask it".to_owned(),
+        }
+    }
+
+    /// Every `ExtensionAsset` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_asset() -> massorca_protocol::methods::extensions::ExtensionAsset {
+        massorca_protocol::methods::extensions::ExtensionAsset {
+            id: "acme.notes".to_owned(),
+            path: String::new(),
+            size: 0,
+            data: String::new(),
+        }
+    }
+
+    /// Every `ExtensionEnabled` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_enabled() -> massorca_protocol::methods::extensions::ExtensionEnabled {
+        massorca_protocol::methods::extensions::ExtensionEnabled {
+            id: "acme.notes".to_owned(),
+            enabled: false,
+            changed: true,
+        }
+    }
+
+    /// Every `ExtensionInstalled` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_installed() -> massorca_protocol::methods::extensions::ExtensionInstalled
+    {
+        massorca_protocol::methods::extensions::ExtensionInstalled {
+            id: "acme.notes".to_owned(),
+            version: "1.0.0".to_owned(),
+            source: crate::service::fixtures::base_source_ref(),
+            sha256: "0123abcd".to_owned(),
+            enabled: true,
+            installed_at_ms: 0,
+            cli: Vec::new(),
+        }
+    }
+
+    /// Every `ExtensionRemoved` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_removed() -> massorca_protocol::methods::extensions::ExtensionRemoved {
+        massorca_protocol::methods::extensions::ExtensionRemoved {
+            id: "acme.notes".to_owned(),
+            version: "1.0.0".to_owned(),
+            failures: Vec::new(),
+            cli: Vec::new(),
+        }
+    }
+
+    /// Every `ExtensionReview` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_review() -> massorca_protocol::methods::extensions::ExtensionReview {
+        massorca_protocol::methods::extensions::ExtensionReview {
+            id: "massorca.claude".to_owned(),
+            name: "Claude".to_owned(),
+            version: "1.0.0".to_owned(),
+            publisher: "massorca".to_owned(),
+            description: "Starts Claude sessions.".to_owned(),
+            source: crate::service::fixtures::base_source_ref(),
+            sha256: "abc123".to_owned(),
+            permissions: Vec::new(),
+            risk: crate::service::fixtures::base_risk(),
+            listing: crate::service::fixtures::base_listing(),
+            kinds: Vec::new(),
+            mcp_servers: Vec::new(),
+            cli: Vec::new(),
+            runs_installer: true,
+            consent: "fingerprint-1".to_owned(),
+        }
+    }
+
+    /// Every `ExtensionRun` field at its usual value; tests override the fields they vary.
+    pub fn base_extension_run() -> massorca_protocol::methods::extensions::ExtensionRun {
+        massorca_protocol::methods::extensions::ExtensionRun {
+            at_ms: 1_700_000_000_000,
+            action: massorca_protocol::methods::extensions::ExtensionRunAction::Update,
+            from_version: None,
+            to_version: None,
+            outcome: massorca_protocol::methods::extensions::ExtensionRunOutcome::Ok,
+            output: Vec::new(),
+        }
+    }
+
+    /// Every `InstalledInfo` field at its usual value; tests override the fields they vary.
+    pub fn base_installed_info() -> massorca_protocol::methods::extensions::InstalledInfo {
+        massorca_protocol::methods::extensions::InstalledInfo {
+            version: "1.0.0".to_owned(),
+            source: crate::service::fixtures::base_source_ref(),
+            sha256: "abc123".to_owned(),
+            installed_at_ms: 0,
+            cli: Vec::new(),
+        }
+    }
+
+    /// Every `ItemProblem` field at its usual value; tests override the fields they vary.
+    pub fn base_item_problem() -> massorca_protocol::methods::extensions::ItemProblem {
+        massorca_protocol::methods::extensions::ItemProblem {
+            code: "extension.tampered".to_owned(),
+            message: "the files changed".to_owned(),
+        }
+    }
+
+    /// Every `Listing` field at its usual value; tests override the fields they vary.
+    pub fn base_listing() -> massorca_protocol::methods::extensions::Listing {
+        massorca_protocol::methods::extensions::Listing {
+            logo: None,
+            category: "agents".to_owned(),
+            developer: None,
+            mention: None,
+            banner: None,
+            connections: Vec::new(),
+            website: None,
+            privacy: None,
+            terms: None,
+        }
+    }
+
+    /// Every `Risk` field at its usual value; tests override the fields they vary.
+    pub fn base_risk() -> massorca_protocol::methods::extensions::Risk {
+        massorca_protocol::methods::extensions::Risk {
+            level: massorca_protocol::methods::extensions::RiskLevel::Low,
+            reasons: Vec::new(),
+        }
+    }
+
+    /// Every `RiskReason` field at its usual value; tests override the fields they vary.
+    pub fn base_risk_reason() -> massorca_protocol::methods::extensions::RiskReason {
+        massorca_protocol::methods::extensions::RiskReason {
+            level: massorca_protocol::methods::extensions::RiskLevel::High,
+            subject: String::new(),
+            copy: String::new(),
+        }
+    }
+
+    /// Every `SourceRef` field at its usual value; tests override the fields they vary.
+    pub fn base_source_ref() -> massorca_protocol::methods::extensions::SourceRef {
+        massorca_protocol::methods::extensions::SourceRef {
+            kind: massorca_protocol::methods::extensions::SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        }
+    }
+
+    /// Every `UninstallEffects` field at its usual value; tests override the fields they vary.
+    pub fn base_uninstall_effects() -> massorca_protocol::methods::extensions::UninstallEffects {
+        massorca_protocol::methods::extensions::UninstallEffects {
+            package_files: true,
+            storage: false,
+            settings: Vec::new(),
+            secret_names: Vec::new(),
+            secrets_unscoped: false,
+            connections: Vec::new(),
+            cli_binaries: Vec::new(),
+            offered_agent_homes: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

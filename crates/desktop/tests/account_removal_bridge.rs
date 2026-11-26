@@ -240,9 +240,7 @@ async fn install_claude(handle: &ServiceHandle) -> ExtensionInstalled {
         .install_extension(ExtensionInstallParams {
             source: SOURCE.to_owned(),
             consent: Some(review.consent),
-            run_installer: false,
-            sha256: None,
-            agent_token: None,
+            ..base_extension_install_params()
         })
         .await
         .expect("the package installs")
@@ -395,5 +393,17 @@ fn base_peer_info() -> massorca_protocol::PeerInfo {
     massorca_protocol::PeerInfo {
         name: "massorca-test-client".to_owned(),
         version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ExtensionInstallParams` field at its usual value; tests override the fields they vary.
+fn base_extension_install_params() -> massorca_protocol::methods::extensions::ExtensionInstallParams
+{
+    massorca_protocol::methods::extensions::ExtensionInstallParams {
+        source: String::new(),
+        consent: None,
+        run_installer: false,
+        sha256: None,
+        agent_token: None,
     }
 }

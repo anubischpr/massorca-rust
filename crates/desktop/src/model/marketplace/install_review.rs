@@ -83,34 +83,20 @@ pub(super) mod tests {
 
     pub(in crate::model::marketplace) fn review() -> ExtensionReview {
         ExtensionReview {
-            id: "massorca.claude".to_owned(),
-            name: "Claude".to_owned(),
-            version: "1.0.0".to_owned(),
-            publisher: "massorca".to_owned(),
-            description: "Starts Claude sessions.".to_owned(),
             source: SourceRef {
                 kind: SourceKind::Catalogue,
                 reference: "massorca.claude".to_owned(),
             },
-            sha256: "abc123".to_owned(),
             permissions: vec![Permission {
                 reason: "Reads the project.".to_owned(),
                 ..crate::service::fixtures::base_permission()
             }],
             risk: Risk {
                 level: RiskLevel::High,
-                reasons: Vec::new(),
+                ..crate::service::fixtures::base_risk()
             },
             listing: Listing {
-                logo: None,
-                category: "agents".to_owned(),
-                developer: None,
-                mention: None,
-                banner: None,
-                connections: Vec::new(),
-                website: None,
-                privacy: None,
-                terms: None,
+                ..crate::service::fixtures::base_listing()
             },
             kinds: vec![KindView {
                 program: vec!["claude".to_owned()],
@@ -118,7 +104,6 @@ pub(super) mod tests {
                 env: vec!["CLAUDE_HOME".to_owned()],
                 ..crate::service::fixtures::base_kind_view()
             }],
-            mcp_servers: Vec::new(),
             cli: vec![CliPlan {
                 agent: "claude".to_owned(),
                 binary: Some("claude".to_owned()),
@@ -133,8 +118,7 @@ pub(super) mod tests {
                     runs_package_scripts: false,
                 },
             }],
-            runs_installer: true,
-            consent: "fingerprint-1".to_owned(),
+            ..crate::service::fixtures::base_extension_review()
         }
     }
 

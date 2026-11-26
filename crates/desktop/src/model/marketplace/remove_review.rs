@@ -116,13 +116,10 @@ mod tests {
         entry.uninstall.connections = vec!["claude".to_owned()];
         entry.uninstall.cli_binaries = vec!["claude".to_owned()];
         entry.installed = Some(InstalledInfo {
-            version: "1.0.0".to_owned(),
             source: SourceRef {
                 kind: SourceKind::Catalogue,
                 reference: "massorca.claude".to_owned(),
             },
-            sha256: "abc123".to_owned(),
-            installed_at_ms: 0,
             cli: vec![CliRecord {
                 agent: "claude".to_owned(),
                 binary: "claude".to_owned(),
@@ -130,6 +127,7 @@ mod tests {
                 installer: None,
                 installed_by_package: ours,
             }],
+            ..crate::service::fixtures::base_installed_info()
         });
         items(&[entry.clone()], &[entry], &[]).remove(0)
     }
