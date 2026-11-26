@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 
 use super::Manifest;
-use super::agent::{AgentAdapter, McpServer};
+use super::agent::{AgentAdapter, HostProgram, McpServer};
 use super::data::{Command, DocumentFile, Keybinding, Skill, ThemeFile};
 use super::logic::{Event, Importer, ItemSource, Job, Tool};
 use super::settings::Setting;
@@ -35,6 +35,7 @@ pub struct Contributes {
     pub jobs: Vec<Job>,
     pub agent_adapters: Vec<AgentAdapter>,
     pub mcp_servers: Vec<McpServer>,
+    pub host_programs: Vec<HostProgram>,
 }
 
 /// Checks every contribution kind against the manifest.
@@ -109,5 +110,6 @@ pub(crate) fn has_non_theme_contributions(contributes: &Contributes) -> bool {
         && contributes.item_sources.is_empty()
         && contributes.jobs.is_empty()
         && contributes.agent_adapters.is_empty()
-        && contributes.mcp_servers.is_empty())
+        && contributes.mcp_servers.is_empty()
+        && contributes.host_programs.is_empty())
 }

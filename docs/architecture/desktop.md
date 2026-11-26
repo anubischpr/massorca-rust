@@ -212,7 +212,7 @@ Linux only. No automated run opens a visible window.
   restored at start; a saved host that is gone shows This computer without being overwritten. Accounts and update
   checks stay on This computer.
 - The Skills section (`shell/marketplace/skills.rs`) sits on the Skills category under the toolbar and lists the skills
-  `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). It
+  `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). On This computer a home skill offers Place, and placed skills list with Remove (`model/marketplace/skill_placement.rs`, SKL-02, decision 0150); each change is confirmed by one sentence first. It
   reads when the page opens, when the picked host changes, and on Refresh with `refresh: true`. This computer reads
   through its own service; a paired host through its own connection (`service/skills.rs`). The store keeps the newest
   answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first." The

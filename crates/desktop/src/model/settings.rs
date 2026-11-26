@@ -191,6 +191,8 @@ pub struct SettingsModel {
     pub folder: FolderSetting,
     /// The vault page's search text, matched against every name in any case.
     pub vault_query: String,
+    /// Why the last unlink on the vault page was refused; said on the page until the next unlink.
+    pub vault_notice: Option<String>,
     /// The scope kinds the vault page shows.
     pub vault_scope: VaultScopeFilter,
 }

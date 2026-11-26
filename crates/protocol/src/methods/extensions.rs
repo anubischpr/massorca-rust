@@ -30,6 +30,49 @@ pub const ROLLBACK: &str = "extensions.rollback";
 /// Params: [`ExtensionRef`]. Result: [`ExtensionLog`], the package's recent runs. Capability `extensions-log/1`.
 pub const LOG: &str = "extensions.log";
 
+/// Params: [`ProgramUpdateParams`] without consent. Result: [`ProgramUpdateReview`]. Changes nothing. Refused with
+/// `extension.program_update_refused` when the package did not install the program. Capability `extensions-programs/1`.
+pub const PROGRAM_UPDATE_REVIEW: &str = "extensions.program_update_review";
+/// Params: [`ProgramUpdateParams`]. Result: [`ProgramUpdated`]. Runs the reviewed vendor update command on the host.
+/// Capability `extensions-programs/1`.
+pub const PROGRAM_UPDATE: &str = "extensions.program_update";
+
+/// Params of the host program update methods (decision 0151).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramUpdateParams {
+    pub id: String,
+    /// The host program's id in the package, such as `git`.
+    pub program: String,
+    /// The `consent` fingerprint of the review; the update is refused without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<String>,
+    /// The run token of the agent that sent this request, when an agent sent it (`extension.needs_person`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+/// Result of `extensions.program_update_review`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramUpdateReview {
+    pub id: String,
+    pub program: String,
+    pub binary: String,
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub verify: Option<Vec<String>>,
+    pub consent: String,
+}
+
+/// Result of `extensions.program_update`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramUpdated {
+    pub id: String,
+    pub program: String,
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+}
+
 /// Selector for `extensions.get`: a package id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionRef {
@@ -220,7 +263,10 @@ pub struct ExtensionItem {
     pub readme: Option<String>,
     #[serde(default)]
     pub agents: Vec<AgentItem>,
-    /// For an agent package: whether every agent's CLI resolves on the host.
+    /// For a tool package: each host program and where it resolves on the host (decision 0151). Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub programs: Vec<AgentItem>,
+    /// For an agent or tool package: whether every agent's CLI and host program resolves on the host.
     #[serde(default)]
     pub detected: Option<bool>,
     #[serde(default)]
@@ -331,7 +377,7 @@ pub struct RiskReason {
 pub struct Listing {
     #[serde(default)]
     pub logo: Option<String>,
-    /// `extensions`, `agents`, `skills`, `services` or `themes`; other values may come from a newer peer.
+    /// `extensions`, `agents`, `skills`, `services`, `themes` or `tools`; other values may come from a newer peer.
     pub category: String,
     #[serde(default)]
     pub developer: Option<Developer>,
@@ -419,6 +465,9 @@ pub struct CliSpec {
     pub source_checked: Option<String>,
     #[serde(default)]
     pub install: Vec<CliStep>,
+    /// The vendor's update steps of a host program (decision 0151). Absent from older hosts and when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub update: Vec<CliStep>,
     #[serde(default)]
     pub uninstall: Vec<CliStep>,
 }
@@ -550,6 +599,9 @@ pub enum CliPlanState {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         runs_package_scripts: bool,
     },
+    /// Every step for the host OS needs administrator rights: the person runs one of these commands, the host never
+    /// does (decision 0151). Absent from older peers, which decode it as `Unknown`.
+    Manual { commands: Vec<Vec<String>> },
     /// No command fits: the package registers, and the CLI stays missing.
     Unsupported,
     /// A state from a newer peer that this build does not know; never sent by this build.
