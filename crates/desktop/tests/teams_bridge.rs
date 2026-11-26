@@ -1465,6 +1465,7 @@ fn base_bot_add_params() -> massorca_protocol::methods::teams::BotAddParams {
         model: None,
         effort: None,
         lead: false,
+        skills: Vec::new(),
     }
 }
 
@@ -1488,5 +1489,6 @@ fn base_bot_update_params() -> massorca_protocol::methods::teams::BotUpdateParam
         model: None,
         effort: None,
         lead: None,
+        skills: None,
     }
 }

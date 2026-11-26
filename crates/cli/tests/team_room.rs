@@ -1,10 +1,11 @@
 //! `massorca team room` end to end (decision 0102): a person's line becomes a started task for the bot it names, the
-//! bot answers in the room and posts again when the task is done, a bot posts with --bot, and a team without bots
-//! refuses the line.
+//! bot answers in the room and posts again when the task is done, a bot posts with --bot, a team without bots
+//! refuses the line, and a line no bot can be picked for gets a choice card answered once.
 
 mod harness;
 
 use harness::{Sandbox, eventually, single_document, with_json};
+use predicates::prelude::PredicateBooleanExt;
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -130,10 +131,7 @@ fn a_line_becomes_a_started_task_for_the_bot_it_names_and_the_bot_answers() {
     assert_eq!(lines[0]["author"], "person");
     assert_eq!(lines[1]["author"], "bot");
     assert_eq!(lines[1]["bot_name"], "bruno");
-    assert_eq!(
-        lines[1]["text"],
-        "Added to the Board: @bruno Parse the headers"
-    );
+    assert_eq!(lines[1]["text"], "Added to the Board: Parse the headers");
     let task = &lines[1]["task"];
     assert_eq!(task["origin"], "room", "{task}");
     assert_eq!(task["column"], "running", "{task}");
@@ -176,16 +174,16 @@ fn a_line_becomes_a_started_task_for_the_bot_it_names_and_the_bot_answers() {
         .success();
     eventually("the bot to post that the task is done", || {
         room(&sandbox)
-            .contains(&"bruno: Done: @bruno Parse the headers".to_owned())
+            .contains(&"bruno: Done: Parse the headers".to_owned())
             .then_some(())
     });
     assert_eq!(
         room(&sandbox),
         [
             "you: @bruno Parse the headers\nthen stop.",
-            "bruno: Added to the Board: @bruno Parse the headers",
+            "bruno: Added to the Board: Parse the headers",
             "bruno: Reading the headers now",
-            "bruno: Done: @bruno Parse the headers",
+            "bruno: Done: Parse the headers",
         ]
     );
     let shown = sandbox.json_ok("default", &["task", "show", task_id.as_str()]);
@@ -217,6 +215,11 @@ fn a_line_goes_to_the_receiver_named_with_to_and_a_false_agent_token_is_refused(
         .as_str()
         .expect("linked session")
         .to_owned();
+    // The room shows its bot typing while the task works (decision 0122).
+    eventually("bruno to type", || {
+        let listed = sandbox.json_ok("default", &["team", "room", "list", "alpha"]);
+        (listed["typing"][0]["bot_name"] == "bruno").then_some(())
+    });
 
     // Inside an agent run, the CLI sends the run's session and token; a token that is not the run's is refused.
     sandbox.set_env("MASSORCA_AGENT_SESSION", &session);
@@ -235,4 +238,178 @@ fn a_line_goes_to_the_receiver_named_with_to_and_a_false_agent_token_is_refused(
     );
     assert_eq!(refused["code"], "permission.denied", "{refused}");
     assert_eq!(room(&sandbox).len(), 2, "nothing was posted");
+}
+
+#[test]
+fn a_line_with_a_day_and_a_time_becomes_a_one_time_routine_instead_of_a_task() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    let posted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "room",
+            "post",
+            "alpha",
+            "Back up the docs on 2099-01-02 at 09:00",
+        ],
+    );
+    let lines = posted["messages"].as_array().expect("posted lines");
+    assert_eq!(lines.len(), 2, "{posted}");
+    let routine = &lines[1]["routine"];
+    assert_eq!(routine["cadence"], "once", "{posted}");
+    assert_eq!(routine["run_date"], "2099-01-02");
+    assert_eq!(routine["time"], "09:00");
+    assert!(lines[1].get("task").is_none(), "no task is made: {posted}");
+    assert_eq!(
+        lines[1]["text"],
+        "Routine created: Back up the docs on 2099-01-02 at 09:00. It runs once on 2099-01-02 at 09:00."
+    );
+
+    let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
+    assert_eq!(routines["routines"][0]["id"], routine["id"], "{routines}");
+    let board = sandbox.json_ok("default", &["task", "list", "--team", "alpha"]);
+    assert_eq!(board["tasks"].as_array().map(Vec::len), Some(0), "{board}");
+    sandbox
+        .run("default", &["team", "room", "list", "alpha"])
+        .success()
+        .stdout(predicates::str::contains(format!(
+            "routine {} (2099-01-02 09:00)",
+            routine["id"].as_str().expect("routine id")
+        )));
+}
+
+#[test]
+fn a_refused_routine_or_a_time_only_mentioned_leaves_the_line_a_task() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    for text in [
+        "Rotate the logs on 2000-01-01 at 09:00",
+        "The 5pm deploy today will break login, please fix now",
+    ] {
+        let posted = sandbox.json_ok("default", &["team", "room", "post", "alpha", text]);
+        let answer = &posted["messages"][1];
+        assert!(answer.get("routine").is_none(), "{posted}");
+        assert!(
+            answer["text"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("Added to the Board")),
+            "{posted}"
+        );
+        assert_eq!(answer["task"]["body"], text, "{posted}");
+    }
+    let routines = sandbox.json_ok("default", &["team", "routine", "list", "alpha"]);
+    assert_eq!(routines["routines"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn no_start_leaves_the_task_in_todo_with_the_mention_left_out_of_its_title() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+
+    let posted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "room",
+            "post",
+            "alpha",
+            "@mara, parse the headers",
+            "--no-start",
+        ],
+    );
+    let answer = &posted["messages"][1];
+    assert_eq!(
+        answer["text"], "Added to the Board, not started: parse the headers",
+        "{posted}"
+    );
+    assert_eq!(answer["task"]["title"], "parse the headers");
+    assert_eq!(answer["task"]["column"], "open", "it waits in Todo");
+    assert!(answer["task"].get("session_id").is_none(), "{posted}");
+    sandbox
+        .run(
+            "default",
+            &[
+                "team",
+                "room",
+                "post",
+                "alpha",
+                "hi",
+                "--bot",
+                "mara",
+                "--no-start",
+            ],
+        )
+        .failure();
+}
+
+#[test]
+fn a_card_answered_with_a_bot_starts_its_task_and_a_second_answer_is_refused() {
+    let sandbox = team_sandbox();
+    add_bot(&sandbox, "mara");
+    add_bot(&sandbox, "bruno");
+
+    let posted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "room",
+            "post",
+            "alpha",
+            "Parse the headers with hold",
+        ],
+    );
+    let card = &posted["messages"][1];
+    let card_id = card["id"].as_str().expect("card id").to_owned();
+    let options = card["card"]["options"].as_array().expect("options");
+    assert_eq!(options.len(), 3, "two bots and this team's Todo: {posted}");
+    let bruno = options
+        .iter()
+        .find(|option| option["label"] == "bruno")
+        .expect("bruno is offered")["choice"]
+        .as_str()
+        .expect("choice")
+        .to_owned();
+    let board = sandbox.json_ok("default", &["task", "list", "--team", "alpha"]);
+    assert_eq!(board["tasks"].as_array().map(Vec::len), Some(0), "{board}");
+    sandbox
+        .run("default", &["team", "room", "list", "alpha"])
+        .success()
+        .stdout(
+            predicates::str::contains(format!("card {card_id}: bot:"))
+                .and(predicates::str::contains(format!("{bruno} (bruno)"))),
+        );
+
+    let answered = sandbox.json_ok(
+        "default",
+        &["team", "room", "answer", "alpha", &card_id, &bruno],
+    );
+    assert_eq!(
+        answered["card"]["card"]["answer"],
+        bruno.as_str(),
+        "{answered}"
+    );
+    let line = &answered["messages"][0];
+    assert_eq!(line["bot_name"], "bruno", "{answered}");
+    assert_eq!(
+        line["text"],
+        "Added to the Board: Parse the headers with hold"
+    );
+    assert_eq!(line["task"]["column"], "running", "the fake agent started");
+
+    let refused = error_of(
+        &sandbox,
+        &["team", "room", "answer", "alpha", &card_id, "todo"],
+    );
+    assert_eq!(refused["code"], "team.room_card_answered", "{refused}");
+    sandbox
+        .run("default", &["team", "room", "list", "alpha"])
+        .success()
+        .stdout(predicates::str::contains(format!(
+            "card {card_id}: answered bruno"
+        )));
+    let board = sandbox.json_ok("default", &["task", "list", "--team", "alpha"]);
+    assert_eq!(board["tasks"].as_array().map(Vec::len), Some(1), "{board}");
 }

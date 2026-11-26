@@ -1448,6 +1448,10 @@ pub(crate) mod fixtures {
             bot_name: None,
             text: String::new(),
             task: None,
+            routine: None,
+            card: None,
+            reply_to: None,
+            quoted: None,
             created_at_ms: 1_700_000_000_000,
         }
     }

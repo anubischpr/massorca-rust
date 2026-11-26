@@ -35,7 +35,11 @@ pub(in crate::shell) fn project_page(
         return note("This project is gone.", &theme).into_any_element();
     };
     let links = link_choices(model, &team_data.host);
-    let (linkable, link_note) = link_state(team_data.reach, project_data.link_saved);
+    let (linkable, link_note) = link_state(
+        team_data.workspaces,
+        team_data.reach,
+        project_data.link_saved,
+    );
     let selected = project_data
         .link
         .as_ref()
@@ -164,9 +168,16 @@ fn link_control(
         })
 }
 
-/// Whether a project's link control can be used, and the sentence under it. A project the service reads keeps
-/// no link, so its control stays off on any host.
-fn link_state(reach: HostReach, link_saved: bool) -> (bool, &'static str) {
+/// Why a team with Workspaces off cannot link a project, as the service refuses it (decision 0120).
+const WORKSPACES_OFF: &str =
+    "Turn on Workspaces for this team in Edit team to connect its projects to code.";
+
+/// Whether a project's link control can be used, and the sentence under it. A team with Workspaces off cannot link;
+/// a project the service reads keeps no link, so its control stays off on any host.
+fn link_state(workspaces: bool, reach: HostReach, link_saved: bool) -> (bool, &'static str) {
+    if !workspaces {
+        return (false, WORKSPACES_OFF);
+    }
     if !link_saved {
         return (false, LINK_NOT_SAVED);
     }
@@ -271,13 +282,13 @@ mod tests {
     #[test]
     fn a_project_the_service_reads_has_its_link_off_and_says_why() {
         assert_eq!(
-            link_state(HostReach::Connected, false),
+            link_state(true, HostReach::Connected, false),
             (
                 false,
                 "Linking to Workspaces is not saved by the service yet."
             )
         );
-        assert!(link_state(HostReach::Connected, true).0);
+        assert!(link_state(true, HostReach::Connected, true).0);
     }
 
     #[gpui::test]
@@ -305,5 +316,13 @@ mod tests {
                 Page::Team(TeamPage::Board(TeamId(1)))
             );
         });
+    }
+
+    #[test]
+    fn a_team_with_workspaces_off_cannot_link_and_is_told_how_to_turn_it_on() {
+        assert_eq!(
+            link_state(false, HostReach::Connected, true),
+            (false, WORKSPACES_OFF)
+        );
     }
 }

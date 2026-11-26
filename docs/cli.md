@@ -430,6 +430,36 @@ an offer's secret is shown only when it is made. `server status` shows the same 
 
 The service log goes to the profile's log files only unless `--log-stderr` is given.
 
+### Automations
+
+Scheduled automation definitions (decision 0123). An automation is stored, listed and changed here; this version
+does not start its runs.
+
+| Command | What it does |
+|---|---|
+| `automations create <NAME> --project <PROJECT> --prompt <TEXT> [--agent <KIND>] [--cadence hourly\|daily\|weekdays\|weekly\|cron] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>] [--creation-key <KEY>]` | Creates an automation in a project, enabled, with its next run from its schedule. `--project` takes an id, a name or a path. Defaults: agent `claude`, daily at `09:00`. `--cadence hourly` runs every hour at the minute of `--time`; `weekly` needs `--weekday` (`mon` to `sun`); `cron` needs `--cron` with five fields, such as `0 9 * * 1-5`, and ignores `--time`. Without `--zone` the host's zone is used; the create is refused when the host's zone cannot be read. `--grace` is 0 to 10080 minutes, 720 when unset. A retry with the same `--creation-key` returns the automation the first create made. |
+| `automations edit <AUTOMATION> [--name <NAME>] [--project <PROJECT>] [--prompt <TEXT>] [--agent <KIND>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>]` | Changes the options given and no others. A schedule change recomputes the next run. `--zone ""` returns the automation to the host's zone. |
+| `automations show <AUTOMATION>` | Shows one automation, by id or by exact name. |
+| `automations list` | Lists the automations, in creation order. |
+| `automations remove <AUTOMATION>` | Removes an automation. It cannot be restored. |
+| `automations enable <AUTOMATION>` | Enables an automation and schedules its next run from now. |
+| `automations disable <AUTOMATION>` | Disables an automation; it has no next run until it is enabled. |
+
+An automation whose project was removed stays listed with no project and does not start. A name two automations
+share is refused until the one meant is named by its id.
+
+### Calendar
+
+The runs of routines and automations in a window of days, on the shared schedule (decision 0124). Read only.
+
+| Command | What it does |
+|---|---|
+| `calendar [--from <DATE>] [--days <N>] [--kind routines\|automations] [--done]` | Lists the runs in a window that starts at `--from`, a UTC date (`YYYY-MM-DD`, today in UTC when unset), and lasts `--days` days (1 to 62, 7 when unset). `--kind routines` lists only Bot Teams routines and `automations` only Workspaces automations; both when unset. Each run shows its date and time on its routine's or automation's zone, or on the host's zone when it has none. Done routine runs show only with `--done`. |
+
+Upcoming runs start at the time of the call. A paused routine and a disabled automation have no upcoming runs.
+Automations keep no run history yet, so they have no done runs. A host that does not offer `calendar/1` says it is too
+old for the calendar.
+
 ### Hosts and pairing
 
 A server is `massorca service run --listen <ADDR>` on another machine. `--listen` takes

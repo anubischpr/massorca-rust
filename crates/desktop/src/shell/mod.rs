@@ -3,7 +3,9 @@
 mod actions;
 mod add_host;
 mod app_theme;
+mod automations;
 mod bring_back;
+mod calendar;
 mod canvas;
 mod close_confirm;
 mod debug_focus;
@@ -322,6 +324,16 @@ pub struct Shell {
     marketplace_pick: marketplace::HostPick,
     /// The hosts the Marketplace's picker offers, in its order.
     marketplace_offers: Vec<crate::model::marketplace::HostTarget>,
+    /// The Automations page's list, editor target, delete question and notice (decision 0123).
+    automations: crate::model::automations::AutomationsState,
+    /// The automation editor's fields, while it is open.
+    automation_editor: Option<automations::AutomationEditor>,
+    /// Whether a read of the automations is on its way to the service.
+    automations_loading: bool,
+    /// The Calendar page's week, mode, Show done switch and last answer (decision 0124).
+    calendar: crate::model::calendar::CalendarState,
+    /// Whether the Calendar was on screen at the last render, so opening it reads the week again.
+    calendar_on_screen: bool,
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
@@ -481,6 +493,7 @@ impl Shell {
             if let Some(teams) = store.read(cx).teams() {
                 shell.model.refresh_teams(teams);
             }
+            shell.follow_bot_skills(cx);
             if !store.read(cx).is_sample() {
                 let state = store.read(cx).state();
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
@@ -701,6 +714,16 @@ impl Shell {
                 ui_state::saved_marketplace_host(cx).unwrap_or_default(),
             ),
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
+            automations: Default::default(),
+            automation_editor: None,
+            automations_loading: false,
+            calendar: {
+                let mut calendar =
+                    crate::model::calendar::CalendarState::new(crate::model::calendar::today());
+                calendar.set_show_done(ui_state::saved_calendar_show_done(cx));
+                calendar
+            },
+            calendar_on_screen: false,
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
@@ -885,6 +908,8 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
+        self.ensure_automations_loaded(cx);
+        self.ensure_calendar_loaded(cx);
         self.focus_started_terminal(window, cx);
         self.focus_started_chat(window, cx);
         let shell = cx.entity().downgrade();
@@ -1027,6 +1052,10 @@ impl Render for Shell {
             &self.zones,
             canvas::PageFrames {
                 settings,
+                automations: (self.model.canvas() == Canvas::Page(Page::Automations))
+                    .then(|| self.automations_frame(&shell)),
+                calendar: (self.model.canvas() == Canvas::Page(Page::Calendar))
+                    .then(|| self.calendar_frame(&shell)),
                 start,
                 home,
                 setup_rows,
@@ -1167,6 +1196,15 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let automation_editor = self
+            .automation_editor
+            .as_ref()
+            .map(|editor| automations::editor_dialog(editor, &shell, cx));
+        let automation_delete = self
+            .automations
+            .delete_target()
+            .and_then(|id| self.automations.find(id))
+            .map(|automation| automations::delete_dialog(&automation.name, &shell, &theme));
         let team_menu = self
             .team_menu
             .as_ref()
@@ -1291,6 +1329,8 @@ impl Render for Shell {
             .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
+            .when_some(automation_editor, |el, dialog| el.child(dialog))
+            .when_some(automation_delete, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(routine_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
