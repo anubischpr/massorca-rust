@@ -12,8 +12,18 @@ use std::path::{Component, PathBuf};
 pub(super) fn create_link(canonical: &Path, link: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        let parent = link.parent().unwrap_or(Path::new("."));
-        std::os::unix::fs::symlink(relative_target(parent, canonical), link)
+        // Why: a linked folder above either end (a stow-managed `~/.claude`) makes a lexical relative target miss.
+        let parent = fs::canonicalize(link.parent().unwrap_or(Path::new(".")))?;
+        let real_canonical = fs::canonicalize(canonical)?;
+        std::os::unix::fs::symlink(relative_target(&parent, &real_canonical), link)?;
+        if fs::canonicalize(link).is_ok_and(|reached| reached == real_canonical) {
+            Ok(())
+        } else {
+            let _ = fs::remove_file(link);
+            Err(io::Error::other(
+                "the link does not reach the canonical copy",
+            ))
+        }
     }
     #[cfg(windows)]
     {
@@ -30,8 +40,13 @@ pub(super) fn create_link(canonical: &Path, link: &Path) -> io::Result<()> {
 pub(super) fn link_points_to(link: &Path, canonical: &Path) -> bool {
     #[cfg(unix)]
     {
-        let parent = link.parent().unwrap_or(Path::new("."));
-        fs::read_link(link).is_ok_and(|target| target == relative_target(parent, canonical))
+        let parent = fs::canonicalize(link.parent().unwrap_or(Path::new(".")));
+        match (fs::read_link(link), parent, resolved(canonical)) {
+            (Ok(target), Ok(parent), Some(canonical)) => {
+                target == relative_target(&parent, &canonical)
+            }
+            _ => false,
+        }
     }
     #[cfg(windows)]
     {
@@ -56,6 +71,15 @@ pub(super) fn remove_link(link: &Path) -> io::Result<()> {
         // Why: on Windows RemoveDirectory on a junction removes the junction and never its target's contents.
         fs::remove_dir(link)
     }
+}
+
+/// `path` with every link above it resolved; a missing last part is kept as named, so a dangling link still compares.
+#[cfg(unix)]
+fn resolved(path: &Path) -> Option<PathBuf> {
+    fs::canonicalize(path).ok().or_else(|| {
+        let real_parent = fs::canonicalize(path.parent()?).ok()?;
+        Some(real_parent.join(path.file_name()?))
+    })
 }
 
 /// The path from `from` to `to`, both absolute, as a symlink target: `..` for each folder left, then the rest.

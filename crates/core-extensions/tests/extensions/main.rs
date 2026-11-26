@@ -20,6 +20,7 @@ mod service;
 mod skill_discovery;
 mod skill_files;
 mod skill_placement;
+mod skill_placement_safety;
 mod source;
 mod sweep;
 mod update;

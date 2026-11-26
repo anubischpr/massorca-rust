@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
@@ -18,6 +18,8 @@ const MAX_FILES: usize = 2_000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// How many folders a skill may nest.
 const MAX_DEPTH: usize = 16;
+/// How old a staging folder must be before a sweep takes it for a crash's leftover.
+const STALE_STAGING: Duration = Duration::from_secs(10 * 60);
 
 /// The entries of a skill folder, sorted by their path below it.
 #[derive(Default)]
@@ -161,11 +163,25 @@ fn staging_name(target: &Path) -> String {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let nanos = SystemTime::now()
+    format!(".{name}.placing-{}-{}", process::id(), now_nanos())
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    format!(".{name}.placing-{}-{nanos}", process::id())
+        .unwrap_or_default()
+}
+
+/// The creation time a staging name's `<pid>-<nanos>` tail records, when the tail has exactly that shape.
+fn staging_stamp(tail: &str) -> Option<u128> {
+    let (pid, nanos) = tail.split_once('-')?;
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(pid) || !digits(nanos) {
+        return None;
+    }
+    pid.parse::<u32>().ok()?;
+    nanos.parse().ok()
 }
 
 fn unsupported(path: &Path, reason: &'static str) -> PlacementError {
@@ -184,16 +200,30 @@ fn io_at(message: &'static str, path: &Path) -> impl FnOnce(io::Error) -> Placem
     }
 }
 
-/// Removes the staging folders a crash left beside `folder` for the skill `name`. Only folders named by a placement's
-/// staging pattern go, and only plain folders, so a link or a folder the user made is never touched.
+/// Removes the staging folders a crash left beside `folder` for the skill `name`. Only plain folders named exactly
+/// `.<name>.placing-<pid>-<nanos>` go, and only once older than `STALE_STAGING`, so another process's copy in progress,
+/// a link and a folder the user made are never touched.
 pub(super) fn sweep_staging(folder: &Path, name: &str) {
     let prefix = format!(".{name}.placing-");
+    let now = now_nanos();
     let Ok(entries) = fs::read_dir(folder) else {
         return;
     };
     for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(stamp) = file_name
+            .to_str()
+            .and_then(|text| text.strip_prefix(&prefix))
+            .and_then(staging_stamp)
+        else {
+            continue;
+        };
+        // A stamp ahead of the clock counts as young.
+        if now.saturating_sub(stamp) < STALE_STAGING.as_nanos() {
+            continue;
+        }
         let path = entry.path();
-        if entry.file_name().to_string_lossy().starts_with(&prefix) && is_plain_folder(&path) {
+        if is_plain_folder(&path) {
             let _ = fs::remove_dir_all(path);
         }
     }

@@ -4,6 +4,7 @@
 //! folder the user already has is never overwritten.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use super::placement_agents::PlacementAgent;
@@ -63,7 +64,7 @@ pub fn place_skill_with(
         sweep_staging(&folder, &prepared.name);
     }
     if !prepared.canonical_managed {
-        place_copy(source, &prepared.canonical)?;
+        place_verified_copy(source, &prepared.canonical, &prepared.digest)?;
     }
     let rows: Vec<AgentOutcome> = prepared
         .slots
@@ -144,20 +145,23 @@ pub fn unplace_skill(
             kept.push(row);
             continue;
         }
-        let outcome = match row.path.as_deref() {
-            None => Outcome::Removed,
-            Some(path) => {
-                match remove_placement(home, path, row.topology, &skill.digest, &canonical) {
-                    Removal::Gone | Removal::Removed => Outcome::Removed,
-                    Removal::Modified => Outcome::Skipped(SkipCause::Modified),
-                    Removal::Failed => Outcome::Skipped(SkipCause::CopyFailed),
-                }
+        let expected = agent_folder(home, row.agent, name);
+        // Why: the record never names what is deleted; only the folder this agent reads can go.
+        let outcome = if row.path != expected {
+            Outcome::Skipped(SkipCause::Modified)
+        } else {
+            match expected.as_deref() {
+                // A canonical row is settled once the canonical copy's fate is known.
+                None => Outcome::Removed,
+                Some(path) => removal_outcome(&remove_placement(
+                    path,
+                    row.topology,
+                    &skill.digest,
+                    &canonical,
+                )),
             }
         };
-        if matches!(
-            outcome,
-            Outcome::Skipped(SkipCause::Modified | SkipCause::CopyFailed)
-        ) {
+        if matches!(outcome, Outcome::Skipped(_)) {
             kept.push(row.clone());
         }
         rows.push(AgentOutcome {
@@ -167,17 +171,27 @@ pub fn unplace_skill(
         });
     }
 
-    if kept.is_empty() {
-        // Why: the canonical copy goes only when nothing still reaches it, so no alias is left dangling.
-        let canonical_gone = matches!(
-            remove_copy(home, &canonical, &skill.digest),
-            Removal::Gone | Removal::Removed
-        );
-        if !canonical_gone {
-            skill.agents = kept;
-            skills.push(skill);
+    // Why: the canonical copy goes only when nothing still reaches it, so no alias is left dangling.
+    let canonical_removal = kept
+        .is_empty()
+        .then(|| remove_copy(&canonical, &skill.digest));
+    for row in &mut rows {
+        if row.path.is_none() && row.outcome == Outcome::Removed {
+            row.outcome = match &canonical_removal {
+                None => Outcome::Canonical,
+                Some(removal) => removal_outcome(removal),
+            };
+            if matches!(row.outcome, Outcome::Skipped(_)) {
+                kept.push(ManagedAgent {
+                    agent: row.agent,
+                    path: None,
+                    topology: Topology::Canonical,
+                });
+            }
         }
-    } else {
+    }
+    let canonical_gone = matches!(canonical_removal, Some(Removal::Gone | Removal::Removed));
+    if !canonical_gone {
         skill.agents = kept;
         skills.push(skill);
     }
@@ -334,16 +348,24 @@ fn place_one(
             return Outcome::Placed(Topology::Alias);
         }
     }
-    match place_copy(source, path) {
-        Ok(()) if tree_digest(path).ok().as_deref() == Some(digest) => {
-            Outcome::Placed(Topology::Copy)
-        }
-        Ok(()) => {
-            let _ = fs::remove_dir_all(path);
-            Outcome::Skipped(SkipCause::CopyFailed)
-        }
+    match place_verified_copy(source, path, digest) {
+        Ok(()) => Outcome::Placed(Topology::Copy),
         Err(_) => Outcome::Skipped(SkipCause::CopyFailed),
     }
+}
+
+/// Copies `source` to `target` and keeps the copy only when it matches `digest`.
+fn place_verified_copy(source: &Path, target: &Path, digest: &str) -> Result<(), PlacementError> {
+    place_copy(source, target)?;
+    if tree_digest(target).ok().as_deref() == Some(digest) {
+        return Ok(());
+    }
+    let _ = fs::remove_dir_all(target);
+    Err(PlacementError::Io {
+        message: "the copy does not match the skill",
+        path: target.to_path_buf(),
+        source: io::Error::from(io::ErrorKind::InvalidData),
+    })
 }
 
 fn placed_topology(outcome: &Outcome) -> Option<Topology> {
@@ -361,21 +383,20 @@ enum Removal {
     Failed,
 }
 
+fn removal_outcome(removal: &Removal) -> Outcome {
+    match removal {
+        Removal::Gone | Removal::Removed => Outcome::Removed,
+        Removal::Modified => Outcome::Skipped(SkipCause::Modified),
+        Removal::Failed => Outcome::Skipped(SkipCause::CopyFailed),
+    }
+}
+
 /// Removes one placement by how it was made: an alias only while it still points at the canonical copy, and it is removed
-/// as a link; a copy only while its digest still matches.
-fn remove_placement(
-    home: &Path,
-    path: &Path,
-    topology: Topology,
-    digest: &str,
-    canonical: &Path,
-) -> Removal {
+/// as a link; a copy only while its digest still matches. `path` is the agent's own folder, never one the record names.
+fn remove_placement(path: &Path, topology: Topology, digest: &str, canonical: &Path) -> Removal {
     let Ok(meta) = fs::symlink_metadata(path) else {
         return Removal::Gone;
     };
-    if !path.starts_with(home) {
-        return Removal::Modified;
-    }
     match topology {
         Topology::Alias => {
             if is_link(&meta) && link_points_to(path, canonical) {
@@ -387,19 +408,16 @@ fn remove_placement(
                 Removal::Modified
             }
         }
-        Topology::Copy | Topology::Canonical => remove_copy(home, path, digest),
+        Topology::Copy | Topology::Canonical => remove_copy(path, digest),
     }
 }
 
-/// Removes a copy when it is still a plain folder with the recorded digest, under `home`.
-fn remove_copy(home: &Path, path: &Path, digest: &str) -> Removal {
+/// Removes a copy when it is still a plain folder with the recorded digest.
+fn remove_copy(path: &Path, digest: &str) -> Removal {
     if fs::symlink_metadata(path).is_err() {
         return Removal::Gone;
     }
-    if !path.starts_with(home)
-        || !is_plain_folder(path)
-        || tree_digest(path).ok().as_deref() != Some(digest)
-    {
+    if !is_plain_folder(path) || tree_digest(path).ok().as_deref() != Some(digest) {
         return Removal::Modified;
     }
     match fs::remove_dir_all(path) {
@@ -422,7 +440,7 @@ fn source_name(source: &Path) -> Result<String, PlacementError> {
 }
 
 /// One to 64 lowercase ASCII letters, digits or hyphens, starting with a letter or digit.
-fn valid_name(name: &str) -> bool {
+pub(super) fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     bytes.len() <= 64
         && bytes
@@ -459,4 +477,26 @@ fn skill_folders(home: &Path) -> Vec<PathBuf> {
         }
     }
     folders
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_that_does_not_match_the_digest_is_removed_and_refused() {
+        let temp = tempfile::TempDir::new().expect("a temporary folder");
+        let source = temp.path().join("source");
+        fs::create_dir_all(&source).expect("the source");
+        fs::write(source.join("SKILL.md"), "body").expect("the file");
+        let target = temp.path().join("skills/release-notes");
+
+        let result = place_verified_copy(&source, &target, "not-the-digest");
+
+        assert!(matches!(result, Err(PlacementError::Io { .. })));
+        assert!(!target.exists(), "the unverified copy is removed");
+        let digest = tree_digest(&source).expect("a digest");
+        place_verified_copy(&source, &target, &digest).expect("a matching copy stays");
+        assert!(target.join("SKILL.md").is_file());
+    }
 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::placement::valid_name;
 use super::placement_agents::PlacementAgent;
 use super::placement_error::PlacementError;
 use super::placement_model::{ManagedAgent, ManagedSkill, PlacementStore, Topology};
@@ -64,6 +65,13 @@ pub(super) fn save(store: &PlacementStore, skills: &[ManagedSkill]) -> Result<()
 }
 
 fn into_managed(skill: RecordSkill) -> Result<ManagedSkill, PlacementError> {
+    // Why: the name builds every path removal touches, so one that could leave the skill folders is refused.
+    if !valid_name(&skill.name) {
+        return Err(PlacementError::InvalidRecord(format!(
+            "a skill name {:?} MassOrca never places",
+            skill.name
+        )));
+    }
     let agents = skill
         .agents
         .into_iter()
