@@ -72,3 +72,5 @@ pub const SERVICES: &str = "services/1";
 pub const HOST: &str = "host/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
+/// Scheduled automation definitions (`automation.*`, decision 0123). Not offered by a service that predates them.
+pub const AUTOMATIONS: &str = "automations/1";

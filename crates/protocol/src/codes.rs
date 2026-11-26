@@ -342,3 +342,9 @@ pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
 pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
 /// `extensions.rollback` found no version kept for the package: nothing changed.
 pub const EXTENSION_NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";
+/// No automation has the id or name given (`automation.*`, decision 0123).
+pub const AUTOMATION_NOT_FOUND: &str = "automation.not_found";
+/// An automation's cadence, time, weekday, cron expression or grace is refused, such as a cron that can never occur.
+pub const AUTOMATION_SCHEDULE_INVALID: &str = "automation.schedule_invalid";
+/// An automation's time zone is unknown, or the host's zone cannot be read so the automation needs one.
+pub const AUTOMATION_ZONE_INVALID: &str = "automation.zone_invalid";

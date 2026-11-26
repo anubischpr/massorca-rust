@@ -146,6 +146,12 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TASK_NOT_FOUND, "task.not_found"),
     (codes::TASK_RUNNING, "task.running"),
     (codes::EXTENSION_UP_TO_DATE, "extension.up_to_date"),
+    (codes::AUTOMATION_NOT_FOUND, "automation.not_found"),
+    (
+        codes::AUTOMATION_SCHEDULE_INVALID,
+        "automation.schedule_invalid",
+    ),
+    (codes::AUTOMATION_ZONE_INVALID, "automation.zone_invalid"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -183,4 +189,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
+    assert_eq!(capabilities::AUTOMATIONS, "automations/1");
 }
