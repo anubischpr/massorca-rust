@@ -386,6 +386,18 @@ does not start its runs.
 An automation whose project was removed stays listed with no project and does not start. A name two automations
 share is refused until the one meant is named by its id.
 
+### Calendar
+
+The runs of routines and automations in a window of days, on the shared schedule (decision 0124). Read only.
+
+| Command | What it does |
+|---|---|
+| `calendar [--from <DATE>] [--days <N>] [--kind routines\|automations] [--done]` | Lists the runs in a window that starts at `--from`, a UTC date (`YYYY-MM-DD`, today in UTC when unset), and lasts `--days` days (1 to 62, 7 when unset). `--kind routines` lists only Bot Teams routines and `automations` only Workspaces automations; both when unset. Each run shows its date and time on its routine's or automation's zone, or on the host's zone when it has none. Done routine runs show only with `--done`. |
+
+Upcoming runs start at the time of the call. A paused routine and a disabled automation have no upcoming runs.
+Automations keep no run history yet, so they have no done runs. A host that does not offer `calendar/1` says it is too
+old for the calendar.
+
 ### Hosts and pairing
 
 A server is `massorca service run --listen <ADDR>` on another machine. `--listen` takes
