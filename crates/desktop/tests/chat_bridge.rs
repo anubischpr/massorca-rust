@@ -248,11 +248,10 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
 
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: Some(temp.path().join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -464,5 +463,16 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         path: None,
         request_id: None,
         no_setup: false,
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
     }
 }

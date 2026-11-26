@@ -440,13 +440,12 @@ async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_i
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: repo_dir
                 .parent()
                 .map(|parent| parent.join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -813,11 +812,10 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     .expect("the bridge connects and lists the fake kind");
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the folder project is added");
@@ -971,4 +969,15 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
 /// Every `WorkspaceListParams` field at its usual value; tests override the fields they vary.
 fn base_workspace_list_params() -> massorca_protocol::methods::workspaces::WorkspaceListParams {
     massorca_protocol::methods::workspaces::WorkspaceListParams { project: None }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

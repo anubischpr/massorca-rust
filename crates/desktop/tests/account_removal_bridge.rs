@@ -275,10 +275,7 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
         .await;
     let client = Client::connect(
         &profile(&fixture.profile),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
@@ -391,4 +388,12 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
     drop(client);
     drop(bridge);
     child.stop();
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
 }

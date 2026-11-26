@@ -101,13 +101,12 @@ fn declare_fake_kind(home: &Path) {
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: repo_dir
                 .parent()
                 .map(|parent| parent.join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -317,5 +316,16 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         path: None,
         request_id: None,
         no_setup: false,
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
     }
 }

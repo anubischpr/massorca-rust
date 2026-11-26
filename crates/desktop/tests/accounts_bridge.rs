@@ -101,10 +101,7 @@ fn bridge_for(home: &Path) -> (ServiceBridge, ServiceHandle, UnboundedReceiver<S
 async fn client_for(home: &Path) -> Client {
     Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects")
@@ -280,4 +277,12 @@ async fn an_account_signing_in_refuses_activation_as_busy() {
     drop(bridge);
     // The service closes the sign-in terminal as it stops.
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
 }

@@ -1243,10 +1243,7 @@ fn details_start_collapsed_open_on_show_details_and_leave_the_install_request_un
 fn removing_a_package_with_connections_deletes_its_agent_homes(cx: &mut TestAppContext) {
     let mut package = installed_package(true);
     package.listing.connections = vec![massorca_protocol::methods::extensions::Connection {
-        id: "notes-login".to_owned(),
-        kind: "agent-login".to_owned(),
-        title: "Notes account".to_owned(),
-        multiple: true,
+        ..crate::service::fixtures::base_connection()
     }];
     let (mut rig, cx, _) = open_listed(cx, vec![package.clone()], vec![package]);
     click(cx, "button:marketplace-uninstall");

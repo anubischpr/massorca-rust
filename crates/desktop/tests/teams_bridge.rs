@@ -75,10 +75,7 @@ async fn stop_service(running: RunningService) {
 async fn client_of(home: &Path) -> Client {
     Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects")
@@ -1421,4 +1418,12 @@ async fn a_card_with_no_run_is_not_stopped_and_the_service_says_so() {
         "the card stays in Open"
     );
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
 }

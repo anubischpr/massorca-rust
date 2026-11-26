@@ -1199,6 +1199,45 @@ pub(crate) mod fixtures {
             no_setup: false,
         }
     }
+
+    /// Every `Connection` field at its usual value; tests override the fields they vary.
+    pub fn base_connection() -> massorca_protocol::methods::extensions::Connection {
+        massorca_protocol::methods::extensions::Connection {
+            id: "notes-login".to_owned(),
+            kind: "agent-login".to_owned(),
+            title: "Notes account".to_owned(),
+            multiple: true,
+        }
+    }
+
+    /// Every `HostRecord` field at its usual value; tests override the fields they vary.
+    pub fn base_host_record() -> massorca_client::HostRecord {
+        massorca_client::HostRecord {
+            name: "vps".into(),
+            server: "vps-server".into(),
+            addresses: Vec::new(),
+            pin: "sha256:test".into(),
+            device_id: "dev-1".into(),
+            device_name: "laptop".into(),
+            scopes: Vec::new(),
+            paired_at_ms: 1,
+        }
+    }
+
+    /// Every `ServiceStatus` field at its usual value; tests override the fields they vary.
+    pub fn base_service_status() -> massorca_protocol::methods::hosted_services::ServiceStatus {
+        massorca_protocol::methods::hosted_services::ServiceStatus {
+            service: String::new(),
+            name: String::new(),
+            state: massorca_protocol::methods::hosted_services::ServiceState::Connected,
+            source: massorca_protocol::methods::hosted_services::ServiceSource::Stored,
+            account: None,
+            base_url: None,
+            updated_at_ms: None,
+            cli_installed: None,
+            detail: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1559,13 +1598,9 @@ mod tests {
     fn host(name: &str) -> HostRecord {
         HostRecord {
             name: name.into(),
-            server: "vps-server".into(),
             addresses: vec!["100.64.0.10:7347".into()],
-            pin: "sha256:test".into(),
-            device_id: "dev-1".into(),
-            device_name: "laptop".into(),
             scopes: vec!["read".into()],
-            paired_at_ms: 1,
+            ..crate::service::fixtures::base_host_record()
         }
     }
 

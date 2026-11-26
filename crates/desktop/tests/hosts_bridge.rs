@@ -517,8 +517,7 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
-            icon: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -548,4 +547,15 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
         "{unanswered:?}"
     );
     drop(client_bridge);
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

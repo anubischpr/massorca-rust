@@ -792,11 +792,8 @@ mod tests {
                 name: name.into(),
                 server: format!("{name}-server"),
                 addresses: vec!["100.64.0.10:7347".into()],
-                pin: "sha256:test".into(),
-                device_id: "dev-1".into(),
-                device_name: "laptop".into(),
                 scopes: vec!["read".into()],
-                paired_at_ms: 1,
+                ..crate::service::fixtures::base_host_record()
             },
             link,
             last_connected: None,

@@ -106,19 +106,14 @@ fn repo(dir: &Path) {
 async fn add_project(home: &Path, repo_dir: &Path) -> String {
     let client = Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
     client
         .project_add(&ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: Some(
                 repo_dir
                     .parent()
@@ -127,6 +122,7 @@ async fn add_project(home: &Path, repo_dir: &Path) -> String {
                     .display()
                     .to_string(),
             ),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added")
@@ -163,13 +159,13 @@ async fn until(
 fn shell() -> ShellSpec {
     if cfg!(windows) {
         ShellSpec {
-            program: "cmd.exe".to_owned(),
             args: vec!["/Q".to_owned()],
+            ..base_shell_spec()
         }
     } else {
         ShellSpec {
             program: "/bin/sh".to_owned(),
-            args: Vec::new(),
+            ..base_shell_spec()
         }
     }
 }
@@ -540,5 +536,32 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         path: None,
         request_id: None,
         no_setup: false,
+    }
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+/// Every `ShellSpec` field at its usual value; tests override the fields they vary.
+fn base_shell_spec() -> massorca_protocol::methods::terminals::ShellSpec {
+    massorca_protocol::methods::terminals::ShellSpec {
+        program: "cmd.exe".to_owned(),
+        args: Vec::new(),
     }
 }

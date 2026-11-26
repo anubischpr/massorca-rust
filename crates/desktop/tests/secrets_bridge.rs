@@ -103,10 +103,7 @@ fn names(state: &StoreState) -> Vec<String> {
 async fn client_for(home: &Path) -> Client {
     Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects")
@@ -342,4 +339,12 @@ async fn a_secret_is_added_and_replaced_only_as_asked_and_each_refusal_keeps_its
     drop(handle);
     drop(bridge);
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
 }
