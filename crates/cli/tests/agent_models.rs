@@ -17,6 +17,10 @@ use serde_json::{Value, json};
 const ALPHA_TOKEN: &str = r#"{"fake":true,"email":"alpha@example.com","refresh":"fake-secret-value","listing":["alpha:Alpha","beta:Beta"]}"#;
 /// A fake token of a second account, which lists another model.
 const GAMMA_TOKEN: &str = r#"{"fake":true,"email":"gamma@example.com","refresh":"fake-secret-value","listing":["gamma:Gamma"]}"#;
+/// A fake token whose account lists the declared model with the model id the vendor says it runs now.
+const RESOLVED_TOKEN: &str = r#"{"fake":true,"email":"resolved@example.com","refresh":"fake-secret-value","listing":["declared:Opus:claude-opus-5-5","other:Other"]}"#;
+/// A fake token whose account lists the declared model with no resolved model id.
+const UNRESOLVED_TOKEN: &str = r#"{"fake":true,"email":"unresolved@example.com","refresh":"fake-secret-value","listing":["declared:Opus"]}"#;
 /// A fake token with no listing, so its account's listing names no model.
 const BARE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
 /// The stream-json control request a Claude-style listing writes to its stdin (decision 0166).
@@ -225,6 +229,62 @@ fn a_stream_json_listing_gets_its_request_on_stdin_and_lists_its_rows() {
         json!([]),
         "a row that takes no effort"
     );
+}
+
+/// The label `agent kinds` gives `kind`'s model choice `id`.
+fn kinds_label(sandbox: &Sandbox, kind: &str, id: &str) -> String {
+    let kinds = sandbox.json_ok("default", &["agent", "kinds"]);
+    let kind = kinds["kinds"]
+        .as_array()
+        .expect("a kinds array")
+        .iter()
+        .find(|entry| entry["id"] == kind)
+        .unwrap_or_else(|| panic!("no kind {kind}: {kinds}"));
+    kind["model"]["choices"]
+        .as_array()
+        .expect("a choices array")
+        .iter()
+        .find(|choice| choice["id"] == id)
+        .unwrap_or_else(|| panic!("no choice {id}: {kind}"))["label"]
+        .as_str()
+        .expect("a label")
+        .to_owned()
+}
+
+#[test]
+fn a_model_the_vendor_resolves_reads_as_its_version_in_the_models_and_the_kinds() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox);
+    let _service = start_service(&sandbox, &[]);
+    import(&sandbox, "claude-like", "resolved", RESOLVED_TOKEN);
+    let resolved = account_id(&sandbox, "claude-like", "resolved");
+    assert_eq!(
+        kinds_label(&sandbox, "claude-like", "declared"),
+        "Declared",
+        "nothing is listed yet, so the declared label stands"
+    );
+
+    let models = models_of(&sandbox, "claude-like", &resolved, &[]);
+    assert_eq!(models["models"][0]["label"], "Opus 5.5", "{models}");
+    assert_eq!(models["models"][1]["label"], "Other", "{models}");
+    assert_eq!(
+        kinds_label(&sandbox, "claude-like", "declared"),
+        "Opus 5.5",
+        "agent kinds reads the catalog's last listing for the active account"
+    );
+}
+
+#[test]
+fn a_model_the_vendor_does_not_resolve_keeps_its_declared_label() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox);
+    let _service = start_service(&sandbox, &[]);
+    import(&sandbox, "claude-like", "unresolved", UNRESOLVED_TOKEN);
+    let unresolved = account_id(&sandbox, "claude-like", "unresolved");
+
+    let models = models_of(&sandbox, "claude-like", &unresolved, &[]);
+    assert_eq!(models["models"][0]["label"], "Declared", "{models}");
+    assert_eq!(kinds_label(&sandbox, "claude-like", "declared"), "Declared");
 }
 
 #[test]

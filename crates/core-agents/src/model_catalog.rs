@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use massorca_core_store::now_ms;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AccountState, AgentModel, AgentModels, ModelListingError, ModelListingFailure, ModelSource,
+    AccountState, AgentKind, AgentModel, AgentModels, KindModelChoice, ModelListingError,
+    ModelListingFailure, ModelSource,
 };
 
 use crate::account_check::account_strip_names;
@@ -55,6 +56,9 @@ pub struct Listed {
     pub label: String,
     /// The effort levels the listing gives the model: `Some(empty)` when it takes none, `None` when it names none.
     pub efforts: Option<Vec<String>>,
+    /// The model the vendor says the id runs now, such as `claude-opus-5-5` for the alias `opus`; `None` when the listing
+    /// names none (decision 0166, amendment).
+    pub resolved: Option<String>,
 }
 
 /// Reads a listing's output in its format. Only models whose id is a valid option value are kept, once each; anything
@@ -85,6 +89,7 @@ fn lines_rows(stdout: &str) -> Vec<Listed> {
                 id: id.to_owned(),
                 label: clean_label(label, id),
                 efforts: None,
+                resolved: None,
             })
         })
         .collect()
@@ -137,6 +142,11 @@ fn claude_row(entry: &serde_json::Value) -> Option<Listed> {
         id: id.to_owned(),
         label: clean_label(entry["displayName"].as_str().unwrap_or(""), id),
         efforts,
+        resolved: entry["resolvedModel"]
+            .as_str()
+            .map(str::trim)
+            .filter(|resolved| !resolved.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -146,14 +156,67 @@ fn clean_label(label: &str, id: &str) -> String {
     if kept.is_empty() { id.to_owned() } else { kept }
 }
 
-/// The declared models in order, then the listed ones the declaration does not name. A declared model keeps its label,
-/// its default and its efforts; a listed model is never the default.
+/// The label a resolved model id reads as (decision 0166, amendment): the family word title-cased, then the version
+/// digits joined by dots, so `claude-opus-5-5` reads as `Opus 5.5`. The id must be `<vendor>-<family>-<n>[-<n>...]`,
+/// with alphabetic vendor and family words and version numbers of one to three digits; a trailing eight-digit release
+/// date and a bracketed variant such as `[1m]` are not part of the version. Any other shape reads as nothing, so the
+/// declared label stands. No table names a version: the vendor's own answer is the only source.
+pub fn versioned_label(resolved: &str) -> Option<String> {
+    let base = match resolved.split_once('[') {
+        Some((base, variant)) if variant.ends_with(']') => base,
+        Some(_) => return None,
+        None => resolved,
+    };
+    let mut parts: Vec<&str> = base.split('-').collect();
+    if parts.len() > 3
+        && parts
+            .last()
+            .is_some_and(|last| last.len() == 8 && last.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        parts.pop();
+    }
+    let [vendor, family, version @ ..] = parts.as_slice() else {
+        return None;
+    };
+    let word = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_alphabetic());
+    let number = |text: &&str| {
+        (1..=3).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    if !word(vendor) || !word(family) || version.is_empty() || !version.iter().all(number) {
+        return None;
+    }
+    let lower = family.to_ascii_lowercase();
+    let mut chars = lower.chars();
+    let first = chars.next()?.to_ascii_uppercase();
+    Some(format!("{first}{} {}", chars.as_str(), version.join(".")))
+}
+
+/// The label a declared choice shows: the versioned label of the model the listing resolves its id to, else its own.
+fn declared_label(id: &str, label: &str, listed: &[Listed]) -> String {
+    listed
+        .iter()
+        .find(|item| item.id == id)
+        .and_then(|item| item.resolved.as_deref())
+        .and_then(versioned_label)
+        .unwrap_or_else(|| label.to_owned())
+}
+
+/// Gives `agent.kinds`' model choices the versioned labels of a listing (decision 0166, amendment); only labels change.
+pub fn version_choices(choices: &mut [KindModelChoice], listed: &[Listed]) {
+    for choice in choices {
+        choice.label = declared_label(&choice.id, &choice.label, listed);
+    }
+}
+
+/// The declared models in order, then the listed ones the declaration does not name. A declared model keeps its default
+/// and its efforts, and its label unless the listing resolves its id to a versioned one; a listed model is never the
+/// default and keeps the vendor's own label.
 pub fn merge(declared: &[ModelChoiceDecl], listed: &[Listed]) -> Vec<AgentModel> {
     let mut models: Vec<AgentModel> = declared
         .iter()
         .map(|choice| AgentModel {
             id: choice.id.clone(),
-            label: choice.label.clone(),
+            label: declared_label(&choice.id, &choice.label, listed),
             default: choice.default,
             efforts: choice.efforts.clone(),
             source: ModelSource::Declared,
@@ -365,6 +428,14 @@ impl ModelCache {
         });
     }
 
+    /// The models of the last listing the vendor CLI answered for `key`, however old; `None` when none answered. Reading
+    /// it never starts a listing.
+    pub fn last_listing(&self, key: &ListingKey) -> Option<Vec<Listed>> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let listed = state.entries.get(key)?.listed.as_ref()?;
+        Some(listed.models.clone())
+    }
+
     /// Stores the outcome of a listing unless the listing was superseded, and returns the answer for its callers.
     fn settle(
         &self,
@@ -548,6 +619,31 @@ impl Agents {
             }
         };
         Ok(view(declared, Some(&entry)))
+    }
+
+    /// Gives each kind's model choices the versioned labels of the catalog's last listing for the kind's default request
+    /// (decision 0166, amendment): its active account, else the vendor's usual home when the kind has never had an
+    /// account. Nothing is listed here, so a label turns versioned once a listing has answered and follows each refresh.
+    pub(crate) fn version_kind_labels(&self, kinds: &mut [AgentKind]) {
+        for kind in kinds {
+            let Some(model) = kind.model.as_mut() else {
+                continue;
+            };
+            let account = match self.store().get_active_agent_account(&kind.id) {
+                Ok(Some(id)) => Some(id),
+                Ok(None) if matches!(self.store().kind_has_had_account(&kind.id), Ok(false)) => {
+                    None
+                }
+                _ => continue,
+            };
+            let key = ListingKey {
+                kind: kind.id.clone(),
+                account,
+            };
+            if let Some(listed) = self.model_cache().last_listing(&key) {
+                version_choices(&mut model.choices, &listed);
+            }
+        }
     }
 
     /// Drops the cached listings a change to `account` of `kind` can make wrong (decision 0166): the account's own, and the
@@ -788,6 +884,7 @@ mod tests {
             id: id.to_owned(),
             label: id.to_owned(),
             efforts: None,
+            resolved: None,
         }]
     }
 
@@ -821,11 +918,13 @@ mod tests {
                     id: "gemini-4-argon-high".to_owned(),
                     label: "Gemini 4 Argon (High)".to_owned(),
                     efforts: None,
+                    resolved: None,
                 },
                 Listed {
                     id: "claude-x".to_owned(),
                     label: "claude-x".to_owned(),
                     efforts: None,
+                    resolved: None,
                 },
             ]
         );
@@ -838,9 +937,9 @@ mod tests {
             "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
             "\"request_id\":\"massorca-model-discovery\",\"response\":{\"models\":[",
             "{\"value\":\"default\",\"displayName\":\"Default\"},",
-            "{\"value\":\"opus\",\"displayName\":\"Opus\",\"supportsEffort\":true,",
+            "{\"value\":\"opus\",\"displayName\":\"Opus\",\"resolvedModel\":\"claude-opus-5-5\",\"supportsEffort\":true,",
             "\"supportedEffortLevels\":[\"low\",\"high\",\"turbo bad\"]},",
-            "{\"value\":\"haiku\",\"displayName\":\"Haiku\",\"supportsEffort\":false},",
+            "{\"value\":\"haiku\",\"displayName\":\"Haiku\",\"resolvedModel\":\" \",\"supportsEffort\":false},",
             "{\"value\":\"cc-update-required-1\",\"displayName\":\"Fable 5.1 (disabled)\",\"disabled\":true},",
             "{\"value\":\"opus[1m]\",\"displayName\":\"Opus (1M context)\"}",
             "]}}}\n"
@@ -852,14 +951,16 @@ mod tests {
                     id: "opus".to_owned(),
                     label: "Opus".to_owned(),
                     efforts: Some(vec!["low".to_owned(), "high".to_owned()]),
+                    resolved: Some("claude-opus-5-5".to_owned()),
                 },
                 Listed {
                     id: "haiku".to_owned(),
                     label: "Haiku".to_owned(),
                     efforts: Some(Vec::new()),
+                    resolved: None,
                 },
             ],
-            "the default row, the disabled row and the bracketed id (not a valid option value) are skipped"
+            "the default row, the disabled row and the bracketed id (not a valid option value) are skipped; a blank              resolved model is none"
         );
     }
 
@@ -868,6 +969,118 @@ mod tests {
         let stdout = "{\"type\":\"control_response\",\"response\":{\"subtype\":\"error\"}}\n\
             control_response but not json\n";
         assert!(parse_listing(ListingFormat::ClaudeControl, stdout).is_empty());
+    }
+
+    #[test]
+    fn a_resolved_model_id_reads_as_its_family_and_its_dotted_version() {
+        let cases = [
+            ("claude-opus-5-5", "Opus 5.5"),
+            ("claude-sonnet-5-5", "Sonnet 5.5"),
+            ("claude-fable-5-2", "Fable 5.2"),
+            ("claude-sonnet-5", "Sonnet 5"),
+            ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+            ("claude-opus-5-5[1m]", "Opus 5.5"),
+            ("CLAUDE-OPUS-5-5", "Opus 5.5"),
+        ];
+        for (resolved, label) in cases {
+            assert_eq!(
+                versioned_label(resolved).as_deref(),
+                Some(label),
+                "{resolved}: a release date and a context variant are not part of the version"
+            );
+        }
+    }
+
+    #[test]
+    fn a_resolved_model_id_of_another_shape_reads_as_nothing() {
+        for resolved in [
+            "",
+            "opus",
+            "claude-opus",
+            "claude-opus-current",
+            "cc-update-required-1",
+            "claude-5-5",
+            "claude-opus-5-x",
+            "claude-opus-5--5",
+            "claude-opus-1234",
+            "claude-opus-20251001",
+            "claude-opus-5-5[1m",
+            "gpt-5.5",
+            "claude-op us-5",
+        ] {
+            assert_eq!(versioned_label(resolved), None, "{resolved:?}");
+        }
+    }
+
+    #[test]
+    fn a_declared_model_the_listing_resolves_reads_as_its_versioned_label() {
+        let declared = vec![
+            choice("opus", "Opus", false, None),
+            choice("haiku", "Haiku", false, None),
+            choice("sonnet", "Sonnet", true, None),
+        ];
+        let listed = vec![
+            Listed {
+                id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                efforts: None,
+                resolved: Some("claude-opus-5-5".to_owned()),
+            },
+            Listed {
+                id: "haiku".to_owned(),
+                label: "Haiku".to_owned(),
+                efforts: None,
+                resolved: Some("claude-haiku-current".to_owned()),
+            },
+            Listed {
+                id: "claude-opus-4-1".to_owned(),
+                label: "Opus 4.1 (legacy)".to_owned(),
+                efforts: None,
+                resolved: Some("claude-opus-4-1".to_owned()),
+            },
+        ];
+        let labels: Vec<String> = merge(&declared, &listed)
+            .into_iter()
+            .map(|model| model.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["Opus 5.5", "Haiku", "Sonnet", "Opus 4.1 (legacy)"],
+            "an unknown shape or no listing keeps the declared label; a discovered row keeps the vendor's own label"
+        );
+    }
+
+    #[test]
+    fn the_kinds_choices_take_the_versioned_label_of_the_last_listing() {
+        let mut choices = vec![
+            KindModelChoice {
+                id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                default: false,
+                efforts: None,
+                fast: true,
+            },
+            KindModelChoice {
+                id: "sonnet".to_owned(),
+                label: "Sonnet".to_owned(),
+                default: true,
+                efforts: None,
+                fast: false,
+            },
+        ];
+        let listed = vec![Listed {
+            id: "opus".to_owned(),
+            label: "Opus".to_owned(),
+            efforts: None,
+            resolved: Some("claude-opus-5-5".to_owned()),
+        }];
+        version_choices(&mut choices, &listed);
+        let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
+        assert_eq!(labels, ["Opus 5.5", "Sonnet"]);
+        assert!(
+            choices[0].fast && choices[1].default,
+            "only the label changes"
+        );
     }
 
     #[test]
@@ -882,11 +1095,13 @@ mod tests {
                 id: "sonnet".to_owned(),
                 label: "Sonnet (listed)".to_owned(),
                 efforts: Some(vec!["high".to_owned()]),
+                resolved: None,
             },
             Listed {
                 id: "opus-new".to_owned(),
                 label: "Opus New".to_owned(),
                 efforts: None,
+                resolved: None,
             },
         ];
         let models = merge(&declared, &listed);

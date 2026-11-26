@@ -566,6 +566,8 @@ impl Agents {
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
         }
+        // A model the catalog's last listing resolves reads as its version (decision 0166, amendment).
+        self.version_kind_labels(&mut kinds);
         AgentKinds { kinds }
     }
 

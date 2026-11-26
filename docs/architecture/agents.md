@@ -243,6 +243,13 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 - Refusals: a kind that is not enabled is refused with `agent.kind_not_enabled`, as a start refuses it. An account of
   another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
   `agent.credentials_invalid`.
+- Versioned labels (decision 0166, amendment): a declared model whose listed row names the model the vendor resolves
+  it to (Claude's `resolvedModel`) shows a label derived from that id: the family word title-cased, then the version
+  numbers joined by dots, so `claude-opus-5-5` reads as `Opus 5.5`. A trailing eight-digit date and a bracketed variant
+  are dropped. Any other shape, or no resolved id, keeps the declared label. `agent.models` shows it on the declared row,
+  and `agent.kinds` shows it on `model.choices[].label` from the last listing of the kind's active account (or of the
+  usual home when the kind has never had an account). `agent.kinds` never starts a listing, so the label turns
+  versioned once one has answered and changes with each refresh. A discovered row keeps the vendor's own label.
 
 ## Session record (`AgentSession`)
 
