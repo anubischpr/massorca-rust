@@ -51,6 +51,27 @@ pub(super) fn new_run(
     )
 }
 
+/// `occurrences` missed occurrences from `scheduled_for`, folded into one row with `reason`.
+pub(super) fn missed_run(
+    automation: &AutomationRow,
+    scheduled_for: i64,
+    occurrences: u32,
+    reason: String,
+    now: i64,
+) -> AutomationRunRow {
+    let run = AutomationRunRow {
+        occurrences: i64::from(occurrences.max(1)),
+        ..new_run(automation, TRIGGER_SCHEDULE, scheduled_for, now)
+    };
+    skipped(
+        run,
+        run_state::SKIPPED_MISSED,
+        codes::AUTOMATION_RUN_MISSED,
+        &reason,
+        now,
+    )
+}
+
 fn skipped(
     run: AutomationRunRow,
     state: &str,

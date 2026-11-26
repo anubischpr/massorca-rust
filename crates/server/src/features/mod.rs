@@ -37,21 +37,21 @@ pub(crate) use config::default_workspace_root;
 pub(crate) use service::info_of;
 pub(crate) use teams::follow_routines;
 
-/// The task outcome listener, with the automation run listener beside it, so the service starts both from one handle
-/// and stops them on the same signal. The run listener subscribes here and reads every session at start.
+/// The task outcome listener, with the automation timer and run listener beside it, so the service starts both from
+/// one handle and stops them on the same signal. The run listener subscribes here and reads every session at start.
 pub(crate) async fn follow_task_outcomes(
     state: std::sync::Arc<crate::context::AppState>,
     changes: tokio::sync::broadcast::Receiver<massorca_core_agents::Change>,
     signal: crate::shutdown::ShutdownSignal,
 ) {
-    let automations = tokio::spawn(automations::follow_runs(
+    let automations = tokio::spawn(automations::follow_automations(
         std::sync::Arc::clone(&state),
         state.agent_changes.subscribe(),
         signal.clone(),
     ));
     teams::follow_task_outcomes(state, changes, signal).await;
     if let Err(error) = automations.await {
-        tracing::warn!("the automation run listener stopped: {error}");
+        tracing::warn!("the automation timer stopped: {error}");
     }
 }
 

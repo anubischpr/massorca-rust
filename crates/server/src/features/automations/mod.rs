@@ -1,5 +1,5 @@
 //! Scheduled automations: their definitions (decision 0123), `automation.create`, `list`, `show`, `update`, `rm`,
-//! `enable` and `disable` under capability `automations/1`; and their runs (decision 0125): the agent launch,
+//! `enable` and `disable` under capability `automations/1`; and their runs (decision 0125): the timer, the agent launch,
 //! completion, `automation.run_now` and `automation.runs` under capability `automation-runs/1`.
 
 mod calls;
@@ -10,10 +10,11 @@ mod occurrences;
 mod run_calls;
 mod runs;
 mod selectors;
+mod timer;
 mod view;
 
-pub(crate) use completion::follow_runs;
 pub(crate) use occurrences::upcoming_runs;
+pub(crate) use timer::follow_automations;
 
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::automations;

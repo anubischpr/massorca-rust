@@ -23,7 +23,7 @@ const STRANDED: &str = "The run's agent session is gone, so how it ended is not 
 
 /// Follows the agents domain until shutdown. It reads every session at start and after a lag, because a Done that
 /// arrived while nothing listened is gone.
-pub(crate) async fn follow_runs(
+pub(super) async fn follow_runs(
     state: Arc<AppState>,
     mut changes: Receiver<Change>,
     mut signal: ShutdownSignal,
