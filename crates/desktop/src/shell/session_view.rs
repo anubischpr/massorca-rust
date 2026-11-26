@@ -531,7 +531,13 @@ impl Shell {
                 .and_then(|queues| queues.get(&id).cloned());
             let waiting = child_wait(&state.agents, &session);
             let shared_folder = shared_folder_notice(&session, &state.agents, &state.agent_kinds);
-            (session, state.agent_kinds.clone(), queue, waiting, shared_folder)
+            (
+                session,
+                state.agent_kinds.clone(),
+                queue,
+                waiting,
+                shared_folder,
+            )
         };
         // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
         // terminal session draws one only where a test holds a transcript for it.
