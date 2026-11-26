@@ -208,7 +208,7 @@ mod tests {
     }
 
     /// Links the directory `link` to `target`: a junction on Windows, which needs no privilege, and a symlink elsewhere.
-    /// False when the link cannot be made, and the test then returns without a check.
+    /// False when the link cannot be made, which fails the test that asked for it.
     fn link_directory(target: &Path, link: &Path) -> bool {
         #[cfg(windows)]
         {
@@ -306,9 +306,10 @@ mod tests {
         let elsewhere = tempfile::tempdir().expect("temp dir");
         std::fs::write(elsewhere.path().join("secret.txt"), "x").expect("file");
         let link = root.path().join("outside");
-        if !link_directory(elsewhere.path(), &link) {
-            return;
-        }
+        assert!(
+            link_directory(elsewhere.path(), &link),
+            "a junction or symlink can be made"
+        );
         assert!(link.join("secret.txt").is_file(), "the link resolves");
         assert_eq!(
             regular_file_inside(root.path(), "outside/secret.txt"),
@@ -323,9 +324,10 @@ mod tests {
         std::fs::create_dir(&real).expect("dir");
         std::fs::write(real.join("file.txt"), "x").expect("file");
         let link = root.path().join("alias");
-        if !link_directory(&real, &link) {
-            return;
-        }
+        assert!(
+            link_directory(&real, &link),
+            "a junction or symlink can be made"
+        );
         assert!(link.join("file.txt").is_file(), "the link resolves");
         let found = regular_file_inside(root.path(), "alias/file.txt").expect("inside");
         assert_eq!(
