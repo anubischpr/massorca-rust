@@ -130,6 +130,10 @@ pub struct WorkspaceRemoveParams {
     /// Forgets a row whose directory git does not recognise as its worktree; the directory stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_orphan: bool,
+    /// Removes the workspaces of delegated children first, deepest first, each with the same checks and waivers
+    /// (decision 0110). Without it a workspace with child workspaces is refused with `workspace.has_children`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_children: bool,
     /// Removes the worktree even when its archive script fails or times out (decision 0095).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_failed_archive: bool,
@@ -146,6 +150,9 @@ pub struct WorkspaceRemoved {
     /// git does not register as a worktree. Absent (false) when the directory was removed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub directory_kept: bool,
+    /// The delegated children's workspaces removed first under `with_children`, deepest first. Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_children: Vec<WorkspaceRemoved>,
     /// What became of the project's archive script; absent when there is none or the workspace is a folder (0095).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<WorkspaceArchive>,

@@ -122,6 +122,10 @@ pub struct Project {
     /// The project's icon; absent when it has none (decision 0091).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<ProjectIcon>,
+    /// The owner segment of the primary remote's repository (`origin`, else the first remote); absent for a
+    /// folder project or a remote that does not parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_owner: Option<String>,
 }
 
 /// A project's icon (decision 0091): a Lucide icon by name, one emoji, or an image.

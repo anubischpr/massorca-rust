@@ -664,7 +664,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "remove_workspace": { "type": "boolean" },
                     "force": { "type": "boolean" },
                     "discard_ignored": { "type": "boolean" },
-                    "expect_dirty": { "type": "boolean" }
+                    "expect_dirty": { "type": "boolean" },
+                    "allow_failed_archive": { "type": "boolean" }
                 }
             }),
         ),

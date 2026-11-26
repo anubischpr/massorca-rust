@@ -156,6 +156,8 @@ impl RemoveFlow {
             force: self.waivers.force,
             discard_ignored: self.waivers.discard_ignored,
             forget_orphan: self.waivers.forget_orphan,
+            // The dialog offers no child removal yet; a refusal names the children.
+            with_children: false,
             allow_failed_archive: false,
         }
     }

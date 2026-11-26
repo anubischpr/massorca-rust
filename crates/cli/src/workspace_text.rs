@@ -115,6 +115,9 @@ pub fn project_details(project: &Project) -> Vec<String> {
         format!("path: {}", project.path),
         format!("workspaces root: {}", project.workspaces_root),
     ];
+    if let Some(owner) = &project.remote_owner {
+        lines.push(format!("owner: {owner}"));
+    }
     if let Some(base) = &project.base_ref {
         lines.push(format!("base: {base}"));
     }
@@ -137,11 +140,18 @@ pub fn project_table(projects: &[Project]) -> Vec<String> {
                     .map_or_else(|| "-".to_owned(), icon_text),
                 project_kind(project.kind).to_owned(),
                 project.base_ref.clone().unwrap_or_else(|| "-".to_owned()),
+                project
+                    .remote_owner
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
                 project.path.clone(),
             ]
         })
         .collect();
-    table(&["ID", "NAME", "ICON", "KIND", "BASE", "PATH"], rows)
+    table(
+        &["ID", "NAME", "ICON", "KIND", "BASE", "OWNER", "PATH"],
+        rows,
+    )
 }
 
 /// One line for a workspace that was just created.
@@ -216,7 +226,13 @@ pub fn workspace_table(workspaces: &[Workspace]) -> Vec<String> {
 /// What a removal did: the workspace, the branch when it was deleted or kept, and a directory left in place.
 pub fn removal_lines(removed: &WorkspaceRemoved) -> Vec<String> {
     let workspace = &removed.workspace;
-    let mut lines = vec![format!("removed workspace {}", workspace.name)];
+    // Children were removed first, so their lines come first.
+    let mut lines: Vec<String> = removed
+        .removed_children
+        .iter()
+        .flat_map(removal_lines)
+        .collect();
+    lines.push(format!("removed workspace {}", workspace.name));
     if removed.branch_deleted {
         if let Some(branch) = &workspace.branch {
             lines.push(format!("deleted branch {branch}"));

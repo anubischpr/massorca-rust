@@ -383,6 +383,9 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the workspaces of delegated children first, deepest first, with the same checks and flags.
+        #[arg(long)]
+        with_children: bool,
         /// Remove the worktree even when the project's archive script fails or times out.
         #[arg(long)]
         allow_failed_archive: bool,

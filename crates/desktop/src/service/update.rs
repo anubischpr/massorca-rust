@@ -777,6 +777,7 @@ pub(crate) mod fixtures {
     pub fn project(id: &str, name: &str) -> Project {
         Project {
             icon: None,
+            remote_owner: None,
             id: id.into(),
             kind: ProjectKind::Git,
             path: format!("/repos/{name}"),
