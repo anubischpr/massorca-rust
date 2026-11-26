@@ -439,6 +439,18 @@ mod tests {
             ]
         );
         assert!(claude.resumable());
+        // The fork forms pv96 builds (decision 0168): the new run gets its own id, learned from its reports.
+        assert_eq!(
+            claude.fork.as_deref(),
+            Some(
+                &[
+                    "--resume".to_owned(),
+                    "{ref}".to_owned(),
+                    "--fork-session".to_owned()
+                ][..]
+            )
+        );
+        assert!(claude.forkable());
 
         let codex = &kinds[1];
         assert_eq!(
@@ -449,6 +461,11 @@ mod tests {
             codex.session_ref.as_ref().unwrap().learn.as_deref(),
             Some("thread-id")
         );
+        assert_eq!(
+            codex.fork.as_deref(),
+            Some(&["fork".to_owned(), "{ref}".to_owned()][..])
+        );
+        assert!(codex.forkable());
         assert_eq!(codex.status.mechanism, StatusMechanism::CodexNotify);
         assert_eq!(
             codex.status.events["turn-complete"],
