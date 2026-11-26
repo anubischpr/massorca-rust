@@ -50,7 +50,7 @@ pub use extensions::{
 };
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
-pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
+pub use hosts::{HostLoss, HostRemoval, SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};

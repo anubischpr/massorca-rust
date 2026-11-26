@@ -11,8 +11,10 @@ mod debug_page;
 mod delegate;
 mod diff_page;
 mod home_start;
+mod host_remove;
 mod marketplace;
 mod pairing;
+mod pairing_qr;
 mod palette;
 mod path_field;
 mod project_sidebar;
@@ -103,6 +105,8 @@ mod delegate_tests;
 #[cfg(test)]
 mod home_start_tests;
 #[cfg(test)]
+mod host_remove_tests;
+#[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
@@ -168,6 +172,10 @@ pub struct Shell {
     /// The offer another host shows, typed or pasted, and the optional name for that host.
     pairing_offer: Entity<TextField>,
     pairing_name: Entity<TextField>,
+    /// "Custom address" of the offer this computer makes; empty lists the bound addresses (SRV-07).
+    pairing_address: Entity<TextField>,
+    /// The shown offer's id, its retire under way, and why the service refused to retire it (SRV-06).
+    offer_retire: pairing::OfferRetire,
     _pairing_changes: Subscription,
     /// Whether the paired devices were asked for since the Pairing page was last shown.
     devices_asked: bool,
@@ -175,6 +183,10 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The Remove host confirm on screen, if one is open (D-HO-03).
+    host_remove: Option<host_remove::HostRemoveFlow>,
+    /// What the last host removal left behind, until dismissed.
+    host_remove_notice: Option<String>,
     /// The `.ssh` folder whose key files the Add host dialog lists.
     ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
@@ -497,6 +509,11 @@ impl Shell {
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
         let pairing_name = cx.new(|cx| TextField::new(cx).placeholder("Name"));
+        let pairing_address = cx.new(|cx| {
+            TextField::new(cx)
+                .placeholder("Automatic, for example 192.168.1.20:7347")
+                .mono()
+        });
         // Typing in the offer field redraws the page, which enables Pair once there is an offer.
         let pairing_changes =
             cx.subscribe(&pairing_offer, |_, _, _: &TextFieldEvent, cx| cx.notify());
@@ -552,10 +569,14 @@ impl Shell {
             pairing: PairingState::default(),
             pairing_offer,
             pairing_name,
+            pairing_address,
+            offer_retire: pairing::OfferRetire::default(),
             _pairing_changes: pairing_changes,
             devices_asked: false,
             revoke: None,
             add_host: None,
+            host_remove: None,
+            host_remove_notice: None,
             ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
@@ -889,6 +910,8 @@ impl Render for Shell {
             state: self.pairing.clone(),
             offer_field: self.pairing_offer.clone(),
             name_field: self.pairing_name.clone(),
+            address_field: self.pairing_address.clone(),
+            retire: self.offer_retire.clone(),
             devices: crate::model::devices::devices_view(
                 self.store.read(cx).state().devices.as_ref(),
                 crate::model::pairing::now_ms(),
@@ -958,6 +981,10 @@ impl Render for Shell {
             .theme_notice
             .as_deref()
             .map(|notice| app_theme::theme_notice_banner(notice, &shell));
+        let host_remove_banner = self
+            .host_remove_notice
+            .as_deref()
+            .map(|notice| host_remove::removal_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -989,6 +1016,7 @@ impl Render for Shell {
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
                     .when_some(theme_banner, |el, banner| el.child(banner))
+                    .when_some(host_remove_banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),
             )
@@ -1089,6 +1117,10 @@ impl Render for Shell {
             .add_host
             .as_ref()
             .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
+        let host_remove = self
+            .host_remove
+            .as_ref()
+            .map(|flow| host_remove::remove_host_dialog(flow, &shell, cx));
         let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
             let connected = self.store.read(cx).state().connection.is_connected();
             settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
@@ -1176,6 +1208,7 @@ impl Render for Shell {
             .when_some(routine_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
+            .when_some(host_remove, |el, dialog| el.child(dialog))
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))

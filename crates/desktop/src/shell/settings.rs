@@ -254,7 +254,7 @@ fn group(
         if spec.body == RowBody::PairedHosts {
             let theme = *cx.theme();
             for (name, state) in &frame.hosts {
-                group = group.row(host_row(name, state, &theme));
+                group = group.row(host_row(name, state, &theme, frame));
             }
             continue;
         }
@@ -263,8 +263,8 @@ fn group(
     group.into_any_element()
 }
 
-/// One paired host: its name, the line its state leaves under it, and the state word as the control.
-fn host_row(name: &str, state: &HostState, theme: &Theme) -> AnyElement {
+/// One paired host: its name, the line its state leaves under it, the state word and Remove (D-HO-03).
+fn host_row(name: &str, state: &HostState, theme: &Theme, frame: &SettingsFrame<'_>) -> AnyElement {
     let selector = format!("settings-host-{name}");
     let row = SettingsRow::new(SharedString::from(selector.clone()), name.to_owned());
     let row = match &state.detail {
@@ -273,7 +273,16 @@ fn host_row(name: &str, state: &HostState, theme: &Theme) -> AnyElement {
     };
     div()
         .debug_selector(move || selector.clone())
-        .child(row.control(value_box(state.word, theme)))
+        .child(
+            row.control(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .child(value_box(state.word, theme))
+                    .child(super::host_remove::remove_button(name, &frame.shell)),
+            ),
+        )
         .into_any_element()
 }
 

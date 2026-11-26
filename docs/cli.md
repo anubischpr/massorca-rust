@@ -74,7 +74,8 @@ machine.
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
 | `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
-| `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
+| `pair offer [--ttl <SECS>] [--standard] [--address <HOST[:PORT]>]... [--no-qr]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. `--address` (repeatable or comma-separated, at most 8) lists exactly these addresses in the offer instead of the bound listeners, for a device behind NAT, in a container or an emulator; see Hosts and pairing. Text output ends with the offer as a QR code for a phone to scan (light modules drawn as blocks, for a dark terminal); `--no-qr` leaves it out. A service that predates it is refused with `service.capability_missing`; an address no device can dial with `pairing.invalid_address`. |
+| `pair cancel <OFFER-ID>\|--all` | Retires a pending offer before it expires, so a code that leaked no longer pairs. `pair offer` prints the offer id after the offer (`offer_id` in `--json`); `--all` retires every pending offer and reports how many. An offer that is used, expired or unknown is `pairing.offer_not_found`. A service that predates it is refused with `service.capability_missing`. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
 | `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
@@ -382,6 +383,15 @@ massorca pair offer
 # on the other computer, reading the offer from stdin
 massorca pair accept - --name vps
 ```
+
+The offer lists the addresses the service is bound to. When the other device reaches this computer at a
+different address (a NAT, a container, or an Android emulator, which reaches its computer at `10.0.2.2`), give it
+with `--address`: `massorca pair offer --address 10.0.2.2`. It takes a host name, `host:port`, an IPv4 or IPv6
+literal (`[fd7a::1]:7347`) or a `wss://` or `https://` URL; a value without a port takes the listener's port.
+Wildcard addresses (`0.0.0.0`, `::`), port 0, paths, queries and user names are refused.
+
+An offer is a credential until it is used or expires. If one leaks, retire it with
+`massorca pair cancel <OFFER-ID>`, or every pending one with `massorca pair cancel --all`.
 
 The accepted host is stored in this profile. `--host vps` then addresses it, and `host list`,
 `host status` and `host remove` manage it. A host that does not answer is reported as
