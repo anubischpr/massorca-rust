@@ -16,6 +16,7 @@ mod config_keys;
 mod core_methods;
 mod events;
 mod extensions;
+mod forwards;
 mod frames;
 mod git_branches;
 mod git_commit;
