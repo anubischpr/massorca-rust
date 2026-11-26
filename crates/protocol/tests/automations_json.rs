@@ -4,8 +4,9 @@
 use massorca_protocol::capabilities;
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
-    self, Automation, AutomationCadence, AutomationCreateParams, AutomationList, AutomationRef,
-    AutomationUpdateParams, AutomationWeekday,
+    self, Automation, AutomationCadence, AutomationCreateParams, AutomationDestination,
+    AutomationDestinationKind, AutomationList, AutomationRef, AutomationUpdateParams,
+    AutomationWeekday,
 };
 use serde_json::{Value, json};
 
@@ -23,6 +24,7 @@ fn create_params() -> AutomationCreateParams {
         zone: None,
         grace_minutes: None,
         creation_key: None,
+        destination: None,
     }
 }
 
@@ -40,6 +42,7 @@ fn update_params(automation: &str) -> AutomationUpdateParams {
         cron: None,
         zone: None,
         grace_minutes: None,
+        destination: None,
     }
 }
 
@@ -66,6 +69,7 @@ fn sample_automation() -> Automation {
         zone_used: Some("Europe/Madrid".to_owned()),
         grace_minutes: automations::DEFAULT_GRACE_MINUTES,
         enabled: false,
+        destination: AutomationDestination::default(),
         next_run_at_ms: None,
         last_run_at_ms: None,
         created_at_ms: 10,
@@ -189,6 +193,7 @@ fn an_automation_uses_the_documented_names_and_omits_absent_options() {
             "zone_used": "Europe/Madrid",
             "grace_minutes": 720,
             "enabled": false,
+            "destination": { "kind": "project_default" },
             "created_at_ms": 10,
             "updated_at_ms": 20,
         })
@@ -224,4 +229,79 @@ fn the_list_result_names_its_automations_and_round_trips() {
     let again: AutomationList =
         serde_json::from_value(serde_json::to_value(&list).unwrap()).unwrap();
     assert_eq!(again, list);
+}
+
+#[test]
+fn a_destination_uses_the_documented_names_and_omits_absent_options() {
+    let params = AutomationCreateParams {
+        destination: Some(AutomationDestination {
+            kind: AutomationDestinationKind::ExistingWorkspace,
+            workspace: Some("ws-1".to_owned()),
+            ..AutomationDestination::default()
+        }),
+        ..create_params()
+    };
+    let value = serde_json::to_value(&params).unwrap();
+    assert_eq!(
+        value["destination"],
+        json!({ "kind": "existing_workspace", "workspace": "ws-1" })
+    );
+}
+
+#[test]
+fn a_worktree_per_run_destination_carries_its_base_branch() {
+    let params: AutomationCreateParams = serde_json::from_value(json!({
+        "project": "app",
+        "name": "Morning PRs",
+        "prompt": "Summarise",
+        "agent": "claude",
+        "cadence": "daily",
+        "time": "09:00",
+        "destination": { "kind": "project_worktree_per_run", "base_branch": "main" }
+    }))
+    .unwrap();
+    let destination = params.destination.expect("the destination is read");
+    assert_eq!(
+        destination.kind,
+        AutomationDestinationKind::ProjectWorktreePerRun
+    );
+    assert_eq!(destination.base_branch.as_deref(), Some("main"));
+    assert_eq!(destination.workspace, None);
+}
+
+#[test]
+fn an_automation_without_a_destination_is_the_project_default_and_an_unknown_kind_decodes_as_unknown()
+ {
+    let mut value = serde_json::to_value(sample_automation()).unwrap();
+    value.as_object_mut().unwrap().remove("destination");
+    let old: Automation = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        old.destination.kind,
+        AutomationDestinationKind::ProjectDefault
+    );
+
+    let newer: AutomationDestination =
+        serde_json::from_value(json!({ "kind": "somewhere_new" })).unwrap();
+    assert_eq!(newer.kind, AutomationDestinationKind::Unknown);
+}
+
+#[test]
+fn the_destination_capability_and_refusal_codes_have_their_wire_values() {
+    assert_eq!(
+        capabilities::AUTOMATION_DESTINATIONS,
+        "automation-destinations/1"
+    );
+    assert_eq!(
+        codes::AUTOMATION_DESTINATION_REMOVED,
+        "automation.destination_removed"
+    );
+    assert_eq!(
+        codes::AUTOMATION_REPOSITORY_DETACHED,
+        "automation.repository_detached"
+    );
+    assert_eq!(codes::AUTOMATION_PATH_CHANGED, "automation.path_changed");
+    assert_eq!(
+        codes::AUTOMATION_DESTINATION_INVALID,
+        "automation.destination_invalid"
+    );
 }
