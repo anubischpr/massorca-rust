@@ -781,9 +781,10 @@ fn run_step(
     Ok(())
 }
 
-/// How long an open waits for another opener's upgrade before it gives up.
+/// How long an open waits for another opener's upgrade before it gives up. Tests keep it short but above the time a
+/// loaded machine needs for a backup and a few steps.
 const UPGRADE_LOCK_WAIT: Duration = if cfg!(test) {
-    Duration::from_secs(1)
+    Duration::from_secs(5)
 } else {
     Duration::from_secs(30)
 };
