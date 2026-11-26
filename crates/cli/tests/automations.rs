@@ -154,6 +154,49 @@ fn a_refused_definition_fails_with_its_code() {
 }
 
 #[test]
+fn a_daily_edit_of_a_cron_automation_names_the_missing_time() {
+    let sandbox = Sandbox::new();
+    project(&sandbox);
+    create(
+        &sandbox,
+        "Weekday audit",
+        &["--cadence", "cron", "--cron", "0 9 * * 1-5"],
+    );
+
+    let outcome = sandbox
+        .run(
+            "default",
+            &with_json(&["automations", "edit", "Weekday audit", "--cadence", "daily"]),
+        )
+        .failure()
+        .code(2);
+    let document = single_document(&outcome);
+    assert_eq!(
+        document["error"]["code"], "usage.missing_time",
+        "{document}"
+    );
+    assert_eq!(
+        document["error"]["message"], "a daily schedule needs --time HH:MM",
+        "{document}"
+    );
+
+    let edited = sandbox.json_ok(
+        "default",
+        &[
+            "automations",
+            "edit",
+            "Weekday audit",
+            "--cadence",
+            "daily",
+            "--time",
+            "08:00",
+        ],
+    );
+    assert_eq!(edited["cadence"], "daily", "{edited}");
+    assert_eq!(edited["time"], "08:00", "{edited}");
+}
+
+#[test]
 fn the_text_output_names_the_schedule_and_the_next_run() {
     let sandbox = Sandbox::new();
     project(&sandbox);
