@@ -115,7 +115,7 @@ machine.
 | `agent archive <SESSION>` | Prints the archived output of a released session. Withheld for a run that holds vault secrets, unless the caller is host-admin. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
-| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`, or in the parent's folder when that is a plain folder workspace. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--same-workspace] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only` or `--same-workspace`, or in the parent's folder when that is a plain folder workspace. While a writing child works in the parent's own workspace, the parent waits. When the child's turn or run ends, the parent's queue gets a one-line notice. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
@@ -318,7 +318,23 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `notes` say "This workspace has no Git, so the child works in this folder."; the
   folder takes several writers, so the child's writing start is not refused there (decisions 0161, 0169). A parent in a worktree with
   no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
-  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  runs in the parent's workspace and does not hold its writing slot. `--same-workspace` (not with
+  `--name`) runs a writing child in the parent's own worktree, the person's manual pick; its `note`
+  and `notes` say "The child works in its parent's worktree, and the parent waits until it
+  finishes." (decision 0170). A second writing `--same-workspace` child, while another writing
+  session of the tree (a sibling or a grandchild) works unfinished in that worktree, or an ancestor
+  of the delegating session has a live run there, fails with `agent.workspace_busy` naming it in
+  `data.session`; `agent resume` of such a child is refused the same way. While a writing child works unfinished in the
+  parent's own workspace (that pick, or a plain folder), the parent waits: its queued prompts hold with reason `child_writing`, and
+  `agent prompt` to it fails with `agent.busy` naming the child in `data.child`, unless `--force`.
+  A child is finished from its first `done` report until its next prompt; a later `waiting` does
+  not reopen it, and a kind that never reports `done` (Antigravity, Gentle Shell, a chat run)
+  finishes only when its run ends. When a child becomes finished, or its run ends unfinished, the
+  parent's queue gets a one-line notice:
+  "MassOrca: child session ID finished: OUTCOME. Read its result with massorca agent status
+  ID --json, or bring it back with massorca agent bring-back ID." OUTCOME is `done`, `failed`,
+  `cancelled`, `interrupted`, `stopped` or `exited`; neither the child's title nor its result text is in it. A
+  parent with no live run gets the notice paused (`paused_stopped`). A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
   delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
   Each session's `--json` record carries `delegation`: `writing_child` (`own_worktree`,

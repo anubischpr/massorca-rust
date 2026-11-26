@@ -1453,6 +1453,7 @@ mod tests {
             name: None,
             title: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: None,
             permission_mode: None,
