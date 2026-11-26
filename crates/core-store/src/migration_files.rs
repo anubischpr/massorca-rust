@@ -32,14 +32,16 @@ const CREATE_TRACKING_TABLE: &str = "CREATE TABLE IF NOT EXISTS store_migrations
 
 /// Applies every file step not yet recorded, in id order, each in its own transaction. Runs under the caller's
 /// migration lock; the backup taken before the first change is shared with the frozen steps through `backed_up`.
+/// `warn_unknown` is false when the caller's earlier `pending` call already logged unknown ids for this open.
 pub(crate) fn apply_pending(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[FileMigration],
+    warn_unknown: bool,
     backed_up: &mut bool,
     observe: &mut dyn FnMut(&'static str),
 ) -> Result<(), StoreError> {
-    for step in pending(connection, steps)? {
+    for step in pending(connection, steps, warn_unknown)? {
         with_foreign_keys_off(connection, step.foreign_keys_off, |connection| {
             run_step(connection, file, step, backed_up)
         })?;
@@ -48,18 +50,30 @@ pub(crate) fn apply_pending(
     Ok(())
 }
 
-/// The file steps not yet recorded, in id order. An id recorded but unknown to this build is logged, not refused: a
-/// step from another branch may have been applied to this database.
+#[cfg(test)]
+thread_local! {
+    /// Unknown-id warnings logged on this thread; tests read it because tracing's callsite cache is process-wide.
+    pub(crate) static UNKNOWN_ID_WARNINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The file steps not yet recorded, in id order. With `warn_unknown`, each recorded id unknown to this build is
+/// logged, not refused: a newer build or another branch may have applied it. Shares the read that finds pending
+/// steps, so the warning adds no query; an extra read can overlap another opener's commit.
 pub(crate) fn pending<'steps>(
     connection: &Connection,
     steps: &'steps [FileMigration],
+    warn_unknown: bool,
 ) -> Result<Vec<&'steps FileMigration>, StoreError> {
     let applied = applied_ids(connection)?;
-    for id in applied
-        .iter()
-        .filter(|id| steps.iter().all(|step| step.id != id.as_str()))
-    {
-        warn!(migration = %id, "database has a migration this build does not know; it stays applied");
+    if warn_unknown {
+        for id in applied
+            .iter()
+            .filter(|id| steps.iter().all(|step| step.id != id.as_str()))
+        {
+            warn!(migration = %id, "database has a migration this build does not know; it stays applied");
+            #[cfg(test)]
+            UNKNOWN_ID_WARNINGS.with(|count| count.set(count.get() + 1));
+        }
     }
     let mut pending: Vec<&FileMigration> = steps
         .iter()

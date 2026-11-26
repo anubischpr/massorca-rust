@@ -623,7 +623,9 @@ pub(crate) fn migrate_observed(
     if found > supported {
         return Err(StoreError::NewerSchema { found, supported });
     }
-    if found == supported && migration_files::pending(connection, files)?.is_empty() {
+    // Unknown file-step ids are logged once per open: here when this check reads them, else under the lock below.
+    let checked = found == supported;
+    if checked && migration_files::pending(connection, files, true)?.is_empty() {
         return Ok(());
     }
     // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
@@ -638,7 +640,7 @@ pub(crate) fn migrate_observed(
     } else {
         apply_frozen(connection, file, steps, supported, &mut backed_up, observe)?;
     }
-    migration_files::apply_pending(connection, file, files, &mut backed_up, observe)
+    migration_files::apply_pending(connection, file, files, !checked, &mut backed_up, observe)
 }
 
 /// Runs the frozen steps newer than `user_version`, one transaction each.

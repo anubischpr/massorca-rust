@@ -5,7 +5,7 @@ use std::thread;
 
 use rusqlite::Connection;
 
-use super::FileMigration;
+use super::{FileMigration, UNKNOWN_ID_WARNINGS};
 use crate::error::StoreError;
 use crate::migrations::{Migration, migrate, migrate_observed};
 
@@ -329,6 +329,36 @@ fn an_applied_id_this_build_does_not_know_is_not_refused() {
     run(&path, FROZEN, &[B]).unwrap();
 
     assert_eq!(applied(&path), [A.id, B.id]);
+}
+
+/// The unknown-id warnings logged while `path` is opened once with `files`.
+fn warnings_on_open(path: &Path, files: &[FileMigration]) -> usize {
+    UNKNOWN_ID_WARNINGS.with(|count| count.set(0));
+    run(path, FROZEN, files).unwrap();
+    UNKNOWN_ID_WARNINGS.with(std::cell::Cell::get)
+}
+
+#[test]
+fn an_unknown_applied_id_is_logged_once_per_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database(&dir);
+    run(&path, FROZEN, &[A]).unwrap();
+
+    assert_eq!(
+        warnings_on_open(&path, &[B]),
+        1,
+        "an open that applies a step"
+    );
+    assert_eq!(warnings_on_open(&path, &[B]), 1, "an up-to-date open");
+    assert_eq!(warnings_on_open(&path, &[A, B]), 0);
+
+    let behind = dir.path().join("behind.db");
+    run(&behind, &FROZEN[..1], &[A]).unwrap();
+    assert_eq!(
+        warnings_on_open(&behind, &[B]),
+        1,
+        "an open that also runs a frozen step"
+    );
 }
 
 #[test]
