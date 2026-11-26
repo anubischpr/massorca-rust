@@ -609,9 +609,34 @@ pub enum HostCommand {
     AddSsh(HostAddSshArgs),
     /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
     Memory,
-    /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them. Works
-    /// with --host.
+    /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them, with the
+    /// URL each is opened at and whether a forward carries it. Works with --host.
     Ports,
+    /// Listens on a local port and carries each connection to a loopback port on host NAME, until Ctrl+C or until the
+    /// forward is stopped on the host. Needs host-admin on the host. With --list or --stop, reads or stops the host's
+    /// forwards instead.
+    Forward(HostForwardArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HostForwardArgs {
+    /// Host name, as `host list` shows it; `local` is this computer's own service.
+    pub name: String,
+    /// Port on the host, reached on its loopback address (127.0.0.1, then ::1).
+    #[arg(required_unless_present_any = ["list", "stop"], conflicts_with_all = ["list", "stop"])]
+    pub port: Option<u16>,
+    /// Local port to listen on. Defaults to the host port; 0 picks a free one, which the first line prints.
+    #[arg(long, value_name = "PORT", conflicts_with_all = ["list", "stop"])]
+    pub local: Option<u16>,
+    /// Local address to listen on. Any address other than a loopback one lets other machines reach the host port.
+    #[arg(long, value_name = "ADDRESS", default_value = "127.0.0.1", conflicts_with_all = ["list", "stop"])]
+    pub bind: std::net::IpAddr,
+    /// Lists the forwards open on the host, from every device.
+    #[arg(long, conflicts_with = "stop")]
+    pub list: bool,
+    /// Stops a forward on the host, by the id `--list` shows, and every connection it carries.
+    #[arg(long, value_name = "FORWARD")]
+    pub stop: Option<String>,
 }
 
 #[derive(Debug, Args)]
