@@ -12,6 +12,7 @@ mod install_log_tail;
 pub mod item;
 pub mod layout;
 pub mod lockfile;
+pub mod program_update;
 pub mod removal;
 pub mod review;
 mod rollback;

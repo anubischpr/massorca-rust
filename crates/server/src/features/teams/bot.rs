@@ -5,7 +5,7 @@ use massorca_core_store::{BotRow, Store, new_id, now_ms};
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::tasks::Column;
 use massorca_protocol::methods::teams::{
-    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, TeamRef,
+    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, MAX_BOT_SKILLS, TeamRef,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -17,7 +17,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::task_state;
-use super::{blocking, non_blank, optional_text, selectors, store_error};
+use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
@@ -57,8 +57,12 @@ async fn list(ctx: RequestCtx, params: TeamRef) -> Result<BotList, ErrorBody> {
     blocking(&ctx, move |store, _agents| {
         let team = selectors::team(store, &params.team)?;
         let rows = store.list_bots(&team.id).map_err(store_error)?;
+        let mut skills = store.team_bot_skills(&team.id).map_err(store_error)?;
         Ok(BotList {
-            bots: rows.iter().map(bot_view).collect(),
+            bots: rows
+                .iter()
+                .map(|row| bot_view(row, skills.remove(&row.id).unwrap_or_default()))
+                .collect(),
         })
     })
     .await
@@ -89,6 +93,7 @@ async fn remove(ctx: RequestCtx, params: BotRemoveParams) -> Result<Bot, ErrorBo
 
 fn add_bot(store: &Store, params: BotAddParams) -> Result<Bot, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
+    let skills = skill_names(params.skills)?;
     let row = BotRow {
         id: new_id(),
         team_id: team.id.clone(),
@@ -100,13 +105,16 @@ fn add_bot(store: &Store, params: BotAddParams) -> Result<Bot, ErrorBody> {
         lead: params.lead,
         created_at: now_ms(),
     };
-    store.insert_bot(&row).map_err(store_error)?;
-    Ok(bot_view(&row))
+    store
+        .insert_bot_with_skills(&row, &skills)
+        .map_err(store_error)?;
+    Ok(bot_view(&row, skills))
 }
 
 fn update_bot(store: &Store, params: BotUpdateParams) -> Result<Bot, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let mut row = selectors::bot(store, &team, &params.bot)?;
+    let skills = params.skills.map(skill_names).transpose()?;
     if let Some(name) = params.name {
         row.name = non_blank(&name, "the bot name")?;
     }
@@ -131,7 +139,16 @@ fn update_bot(store: &Store, params: BotUpdateParams) -> Result<Bot, ErrorBody> 
             "the bot was removed by another call",
         ));
     }
-    Ok(bot_view(&row))
+    let skills = match skills {
+        Some(skills) => {
+            store
+                .set_bot_skills(&row.id, &skills)
+                .map_err(store_error)?;
+            skills
+        }
+        None => store.bot_skills(&row.id).map_err(store_error)?,
+    };
+    Ok(bot_view(&row, skills))
 }
 
 /// Refused while the bot owns open tasks, unless `unassign` is given. Returns the bot and the ids of its linked tasks.
@@ -142,6 +159,7 @@ fn remove_bot(
 ) -> Result<(Bot, Vec<String>), ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let row = selectors::bot(store, &team, &params.bot)?;
+    let skills = store.bot_skills(&row.id).map_err(store_error)?;
     let linked = store.list_tasks_of_bot(&row.id).map_err(store_error)?;
     let mut open = 0;
     for task in &linked {
@@ -166,10 +184,28 @@ fn remove_bot(
         ));
     }
     let tasks = linked.into_iter().map(|task| task.id).collect();
-    Ok((bot_view(&row), tasks))
+    Ok((bot_view(&row, skills), tasks))
 }
 
-fn bot_view(row: &BotRow) -> Bot {
+/// The skill names as given, trimmed, without blanks or repeats; more than [`MAX_BOT_SKILLS`] is refused.
+fn skill_names(given: Vec<String>) -> Result<Vec<String>, ErrorBody> {
+    let mut names: Vec<String> = Vec::new();
+    for name in given {
+        let name = name.trim();
+        if !name.is_empty() && !names.iter().any(|kept| kept == name) {
+            names.push(name.to_owned());
+        }
+    }
+    if names.len() > MAX_BOT_SKILLS {
+        return Err(invalid(format!(
+            "a bot takes at most {MAX_BOT_SKILLS} skills; {} were given",
+            names.len()
+        )));
+    }
+    Ok(names)
+}
+
+fn bot_view(row: &BotRow, skills: Vec<String>) -> Bot {
     Bot {
         id: row.id.clone(),
         team_id: row.team_id.clone(),
@@ -180,5 +216,6 @@ fn bot_view(row: &BotRow) -> Bot {
         effort: row.effort.clone(),
         lead: row.lead,
         created_at_ms: row.created_at,
+        skills,
     }
 }

@@ -1,9 +1,10 @@
-//! One schedule engine for routines and automations (decision 0082).
+//! One schedule engine for routines and automations (decision 0082, amended by decision 0123).
 //!
-//! A [`Schedule`] is a cadence (daily, weekly on a weekday, monthly on day 1 to 28, or once on a date), a wall-clock
-//! `HH:MM` and an optional IANA zone; no zone means the host's zone. [`Schedule::compile`] validates it into a
-//! [`CompiledSchedule`], which answers occurrence questions. Instants are UTC epoch milliseconds (`i64`) so any
-//! store can keep them. The crate knows nothing about teams, bots, tasks or automations.
+//! A [`Schedule`] is a cadence (daily, hourly, weekdays, weekly on a weekday, monthly on day 1 to 28, or once on a
+//! date), a wall-clock `HH:MM` and an optional IANA zone; no zone means the host's zone. A [`CronSchedule`] is a
+//! five-field cron expression and a zone. Both compile into a [`CompiledSchedule`], which answers occurrence
+//! questions. Instants are UTC epoch milliseconds (`i64`) so any store can keep them. The crate knows nothing about
+//! teams, bots, tasks or automations.
 //!
 //! # Daylight-saving rules
 //!
@@ -14,8 +15,8 @@
 //!
 //! # Bounded searches
 //!
-//! Searches walk at most [`MAX_SEARCH_DAYS`] local days and stop at the end of representable time, so no question
-//! loops forever; instants outside that range have no occurrence.
+//! Searches walk at most [`MAX_SEARCH_DAYS`] local days, or [`MAX_CRON_SEARCH_DAYS`] for a cron expression, and stop at
+//! the end of representable time, so no question loops forever; instants outside that range have no occurrence.
 //!
 //! # Exactly-once claims
 //!
@@ -33,11 +34,15 @@
 //! [`next_run_from`] for the current time, so runs missed while paused are never made up.
 
 mod claim;
+mod cron;
 mod occurrence;
+mod occurrence_window;
 mod schedule;
 mod zone;
 
 pub use claim::{ClaimDecision, MAX_COUNTED_SKIPS, decide_claim, next_run_from};
-pub use occurrence::{CompiledSchedule, MAX_SEARCH_DAYS};
+pub use cron::{CronSchedule, MAX_CRON_EXPRESSION_LEN};
+pub use occurrence::{CompiledSchedule, MAX_CRON_SEARCH_DAYS, MAX_SEARCH_DAYS};
+pub use occurrence_window::{WallClock, occurrences_between, wall_clock_in};
 pub use schedule::{Cadence, MAX_ZONE_NAME_LEN, Schedule, ScheduleError, Weekday};
 pub use zone::{ZoneSource, host_zone_used};
