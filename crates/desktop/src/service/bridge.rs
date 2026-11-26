@@ -55,6 +55,8 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::automations::{self, AutomationCommand};
+use super::calendar::{self, CalendarCommand};
 use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
@@ -135,6 +137,10 @@ pub(crate) enum Command {
     Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
+    /// A scheduled automation call (decision 0123), answered on its oneshot.
+    Automation(AutomationCommand),
+    /// A calendar call (decision 0124), answered on its oneshot.
+    Calendar(CalendarCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
     HostRead {
         host: String,
@@ -156,6 +162,11 @@ pub(crate) enum Command {
         host: String,
         request: u64,
         refresh: bool,
+    },
+    /// Previews, places, removes or lists placed skills on This computer; the answer is a store update tagged with `request`.
+    SkillPlacement {
+        request: u64,
+        call: skills::PlacementCall,
     },
     Secret(SecretCommand),
     /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
@@ -1004,6 +1015,9 @@ impl Link {
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
+        self.emit(StoreUpdate::ProgramUpdateOffered(client.has_capability(
+            massorca_protocol::capabilities::EXTENSIONS_PROGRAMS,
+        )));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1097,11 +1111,20 @@ impl Link {
                                     &self.extension_reads,
                                 );
                             }
+                            Some(Command::Automation(command)) => {
+                                automations::spawn_call(client, command);
+                            }
+                            Some(Command::Calendar(command)) => {
+                                calendar::spawn_call(client, command);
+                            }
                             Some(Command::HostedServices { command, .. }) => {
                                 hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
+                            }
+                            Some(Command::SkillPlacement { request, call }) => {
+                                skills::spawn_placement(client, request, call, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -1529,6 +1552,8 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Routine(_)
+        | Command::Automation(_)
+        | Command::Calendar(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1599,12 +1624,14 @@ fn refuse_while_down(command: Command) {
         Command::Room(command) => team_room::refuse(command, refusal),
         Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
+        Command::Automation(command) => automations::refuse(command, refusal),
+        Command::Calendar(command) => calendar::refuse(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
         Command::HostAgentStop { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::Skills { .. } | Command::HostSkills { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } | Command::SkillPlacement { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }

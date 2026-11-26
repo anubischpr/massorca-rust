@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
-use crate::backup;
+use crate::backup::{self, BackupLabel};
 use crate::error::StoreError;
+use crate::migration_files::{self, FileMigration};
 
 /// One schema step. A table rebuild sets `foreign_keys_off`: enforcement is off around its transaction, which is rolled
 /// back if it leaves a foreign key violation.
@@ -602,25 +603,97 @@ ALTER TABLE agent_sessions ADD COLUMN forked_from TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // A room line about the one-time routine it scheduled (decision 0121); the routine's removal keeps the line.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN routine_id TEXT REFERENCES team_routines(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that is a choice card, with its options and the answer it got once (decision 0121).
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN card TEXT;
+ALTER TABLE team_room_messages ADD COLUMN card_answer TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // A room line that replies to another, and a person's conversation line with its bot, reply run and reply state
+    // (decision 0122). A removed line or bot keeps the reply, unlinked.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN reply_to TEXT REFERENCES team_room_messages(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_session TEXT;
+ALTER TABLE team_room_messages ADD COLUMN reply_state TEXT CHECK(reply_state IN ('open','answered','closed'));
+CREATE INDEX team_room_by_reply_session ON team_room_messages(reply_session);
+"#,
+        foreign_keys_off: false,
+    },
+    // A bot's skills (decision 0120): skill names in the order chosen; a bot's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE bot_skills (
+    bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    skill TEXT NOT NULL,
+    PRIMARY KEY (bot_id, position),
+    UNIQUE (bot_id, skill)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Scheduled automation definitions (decision 0123): what runs, with which agent and when. `next_run_at` is the next
+    // occurrence to start, NULL while disabled. Removing a project leaves its automations without one.
+    Migration {
+        sql: r#"
+CREATE TABLE automations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    agent_kind TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('hourly','daily','weekdays','weekly','cron')),
+    time TEXT NOT NULL,
+    weekday TEXT CHECK(weekday IN ('monday','tuesday','wednesday','thursday','friday','saturday','sunday')),
+    cron TEXT,
+    zone TEXT,
+    grace_minutes INTEGER CHECK(grace_minutes IS NULL OR grace_minutes BETWEEN 0 AND 10080),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    creation_key TEXT UNIQUE,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((cadence = 'weekly') = (weekday IS NOT NULL)),
+    CHECK ((cadence = 'cron') = (cron IS NOT NULL))
+);
+CREATE INDEX automations_by_created ON automations (created_at, id);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
-/// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
-/// `file` is `Some` for on-disk databases, which are backed up before their first migration.
-/// The whole upgrade of a file runs under an OS lock, and each step re-reads `user_version` under the write lock, so
-/// concurrent openers migrate a file once and back it up once.
+/// Applies every step newer than the database's `user_version`, then every file step not yet recorded in
+/// `store_migrations` (decision 0119). A newer database is refused before anything is written; `file` is `Some` for
+/// on-disk databases, which are backed up before their first change. The whole upgrade of a file runs under an OS
+/// lock, and each step re-checks its state under the write lock, so concurrent openers migrate a file once and back
+/// it up once.
+#[cfg(test)]
 pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
 ) -> Result<(), StoreError> {
-    migrate_observed(connection, file, steps, &mut |_| {})
+    migrate_observed(connection, file, steps, &[], &mut |_| {})
 }
 
-/// Like `migrate`, calling `observe` once the migration lock is held and after each step.
+/// Like `migrate`, with the file steps `files`, calling `observe` once the migration lock is held and after each step.
 pub(crate) fn migrate_observed(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
+    files: &[FileMigration],
     observe: &mut dyn FnMut(&'static str),
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
@@ -629,20 +702,36 @@ pub(crate) fn migrate_observed(
     if found > supported {
         return Err(StoreError::NewerSchema { found, supported });
     }
-    if found == supported {
+    // Unknown file-step ids are logged once per open: here when this check reads them, else under the lock below.
+    let checked = found == supported;
+    if checked && migration_files::pending(connection, files, true)?.is_empty() {
         return Ok(());
     }
     // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
     // would back up the half-migrated file again.
     let _upgrade = file.map(upgrade_lock).transpose()?;
     observe("store migration lock");
+    // Nothing is backed up before the first change to a database this run created empty.
+    let mut backed_up = false;
     if found == 0 && create_fresh(connection, file, steps)? {
         observe("store schema");
-        return Ok(());
+        backed_up = true;
+    } else {
+        apply_frozen(connection, file, steps, supported, &mut backed_up, observe)?;
     }
-    let mut backed_up = false;
+    migration_files::apply_pending(connection, file, files, !checked, &mut backed_up, observe)
+}
+
+/// Runs the frozen steps newer than `user_version`, one transaction each.
+fn apply_frozen(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    steps: &[Migration],
+    supported: i64,
+    backed_up: &mut bool,
+    observe: &mut dyn FnMut(&'static str),
+) -> Result<(), StoreError> {
     loop {
-        // Read without the lock first, so an up-to-date database is never written to.
         let found = user_version(connection)?;
         if found > supported {
             return Err(StoreError::NewerSchema { found, supported });
@@ -651,7 +740,7 @@ pub(crate) fn migrate_observed(
         let Some(step) = steps.get(index) else {
             return Ok(());
         };
-        apply_step(connection, file, found, index, step, &mut backed_up)?;
+        apply_step(connection, file, found, index, step, backed_up)?;
         observe("store schema step");
     }
 }
@@ -691,7 +780,7 @@ fn create_in_one_transaction(
     Ok(true)
 }
 
-/// Runs one step, with foreign keys switched off around its transaction when the step asks for that.
+/// Runs one frozen step, with foreign keys switched off around its transaction when the step asks for that.
 fn apply_step(
     connection: &mut Connection,
     file: Option<&Path>,
@@ -700,20 +789,50 @@ fn apply_step(
     step: &Migration,
     backed_up: &mut bool,
 ) -> Result<(), StoreError> {
-    if !step.foreign_keys_off {
-        return run_step(connection, file, found, index, step, backed_up);
-    }
-    // `PRAGMA foreign_keys` does nothing inside a transaction, so it is set before the step's transaction and
-    // restored after it, whether the step committed or was rolled back.
-    let enforced = foreign_keys_enforced(connection)?;
-    connection.pragma_update(None, "foreign_keys", false)?;
-    let result = run_step(connection, file, found, index, step, backed_up);
-    let restored = connection.pragma_update(None, "foreign_keys", enforced);
-    result.and(restored.map_err(StoreError::from))
+    with_foreign_keys_off(connection, step.foreign_keys_off, |connection| {
+        run_step(connection, file, found, index, step, backed_up)
+    })
 }
 
-/// Runs the step in one immediate transaction if `user_version` still reads `found`. Otherwise another process has
-/// moved it on, and the caller reads it again.
+/// Runs `run` with foreign keys switched off when `off` is set. `PRAGMA foreign_keys` does nothing inside a
+/// transaction, so it is set before the step's transaction and restored after it, whether the step committed or not.
+pub(crate) fn with_foreign_keys_off<T>(
+    connection: &mut Connection,
+    off: bool,
+    run: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    if !off {
+        return run(connection);
+    }
+    let enforced = foreign_keys_enforced(connection)?;
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = run(connection);
+    let restored = connection.pragma_update(None, "foreign_keys", enforced);
+    let value = result?;
+    restored?;
+    Ok(value)
+}
+
+/// Backs the database up once per run, under the write lock and before its first change. A process that arrives
+/// after the schema moved on never copies it.
+pub(crate) fn back_up_before_first_step(
+    transaction: &Transaction<'_>,
+    file: Option<&Path>,
+    label: BackupLabel<'_>,
+    backed_up: &mut bool,
+) -> Result<(), StoreError> {
+    if !*backed_up
+        && let Some(file) = file
+        && backup::holds_objects(transaction)?
+    {
+        backup::create_before_migration(file, label)?;
+    }
+    *backed_up = true;
+    Ok(())
+}
+
+/// Runs the frozen step in one immediate transaction if `user_version` still reads `found`. Otherwise another process
+/// has moved it on, and the caller reads it again.
 fn run_step(
     connection: &mut Connection,
     file: Option<&Path>,
@@ -726,14 +845,7 @@ fn run_step(
     if user_version(&transaction)? != found {
         return Ok(());
     }
-    // One backup per run, taken under the lock: a process that arrives after the schema moved on never copies it.
-    if !*backed_up
-        && let Some(file) = file
-        && backup::holds_objects(&transaction)?
-    {
-        backup::create_before_migration(file, found)?;
-    }
-    *backed_up = true;
+    back_up_before_first_step(&transaction, file, BackupLabel::Version(found), backed_up)?;
     transaction.execute_batch(step.sql)?;
     if step.foreign_keys_off
         && let Some(table) = first_foreign_key_violation(&transaction)?
@@ -748,9 +860,10 @@ fn run_step(
     Ok(())
 }
 
-/// How long an open waits for another opener's upgrade before it gives up.
+/// How long an open waits for another opener's upgrade before it gives up. Tests keep it short but above the time a
+/// loaded machine needs for a backup and a few steps.
 const UPGRADE_LOCK_WAIT: Duration = if cfg!(test) {
-    Duration::from_secs(1)
+    Duration::from_secs(5)
 } else {
     Duration::from_secs(30)
 };
@@ -788,7 +901,7 @@ fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
     }
 }
 
-fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
+pub(crate) fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
     connection.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
@@ -797,7 +910,9 @@ fn foreign_keys_enforced(connection: &Connection) -> rusqlite::Result<bool> {
 }
 
 /// The table of the first row that breaks a foreign key, if any.
-fn first_foreign_key_violation(connection: &Connection) -> rusqlite::Result<Option<String>> {
+pub(crate) fn first_foreign_key_violation(
+    connection: &Connection,
+) -> rusqlite::Result<Option<String>> {
     let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
     let mut rows = statement.query([])?;
     let first = rows.next()?;

@@ -5,10 +5,15 @@ mod agent_accounts;
 mod agent_chat;
 mod agent_prompt_queue;
 mod agent_sessions;
+mod automations;
 mod backup;
+mod bot_skills;
 mod bots;
 mod devices;
 mod error;
+mod migration_files;
+#[cfg(test)]
+mod migration_folder;
 mod migrations;
 mod projects;
 mod script_trust;
@@ -35,6 +40,7 @@ pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, PREVIEW_SOURCE_CHARS, RunExit, RunExitReason, RunMode,
     SessionDetails, SessionOrigin, StoredActivity,
 };
+pub use automations::AutomationRow;
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;

@@ -14,20 +14,32 @@ pub enum ReviewOutcome {
         sentence: String,
         command: String,
     },
+    /// The update of a host program MassOrca installed: one sentence; the command is under Show details.
+    Update { title: String, sentence: String },
+    /// Every install step needs administrator rights: the person runs one of these commands; MassOrca never does.
+    Manual {
+        title: String,
+        sentence: String,
+        commands: Vec<String>,
+    },
 }
 
 impl ReviewOutcome {
     pub fn title(&self) -> &str {
         match self {
-            Self::Add { title, .. } | Self::Install { title, .. } => title,
+            Self::Add { title, .. }
+            | Self::Install { title, .. }
+            | Self::Update { title, .. }
+            | Self::Manual { title, .. } => title,
         }
     }
 
     /// The primary button.
     pub fn button(&self) -> &'static str {
         match self {
-            Self::Add { .. } => "Add to MassOrca",
+            Self::Add { .. } | Self::Manual { .. } => "Add to MassOrca",
             Self::Install { .. } => "Install",
+            Self::Update { .. } => "Update",
         }
     }
 }
@@ -57,11 +69,33 @@ pub fn review_outcome(review: &ExtensionReview, name: &str) -> ReviewOutcome {
             command: commands.join("; "),
         };
     }
+    let manual: Vec<String> = review
+        .cli
+        .iter()
+        .filter_map(|plan| match &plan.state {
+            CliPlanState::Manual { commands } => {
+                Some(commands.iter().map(|command| command.join(" ")))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if !manual.is_empty() {
+        return ReviewOutcome::Manual {
+            title: format!("Add {name} to MassOrca"),
+            sentence: format!(
+                "{name} needs administrator rights to install. Run this command yourself; MassOrca never runs it."
+            ),
+            commands: manual,
+        };
+    }
     let detected = review
         .cli
         .iter()
         .any(|plan| matches!(plan.state, CliPlanState::Detected { .. }));
-    let body = if detected {
+    let body = if detected && review.listing.category == "tools" {
+        format!("MassOrca will add the {name} you already have installed on this computer.")
+    } else if detected {
         format!("MassOrca will add the {name} agent you already have installed on this computer.")
     } else {
         format!("MassOrca will add {name} to this computer.")
@@ -158,6 +192,23 @@ pub(super) mod tests {
 {sentence}
 {command}"
             ),
+            ReviewOutcome::Update { title, sentence } => format!(
+                "{title}
+{sentence}"
+            ),
+            ReviewOutcome::Manual {
+                title,
+                sentence,
+                commands,
+            } => format!(
+                "{title}
+{sentence}
+{}",
+                commands.join(
+                    "
+"
+                )
+            ),
         }
     }
 
@@ -214,5 +265,44 @@ pub(super) mod tests {
         );
         assert_eq!(outcome.button(), "Add to MassOrca");
         assert_nothing_removed_shows(&outcome);
+    }
+
+    #[test]
+    fn a_detected_tool_is_added_without_calling_it_an_agent() {
+        let mut tool = detected_review();
+        tool.listing.category = "tools".to_owned();
+        assert_eq!(
+            review_outcome(&tool, "Git"),
+            ReviewOutcome::Add {
+                title: "Add Git to MassOrca".to_owned(),
+                body: "MassOrca will add the Git you already have installed on this computer."
+                    .to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_step_that_needs_admin_rights_is_shown_to_run_yourself() {
+        let mut tool = review();
+        tool.listing.category = "tools".to_owned();
+        tool.runs_installer = false;
+        let apt: Vec<String> = ["sudo", "apt-get", "install", "-y", "git"]
+            .map(String::from)
+            .into();
+        tool.cli[0].state = CliPlanState::Manual {
+            commands: vec![apt.clone()],
+        };
+        let outcome = review_outcome(&tool, "Git");
+        assert_eq!(
+            outcome,
+            ReviewOutcome::Manual {
+                title: "Add Git to MassOrca".to_owned(),
+                sentence: "Git needs administrator rights to install. Run this command yourself; MassOrca never runs it."
+                    .to_owned(),
+                commands: vec!["sudo apt-get install -y git".to_owned()],
+            }
+        );
+        assert_eq!(outcome.button(), "Add to MassOrca");
+        assert!(!installer_runs(&tool));
     }
 }

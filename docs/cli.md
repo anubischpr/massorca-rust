@@ -179,6 +179,10 @@ project) at the time the project is added.
   anyway and prints `archive failed, removed anyway: <reason>`. An untrusted script does not run
   (`archive skipped: <reason>`) and the removal goes ahead. Folder workspaces have no archive
   script (decision 0095).
+- Removing any workspace, worktree or folder, also deletes what the service kept of what ran
+  in it: its sessions with their archived output, and its terminals with their scrollback,
+  ended ones and those a retained session kept included. The archive script's terminal stays,
+  so `archive script ran in terminal <ID>` can still be read. Files on disk are not touched.
 
 Settings that affect workspace names are changed with `config set` (`config list` shows every setting).
 `workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt the person
@@ -209,6 +213,12 @@ connect and disconnect on their own.
   still detaches. A refusal, such as a revoked device, ends the attach with its reason.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
+- A program that asks for the foreground, background or cursor colour (OSC 10, 11 or 12)
+  while no answering emulator is attached gets the service's answer in the xterm form
+  (`rgb:RRRR/GGGG/BBBB`, with the query's terminator). The colours are the desktop's
+  terminal defaults, light when `appearance.theme` is `light` and dark otherwise, `system`
+  included. While an emulator is attached (`terminal attach`, the desktop), the service
+  leaves colour queries to it and never waits for its reply.
 
 ### Agents
 
@@ -227,8 +237,9 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   piped streams, keeps its transcript, and answers its permission requests through `agent.chat.approval.answer`.
   Only a kind with a `chat` block whose CLI version is in range can: `agent kinds --json` shows each kind's `chat`
   (`supported`, and otherwise `reason`: `not_detected`, `version_unknown` or `version_outside_range`, with the probed
-  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x. Any other
-  kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
+  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x, and the
+  built-in `codex` kind Codex 0.172.0 through 0.x (`codex app-server`, decision 0173; its `--model` and `--effort` apply,
+  and a resume reopens the conversation the first run named). Any other kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
   without `--chat` instead. `agent resume` of a chat session resumes it as a chat, `agent stop`, `agent status` and the
   queue work as for a terminal session.
 - `agent start` without `--workspace` starts a session with no project (decision 0094). It
@@ -429,6 +440,36 @@ health. A web client URL and a pairing QR or URL are not produced either: no off
 an offer's secret is shown only when it is made. `server status` shows the same listeners and pin later.
 
 The service log goes to the profile's log files only unless `--log-stderr` is given.
+
+### Automations
+
+Scheduled automation definitions (decision 0123). An automation is stored, listed and changed here; this version
+does not start its runs.
+
+| Command | What it does |
+|---|---|
+| `automations create <NAME> --project <PROJECT> --prompt <TEXT> [--agent <KIND>] [--cadence hourly\|daily\|weekdays\|weekly\|cron] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>] [--creation-key <KEY>]` | Creates an automation in a project, enabled, with its next run from its schedule. `--project` takes an id, a name or a path. Defaults: agent `claude`, daily at `09:00`. `--cadence hourly` runs every hour at the minute of `--time`; `weekly` needs `--weekday` (`mon` to `sun`); `cron` needs `--cron` with five fields, such as `0 9 * * 1-5`, and ignores `--time`. Without `--zone` the host's zone is used; the create is refused when the host's zone cannot be read. `--grace` is 0 to 10080 minutes, 720 when unset. A retry with the same `--creation-key` returns the automation the first create made. |
+| `automations edit <AUTOMATION> [--name <NAME>] [--project <PROJECT>] [--prompt <TEXT>] [--agent <KIND>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>]` | Changes the options given and no others. A schedule change recomputes the next run. `--zone ""` returns the automation to the host's zone. |
+| `automations show <AUTOMATION>` | Shows one automation, by id or by exact name. |
+| `automations list` | Lists the automations, in creation order. |
+| `automations remove <AUTOMATION>` | Removes an automation. It cannot be restored. |
+| `automations enable <AUTOMATION>` | Enables an automation and schedules its next run from now. |
+| `automations disable <AUTOMATION>` | Disables an automation; it has no next run until it is enabled. |
+
+An automation whose project was removed stays listed with no project and does not start. A name two automations
+share is refused until the one meant is named by its id.
+
+### Calendar
+
+The runs of routines and automations in a window of days, on the shared schedule (decision 0124). Read only.
+
+| Command | What it does |
+|---|---|
+| `calendar [--from <DATE>] [--days <N>] [--kind routines\|automations] [--done]` | Lists the runs in a window that starts at `--from`, a UTC date (`YYYY-MM-DD`, today in UTC when unset), and lasts `--days` days (1 to 62, 7 when unset). `--kind routines` lists only Bot Teams routines and `automations` only Workspaces automations; both when unset. Each run shows its date and time on its routine's or automation's zone, or on the host's zone when it has none. Done routine runs show only with `--done`. |
+
+Upcoming runs start at the time of the call. A paused routine and a disabled automation have no upcoming runs.
+Automations keep no run history yet, so they have no done runs. A host that does not offer `calendar/1` says it is too
+old for the calendar.
 
 ### Hosts and pairing
 

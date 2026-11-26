@@ -1,4 +1,4 @@
-use rusqlite::{Row, params};
+use rusqlite::{Connection, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
@@ -37,21 +37,7 @@ fn bot_from_row(row: &Row<'_>) -> rusqlite::Result<BotRow> {
 impl Store {
     /// Inserts a bot. A name taken in its team, or a second lead, is `StoreError::Conflict`.
     pub fn insert_bot(&self, row: &BotRow) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO bots (id, team_id, name, job, kind, model, effort, lead, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                row.id,
-                row.team_id,
-                row.name,
-                row.job,
-                row.kind,
-                row.model,
-                row.effort,
-                row.lead,
-                row.created_at
-            ],
-        )?;
-        Ok(())
+        insert_bot_row(&self.lock(), row)
     }
 
     pub fn get_bot(&self, id: &str) -> Result<Option<BotRow>, StoreError> {
@@ -111,4 +97,22 @@ impl Store {
             .execute("DELETE FROM bots WHERE id = ?1", [id])?;
         Ok(removed > 0)
     }
+}
+
+pub(crate) fn insert_bot_row(connection: &Connection, row: &BotRow) -> Result<(), StoreError> {
+    connection.execute(
+        "INSERT INTO bots (id, team_id, name, job, kind, model, effort, lead, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            row.id,
+            row.team_id,
+            row.name,
+            row.job,
+            row.kind,
+            row.model,
+            row.effort,
+            row.lead,
+            row.created_at
+        ],
+    )?;
+    Ok(())
 }

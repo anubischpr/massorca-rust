@@ -138,6 +138,24 @@ fn a_cancelled_offer_no_longer_pairs_and_all_retires_the_rest() {
 }
 
 #[test]
+fn an_offer_id_that_starts_with_a_dash_is_an_id_not_an_option() {
+    let server = Sandbox::new();
+    let (_service, _port) = start_server(&server);
+
+    // Ids are base64url, so about one in 64 starts with '-'.
+    let unknown = server
+        .run(
+            "server",
+            &with_json(&["--no-autostart", "pair", "cancel", "-dQw4w9WgXcQ"]),
+        )
+        .failure();
+    assert_eq!(
+        single_document(&unknown)["error"]["code"],
+        "pairing.offer_not_found"
+    );
+}
+
+#[test]
 fn a_text_offer_ends_with_its_qr_code_unless_asked_not_to() {
     let server = Sandbox::new();
     let (_service, _port) = start_server(&server);
