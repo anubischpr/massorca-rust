@@ -62,6 +62,7 @@ pub struct ProjectIconControl {
     open: bool,
     current: Option<String>,
     refusal: Option<SharedString>,
+    reset: SharedString,
     on_open_change: OpenChange,
     on_choose: Choose,
 }
@@ -89,6 +90,7 @@ impl ProjectIconControl {
             open,
             current: None,
             refusal: None,
+            reset: SharedString::from("Reset to folder"),
             on_open_change: Rc::new(on_open_change),
             on_choose: Rc::new(on_choose),
         }
@@ -103,6 +105,12 @@ impl ProjectIconControl {
     /// The reason the last change was refused, drawn under the grid until the next attempt.
     pub fn refusal(mut self, refusal: Option<SharedString>) -> Self {
         self.refusal = refusal;
+        self
+    }
+
+    /// The words of the reset row, which say what Reset does for this owner; "Reset to folder" by default.
+    pub fn reset_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.reset = label.into();
         self
     }
 }
@@ -134,7 +142,7 @@ impl RenderOnce for ProjectIconControl {
         }
         body = body
             .child(upload_row(self.on_choose.clone(), &theme))
-            .child(reset_row(self.on_choose, &theme));
+            .child(reset_row(self.on_choose, self.reset, &theme));
         Popover::new(self.id, trigger)
             .open(open)
             .variant(PopoverVariant::Form)
@@ -245,7 +253,7 @@ fn upload_row(choose: Choose, theme: &Theme) -> impl IntoElement {
         .on_click(move |_: &ClickEvent, window, cx| choose(ProjectIconChoice::Upload, window, cx))
 }
 
-fn reset_row(choose: Choose, theme: &Theme) -> impl IntoElement {
+fn reset_row(choose: Choose, label: SharedString, theme: &Theme) -> impl IntoElement {
     let p = theme.palette;
     div()
         .id("project-icon-reset")
@@ -257,7 +265,7 @@ fn reset_row(choose: Choose, theme: &Theme) -> impl IntoElement {
         .text_color(p.text.primary)
         .hover(move |s| s.bg(p.fill.hover_raised))
         .cursor_pointer()
-        .child("Reset to folder")
+        .child(label)
         .on_click(move |_: &ClickEvent, window, cx| choose(ProjectIconChoice::Reset, window, cx))
 }
 
@@ -337,6 +345,17 @@ mod tests {
         });
         draw(cx);
         (recorded, view, cx)
+    }
+
+    #[test]
+    fn reset_says_what_it_does_for_its_owner() {
+        let folder =
+            ProjectIconControl::new("project-icon", div(), false, |_, _, _| {}, |_, _, _| {});
+        assert_eq!(folder.reset.as_ref(), "Reset to folder");
+        let detect =
+            ProjectIconControl::new("add-project-icon", div(), false, |_, _, _| {}, |_, _, _| {})
+                .reset_label("Detect from files");
+        assert_eq!(detect.reset.as_ref(), "Detect from files");
     }
 
     #[test]

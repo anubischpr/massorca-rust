@@ -2,14 +2,18 @@
 
 use super::Shell;
 use super::path_field::{PickKind, path_field};
+use super::project_mark::project_mark;
 use super::workspace_dialogs::AddProjectDialog;
-use crate::model::project_add::plain_folder_copy;
+use crate::model::project_add::{AddProjectForm, plain_folder_copy};
+use crate::model::project_icon::ProjectGlyph;
 use crate::model::session_delete::{SessionDeleteFlow, SessionDeleteStage};
 use crate::model::workspace_flow::{DialogCopy, DialogKind, KEEP_BRANCH_LATER, RemoveFlow};
-use gpui::{AnyElement, App, Focusable, WeakEntity, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Focusable, SharedString, WeakEntity, Window, div, prelude::*, px};
+use massorca_protocol::methods::projects::ProjectIcon;
 use massorca_ui::ActiveTheme;
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
+use massorca_ui::components::project_icon_popover::ProjectIconControl;
 use massorca_ui::tokens::SPACE_3;
 
 /// "Add a project…": one path field. A refusal about the path shows under it, any other refusal in
@@ -36,6 +40,7 @@ pub(super) fn add_project_dialog(
             true,
             true,
         ))
+        .child(add_project_icon_row(form, shell))
         .field(dialog.path.read(cx).focus_handle(cx))
         .action("Add project")
         .action_disabled(!form.can_submit())
@@ -50,6 +55,29 @@ pub(super) fn add_project_dialog(
         view = view.error(error.clone());
     }
     view
+}
+
+/// The icon row of "Add a project…": the icon button and its grid, which choose the icon the project is added with.
+fn add_project_icon_row(form: &AddProjectForm, shell: &WeakEntity<Shell>) -> impl IntoElement {
+    let (on_open, on_choose) = (shell.clone(), shell.clone());
+    let current = match &form.icon {
+        Some(ProjectIcon::Lucide { name }) => Some(name.clone()),
+        _ => None,
+    };
+    ProjectIconControl::new(
+        "add-project-icon",
+        project_mark(&ProjectGlyph::of(form.icon.as_ref())),
+        form.icon_open,
+        move |open, _, cx| {
+            let _ = on_open.update(cx, |shell, cx| shell.set_add_project_icon_open(open, cx));
+        },
+        move |choice, _, cx| {
+            let _ = on_choose.update(cx, |shell, cx| shell.choose_add_project_icon(choice, cx));
+        },
+    )
+    .current(current.as_deref())
+    .refusal(form.icon_refusal.clone().map(SharedString::from))
+    .reset_label("Detect from files")
 }
 
 /// The warning for a folder that is not a Git repository: what it loses, then Continue without Git or Cancel back

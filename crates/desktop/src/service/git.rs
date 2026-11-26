@@ -17,6 +17,9 @@ use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::git::log::{DEFAULT_LOG_LIMIT, GitLog, GitLogParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams, GitPushed,
+};
 use massorca_protocol::methods::git::status::{GitStatus, GitStatusParams};
 use massorca_protocol::methods::git::watch::{GitWatchEvent, WatchKind};
 use tokio::sync::{mpsc, oneshot};
@@ -58,6 +61,21 @@ impl ServiceHandle {
     pub async fn git_discard(&self, params: GitDiscardParams) -> Result<GitDiscarded, Refusal> {
         self.ask(|reply| Command::GitDiscard { params, reply })
             .await
+    }
+
+    /// `git.fetch`: fetches the named remote, the default one, or every remote when `all` is set.
+    pub async fn git_fetch(&self, params: GitFetchParams) -> Result<GitFetched, Refusal> {
+        self.ask(|reply| Command::GitFetch { params, reply }).await
+    }
+
+    /// `git.pull`: brings the branch up to its upstream with the strategy the params name.
+    pub async fn git_pull(&self, params: GitPullParams) -> Result<GitPulled, Refusal> {
+        self.ask(|reply| Command::GitPull { params, reply }).await
+    }
+
+    /// `git.push`: pushes the current branch to its upstream, creating the upstream on the remote if needed.
+    pub async fn git_push(&self, params: GitPushParams) -> Result<GitPushed, Refusal> {
+        self.ask(|reply| Command::GitPush { params, reply }).await
     }
 
     /// `git.commit`. The status and history change through the refetch that follows, not this answer.
@@ -147,6 +165,42 @@ pub(super) fn spawn(
                 move |client| async move { client.git_commit(&params).await },
             );
         }
+        Command::GitFetch { params, reply } => {
+            let workspace = params.workspace.clone();
+            mutate(
+                client,
+                updates,
+                workspace,
+                freshness,
+                true,
+                reply,
+                move |client| async move { client.git_fetch(&params).await },
+            );
+        }
+        Command::GitPull { params, reply } => {
+            let workspace = params.workspace.clone();
+            mutate(
+                client,
+                updates,
+                workspace,
+                freshness,
+                true,
+                reply,
+                move |client| async move { client.git_pull(&params).await },
+            );
+        }
+        Command::GitPush { params, reply } => {
+            let workspace = params.workspace.clone();
+            mutate(
+                client,
+                updates,
+                workspace,
+                freshness,
+                true,
+                reply,
+                move |client| async move { client.git_push(&params).await },
+            );
+        }
         // The session starts and stops watches itself; other commands are not git's.
         _ => {}
     }
@@ -165,6 +219,15 @@ pub(super) fn refuse(command: Command, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         Command::GitCommit { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitFetch { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitPull { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::GitPush { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         _ => {}

@@ -226,6 +226,7 @@ fn model(id: &str, name: &str, efforts: &[&str], default: usize, fast: bool) -> 
             .collect(),
         default_effort: default,
         fast,
+        fast_reason: None,
     }
 }
 
