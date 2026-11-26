@@ -1,15 +1,22 @@
-//! Scheduled automation definitions over the wire (decision 0123): creation and its refusals, and the host zone an
-//! automation without a zone runs in.
+//! Scheduled automation definitions over the wire (decision 0123): creation and its refusals, the creation key, the
+//! list order, edits, enable and disable, removal, and what a removed project leaves behind.
 
 use std::path::Path;
 
 use massorca_client::Client;
 use massorca_core_schedule::{ZoneSource, host_zone_used};
 use massorca_protocol::codes;
-use massorca_protocol::methods::automations::{self, AutomationCadence, AutomationCreateParams};
-use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
+use massorca_protocol::methods::automations::{
+    self, Automation, AutomationCadence, AutomationCreateParams, AutomationRef,
+};
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
+};
 
 use super::common::{connect, remote_code, start, stop, temp_home};
+
+const DAY_MS: i64 = 86_400_000;
+const NINE_AM_MS: i64 = 9 * 3_600_000;
 
 fn create_params(project: &str, name: &str) -> AutomationCreateParams {
     AutomationCreateParams {
@@ -24,6 +31,12 @@ fn create_params(project: &str, name: &str) -> AutomationCreateParams {
         zone: Some("UTC".to_owned()),
         grace_minutes: None,
         creation_key: None,
+    }
+}
+
+fn reference(automation: &str) -> AutomationRef {
+    AutomationRef {
+        automation: automation.to_owned(),
     }
 }
 
@@ -42,6 +55,93 @@ async fn folder_project(client: &Client, home: &Path, name: &str) -> Project {
         .call(projects::ADD, &params)
         .await
         .expect("project.add")
+}
+
+#[tokio::test]
+async fn an_automation_is_created_listed_shown_by_id_and_name_and_removed() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = folder_project(&client, home.path(), "app").await;
+
+    let created = client
+        .automation_create(&create_params("app", "Morning PRs"))
+        .await
+        .expect("automation.create");
+    assert_eq!(created.name, "Morning PRs");
+    assert_eq!(created.project_id.as_deref(), Some(project.id.as_str()));
+    assert_eq!(created.project_name.as_deref(), Some("app"));
+    assert_eq!(created.cadence, AutomationCadence::Daily);
+    assert_eq!(created.zone_used, None, "a named zone is not the host's");
+    assert_eq!(created.grace_minutes, automations::DEFAULT_GRACE_MINUTES);
+    assert!(created.enabled);
+    let next = created
+        .next_run_at_ms
+        .expect("an enabled automation has a next run");
+    assert_eq!(next % DAY_MS, NINE_AM_MS, "09:00 UTC");
+    assert!(next > created.created_at_ms);
+    assert_eq!(created.last_run_at_ms, None);
+
+    let list = client.automation_list().await.expect("automation.list");
+    assert_eq!(list.automations, vec![created.clone()]);
+    let by_id = client
+        .automation_show(&reference(&created.id))
+        .await
+        .expect("show by id");
+    let by_name = client
+        .automation_show(&reference("Morning PRs"))
+        .await
+        .expect("show by name");
+    assert_eq!(by_id, created);
+    assert_eq!(by_name, created);
+
+    let removed = client
+        .automation_remove(&reference(&created.id))
+        .await
+        .expect("automation.rm");
+    assert_eq!(removed, created);
+    assert!(
+        client
+            .automation_list()
+            .await
+            .expect("list after removal")
+            .automations
+            .is_empty()
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_repeated_create_with_the_same_creation_key_returns_the_first_automation() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+
+    let mut first = create_params("app", "Morning PRs");
+    first.creation_key = Some("client-key-1".to_owned());
+    let made: Automation = client
+        .automation_create(&first)
+        .await
+        .expect("first create");
+
+    let mut repeat = create_params("app", "Renamed on retry");
+    repeat.creation_key = Some("client-key-1".to_owned());
+    let again = client
+        .automation_create(&repeat)
+        .await
+        .expect("the repeat returns the first");
+    assert_eq!(again, made);
+    assert_eq!(
+        client
+            .automation_list()
+            .await
+            .expect("list")
+            .automations
+            .len(),
+        1
+    );
+    stop(running).await;
 }
 
 #[tokio::test]
@@ -123,6 +223,90 @@ async fn a_weekly_without_a_weekday_and_a_grace_over_one_week_are_refused() {
         .await
         .expect("one week is allowed");
     assert_eq!(kept.grace_minutes, automations::MAX_GRACE_MINUTES);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn the_list_keeps_creation_order() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+
+    for name in ["Beta", "Alpha", "Gamma"] {
+        client
+            .automation_create(&create_params("app", name))
+            .await
+            .expect("create");
+    }
+    let names: Vec<String> = client
+        .automation_list()
+        .await
+        .expect("list")
+        .automations
+        .into_iter()
+        .map(|automation| automation.name)
+        .collect();
+    assert_eq!(names, ["Beta", "Alpha", "Gamma"]);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn removing_a_project_leaves_its_automation_without_a_project() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+    let created = client
+        .automation_create(&create_params("app", "Morning PRs"))
+        .await
+        .expect("create");
+
+    let _: Project = client
+        .call(
+            projects::REMOVE,
+            &ProjectRemoveParams {
+                project: "app".to_owned(),
+                forget_workspaces: false,
+            },
+        )
+        .await
+        .expect("project.remove");
+
+    let orphan = client
+        .automation_show(&reference(&created.id))
+        .await
+        .expect("the automation remains");
+    assert_eq!(orphan.project_id, None);
+    assert_eq!(orphan.project_name, None);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_name_shared_by_two_automations_is_refused_until_one_is_named_by_id() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+    let first = client
+        .automation_create(&create_params("app", "Twin"))
+        .await
+        .expect("first");
+    client
+        .automation_create(&create_params("app", "Twin"))
+        .await
+        .expect("second");
+
+    let error = client
+        .automation_show(&reference("Twin"))
+        .await
+        .expect_err("the name is shared");
+    assert_eq!(remote_code(&error), codes::REQUEST_INVALID_PARAMS);
+    let shown = client
+        .automation_show(&reference(&first.id))
+        .await
+        .expect("by id");
+    assert_eq!(shown, first);
     stop(running).await;
 }
 

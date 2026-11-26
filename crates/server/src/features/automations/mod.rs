@@ -1,8 +1,9 @@
-//! Scheduled automation definitions (decision 0123): `automation.create` under capability `automations/1`. A definition
-//! is stored here; no run is started.
+//! Scheduled automation definitions (decision 0123): `automation.create`, `list`, `show` and `rm` under capability
+//! `automations/1`. A definition is stored and listed here; no run is started.
 
 mod calls;
 mod definition;
+mod selectors;
 mod view;
 
 use massorca_protocol::capabilities;
@@ -14,8 +15,8 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-/// Registers the automations capability and its methods. Changing a definition is `workspace`, as for routines, since a
-/// definition starts agents in a project.
+/// Registers the automations capability and its methods. Reading is `read`; changing a definition is `workspace`, as
+/// for routines, since a definition starts agents in a project.
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
     let cap = capabilities::AUTOMATIONS;
@@ -23,10 +24,31 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries.capabilities.register(cap, Owner::Core)?,
         methods.register(
             Owner::Core,
+            automations::LIST,
+            cap,
+            Permission::Read,
+            calls::list,
+        )?,
+        methods.register(
+            Owner::Core,
+            automations::SHOW,
+            cap,
+            Permission::Read,
+            calls::show,
+        )?,
+        methods.register(
+            Owner::Core,
             automations::CREATE,
             cap,
             Permission::Workspace,
             calls::create,
+        )?,
+        methods.register(
+            Owner::Core,
+            automations::REMOVE,
+            cap,
+            Permission::Workspace,
+            calls::remove,
         )?,
     ])
 }

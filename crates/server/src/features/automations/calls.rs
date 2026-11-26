@@ -1,18 +1,44 @@
-//! The `automation.*` handlers. A create reads or writes the store on the blocking pool, and resolves its project the way
+//! The `automation.*` handlers. Each reads or writes the store on the blocking pool. A create resolves its project the way
 //! `project.show` does, through the workspace domain (decision 0123).
 
 use massorca_core_store::{AutomationRow, StoreError, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
-use massorca_protocol::ErrorBody;
-use massorca_protocol::methods::automations::{Automation, AutomationCreateParams};
+use massorca_protocol::methods::automations::{
+    Automation, AutomationCreateParams, AutomationList, AutomationRef,
+};
+use massorca_protocol::{ErrorBody, codes};
 
 use super::definition::{
     HostZone, cadence_name, check, check_grace, keep_for, next_run, time_kept, weekday_name,
 };
+use super::selectors::automation;
 use super::view::automation_view;
 use crate::context::RequestCtx;
+use crate::features::NoParams;
 use crate::features::teams::{blocking, non_blank, optional_text, store_error};
 use crate::features::workspace_domain::shared;
+
+pub(super) async fn list(ctx: RequestCtx, _params: NoParams) -> Result<AutomationList, ErrorBody> {
+    let host = HostZone::read();
+    blocking(&ctx, move |store, _agents| {
+        let rows = store.list_automations().map_err(store_error)?;
+        let automations = rows
+            .iter()
+            .map(|row| automation_view(store, row, &host))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(AutomationList { automations })
+    })
+    .await
+}
+
+pub(super) async fn show(ctx: RequestCtx, params: AutomationRef) -> Result<Automation, ErrorBody> {
+    let host = HostZone::read();
+    blocking(&ctx, move |store, _agents| {
+        let row = automation(store, &params.automation)?;
+        automation_view(store, &row, &host)
+    })
+    .await
+}
 
 pub(super) async fn create(
     ctx: RequestCtx,
@@ -50,6 +76,23 @@ pub(super) async fn create(
                 None => Err(store_error(StoreError::Conflict { constraint })),
             },
             Err(error) => Err(store_error(error)),
+        }
+    })
+    .await
+}
+
+pub(super) async fn remove(
+    ctx: RequestCtx,
+    params: AutomationRef,
+) -> Result<Automation, ErrorBody> {
+    let host = HostZone::read();
+    blocking(&ctx, move |store, _agents| {
+        let row = automation(store, &params.automation)?;
+        let removed = automation_view(store, &row, &host)?;
+        if store.delete_automation(&row.id).map_err(store_error)? {
+            Ok(removed)
+        } else {
+            Err(removed_meanwhile())
         }
     })
     .await
@@ -96,4 +139,11 @@ fn new_row(
 fn project_of(domain: &Workspaces, selector: &str) -> Result<(String, String), ErrorBody> {
     let project = domain.show_project(selector)?;
     Ok((project.id, project.name))
+}
+
+fn removed_meanwhile() -> ErrorBody {
+    ErrorBody::new(
+        codes::AUTOMATION_NOT_FOUND,
+        "the automation was removed by another call",
+    )
 }
