@@ -11,6 +11,7 @@ use gpui::{
 use super::*;
 use crate::components::diff_view::{DiffModel, FileDiff, FileStatus};
 use crate::components::plan_view::{Plan, PlanStep, StepStatus};
+use crate::components::secret_request_card::{SecretAction, SecretState};
 
 /// Draws one transcript and records what it asks for.
 struct Host {
@@ -229,6 +230,85 @@ fn choosing_always_asks_for_the_always_answer_when_it_is_offered(cx: &mut TestAp
         vec![TranscriptAction::Answer {
             request_id: "req-offered".into(),
             answer: ApprovalAnswer::Always,
+        }]
+    );
+}
+
+fn secret(id: &str, state: SecretState, storable: bool) -> TranscriptRow {
+    TranscriptRow::Secret {
+        id: format!("secret-{id}").into(),
+        secret: SecretRow {
+            request_id: id.into(),
+            name: "OPENAI_API_KEY".into(),
+            title: "Claude needs a secret".into(),
+            reason: Some("Calls the OpenAI API.".into()),
+            scope: "for project alpha".into(),
+            state,
+            storable,
+        },
+    }
+}
+
+#[gpui::test]
+fn a_pending_secret_request_sends_add_and_decline_for_its_request(cx: &mut TestAppContext) {
+    let (_view, asked, cx) = open(cx, vec![secret("r1", SecretState::Pending, true)], None);
+
+    click(cx, "button:secret-r1-add");
+    click(cx, "button:secret-r1-decline");
+
+    assert_eq!(
+        *asked.borrow(),
+        vec![
+            TranscriptAction::Secret {
+                request_id: "r1".into(),
+                action: SecretAction::Add,
+            },
+            TranscriptAction::Secret {
+                request_id: "r1".into(),
+                action: SecretAction::Decline,
+            },
+        ]
+    );
+}
+
+#[gpui::test]
+fn add_is_not_offered_for_a_team_scope_or_while_the_host_is_unreachable(cx: &mut TestAppContext) {
+    let (_view, asked, cx) = open(cx, vec![secret("r1", SecretState::Pending, false)], None);
+    click(cx, "button:secret-r1-add");
+    assert!(
+        asked.borrow().is_empty(),
+        "a team's request cannot be stored here"
+    );
+
+    let (_view, asked, cx) = open(
+        cx,
+        vec![secret("r2", SecretState::Pending, true)],
+        Some("the host".into()),
+    );
+    click(cx, "button:secret-r2-add");
+    click(cx, "button:secret-r2-decline");
+    assert_eq!(
+        *asked.borrow(),
+        vec![TranscriptAction::Secret {
+            request_id: "r2".into(),
+            action: SecretAction::Decline,
+        }],
+        "Decline still works while the host is unreachable"
+    );
+}
+
+#[gpui::test]
+fn a_settled_secret_request_is_a_row_whose_vault_link_asks_for_the_vault(cx: &mut TestAppContext) {
+    let (_view, asked, cx) = open(cx, vec![secret("r1", SecretState::Stored, true)], None);
+
+    assert!(cx.debug_bounds("button:secret-r1-add").is_none());
+    click(cx, "link:secret-r1-vault");
+
+    assert_eq!(
+        *asked.borrow(),
+        vec![TranscriptAction::Secret {
+            request_id: "r1".into(),
+            action: SecretAction::OpenVault,
         }]
     );
 }

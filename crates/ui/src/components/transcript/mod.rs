@@ -12,6 +12,7 @@ use gpui::{
 
 use crate::components::diff_view::DiffModel;
 use crate::components::plan_view::Plan;
+use crate::components::secret_request_card::{SecretAction, SecretState};
 use crate::theme::ActiveTheme;
 use crate::tokens::{LAYOUT_CONVERSATION_READING, Palette, SPACE_3, SPACE_4, SPACE_12};
 
@@ -19,6 +20,7 @@ use cards::ThinkingToggle;
 
 pub mod approval;
 pub mod cards;
+pub mod secret;
 #[cfg(test)]
 mod tests;
 
@@ -58,6 +60,11 @@ pub enum TranscriptRow {
         id: SharedString,
         approval: ApprovalRow,
     },
+    /// A secret an agent asked for: its card, with the request's state (X-CH-07).
+    Secret {
+        id: SharedString,
+        secret: SecretRow,
+    },
     Notice {
         id: SharedString,
         level: NoticeLevel,
@@ -80,6 +87,7 @@ impl TranscriptRow {
             | Self::Plan { id, .. }
             | Self::Diff { id, .. }
             | Self::Approval { id, .. }
+            | Self::Secret { id, .. }
             | Self::Notice { id, .. }
             | Self::Turn { id, .. } => id,
         }
@@ -117,6 +125,23 @@ pub struct ApprovalRow {
     pub can_always: bool,
     /// What an `always` answer writes, one line each, shown above the Always button so the person sees it first.
     pub suggestions: Vec<SharedString>,
+}
+
+/// A secret request as its card draws it. The card holds a name and a state, never a value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SecretRow {
+    pub request_id: SharedString,
+    /// The variable name, as the agent asked for it.
+    pub name: SharedString,
+    /// "Claude needs a secret", naming the agent that asked.
+    pub title: SharedString,
+    /// Why the agent needs it, as plain text.
+    pub reason: Option<SharedString>,
+    /// Where the secret belongs, such as "for project oppm".
+    pub scope: SharedString,
+    pub state: SecretState,
+    /// Whether this app can store a value for the request's scope; a team's cannot be answered here.
+    pub storable: bool,
 }
 
 /// Only `Allowed` authorizes the tool. `Cancelled` covers every end without an answer.
@@ -157,6 +182,11 @@ pub enum TranscriptAction {
     Answer {
         request_id: SharedString,
         answer: ApprovalAnswer,
+    },
+    /// A press on a secret card: Add and Retry open the Add dialog, Decline declines, Open vault opens the vault.
+    Secret {
+        request_id: SharedString,
+        action: SecretAction,
     },
 }
 
@@ -341,6 +371,9 @@ fn render_row(
         } => cards::diff(id, diff, *truncated, p),
         TranscriptRow::Approval { id, approval } => {
             approval::approval_card(id, approval, host, on_action, p)
+        }
+        TranscriptRow::Secret { id, secret } => {
+            secret::secret_card(id, secret, host.is_some(), on_action)
         }
         TranscriptRow::Notice { level, text, .. } => cards::notice(*level, text, p),
         TranscriptRow::Turn { state, .. } => cards::turn_footer(*state, p),

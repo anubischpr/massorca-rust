@@ -996,7 +996,9 @@ impl Shell {
         action: TranscriptAction,
         cx: &mut Context<Self>,
     ) {
-        let TranscriptAction::Answer { request_id, answer } = action;
+        let TranscriptAction::Answer { request_id, answer } = action else {
+            return;
+        };
         let request_id = request_id.to_string();
         let Some(service) = self.service.clone() else {
             return;

@@ -131,6 +131,7 @@ pub struct SecretRequestCard {
     host: SharedString,
     state: SecretState,
     unreachable: bool,
+    storable: bool,
     add_focus: Option<FocusHandle>,
     on_action: Option<ActionHandler>,
 }
@@ -162,6 +163,7 @@ impl SecretRequestCard {
             host: "this PC".into(),
             state,
             unreachable: false,
+            storable: true,
             add_focus: None,
             on_action: None,
         }
@@ -190,6 +192,12 @@ impl SecretRequestCard {
     /// The host cannot be reached: Add is disabled and nothing can be saved; Decline still works.
     pub fn unreachable(mut self, unreachable: bool) -> Self {
         self.unreachable = unreachable;
+        self
+    }
+
+    /// Whether this app can store a value for the request's scope; Add is off where it cannot, as for a team's.
+    pub fn storable(mut self, storable: bool) -> Self {
+        self.storable = storable;
         self
     }
 
@@ -305,9 +313,11 @@ impl RenderOnce for SecretRequestCard {
                 );
             }
             if matches!(self.state, SecretState::Stored | SecretState::Linked) {
+                let vault_link = format!("link:{id}-vault");
                 row = row.child(
                     div()
                         .id((id.clone(), "vault"))
+                        .debug_selector(move || vault_link)
                         .flex_none()
                         .cursor_pointer()
                         .text_style(TYPE_LABEL)
@@ -321,7 +331,7 @@ impl RenderOnce for SecretRequestCard {
 
         let entering = self.state == SecretState::Entering;
         let valid = is_valid_name(&self.name);
-        let add_enabled = valid && !self.unreachable && !entering;
+        let add_enabled = valid && self.storable && !self.unreachable && !entering;
         let pending_fill = matches!(self.state, SecretState::Pending | SecretState::Entering);
         let fill = if pending_fill {
             p.agent.waiting_bg
@@ -355,7 +365,7 @@ impl RenderOnce for SecretRequestCard {
                         Button::new((id.clone(), "retry"), "Retry")
                             .variant(ButtonVariant::Primary)
                             .size(ButtonSize::Default)
-                            .disabled(self.unreachable || !valid)
+                            .disabled(self.unreachable || !valid || !self.storable)
                             .on_click(emit(&handler, SecretAction::Retry)),
                     ))
                     .child(wrapped(
