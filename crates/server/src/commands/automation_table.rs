@@ -1,4 +1,5 @@
-//! The automation command table: `automations create|edit|show|list|remove|enable|disable` (decision 0123).
+//! The automation command table: `automations create|edit|show|list|remove|enable|disable` (decision 0123) and
+//! `automations run|runs` (decision 0125).
 
 use serde_json::json;
 
@@ -56,6 +57,22 @@ pub(super) fn automation_commands() -> Vec<CommandDescriptor> {
             "Disable an automation",
             "automation.disable",
             automation_selector(),
+        ),
+        command(
+            "automations.run",
+            "Run an automation now",
+            "automation.run_now",
+            automation_selector(),
+        ),
+        command(
+            "automations.runs",
+            "List an automation's runs, newest first",
+            "automation.runs",
+            json!({
+                "type": "object",
+                "required": ["automation"],
+                "properties": { "automation": { "type": "string" }, "limit": { "type": "integer" }, "before": { "type": "integer" } }
+            }),
         ),
     ]
 }

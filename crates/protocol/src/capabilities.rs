@@ -110,3 +110,6 @@ pub const COMMANDS: &str = "commands/1";
 pub const AUTOMATIONS: &str = "automations/1";
 /// The Calendar (`calendar.occurrences`, decision 0124). Not offered by a service that predates it.
 pub const CALENDAR: &str = "calendar/1";
+/// Automation runs (`automation.run_now`, `automation.runs` and the `automation.changed` topic, decision 0125). A host
+/// that has it also keeps `automations/1`.
+pub const AUTOMATION_RUNS: &str = "automation-runs/1";

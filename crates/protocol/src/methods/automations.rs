@@ -1,5 +1,5 @@
 //! `automation.*`: scheduled agent runs, defined, listed, shown, edited, enabled and removed (decision 0123, capability
-//! `automations/1`). These methods store definitions only; a run is not started by them.
+//! `automations/1`), and their runs: run now and run history (decision 0125, capability `automation-runs/1`).
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,20 @@ pub const REMOVE: &str = "automation.rm";
 pub const ENABLE: &str = "automation.enable";
 /// Params: [`AutomationRef`]. Result: [`Automation`]; it has no next run until enabled.
 pub const DISABLE: &str = "automation.disable";
+
+/// Params: [`AutomationRef`]. Result: [`AutomationRun`], the run it recorded (capability `automation-runs/1`).
+pub const RUN_NOW: &str = "automation.run_now";
+/// Params: [`AutomationRunsParams`]. Result: [`AutomationRunList`], newest first (capability `automation-runs/1`).
+pub const RUNS: &str = "automation.runs";
+
+/// Topic of `automation.changed` (decision 0125): a run of the automation it names started, ended or was recorded, so
+/// its history and its last and next runs changed.
+pub const TOPIC_AUTOMATION_CHANGED: &str = "automation.changed";
+
+/// The runs `automation.runs` returns when the params set no limit.
+pub const DEFAULT_RUNS_LIMIT: u32 = 20;
+/// The most runs one `automation.runs` page returns; retention keeps 100 final runs per automation.
+pub const MAX_RUNS_LIMIT: u32 = 100;
 
 /// The minutes a missed run may be late and still run, when an automation sets no grace (decision 0123).
 pub const DEFAULT_GRACE_MINUTES: i64 = 720;
@@ -162,4 +176,140 @@ pub struct AutomationRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationList {
     pub automations: Vec<Automation>,
+}
+
+/// Params of `automation.runs`: one automation's runs, newest first, `limit` at a time ([`DEFAULT_RUNS_LIMIT`] when
+/// unset, at most [`MAX_RUNS_LIMIT`]), numbered below `before` when it is given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationRunsParams {
+    /// The automation, by id or exact name.
+    pub automation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+}
+
+/// Result of `automation.runs`. `next_before` is the cursor of the next page, absent on the last one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationRunList {
+    pub runs: Vec<AutomationRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before: Option<i64>,
+}
+
+/// What started a run. A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationRunTrigger {
+    Schedule,
+    Manual,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where a run stands (AUTO-04). `dispatching` and `dispatched` are in progress; the rest are final. A value this build
+/// does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationRunState {
+    Pending,
+    /// Claimed; its agent is being started.
+    Dispatching,
+    /// Its agent runs; it ends when the agent reports Done or its run ends.
+    Dispatched,
+    /// The agent reported Done; `outcome` says how it went.
+    Completed,
+    SkippedPrecheck,
+    /// The occurrence was later than its grace, or an earlier one a later occurrence replaced. Never replayed.
+    SkippedMissed,
+    /// The run could not start here, such as an automation without a project.
+    SkippedUnavailable,
+    SkippedNeedsInteractiveAuth,
+    /// The agent could not start, exited without reporting Done, or its session was lost.
+    DispatchFailed,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+impl AutomationRunState {
+    /// Whether the run is still going: claimed or with its agent running.
+    pub fn in_progress(self) -> bool {
+        matches!(self, Self::Pending | Self::Dispatching | Self::Dispatched)
+    }
+}
+
+/// How a completed run's agent said it went. A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationRunOutcome {
+    Success,
+    Failure,
+    Cancelled,
+    Interrupted,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Whether a run's token usage is known. A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationUsageStatus {
+    Known,
+    Unavailable,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A run's token usage, or why it is not known.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationRunUsage {
+    pub status: AutomationUsageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<i64>,
+}
+
+/// One run of an automation. Timestamps are UTC epoch milliseconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationRun {
+    pub id: String,
+    pub automation_id: String,
+    /// The automation's run number, counting from 1; never reused.
+    pub number: i64,
+    pub trigger: AutomationRunTrigger,
+    pub state: AutomationRunState,
+    /// The occurrence the run stands for, or when a manual run was asked for.
+    pub scheduled_for_ms: i64,
+    /// How many occurrences the row stands for: more than one when missed occurrences are folded together.
+    pub occurrences: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<AutomationRunOutcome>,
+    /// The agent session of the run, once its agent started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Why the run was skipped or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The protocol code of `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    /// The agent's last result text, its most recent characters when it was longer than the host keeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    pub usage: AutomationRunUsage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<i64>,
+    pub created_at_ms: i64,
 }

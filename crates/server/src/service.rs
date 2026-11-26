@@ -350,6 +350,7 @@ impl Service {
         let _ = first_prompt_state.set(Arc::downgrade(&state));
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
         let outcome_changes = state.agent_changes.subscribe();
+        let automation_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
 
         // Terminals and chat runs end as soon as shutdown is requested, alongside the connections' grace period.
@@ -366,6 +367,11 @@ impl Service {
         let outcomes_stop = tokio::spawn(features::follow_task_outcomes(
             Arc::clone(&state),
             outcome_changes,
+            signal.clone(),
+        ));
+        let automations_stop = tokio::spawn(features::follow_automations(
+            Arc::clone(&state),
+            automation_changes,
             signal.clone(),
         ));
         let routines_stop = tokio::spawn(features::follow_routines(
@@ -387,6 +393,7 @@ impl Service {
             let _ = terminals_stop.await;
             let _ = outcomes_stop.await;
             let _ = routines_stop.await;
+            let _ = automations_stop.await;
         });
         timings.mark("serving");
         timings.report();

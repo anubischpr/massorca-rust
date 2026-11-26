@@ -35,6 +35,8 @@ use crate::model::chat_transcript::ChatTranscript;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreUpdate {
     Connection(ConnectionState),
+    /// A run of the automation with this id was recorded, started or ended (`automation.changed`, decision 0125).
+    AutomationChanged(String),
     /// Every project and workspace, after a connect or an overflow. Replaces what was held.
     Resync {
         projects: Vec<Project>,
@@ -343,6 +345,8 @@ pub struct StoreState {
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
     /// it). In memory only; a session ends the entry, so no placeholder comes back once its session is archived (A97).
     pub awaiting_session: BTreeMap<String, Option<String>>,
+    /// How many `automation.changed` events arrived; the Automations page reads again when it grows (decision 0125).
+    pub automation_changes: u64,
 }
 
 impl Default for StoreState {
@@ -393,6 +397,7 @@ impl Default for StoreState {
             chat_refused: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
+            automation_changes: 0,
         }
     }
 }
@@ -534,6 +539,9 @@ impl StoreState {
             }
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::AutomationChanged(_) => {
+                self.automation_changes = self.automation_changes.wrapping_add(1);
+            }
             StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),

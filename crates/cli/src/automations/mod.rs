@@ -1,5 +1,5 @@
-//! `massorca automations ...`: scheduled automation definitions (decision 0123). Creates, edits, shows, lists, removes,
-//! enables and disables them. A definition only: no run is started yet.
+//! `massorca automations ...`: scheduled automations (decision 0123). Creates, edits, shows, lists, removes, enables and
+//! disables them; runs one now and lists its runs (decision 0125).
 
 mod options;
 mod text;
@@ -8,8 +8,8 @@ use clap::Subcommand;
 use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
-    AutomationCadence, AutomationCreateParams, AutomationRef, AutomationUpdateParams,
-    AutomationWeekday,
+    AutomationCadence, AutomationCreateParams, AutomationRef, AutomationRunsParams,
+    AutomationUpdateParams, AutomationWeekday,
 };
 
 pub use options::{CadenceArg, CreateArgs, EditArgs, WeekdayArg};
@@ -46,6 +46,25 @@ pub enum AutomationsCommand {
     Disable {
         /// Automation id or exact name.
         automation: String,
+    },
+    /// Runs an automation now. The schedule does not move; `--now` is required.
+    Run {
+        /// Automation id or exact name.
+        automation: String,
+        /// Confirms the run now.
+        #[arg(long)]
+        now: bool,
+    },
+    /// Lists an automation's runs, newest first.
+    Runs {
+        /// Automation id or exact name.
+        automation: String,
+        /// Runs to list, 1 to 100; 20 when unset.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Lists the runs numbered below this one, the next page.
+        #[arg(long)]
+        before: Option<i64>,
     },
 }
 
@@ -113,11 +132,41 @@ pub async fn execute(
                 .map_err(|error| too_old(error.into()))?;
             output.success(&disabled, &[text::automation_line(&disabled, "disabled")]);
         }
+        AutomationsCommand::Run { automation, now } => {
+            if !now {
+                return Err(CliError::new(
+                    codes::REQUEST_INVALID_PARAMS,
+                    "pass --now to run it now; an automation runs on its own schedule",
+                    exit::ERROR,
+                ));
+            }
+            let run = client
+                .automation_run_now(&AutomationRef { automation })
+                .await
+                .map_err(|error| too_old(error.into()))?;
+            output.success(&run, &[text::run_line(&run)]);
+        }
+        AutomationsCommand::Runs {
+            automation,
+            limit,
+            before,
+        } => {
+            let list = client
+                .automation_runs(&AutomationRunsParams {
+                    automation,
+                    limit,
+                    before,
+                })
+                .await
+                .map_err(|error| too_old(error.into()))?;
+            output.success(&list, &text::run_table(&list));
+        }
     }
     Ok(())
 }
 
-/// The `automation.*` methods are newer than the first Bot Teams methods, so an older host answers them as unknown.
+/// The `automation.*` methods are newer than the first Bot Teams methods, and the run methods newer still, so an older
+/// host answers them as unknown.
 fn too_old(error: CliError) -> CliError {
     if error.code == codes::METHOD_NOT_FOUND {
         return CliError {
