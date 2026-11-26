@@ -1601,6 +1601,92 @@ pub(crate) mod fixtures {
             offered_agent_homes: Vec::new(),
         }
     }
+
+    /// Every `CliPlan` field at its usual value; tests override the fields they vary.
+    pub fn base_cli_plan() -> massorca_protocol::methods::extensions::CliPlan {
+        massorca_protocol::methods::extensions::CliPlan {
+            agent: "claude".to_owned(),
+            binary: None,
+            verify: None,
+            uninstall: None,
+            state: massorca_protocol::methods::extensions::CliPlanState::Unsupported,
+        }
+    }
+
+    /// Every `CliRecord` field at its usual value; tests override the fields they vary.
+    pub fn base_cli_record() -> massorca_protocol::methods::extensions::CliRecord {
+        massorca_protocol::methods::extensions::CliRecord {
+            agent: "claude".to_owned(),
+            binary: "claude".to_owned(),
+            detected_before_install: false,
+            installer: None,
+            installed_by_package: true,
+        }
+    }
+
+    /// Every `CliRemoval` field at its usual value; tests override the fields they vary.
+    pub fn base_cli_removal() -> massorca_protocol::methods::extensions::CliRemoval {
+        massorca_protocol::methods::extensions::CliRemoval {
+            agent: "notes".to_owned(),
+            binary: "notes".to_owned(),
+            action: massorca_protocol::methods::extensions::CliRemovalAction::LeftAlone,
+        }
+    }
+
+    /// Every `DiscoveredSkill` field at its usual value; tests override the fields they vary.
+    pub fn base_discovered_skill() -> massorca_protocol::methods::skills::DiscoveredSkill {
+        massorca_protocol::methods::skills::DiscoveredSkill {
+            id: String::new(),
+            name: String::new(),
+            description: None,
+            providers: Vec::new(),
+            source_kind: massorca_protocol::methods::skills::SkillSourceKind::Home,
+            source_label: String::new(),
+            root_path: None,
+            root_paths: Vec::new(),
+            directory_path: None,
+            skill_file_path: None,
+            installed: true,
+            updated_at: None,
+            disable_slash_command: false,
+        }
+    }
+
+    /// Every `RoutineRun` field at its usual value; tests override the fields they vary.
+    pub fn base_routine_run() -> massorca_protocol::methods::teams::RoutineRun {
+        massorca_protocol::methods::teams::RoutineRun {
+            id: "run-1".into(),
+            routine_id: "r1".into(),
+            scheduled_for_ms: 0,
+            task_id: None,
+            error: None,
+            error_code: None,
+            created_at_ms: 1,
+        }
+    }
+
+    /// Every `SkillDiscovery` field at its usual value; tests override the fields they vary.
+    pub fn base_skill_discovery() -> massorca_protocol::methods::skills::SkillDiscovery {
+        massorca_protocol::methods::skills::SkillDiscovery {
+            skills: Vec::new(),
+            sources: Vec::new(),
+            scanned_at: 1,
+        }
+    }
+
+    /// Every `SkillSource` field at its usual value; tests override the fields they vary.
+    pub fn base_skill_source() -> massorca_protocol::methods::skills::SkillSource {
+        massorca_protocol::methods::skills::SkillSource {
+            id: String::new(),
+            label: String::new(),
+            path: None,
+            source_kind: massorca_protocol::methods::skills::SkillSourceKind::Home,
+            providers: Vec::new(),
+            owner: None,
+            exists: false,
+            skipped_reason: None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -105,10 +105,8 @@ pub(super) mod tests {
                 ..crate::service::fixtures::base_kind_view()
             }],
             cli: vec![CliPlan {
-                agent: "claude".to_owned(),
                 binary: Some("claude".to_owned()),
                 verify: Some(vec!["claude".to_owned(), "--version".to_owned()]),
-                uninstall: None,
                 state: CliPlanState::WillRun {
                     command: vec![
                         "winget".to_owned(),
@@ -117,6 +115,7 @@ pub(super) mod tests {
                     ],
                     runs_package_scripts: false,
                 },
+                ..crate::service::fixtures::base_cli_plan()
             }],
             ..crate::service::fixtures::base_extension_review()
         }

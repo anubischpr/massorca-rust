@@ -646,11 +646,8 @@ pub(super) mod tests {
         };
 
         let record = |installed_by_package: bool| CliRecord {
-            agent: "claude".to_owned(),
-            binary: "claude".to_owned(),
-            detected_before_install: false,
-            installer: None,
             installed_by_package,
+            ..crate::service::fixtures::base_cli_record()
         };
         let installed = |cli: Vec<CliRecord>| {
             let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);

@@ -121,11 +121,9 @@ mod tests {
                 reference: "massorca.claude".to_owned(),
             },
             cli: vec![CliRecord {
-                agent: "claude".to_owned(),
-                binary: "claude".to_owned(),
                 detected_before_install: !ours,
-                installer: None,
                 installed_by_package: ours,
+                ..crate::service::fixtures::base_cli_record()
             }],
             ..crate::service::fixtures::base_installed_info()
         });

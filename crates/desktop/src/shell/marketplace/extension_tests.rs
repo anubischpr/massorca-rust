@@ -75,8 +75,6 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
             vec![CliPlan {
                 agent: "notes".to_owned(),
                 binary: Some("notes".to_owned()),
-                verify: None,
-                uninstall: None,
                 state: CliPlanState::WillRun {
                     command: vec![
                         "npm".to_owned(),
@@ -86,6 +84,7 @@ pub(super) fn review(runs_installer: bool) -> ExtensionReview {
                     ],
                     runs_package_scripts: true,
                 },
+                ..crate::service::fixtures::base_cli_plan()
             }]
         } else {
             Vec::new()
@@ -446,9 +445,7 @@ fn installed_with_cli() -> ExtensionItem {
         info.cli = vec![massorca_protocol::methods::extensions::CliRecord {
             agent: "notes".to_owned(),
             binary: "notes".to_owned(),
-            detected_before_install: false,
-            installer: None,
-            installed_by_package: true,
+            ..crate::service::fixtures::base_cli_record()
         }];
     }
     item
@@ -503,12 +500,11 @@ fn a_cli_that_was_not_removed_is_said_under_the_item(cx: &mut TestAppContext) {
         Some(Command::Extension(ExtensionCommand::Remove { reply, .. })) => {
             let _ = reply.send(Ok(ExtensionRemoved {
                 cli: vec![massorca_protocol::methods::extensions::CliRemoval {
-                    agent: "notes".to_owned(),
-                    binary: "notes".to_owned(),
                     action: massorca_protocol::methods::extensions::CliRemovalAction::Failed {
                         command: vec!["npm".to_owned(), "uninstall".to_owned()],
                         message: "the uninstall exited with code 1".to_owned(),
                     },
+                    ..crate::service::fixtures::base_cli_removal()
                 }],
                 ..crate::service::fixtures::base_extension_removed()
             }));

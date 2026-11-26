@@ -292,12 +292,7 @@ async fn a_team_and_a_bot_are_written_through_the_bridge_and_read_back() {
     handle
         .add_bot(BotAddParams {
             team: team_key,
-            name: "Nora".to_owned(),
-            job: "Reviews".to_owned(),
-            kind: "claude".to_owned(),
-            model: None,
-            effort: None,
-            lead: false,
+            ..base_bot_add_params()
         })
         .await
         .expect("the bot is added");
@@ -445,12 +440,8 @@ async fn a_card_is_finished_and_reopened_through_the_service() {
 fn nora(team: &str, lead: bool) -> BotAddParams {
     BotAddParams {
         team: team.to_owned(),
-        name: "Nora".to_owned(),
-        job: "Reviews".to_owned(),
-        kind: "claude".to_owned(),
-        model: None,
-        effort: None,
         lead,
+        ..base_bot_add_params()
     }
 }
 
@@ -1108,7 +1099,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
         .remove_bot(BotRemoveParams {
             team: team_key.clone(),
             bot: bot_key.clone(),
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect_err("a bot that owns an open task is refused");
@@ -1122,11 +1113,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
             team: team_key,
             bot: bot_key,
             name: Some("Lucia".to_owned()),
-            job: None,
-            kind: None,
-            model: None,
-            effort: None,
-            lead: None,
+            ..base_bot_update_params()
         })
         .await
         .expect("the bot is renamed");
@@ -1181,7 +1168,7 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
         .remove_bot(BotRemoveParams {
             team: team_key.clone(),
             bot: bot_key.clone(),
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect("the bot is removed");
@@ -1202,7 +1189,7 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
         .remove_bot(BotRemoveParams {
             team: team_key,
             bot: bot_key,
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect_err("a bot that is gone is refused");
@@ -1380,5 +1367,41 @@ fn base_team_update_params() -> massorca_protocol::methods::teams::TeamUpdatePar
         character: None,
         access: None,
         workspaces: None,
+    }
+}
+
+/// Every `BotAddParams` field at its usual value; tests override the fields they vary.
+fn base_bot_add_params() -> massorca_protocol::methods::teams::BotAddParams {
+    massorca_protocol::methods::teams::BotAddParams {
+        team: String::new(),
+        name: "Nora".to_owned(),
+        job: "Reviews".to_owned(),
+        kind: "claude".to_owned(),
+        model: None,
+        effort: None,
+        lead: false,
+    }
+}
+
+/// Every `BotRemoveParams` field at its usual value; tests override the fields they vary.
+fn base_bot_remove_params() -> massorca_protocol::methods::teams::BotRemoveParams {
+    massorca_protocol::methods::teams::BotRemoveParams {
+        team: String::new(),
+        bot: String::new(),
+        unassign: false,
+    }
+}
+
+/// Every `BotUpdateParams` field at its usual value; tests override the fields they vary.
+fn base_bot_update_params() -> massorca_protocol::methods::teams::BotUpdateParams {
+    massorca_protocol::methods::teams::BotUpdateParams {
+        team: String::new(),
+        bot: String::new(),
+        name: None,
+        job: None,
+        kind: None,
+        model: None,
+        effort: None,
+        lead: None,
     }
 }
