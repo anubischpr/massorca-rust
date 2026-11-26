@@ -13,6 +13,8 @@ use crate::network::NetworkState;
 pub struct Readiness {
     /// Where local clients connect: the socket file, or the named pipe on Windows.
     pub local_endpoint: String,
+    /// What the service holds in memory now; the terminal host runs in the service process, so no daemon reports it.
+    pub health: Health,
     /// `None` when the service has no network listener.
     pub network: Option<NetworkReadiness>,
 }
@@ -30,6 +32,12 @@ pub struct NetworkReadiness {
     pub pending_offers: Vec<PendingOffer>,
 }
 
+/// The service's own state that is cheap to read: the terminals of its in-process terminal host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Health {
+    pub live_terminals: u32,
+}
+
 /// A pending pairing offer: the id that names it, when it ends in wall-clock milliseconds, and its scopes. No secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingOffer {
@@ -39,9 +47,12 @@ pub struct PendingOffer {
 }
 
 impl Readiness {
-    pub(crate) fn of(profile: &Profile, network: &NetworkState) -> Self {
+    pub(crate) fn of(profile: &Profile, network: &NetworkState, live_terminals: usize) -> Self {
         Self {
             local_endpoint: local_endpoint(profile),
+            health: Health {
+                live_terminals: u32::try_from(live_terminals).unwrap_or(u32::MAX),
+            },
             network: network.server_pin.map(|pin| {
                 let listeners = network.listener_infos();
                 NetworkReadiness {

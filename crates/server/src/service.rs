@@ -463,7 +463,11 @@ impl RunningService {
             biased;
             () = self.shutdown.listener_closed() => None,
             () = self.state.network.wait_settled() => {
-                Some(Readiness::of(&self.state.profile, &self.state.network))
+                Some(Readiness::of(
+                    &self.state.profile,
+                    &self.state.network,
+                    self.state.terminals.live_count(),
+                ))
             }
         }
     }

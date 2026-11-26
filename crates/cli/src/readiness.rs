@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::devices::ListenerInfo;
 use massorca_protocol::methods::service::ServiceInfo;
-use massorca_server::Readiness;
+use massorca_server::{Health, Readiness};
 use serde::Serialize;
 
 use crate::server_status::listener_table;
@@ -22,8 +22,23 @@ pub struct ReadinessRecord {
     pub bound_endpoints: Vec<String>,
     pub advertised_endpoints: Vec<String>,
     pub pairing: PairingRecord,
+    pub health: HealthRecord,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkRecord>,
+}
+
+/// The service's own state now: the terminals alive in its in-process terminal host.
+#[derive(Debug, Serialize)]
+pub struct HealthRecord {
+    pub live_terminals: u32,
+}
+
+impl From<Health> for HealthRecord {
+    fn from(health: Health) -> Self {
+        Self {
+            live_terminals: health.live_terminals,
+        }
+    }
 }
 
 /// The network listeners, the server pin and the pending offer count.
@@ -57,6 +72,7 @@ const NOT_BOUND_REASON: &str = "no network listener is bound yet; pairing needs 
 impl ReadinessRecord {
     pub fn new(info: ServiceInfo, ready: Readiness) -> Self {
         let endpoint = ready.local_endpoint;
+        let health = HealthRecord::from(ready.health);
         let Some(network) = ready.network else {
             return Self {
                 schema: SCHEMA,
@@ -70,6 +86,7 @@ impl ReadinessRecord {
                     reason: Some(NO_LISTENER_REASON.to_owned()),
                     pending_offers: Vec::new(),
                 },
+                health,
                 network: None,
             };
         };
@@ -95,6 +112,7 @@ impl ReadinessRecord {
                     .collect(),
             },
             advertised_endpoints: network.advertised_endpoints,
+            health,
             network: Some(NetworkRecord {
                 listeners: network.listeners,
                 server_pin: network.server_pin,
@@ -114,6 +132,7 @@ pub fn lines(record: &ReadinessRecord) -> Vec<String> {
         ),
         format!("version {}, protocol {}", info.version, info.protocol),
         format!("local endpoint: {}", record.endpoint),
+        format!("live terminals: {}", record.health.live_terminals),
     ];
     match &record.network {
         None => {

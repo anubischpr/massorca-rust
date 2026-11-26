@@ -179,3 +179,14 @@ fn readiness_pairing_object_is_available_with_a_listener_and_offers_no_secret() 
     assert!(record["pairing"].get("reason").is_none());
     assert_eq!(record["pairing"]["pending_offers"], json!([]));
 }
+
+#[test]
+fn readiness_health_counts_the_live_terminals_of_the_in_process_terminal_host() {
+    let sandbox = Sandbox::new();
+    let (_service, record, _line) = start_with_readiness(&sandbox, &[]);
+
+    assert_eq!(
+        record["health"]["live_terminals"], 0,
+        "no terminal yet: {record}"
+    );
+}

@@ -389,7 +389,7 @@ network listeners have made their first bind attempt (bound, or waiting with the
 printed earlier, and it is printed once per process. In text mode it is a few lines: `service ready for
 profile <name> (pid <n>)`, `version <v>, protocol <p>`, `local endpoint: <path or pipe>`, the listener
 table, `server pin`, `advertised endpoints`, `pending offers`, and `pairing: available` or
-`pairing: unavailable: <reason>`. With no network listener it says so instead.
+`pairing: unavailable: <reason>`, and `live terminals`. With no network listener it says so instead.
 
 With `--json` it is one line on stdout, `{"ok":true,"result":{...}}`. `result` holds:
 
@@ -401,6 +401,7 @@ With `--json` it is one line on stdout, `{"ok":true,"result":{...}}`. `result` h
   Both are empty without a network listener;
 - `pairing`: `available`, `reason` when not available, and `pending_offers`, each
   `{offer_id, expires_at_ms, scopes}`. Pending offers at readiness are normally none;
+- `health`: `live_terminals`, the terminals alive in the service's in-process terminal host;
 - `network`, with a network listener only: `listeners`, `server_pin` (a public key fingerprint) and
   `pending_offers` (a count).
 

@@ -44,7 +44,7 @@ pub use method::{
 pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, identity_paths};
 pub use owner::Owner;
 pub use permission::{Permission, Principal, Scopes, authorize};
-pub use readiness::{NetworkReadiness, PendingOffer, Readiness};
+pub use readiness::{Health, NetworkReadiness, PendingOffer, Readiness};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 pub use service::{
     DiscoveryOptions, RunningService, SKILL_HOME_ENV, Service, ServiceConfig, VAULT_PROTECTION_ENV,
