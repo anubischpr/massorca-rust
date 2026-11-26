@@ -123,6 +123,7 @@ async fn routines_and_automations_share_one_window_and_the_kind_filter_separates
             model: None,
             effort: None,
             lead: false,
+            skills: Vec::new(),
         })
         .await
         .expect("team.bot_add");
