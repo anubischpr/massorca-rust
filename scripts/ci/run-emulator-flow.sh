@@ -47,13 +47,15 @@ import html, re, sys
 xml = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 for node in re.findall(r"<node [^>]*>", xml):
     attrs = {key: html.unescape(value) for key, value in re.findall(r'([\w-]+)="([^"]*)"', node)}
+    if attrs.get("index") == "0":
+        print("screen bounds=%s" % attrs.get("bounds"))
     if "WebView" in attrs.get("class", ""):
         print("webview bounds=%s enabled=%s" % (attrs.get("bounds"), attrs.get("enabled")))
     if attrs.get("resource-id"):
-        print("id %s enabled=%s" % (attrs["resource-id"], attrs.get("enabled")))
+        print("id %s enabled=%s bounds=%s" % (attrs["resource-id"], attrs.get("enabled"), attrs.get("bounds")))
     for key in ("text", "content-desc"):
         value = attrs.get(key, "")
-        if value and not value.startswith("mop1.") and len(value) <= 200:
+        if value.strip() and not value.startswith("mop1.") and len(value) <= 200:
             print("%s: %s" % (key, value))
 PY
   rm -f "$RUNNER_TEMP/phone-window.xml"

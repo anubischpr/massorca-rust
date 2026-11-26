@@ -44,8 +44,8 @@ appId: dev.massorca.app
     id: "terminal-input"
 # The shell prints marker6 and the typed line reads ma''rker6, so the assertion can only match the output.
 - inputText: "echo ma''rker6"
-- tapOn:
-    id: "terminal-send"
+# Enter on the keyboard submits the line. The send button can sit under the keyboard, so it is not tapped.
+- pressKey: Enter
 - extendedWaitUntil:
     visible: ".*marker6.*"
     timeout: 60000
