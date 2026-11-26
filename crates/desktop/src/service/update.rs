@@ -740,34 +740,12 @@ pub(crate) mod fixtures {
             id: id.into(),
             kind: "claude".into(),
             workspace_id: workspace_id.into(),
-            title: None,
-            read_only: false,
-            parent_id: None,
-            brought_back_at_ms: None,
-            agent_ref: None,
-            terminal_id: None,
-            run: Default::default(),
             created_at_ms: created,
             execution: Execution {
                 state: TerminalState::Live,
                 exit: None,
             },
-            activity: None,
-            result: None,
-            holds_secrets: false,
-            secrets_withheld: None,
-            permission_mode: None,
-            mode_confirmed: false,
-            mode_source: None,
-            pending_permission_mode: None,
-            retained: false,
-            released: false,
-            archived: false,
-            resume: None,
-            delegation: None,
-            fast: None,
-            notes: Vec::new(),
-            shared_folder_with: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -1020,6 +998,7 @@ pub(crate) mod fixtures {
             resume: None,
             delegation: None,
             notes: Vec::new(),
+            meta: massorca_protocol::methods::agents::SessionMeta::default(),
             fast: None,
             shared_folder_with: Vec::new(),
         }

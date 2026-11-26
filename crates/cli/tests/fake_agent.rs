@@ -277,6 +277,7 @@ fn prompt_words_on_the_command_line_run_before_stdin() {
             "ready",
             "session S1",
             "credentials missing",
+            "prompt at launch",
             "working on say hello",
             "done say hello"
         ])
