@@ -36,6 +36,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_MODES,
             capabilities::AGENT_NO_PROJECT,
             capabilities::AGENT_OPTIONS,
+            capabilities::AGENT_PROMPT_ATTACHMENTS,
             capabilities::AGENT_QUEUE,
             capabilities::AGENT_RELEASE,
             capabilities::AGENT_SEEN,

@@ -21,7 +21,7 @@ use massorca_protocol::methods::agents::{
     AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
     CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
     GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
-    ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
+    ImportCandidatesParams, PromptAttachment, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -54,6 +54,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_QUEUE, Owner::Core)?,
+        // Files of the session's workspace sent with a prompt or a queued prompt (decision 0172).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_PROMPT_ATTACHMENTS, Owner::Core)?,
         // Release and retain of a session, and its archived output (decision 0090).
         registries
             .capabilities
@@ -623,27 +627,35 @@ async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentMo
     Ok(set)
 }
 
-/// Types a prompt into a run's terminal (0054). The text is never logged.
+/// The workspace paths of a prompt's attachments, in the order the caller gave them (decision 0172).
+fn attachment_paths(attachments: Vec<PromptAttachment>) -> Vec<String> {
+    attachments.into_iter().map(|file| file.path).collect()
+}
+
+/// Types a prompt into a run's terminal (0054), with the files it names (decision 0172). The text is never logged.
 async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
+    let files = attachment_paths(params.attachments);
     on_agents(&ctx, move |agents| {
-        agents.prompt(&params.session, &params.text, params.force)
+        agents.prompt_with_attachments(&params.session, &params.text, params.force, &files)
     })
     .await
 }
 
-/// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a
-/// prompt does: its run holds vault secrets. The text is never logged.
+/// Queues a prompt behind a session's busy agent (decision 0084), with the files it names (decision 0172). A queued
+/// prompt needs host-admin scope exactly where a prompt does: its run holds vault secrets. The text is never logged.
 async fn queue(ctx: RequestCtx, params: AgentQueueParams) -> Result<QueuedPrompt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     // The caller's scope is kept with the prompt, so a run that later holds secrets types only prompts an admin queued.
     let host_admin = is_host_admin(&ctx);
+    let files = attachment_paths(params.attachments);
     on_agents(&ctx, move |agents| {
-        agents.queue_add(
+        agents.queue_add_with_attachments(
             &params.session,
             &params.text,
             params.request_id.as_deref(),
             host_admin,
+            &files,
         )
     })
     .await
