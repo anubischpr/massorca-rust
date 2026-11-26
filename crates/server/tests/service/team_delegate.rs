@@ -19,6 +19,7 @@ fn delegate(session: Option<&str>, token: Option<&str>) -> TeamDelegateParams {
         read_only: false,
         session: session.map(str::to_owned),
         agent_token: token.map(str::to_owned),
+        request_id: None,
     }
 }
 

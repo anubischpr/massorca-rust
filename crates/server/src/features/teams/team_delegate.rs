@@ -4,7 +4,10 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use massorca_core_agents::{Agents, SecretGrant};
+use massorca_core_agents::{
+    Agents, DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN,
+    DELEGATION_DEPTH_SETTING, SecretGrant,
+};
 use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::TOPIC_TASK_CHANGED;
@@ -24,7 +27,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::task::{new_task_row, view_of};
-use super::task_start::{Changes, publish_changes, start_task, team_mode};
+use super::task_start::{Changes, publish_changes, start_gate, start_task, team_mode};
 use super::task_state;
 use super::{blocking, non_blank, optional_text, selectors, store_error};
 
@@ -35,6 +38,8 @@ const STOP_WORDS: &[&str] = &[
     "the", "and", "for", "with", "that", "this", "from", "into", "your", "make", "add", "use",
     "una", "los", "las", "para", "con", "por", "del",
 ];
+/// The owner the core settings are stored under, as core-agents stores them.
+const SETTINGS_OWNER: &str = "core";
 /// The reason a child's run gets no vault variables: a delegated child never takes more scope than its parent.
 const WITHHELD_REASON: &str = "a delegated child starts without the vault";
 
@@ -120,6 +125,8 @@ fn delegate_task(
             "a bot never delegates to itself; name a teammate with bot",
         ));
     }
+    check_reads(params.read_only, &parent.team_id, &team.id)?;
+    ensure_depth(store, &parent.id)?;
     // A writing child keeps the parent's project, so it gets that project's own worktree. A read-only child shares
     // the parent's workspace instead. A project of another team is never linked.
     let project = (!params.read_only && team.id == parent.team_id)
@@ -136,10 +143,28 @@ fn delegate_task(
             origin: None,
         },
     )?;
-    store.insert_task(&child).map_err(store_error)?;
-    store
-        .insert_task_delegation(&child.id, &parent.id, params.read_only, now_ms())
-        .map_err(store_error)?;
+    // Stored with its link in one transaction. A repeated request from this parent returns the child it made first.
+    let request_id = optional_text(params.request_id.clone());
+    let repeated = {
+        let _gate = start_gate();
+        store
+            .insert_delegated_task(
+                &child,
+                &parent.id,
+                params.read_only,
+                request_id.as_deref(),
+                now_ms(),
+            )
+            .map_err(store_error)?
+    };
+    if let Some(first) = repeated {
+        let row = selectors::task(store, &first)?;
+        return Ok(TeamDelegated {
+            task: view_of(&row, &task_state::load(agents, &row)?),
+            parent: parent.id,
+            picked,
+        });
+    }
     // A child that cannot start stays Open with the reason in its `error`, as a task does; the delegation stands.
     let started = start_task(
         store,
@@ -161,6 +186,57 @@ fn delegate_task(
         parent: parent.id,
         picked,
     })
+}
+
+/// A read-only child shares its parent's workspace, so it stays in the parent's team: another team's bot would share a
+/// workspace it does not own (decision 0128).
+fn check_reads(read_only: bool, parent_team: &str, team: &str) -> Result<(), ErrorBody> {
+    if read_only && parent_team != team {
+        return Err(ErrorBody::new(
+            codes::TEAM_DELEGATE_READS_OTHER_TEAM,
+            "a read-only child shares its parent's workspace, so it must stay in the parent's team",
+        ));
+    }
+    Ok(())
+}
+
+/// The delegation depth limit the store holds under `agents.delegation_depth`, read on every call (decision 0070).
+fn depth_limit(store: &Store) -> Result<i64, ErrorBody> {
+    let stored = store
+        .get_setting(SETTINGS_OWNER, DELEGATION_DEPTH_SETTING)
+        .map_err(store_error)?;
+    Ok(parse_depth_limit(stored.as_deref()))
+}
+
+/// The stored limit, clamped as core-agents clamps it; an unset or unreadable value is the default.
+fn parse_depth_limit(stored: Option<&str>) -> i64 {
+    stored
+        .and_then(|text| serde_json::from_str::<i64>(text).ok())
+        .map_or(DELEGATION_DEPTH_DEFAULT, |depth| {
+            depth.clamp(DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_MAX)
+        })
+}
+
+/// Refuses a child that would sit deeper than the limit: a child of `parent` is one level below it, so a child cannot
+/// delegate at the default depth (decision 0128).
+fn ensure_depth(store: &Store, parent: &str) -> Result<(), ErrorBody> {
+    let limit = depth_limit(store)?;
+    let depth = i64::from(store.task_delegation_depth(parent).map_err(store_error)?) + 1;
+    if depth <= limit {
+        return Ok(());
+    }
+    let mut error = ErrorBody::new(
+        codes::TEAM_DELEGATE_DEPTH_EXCEEDED,
+        format!(
+            "task {parent} cannot delegate: its child would be at depth {depth}, and {DELEGATION_DEPTH_SETTING} allows at most {limit}"
+        ),
+    );
+    error.data = Some(serde_json::json!({
+        "limit": limit,
+        "setting": DELEGATION_DEPTH_SETTING,
+        "depth": depth,
+    }));
+    Err(error)
 }
 
 /// The run that delegates: its session and token prove it is a live agent run, and the task it works on is the parent.
@@ -317,8 +393,8 @@ fn children_of(
     Ok(children)
 }
 
-/// The mode a delegated child runs in (decision 0128): the team's own mode, but never a bypass mode when the parent runs
-/// in the vendor's default. An undelegated task keeps its team's mode.
+/// The mode a delegated child runs in (decision 0128). A read-only child runs in the vendor's default, never a bypass
+/// mode. A writing child gets its team's mode, but none when its parent runs in the default or its parent's bot is gone.
 pub(super) fn child_mode(
     store: &Store,
     agents: &Agents,
@@ -326,20 +402,25 @@ pub(super) fn child_mode(
     bot: &BotRow,
     task: &TaskRow,
 ) -> Result<Option<String>, ErrorBody> {
-    let own = team_mode(agents, team, bot);
-    let Some((parent_id, _)) = store
+    let Some((parent_id, read_only)) = store
         .task_delegation_parent(&task.id)
         .map_err(store_error)?
     else {
-        return Ok(own);
+        return Ok(team_mode(agents, team, bot));
     };
+    if read_only {
+        return Ok(None);
+    }
     let parent = selectors::task(store, &parent_id)?;
-    let parent_team = selectors::team(store, &parent.team_id)?;
-    let Some(parent_bot) = parent.bot_id.as_deref() else {
+    let parent_bot = match parent.bot_id.as_deref() {
+        Some(id) => store.get_bot(id).map_err(store_error)?,
+        None => None,
+    };
+    let Some(parent_bot) = parent_bot else {
         return Ok(None);
     };
-    let parent_bot = selectors::bot(store, &parent_team, parent_bot)?;
-    Ok(team_mode(agents, &parent_team, &parent_bot).and(own))
+    let parent_team = selectors::team(store, &parent.team_id)?;
+    Ok(team_mode(agents, &parent_team, &parent_bot).and(team_mode(agents, team, bot)))
 }
 
 /// The parent's workspace a read-only child runs in. `None` for a task that is not a read-only child, or whose parent
@@ -366,6 +447,7 @@ pub(super) fn read_only_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use massorca_core_store::{TaskOrigin, new_id};
 
     fn bot(name: &str, job: &str) -> BotRow {
         BotRow {
@@ -423,5 +505,91 @@ mod tests {
         let long = "x".repeat(200);
         assert_eq!(title_of(&long).unwrap().chars().count(), MAX_TITLE_CHARS);
         assert!(title_of("   ").is_err());
+    }
+
+    fn store_with_team() -> (Store, String) {
+        let store = Store::open_in_memory().expect("store");
+        let team = TeamRow {
+            id: "team".to_owned(),
+            name: "Parser".to_owned(),
+            purpose: String::new(),
+            character: "triangle".to_owned(),
+            access: "full".to_owned(),
+            workspaces: false,
+            created_at: 0,
+        };
+        store.insert_team(&team).expect("team");
+        (store, team.id)
+    }
+
+    fn task_in(team: &str, title: &str) -> TaskRow {
+        TaskRow {
+            id: new_id(),
+            team_id: team.to_owned(),
+            project_id: None,
+            bot_id: None,
+            title: title.to_owned(),
+            body: String::new(),
+            origin: TaskOrigin::Cli,
+            session_id: None,
+            outcome: None,
+            error: None,
+            error_code: None,
+            workspace_id: None,
+            branch: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_child_cannot_delegate_at_the_default_depth() {
+        let (store, team) = store_with_team();
+        let root = task_in(&team, "Lead");
+        let child = task_in(&team, "Write");
+        store.insert_task(&root).expect("root");
+        store
+            .insert_delegated_task(&child, &root.id, false, None, 0)
+            .expect("link");
+        assert!(ensure_depth(&store, &root.id).is_ok());
+        let refused = ensure_depth(&store, &child.id).expect_err("depth");
+        assert_eq!(refused.code, codes::TEAM_DELEGATE_DEPTH_EXCEEDED);
+    }
+
+    #[test]
+    fn a_raised_depth_limit_lets_a_child_delegate_one_level_deeper() {
+        let (store, team) = store_with_team();
+        store
+            .set_setting("core", DELEGATION_DEPTH_SETTING, "2")
+            .expect("setting");
+        let root = task_in(&team, "Lead");
+        let child = task_in(&team, "Write");
+        let grandchild = task_in(&team, "Test");
+        store.insert_task(&root).expect("root");
+        store
+            .insert_delegated_task(&child, &root.id, false, None, 0)
+            .expect("child");
+        store
+            .insert_delegated_task(&grandchild, &child.id, false, None, 0)
+            .expect("grandchild");
+        assert!(ensure_depth(&store, &child.id).is_ok());
+        let refused = ensure_depth(&store, &grandchild.id).expect_err("depth");
+        assert_eq!(refused.code, codes::TEAM_DELEGATE_DEPTH_EXCEEDED);
+    }
+
+    #[test]
+    fn the_depth_limit_is_the_stored_one_clamped_and_defaults_to_one() {
+        assert_eq!(parse_depth_limit(None), 1);
+        assert_eq!(parse_depth_limit(Some("3")), 3);
+        assert_eq!(parse_depth_limit(Some("9")), 5);
+        assert_eq!(parse_depth_limit(Some("0")), 1);
+        assert_eq!(parse_depth_limit(Some("\"x\"")), 1);
+    }
+
+    #[test]
+    fn a_read_only_child_stays_in_its_parents_team() {
+        assert!(check_reads(true, "a", "b").is_err());
+        assert!(check_reads(true, "a", "a").is_ok());
+        assert!(check_reads(false, "a", "b").is_ok());
     }
 }
