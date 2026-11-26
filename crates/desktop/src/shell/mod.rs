@@ -5,6 +5,7 @@ mod add_host;
 mod app_theme;
 mod automations;
 mod bring_back;
+mod calendar;
 mod canvas;
 mod close_confirm;
 mod debug_focus;
@@ -280,6 +281,10 @@ pub struct Shell {
     automation_editor: Option<automations::AutomationEditor>,
     /// Whether a read of the automations is on its way to the service.
     automations_loading: bool,
+    /// The Calendar page's week, mode, Show done switch and last answer (decision 0124).
+    calendar: crate::model::calendar::CalendarState,
+    /// Whether the Calendar was on screen at the last render, so opening it reads the week again.
+    calendar_on_screen: bool,
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
     marketplace_host_select: Entity<SelectView>,
     _marketplace_host_changes: Subscription,
@@ -603,6 +608,8 @@ impl Shell {
             automations: Default::default(),
             automation_editor: None,
             automations_loading: false,
+            calendar: crate::model::calendar::CalendarState::new(crate::model::calendar::today()),
+            calendar_on_screen: false,
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
@@ -783,6 +790,7 @@ impl Render for Shell {
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
         self.ensure_automations_loaded(cx);
+        self.ensure_calendar_loaded(cx);
         self.focus_started_terminal(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
@@ -909,6 +917,8 @@ impl Render for Shell {
                 settings,
                 automations: (self.model.canvas() == Canvas::Page(Page::Automations))
                     .then(|| self.automations_frame(&shell)),
+                calendar: (self.model.canvas() == Canvas::Page(Page::Calendar))
+                    .then(|| self.calendar_frame(&shell)),
                 start,
                 home,
                 setup_rows,
