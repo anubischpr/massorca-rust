@@ -10,6 +10,7 @@ mod error;
 mod extension_calls;
 mod git_calls;
 mod handshake;
+mod host_link;
 mod host_storage;
 mod hosted_service_calls;
 #[cfg(feature = "local")]
@@ -38,6 +39,7 @@ pub use error::ClientError;
 #[cfg(feature = "local")]
 pub use error::profile_refusal;
 pub use handshake::Welcome;
+pub use host_link::{HOST_ATTEMPT_TIMEOUT, HostDial, LiveHost, LiveState};
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::{DeviceRevocation, Hosts};
