@@ -19,7 +19,11 @@ use massorca_protocol::methods::workspaces::{
 use massorca_protocol::{capabilities, codes};
 use tokio::time::timeout;
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use massorca_core_store::{
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, new_id, now_ms,
+};
+
+use super::common::{connect, profile, remote_code, start, stop, temp_home};
 
 pub(super) fn git_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create repository dir");
@@ -576,12 +580,94 @@ async fn removing_a_workspace_stops_its_terminals_first() {
         .call(terminals::LIST, &TerminalListParams { workspace: None })
         .await
         .expect("list");
-    let after = listed
-        .terminals
-        .iter()
-        .find(|listed| listed.id == terminal.id)
-        .expect("the stopped terminal stays listed as exited");
-    assert_eq!(after.state, TerminalState::Exited);
+    assert!(
+        listed
+            .terminals
+            .iter()
+            .all(|listed| listed.id != terminal.id),
+        "the stopped terminal and its output are forgotten with the workspace: {listed:?}"
+    );
+    stop(running).await;
+}
+
+/// An ended session of `workspace`, written to the store directly, released with archived output `text`.
+fn released_session(store: &Store, workspace: &str, text: &str) -> String {
+    let row = AgentSessionRow {
+        id: new_id(),
+        kind: "fake".to_owned(),
+        workspace_id: workspace.to_owned(),
+        parent_id: None,
+        title: None,
+        read_only: true,
+        agent_ref: None,
+        terminal_id: None,
+        request_id: None,
+        created_at: now_ms(),
+        exit: Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: now_ms(),
+        }),
+        activity: None,
+        result: None,
+        brought_back_at: None,
+        holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
+        retained: false,
+        released_at: None,
+    };
+    store.insert_agent_session(&row).expect("session");
+    assert!(
+        store
+            .release_agent_session(&row.id, text, false, now_ms())
+            .expect("the release is recorded")
+    );
+    row.id
+}
+
+#[tokio::test]
+async fn removing_a_workspace_deletes_the_archived_output_of_its_sessions_only() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let mut ids = Vec::new();
+    for name in ["gone", "kept"] {
+        let created: Workspace = client
+            .call(workspaces::CREATE, &create_params(&project.name, name))
+            .await
+            .expect("create");
+        ids.push(created.id);
+    }
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let gone = released_session(&store, &ids[0], "output of the removed workspace");
+    let kept = released_session(&store, &ids[1], "output of the other workspace");
+
+    let _: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&ids[0], false))
+        .await
+        .expect("remove");
+
+    assert!(
+        store
+            .get_agent_session_archive(&gone)
+            .expect("read")
+            .is_none(),
+        "the removed workspace's archived output is deleted"
+    );
+    assert!(
+        store.get_agent_session(&gone).expect("read").is_none(),
+        "its session rows go with the workspace row"
+    );
+    let other = store
+        .get_agent_session_archive(&kept)
+        .expect("read")
+        .expect("the other workspace's archive stays");
+    assert_eq!(other.text, "output of the other workspace");
     stop(running).await;
 }
 
