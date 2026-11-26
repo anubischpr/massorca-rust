@@ -209,6 +209,12 @@ connect and disconnect on their own.
   still detaches. A refusal, such as a revoked device, ends the attach with its reason.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
+- A program that asks for the foreground, background or cursor colour (OSC 10, 11 or 12)
+  while no answering emulator is attached gets the service's answer in the xterm form
+  (`rgb:RRRR/GGGG/BBBB`, with the query's terminator). The colours are the desktop's
+  terminal defaults, light when `appearance.theme` is `light` and dark otherwise, `system`
+  included. While an emulator is attached (`terminal attach`, the desktop), the service
+  leaves colour queries to it and never waits for its reply.
 
 ### Agents
 
