@@ -9,6 +9,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountSummary, AgentKind, AgentQueueList, AgentSession, QueuedPrompt,
 };
+use massorca_protocol::methods::chat::{ChatEvent, ChatHistoryPage};
 use massorca_protocol::methods::config::{ConfigValue, DEFAULT_OWNER};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::extensions::ExtensionItem;
@@ -16,16 +17,19 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
+use massorca_protocol::methods::service::GitStatus as ServiceGitStatus;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::agent_chat::KindChat;
 use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
+use super::host_sessions::{HostSessions, HostSessionsRead};
 use super::refusal::Refusal;
 use super::skills::SkillsRead;
 use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
+use crate::model::chat_transcript::ChatTranscript;
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +70,8 @@ pub enum StoreUpdate {
     AgentSeenOffered(bool),
     /// Whether the service offers starting a session with no workspace (`agent-no-project/1`), read on each connect.
     AgentNoProjectOffered(bool),
+    /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
+    AgentImportDetectOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -96,6 +102,8 @@ pub enum StoreUpdate {
     ConfigChanged(ConfigValue),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
+    /// What one check of a paired host learned about its agent sessions; `None` answers mean it was not reached.
+    HostSessions(HostSessionsRead),
     /// What a probe or a call learned about one paired host's connection.
     HostLinkChanged {
         name: String,
@@ -105,12 +113,31 @@ pub enum StoreUpdate {
     Devices(Result<Vec<DeviceInfo>, Refusal>),
     /// The listeners and counts of this computer's service, after a read.
     Network(Result<NetworkStatus, Refusal>),
+    /// This computer's service's Git, read on each connect; `Ok(None)` from a service that predates the report.
+    ServiceGit(Result<Option<ServiceGitStatus>, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
     /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
     Accounts {
         kind: String,
         result: Result<Vec<AccountSummary>, Refusal>,
+    },
+    /// One event of a followed chat session's stream (decision 0101, D4).
+    Chat {
+        session: String,
+        event: ChatEvent,
+    },
+    /// A page of older items the service sent for a followed chat session.
+    ChatHistory {
+        session: String,
+        page: ChatHistoryPage,
+    },
+    /// The session's transcript is no longer followed; the store drops what it held.
+    ChatClosed(String),
+    /// The service refused the session's stream (it is not a chat, or it is gone).
+    ChatRefused {
+        session: String,
+        refusal: Refusal,
     },
 }
 
@@ -248,6 +275,8 @@ pub struct StoreState {
     pub devices: Option<Result<Vec<DeviceInfo>, Refusal>>,
     /// This computer's listeners and counts, once read.
     pub network: Option<Result<NetworkStatus, Refusal>>,
+    /// What this computer's service said about Git on the last connect; `None` until that read answered.
+    pub service_git: Option<Result<Option<ServiceGitStatus>, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
     /// The number of the newest extension read applied; an older late answer changes nothing.
@@ -256,6 +285,8 @@ pub struct StoreState {
     pub extensions: Option<ExtensionsRead>,
     /// The newest Marketplace answer of each paired host, by host name.
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
+    /// The agent sessions each paired host last reported, by host name (STAT-16).
+    pub host_sessions: BTreeMap<String, HostSessions>,
     /// The newest skills answer of This computer (None) and of each paired host, by host name.
     pub skills: BTreeMap<Option<String>, SkillsRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
@@ -267,6 +298,8 @@ pub struct StoreState {
     pub agent_seen: bool,
     /// Whether the service offers a session with no workspace (`agent-no-project/1`); without it "No project" is off.
     pub agent_no_project: bool,
+    /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
+    pub agent_import_detect: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -280,6 +313,10 @@ pub struct StoreState {
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
+    /// The transcript of each followed chat session, by session id (decision 0101).
+    pub chat: BTreeMap<String, ChatTranscript>,
+    /// Why the service refused the stream of a chat session, by session id.
+    pub chat_refused: BTreeMap<String, Refusal>,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
@@ -307,21 +344,26 @@ impl Default for StoreState {
             hosts: Vec::new(),
             devices: None,
             network: None,
+            service_git: None,
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
             host_listings: BTreeMap::new(),
+            host_sessions: BTreeMap::new(),
             skills: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
             agent_no_project: false,
+            agent_import_detect: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
             workspace_unique_name: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
+            chat: BTreeMap::new(),
+            chat_refused: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
         }
@@ -425,6 +467,7 @@ impl StoreState {
             }
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
+            StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
@@ -433,6 +476,22 @@ impl StoreState {
             }
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
+            StoreUpdate::Chat { session, event } => {
+                self.chat_refused.remove(&session);
+                self.chat.entry(session).or_default().apply(event);
+            }
+            StoreUpdate::ChatHistory { session, page } => {
+                if let Some(transcript) = self.chat.get_mut(&session) {
+                    transcript.prepend(page);
+                }
+            }
+            StoreUpdate::ChatClosed(session) => {
+                self.chat.remove(&session);
+                self.chat_refused.remove(&session);
+            }
+            StoreUpdate::ChatRefused { session, refusal } => {
+                self.chat_refused.insert(session, refusal);
+            }
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -447,6 +506,7 @@ impl StoreState {
             StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
+            StoreUpdate::HostSessions(read) => self.apply_host_sessions(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
@@ -469,6 +529,7 @@ impl StoreState {
             }
             StoreUpdate::Devices(result) => self.devices = Some(result),
             StoreUpdate::Network(result) => self.network = Some(result),
+            StoreUpdate::ServiceGit(result) => self.service_git = Some(result),
             StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
                 self.secrets.status = Some(result);
             }
@@ -541,6 +602,24 @@ impl StoreState {
         self.host_listings.insert(read.host.clone(), read);
     }
 
+    /// Keeps the newest check of each host's sessions. A check that did not reach the host keeps the sessions it
+    /// last saw, marked unreached, so they show as unverifiable rather than gone.
+    fn apply_host_sessions(&mut self, read: HostSessionsRead) {
+        let held = self.host_sessions.entry(read.host).or_default();
+        if held.request > read.request {
+            return;
+        }
+        held.request = read.request;
+        match read.answer {
+            Some(agents) => {
+                held.reached = true;
+                held.sessions = agents.sessions;
+                held.workspaces = agents.workspaces;
+            }
+            None => held.reached = false,
+        }
+    }
+
     /// Keeps the newest skills answer of each host, so an answer to an older request never replaces a newer one.
     fn apply_skills(&mut self, read: SkillsRead) {
         if self
@@ -570,6 +649,8 @@ impl StoreState {
             })
             .collect();
         hosts.sort_by(|a, b| a.record.name.cmp(&b.record.name));
+        self.host_sessions
+            .retain(|name, _| hosts.iter().any(|entry| &entry.record.name == name));
         self.hosts = hosts;
     }
 
@@ -678,6 +759,7 @@ pub(crate) mod fixtures {
             archived: false,
             resume: None,
             delegation: None,
+            fast: None,
             notes: Vec::new(),
             shared_folder_with: Vec::new(),
         }
@@ -709,6 +791,7 @@ pub(crate) mod fixtures {
             default_permission_mode: None,
             chat: None,
             model: None,
+            fast: None,
             effort: None,
         }
     }
@@ -744,6 +827,7 @@ pub(crate) mod fixtures {
             base_refresh: None,
             comment: None,
             setup: None,
+            name_generated: false,
         }
     }
 
@@ -765,6 +849,7 @@ pub(crate) mod fixtures {
             },
             bots: Vec::new(),
             projects: Vec::new(),
+            routines: Vec::new(),
         }
     }
 
@@ -1259,6 +1344,25 @@ mod tests {
         );
         assert_eq!(state.devices, Some(Err(Refusal::unavailable("gone"))));
         assert_eq!(state.network, None);
+    }
+
+    #[test]
+    fn this_computers_git_answer_replaces_the_one_held() {
+        let mut state = StoreState::default();
+        assert_eq!(state.service_git, None);
+        let present = ServiceGitStatus::Present {
+            version: "2.49.0".to_owned(),
+        };
+        state.apply(
+            StoreUpdate::ServiceGit(Ok(Some(present.clone()))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Ok(Some(present))));
+        state.apply(
+            StoreUpdate::ServiceGit(Err(Refusal::unavailable("gone"))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Err(Refusal::unavailable("gone"))));
     }
 
     #[test]

@@ -41,6 +41,12 @@ pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// `workspace.rename` refused a name a person typed; only a name the service chose is renamed (decision 0111).
+pub const WORKSPACE_NAME_NOT_GENERATED: &str = "workspace.name_not_generated";
+/// The worktree is no longer on the branch the workspace records, or the one the caller expected.
+pub const WORKSPACE_BRANCH_CHANGED: &str = "workspace.branch_changed";
+/// The workspace's branch has an upstream or a remote copy, so renaming it would split it from what others see.
+pub const WORKSPACE_BRANCH_PUBLISHED: &str = "workspace.branch_published";
 /// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
 pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
 /// The project's `orca.yaml` defines no script of the kind asked for.
@@ -144,6 +150,10 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 /// The service has no network listener, so an offer would name no address.
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+/// An address given for a pairing offer is not one a device could dial (a wildcard, port 0, a path, credentials).
+pub const PAIRING_INVALID_ADDRESS: &str = "pairing.invalid_address";
+/// `pairing.cancel` named an offer that is not pending: unknown, used or expired.
+pub const PAIRING_OFFER_NOT_FOUND: &str = "pairing.offer_not_found";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
@@ -214,6 +224,12 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
+/// The kind declares no one-shot form, so it cannot name a chat (decision 0167).
+pub const AGENT_ONESHOT_UNSUPPORTED: &str = "agent.oneshot_unsupported";
+/// A one-shot run that names a chat did not finish within its time limit (decision 0167).
+pub const AGENT_ONESHOT_TIMEOUT: &str = "agent.oneshot_timeout";
+/// A one-shot run that names a chat exited with a failure, or printed no usable title (decision 0167).
+pub const AGENT_ONESHOT_FAILED: &str = "agent.oneshot_failed";
 /// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
 pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 /// The kind declares no permission mode of that id, or none at all; the data names the kind, the mode and the known ids.

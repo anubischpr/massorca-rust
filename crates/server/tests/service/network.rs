@@ -106,6 +106,7 @@ pub(crate) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Of
                 ttl_secs,
                 admin,
                 standard: !admin,
+                addresses: Vec::new(),
             },
         )
         .await
@@ -398,6 +399,7 @@ async fn a_default_offer_is_full_access_and_grant_raises_a_reduced_device() {
             ttl_secs: None,
             admin: true,
             standard: false,
+            addresses: Vec::new(),
         },
     ] {
         let created: PairingCreated = owner
@@ -882,6 +884,8 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
                 path: None,
                 request_id: None,
                 no_setup: false,
+                unique_name: false,
+                name_generated: false,
             },
         )
         .await

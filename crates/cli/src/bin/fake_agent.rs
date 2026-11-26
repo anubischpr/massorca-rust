@@ -8,13 +8,15 @@
 //! can report whether an inherited value reached it, and play a CLI whose saved conversation is gone (decision 0160). It
 //! can say whether it got MassOrca's instructions and whether `massorca`'s folder is first on its `PATH` (decision 0161).
 //! Started as `chat`, it speaks the tiny structured dialect of core-agents' `TestAdapter` instead (decision 0101).
-//! Started with `-p` (as the Claude adapter starts a chat run), it plays a hand-written script of stream-json frames
-//! ([`claude_stream`]), and `--version` prints a Claude-style version line.
+//! Started with `-p`, it is one of two forms, told apart by its arguments. With `--output-format text` it is the one-shot
+//! form that names a chat (decision 0167): it prints one reply, as its `--fake-mode` argument says, and reports its
+//! working folder and run identity variables when asked. Otherwise, as the Claude adapter starts a chat run, it plays a
+//! hand-written script of stream-json frames ([`claude_stream`]), and `--version` prints a Claude-style version line.
 
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 use std::thread;
@@ -51,6 +53,14 @@ const DELEGATE_COMMAND: &str = "massorca agent delegate";
 const HELP_WITHOUT_INSTRUCTIONS_ENV: &str = "FAKE_AGENT_HELP_WITHOUT_INSTRUCTIONS";
 /// Names a file `--help` appends a line to on each run.
 const HELP_MARKER_ENV: &str = "FAKE_AGENT_HELP_MARKER";
+/// Comma-separated flags `--help` lists after its usage, as a CLI lists the flags it takes (decision 0167): a test picks the
+/// optional arguments of a one-shot run that the listing names.
+const HELP_FLAGS_ENV: &str = "FAKE_AGENT_HELP_FLAGS";
+/// Comma-separated values `--help` lists as the choices of `--permission-mode`, the way the vendor's help does. Unset, the
+/// option is not listed (decision 0164).
+const HELP_PERMISSION_CHOICES_ENV: &str = "FAKE_AGENT_HELP_PERMISSION_CHOICES";
+/// Set to `1`, `--help` exits 1 and prints nothing, as a CLI whose help cannot be read (decision 0164).
+const HELP_FAILS_ENV: &str = "FAKE_AGENT_HELP_FAILS";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
 /// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
@@ -114,9 +124,16 @@ fn main() -> ExitCode {
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
+        Some("models") => return models(),
+        // Print mode is the title one-shot (it asks for text output), a chat run (it asks for partial messages) or the
+        // model listing (decision 0166).
+        Some("-p") if prints_text() => return oneshot(),
+        Some("-p") if env::args().any(|arg| arg == "--include-partial-messages") => {
+            return claude_stream();
+        }
+        Some("-p") => return claude_models(),
         Some("--help") => return help(),
         Some("--version") => return version(),
-        Some("-p") => return claude_stream(),
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
@@ -172,6 +189,8 @@ struct Arguments {
     effort: Option<String>,
     /// `--instructions <TEXT>`, the channel a test kind declares for MassOrca's per-launch instructions (decision 0161).
     instructions: Option<String>,
+    /// `--settings <TEXT>`, the settings object a kind declares for fast mode (decision 0165), read as JSON.
+    settings: Option<String>,
     prompt: Option<String>,
 }
 
@@ -190,10 +209,11 @@ impl Arguments {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
-                "--mode" if words.is_empty() => parsed.mode = args.next(),
+                "--mode" | "--permission-mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
                 "--instructions" if words.is_empty() => parsed.instructions = args.next(),
+                "--settings" if words.is_empty() => parsed.settings = args.next(),
                 // Codex's spellings of the model and the effort (decision 0094); other `-c` settings pass unread.
                 "-m" if words.is_empty() => parsed.model = args.next(),
                 "-c" if words.is_empty() => {
@@ -218,6 +238,14 @@ impl Arguments {
         };
         parsed
     }
+}
+
+/// Whether a `--settings` object turns `fastMode` on (decision 0165).
+fn fast_mode_on(text: &str) -> bool {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|settings| settings.get("fastMode").and_then(Value::as_bool))
+        == Some(true)
 }
 
 /// What the agent does after a prompt: keep reading input, or finish with an exit code.
@@ -264,6 +292,9 @@ impl Agent {
         }
         if let Some(effort) = &arguments.effort {
             say(&format!("effort {effort}"));
+        }
+        if arguments.settings.as_deref().is_some_and(fast_mode_on) {
+            say("fast mode on");
         }
         if let Some(text) = &arguments.instructions {
             say(if text.contains(DELEGATE_COMMAND) {
@@ -432,6 +463,89 @@ fn say(text: &str) {
     let _ = out.flush();
 }
 
+/// Names the file a one-shot run writes its working folder and the presence of each run identity variable to.
+const ONESHOT_REPORT_ENV: &str = "FAKE_AGENT_ONESHOT_REPORT";
+/// The variables a MassOrca run carries; the one-shot report states whether each is set, never its value.
+const RUN_IDENTITY_NAMES: [&str; 3] = [
+    "MASSORCA_AGENT_SESSION",
+    "MASSORCA_AGENT_TOKEN",
+    "MASSORCA_AGENT_KIND",
+];
+
+/// Whether the arguments ask for text output (`--output-format text`), as the title one-shot does.
+fn prints_text() -> bool {
+    env::args()
+        .collect::<Vec<String>>()
+        .windows(2)
+        .any(|pair| pair[0] == "--output-format" && pair[1] == "text")
+}
+
+/// The one-shot form of a chat title (decision 0167): `-p <prompt> [--fake-mode <mode>]` prints one reply and exits. The
+/// mode says what it prints: `say:<text>` prints `<text>`, `exit:<code>` exits with that code and prints nothing, `empty`
+/// prints nothing and exits 0, `hang` never ends. Without a mode it prints `Fake title`. It writes the report first.
+fn oneshot() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    let mode = args
+        .windows(2)
+        .find(|pair| pair[0] == "--fake-mode")
+        .map_or("say:Fake title", |pair| pair[1].as_str());
+    if let Some(report) = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty()) {
+        write_oneshot_report(Path::new(&report), &args);
+    }
+    if let Some(text) = mode.strip_prefix("say:") {
+        reply(text);
+        return ExitCode::SUCCESS;
+    }
+    if let Some(code) = mode.strip_prefix("exit:") {
+        return ExitCode::from(code.parse::<u8>().unwrap_or(1));
+    }
+    if mode == "empty" {
+        return ExitCode::SUCCESS;
+    }
+    if mode == "hang" {
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
+    ExitCode::from(2)
+}
+
+/// Prints the reply of a one-shot run, unprefixed, and flushes it.
+fn reply(text: &str) {
+    let mut out = io::stdout().lock();
+    let _ = writeln!(out, "{text}");
+    let _ = out.flush();
+}
+
+/// Writes the run's working folder, the arguments it was started with and whether each run identity variable is set. Never a
+/// value of a run identity variable.
+fn write_oneshot_report(path: &Path, args: &[String]) {
+    let identity: Map<String, Value> = RUN_IDENTITY_NAMES
+        .iter()
+        .map(|name| {
+            let state = if env::var_os(name).is_some() {
+                "set"
+            } else {
+                "unset"
+            };
+            ((*name).to_owned(), Value::String(state.to_owned()))
+        })
+        .collect();
+    let cwd = env::current_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_default();
+    let argv: Vec<Value> = args
+        .iter()
+        .skip(1)
+        .map(|arg| Value::String(arg.clone()))
+        .collect();
+    let mut report = Map::new();
+    report.insert("cwd".to_owned(), Value::String(cwd));
+    report.insert("argv".to_owned(), Value::Array(argv));
+    report.insert("run_identity".to_owned(), Value::Object(identity));
+    let _ = fs::write(path, Value::Object(report).to_string());
+}
+
 /// Whether `<CREDENTIAL_HOME_ENV>/token.json` is a file. Only the presence is reported.
 fn credentials_found() -> bool {
     env::var_os(CREDENTIAL_HOME_ENV)
@@ -484,6 +598,97 @@ const AMBIENT_IDENTITY: &str = "ambient@example.com";
 
 /// The check: prints `signed in as <identity>` and exits 0 when the token exists and is not expired; otherwise prints
 /// `expired` and exits 1. A token's `email` names its identity; the default identity is used otherwise.
+/// Set to a file, each listing appends a line to it, so a test can count the vendor calls (decision 0166).
+const LISTING_COUNT_ENV: &str = "FAKE_AGENT_MODELS_COUNT";
+/// Set to any value, a listing exits 3 without a model: a vendor CLI that fails.
+const LISTING_FAIL_ENV: &str = "FAKE_AGENT_MODELS_FAIL";
+/// Set to any value, a listing sleeps far past any test's time limit: a vendor CLI that hangs.
+const LISTING_HANG_ENV: &str = "FAKE_AGENT_MODELS_HANG";
+/// The token's field that names the account's models, as `id:label` strings.
+const LISTING_FIELD: &str = "listing";
+
+/// `models`: the account's listing as `id<TAB>label` lines, the shape of `agy models` (decision 0166).
+fn models() -> ExitCode {
+    count_listing();
+    if env::var_os(LISTING_HANG_ENV).is_some() {
+        thread::sleep(Duration::from_secs(120));
+    }
+    if env::var_os(LISTING_FAIL_ENV).is_some() {
+        return ExitCode::from(3);
+    }
+    let mut out = io::stdout().lock();
+    match listing_from_home() {
+        Some(models) => {
+            for (id, label) in models {
+                let _ = writeln!(out, "{id}\t{label}");
+            }
+        }
+        None => {
+            let _ = writeln!(out, "nothing a listing can read");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `-p` with stream-json input: the `list_models` control request is answered with the account's listing, the shape the
+/// Claude CLI answers with (decision 0166). Any other request prints nothing.
+fn claude_models() -> ExitCode {
+    count_listing();
+    let mut request = String::new();
+    let _ = io::stdin().read_to_string(&mut request);
+    if !request.contains("list_models") {
+        return ExitCode::SUCCESS;
+    }
+    let response = match listing_from_home() {
+        Some(models) => {
+            let rows: Vec<Value> = models
+                .iter()
+                .map(|(id, label)| {
+                    serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false })
+                })
+                .collect();
+            serde_json::json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "massorca-model-discovery",
+                    "response": { "models": rows }
+                }
+            })
+        }
+        None => serde_json::json!({
+            "type": "control_response",
+            "response": { "subtype": "error" }
+        }),
+    };
+    let _ = writeln!(io::stdout().lock(), "{response}");
+    ExitCode::SUCCESS
+}
+
+/// The listing the account's token names, as `(id, label)` pairs; `None` when there is no home, token or listing.
+fn listing_from_home() -> Option<Vec<(String, String)>> {
+    let home = PathBuf::from(env::var_os(CREDENTIAL_HOME_ENV)?);
+    let token: Value =
+        serde_json::from_str(&fs::read_to_string(home.join(CREDENTIAL_FILE)).ok()?).ok()?;
+    token[LISTING_FIELD]
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            let (id, label) = entry.as_str()?.split_once(':')?;
+            Some((id.to_owned(), label.to_owned()))
+        })
+        .collect()
+}
+
+/// Appends a line to the file `LISTING_COUNT_ENV` names, when it is set.
+fn count_listing() {
+    if let Some(path) = env::var_os(LISTING_COUNT_ENV)
+        && let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "listed");
+    }
+}
+
 fn whoami() -> ExitCode {
     if env::var_os(AMBIENT_TOKEN_ENV).is_some_and(|value| !value.is_empty()) {
         let _ = writeln!(io::stdout().lock(), "signed in as {AMBIENT_IDENTITY}");
@@ -578,6 +783,9 @@ fn help() -> ExitCode {
     {
         let _ = writeln!(file, "help");
     }
+    if env::var_os(HELP_FAILS_ENV).is_some_and(|value| value == "1") {
+        return ExitCode::from(1);
+    }
     let mut text = String::from(
         "Usage: massorca-fake-agent [OPTIONS] [PROMPT]
   --session-id <ID>
@@ -590,6 +798,28 @@ fn help() -> ExitCode {
             "  --instructions <TEXT>
 ",
         );
+    }
+    if let Some(flags) = env::var_os(HELP_FLAGS_ENV) {
+        for flag in flags
+            .to_string_lossy()
+            .split(',')
+            .filter(|flag| !flag.is_empty())
+        {
+            text.push_str("  ");
+            text.push_str(flag);
+            text.push('\n');
+        }
+    }
+    if let Some(choices) = env::var_os(HELP_PERMISSION_CHOICES_ENV) {
+        let listed: Vec<String> = choices
+            .to_string_lossy()
+            .split(',')
+            .map(|choice| format!("\"{}\"", choice.trim()))
+            .collect();
+        text.push_str(&format!(
+            "  --permission-mode <MODE>  Permission mode (choices: {})\n",
+            listed.join(", ")
+        ));
     }
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());

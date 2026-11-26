@@ -5,13 +5,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use massorca_client::default_device_name;
+use massorca_client::{DeviceRevocation, Hosts, default_device_name};
 use massorca_desktop::service::{
-    HostLink, Refusal, ServiceBridge, ServiceHandle, SshHost, StoreState, StoreUpdate,
+    HostLink, HostLoss, Refusal, ServiceBridge, ServiceHandle, SshHost, StoreState, StoreUpdate,
     connect_options,
 };
 use massorca_profile::Profile;
 use massorca_protocol::methods::devices::{DeviceRevokeParams, PairingCreateParams};
+use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -142,6 +143,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -185,6 +187,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -243,6 +246,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -313,6 +317,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
             ttl_secs: None,
             admin: false,
             standard: false,
+            addresses: Vec::new(),
         })
         .await
         .expect("an offer is made");
@@ -384,4 +389,163 @@ async fn an_ssh_add_that_is_refused_before_it_starts_keeps_an_empty_log() {
     assert!(failed.log.is_empty(), "{failed:?}");
 
     drop(bridge);
+}
+
+/// A computer that paired with the listening service as host `vps`, with its bridge and the store it folds.
+async fn paired_with(
+    server_handle: &ServiceHandle,
+) -> (
+    TempHome,
+    ServiceBridge,
+    ServiceHandle,
+    UnboundedReceiver<StoreUpdate>,
+    StoreState,
+) {
+    let offer = server_handle
+        .create_offer(PairingCreateParams {
+            ttl_secs: None,
+            admin: false,
+            standard: false,
+            addresses: Vec::new(),
+        })
+        .await
+        .expect("an offer is made");
+    let client_home = temp_home();
+    let (client_bridge, client_handle, mut client_updates) = bridge_for(client_home.path());
+    client_handle
+        .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
+        .await
+        .expect("the offer pairs");
+    let mut state = StoreState::default();
+    until(&mut client_updates, &mut state, "the paired host", |s| {
+        is_connected(s, "vps")
+    })
+    .await;
+    (
+        client_home,
+        client_bridge,
+        client_handle,
+        client_updates,
+        state,
+    )
+}
+
+#[tokio::test]
+async fn removing_a_host_revokes_this_device_there_and_forgets_it_here() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, mut client_updates, mut state) =
+        paired_with(&server_handle).await;
+
+    let removal = client_handle
+        .remove_host("vps".to_owned())
+        .await
+        .expect("the host is removed");
+    assert_eq!(removal.host, "vps");
+    assert_eq!(removal.device, DeviceRevocation::Revoked);
+    until(&mut client_updates, &mut state, "the forgotten host", |s| {
+        s.hosts.is_empty()
+    })
+    .await;
+    assert!(
+        !Hosts::of(&profile(client_home.path())).exists("vps"),
+        "the host record is gone from this computer"
+    );
+    let listed = server_handle
+        .list_devices()
+        .await
+        .expect("the devices are listed");
+    let device = listed
+        .devices
+        .iter()
+        .find(|device| device.name == default_device_name())
+        .expect("the device stays listed on the server, revoked");
+    assert!(device.revoked_at_ms.is_some(), "{device:?}");
+
+    let again = client_handle
+        .remove_host("vps".to_owned())
+        .await
+        .expect_err("a host that is gone cannot be removed again");
+    assert!(
+        matches!(&again, Refusal::Failed { code, .. } if code == "host.not_found"),
+        "{again:?}"
+    );
+
+    drop(client_bridge);
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
+async fn a_host_that_does_not_answer_is_still_forgotten_and_says_the_device_stays_paired() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+    drop(server_bridge);
+    stop_service(server).await;
+
+    let removal = client_handle
+        .remove_host("vps".to_owned())
+        .await
+        .expect("an unreachable host is still removed");
+    assert!(
+        matches!(&removal.device, DeviceRevocation::NotRevoked(reason) if !reason.is_empty()),
+        "{removal:?}"
+    );
+    assert!(!Hosts::of(&profile(client_home.path())).exists("vps"));
+    drop(client_bridge);
+}
+
+#[tokio::test]
+async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let folder = server_home.path().join("notes");
+    std::fs::create_dir(&folder).expect("a project folder");
+    server_handle
+        .add_project(ProjectAddParams {
+            path: folder.display().to_string(),
+            name: Some("notes".to_owned()),
+            kind: Some(ProjectKind::Folder),
+            workspaces_root: None,
+            icon: None,
+        })
+        .await
+        .expect("the project is added");
+    let (_client_home, client_bridge, client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+
+    let loss = client_handle
+        .count_host_loss("vps".to_owned())
+        .await
+        .expect("the host answers");
+    assert_eq!(
+        loss,
+        HostLoss {
+            projects: 1,
+            sessions: 0
+        }
+    );
+
+    drop(server_bridge);
+    stop_service(server).await;
+    let unanswered = client_handle
+        .count_host_loss("vps".to_owned())
+        .await
+        .expect_err("a host that does not answer cannot be counted");
+    assert!(
+        matches!(unanswered, Refusal::Unavailable { .. }),
+        "{unanswered:?}"
+    );
+    drop(client_bridge);
 }

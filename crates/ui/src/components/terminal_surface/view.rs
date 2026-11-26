@@ -22,8 +22,8 @@ use super::feed::{Exit, FeedError, FeedEvent, FeedOutcome, TerminalFeed};
 use super::geometry::{self, CellHit, CellSize};
 use super::grid_paint::{self, Frame};
 use super::keys::{self, KeyPress};
-use crate::assets::FONT_MONO;
 use crate::components::button::Button;
+use crate::text_preferences;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{Palette, RADIUS_MD, SPACE_2};
 
@@ -355,7 +355,7 @@ impl Render for TerminalSurface {
             .size_full()
             .p(px(SPACE_2))
             .bg(palette.terminal.bg)
-            .font_family(FONT_MONO)
+            .font_family(text_preferences::terminal_family())
             .track_focus(&self.focus)
             .role(ACCESSIBILITY_ROLE)
             .aria_label(label)

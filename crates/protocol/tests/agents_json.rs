@@ -15,7 +15,8 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::agents::{
     AgentArchiveSessionParams, AgentForgetParams, AgentForgetPreview, AgentForgotten,
-    AgentListParams, ForgetPreviewWorkspace, ModeTone, WorkspaceRemovalError,
+    AgentListParams, AgentModel, AgentModels, AgentModelsParams, ForgetPreviewWorkspace, ModeTone,
+    ModelListingError, ModelListingFailure, ModelSource, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
@@ -63,6 +64,7 @@ fn live_session() -> AgentSession {
         archived: false,
         resume: None,
         delegation: None,
+        fast: None,
         notes: Vec::new(),
         shared_folder_with: Vec::new(),
     }
@@ -72,6 +74,7 @@ fn live_session() -> AgentSession {
 fn method_names_match_the_wire_table() {
     let names = [
         (agents::KINDS, "agent.kinds"),
+        (agents::MODELS, "agent.models"),
         (agents::START, "agent.start"),
         (agents::LIST, "agent.list"),
         (agents::SHOW, "agent.show"),
@@ -245,6 +248,7 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         default_permission_mode: None,
         chat: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(
@@ -296,16 +300,19 @@ fn a_kind_lists_its_model_choices_and_effort_levels_and_an_older_one_has_neither
                     id: "sonnet".to_owned(),
                     label: "Sonnet".to_owned(),
                     default: true,
+                    fast: false,
                     efforts: None,
                 },
                 KindModelChoice {
                     id: "haiku".to_owned(),
                     label: "Haiku".to_owned(),
                     default: false,
+                    fast: false,
                     efforts: Some(Vec::new()),
                 },
             ],
         }),
+        fast: None,
         effort: Some(KindEffort {
             levels: vec![KindEffortLevel {
                 id: "high".to_owned(),
@@ -374,6 +381,7 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
         default_permission_mode: None,
         chat: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(
@@ -451,6 +459,7 @@ fn start_params_default_every_optional_field() {
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         }
     );
@@ -473,6 +482,7 @@ fn a_start_without_a_workspace_omits_the_key() {
         request_id: None,
         permission_mode: None,
         model: None,
+        fast: None,
         effort: None,
     };
     assert_wire(&no_project, &json!({ "kind": "fake", "read_only": false }));
@@ -497,6 +507,7 @@ fn a_start_with_a_model_and_an_effort_carries_both_keys() {
         request_id: None,
         permission_mode: None,
         model: Some("fast-model".to_owned()),
+        fast: None,
         effort: Some("high".to_owned()),
     };
     assert_wire(
@@ -1065,6 +1076,102 @@ fn a_session_says_which_children_it_could_delegate_and_an_older_one_says_nothing
 }
 
 #[test]
+fn a_models_listing_names_each_models_source_and_omits_an_absent_time_and_error() {
+    let declared = AgentModel {
+        id: "sonnet".to_owned(),
+        label: "Sonnet".to_owned(),
+        default: true,
+        efforts: Some(vec!["low".to_owned(), "high".to_owned()]),
+        source: ModelSource::Declared,
+    };
+    let discovered = AgentModel {
+        id: "opus[1m]".to_owned(),
+        label: "Opus (1M context)".to_owned(),
+        default: false,
+        efforts: None,
+        source: ModelSource::Discovered,
+    };
+    assert_wire(
+        &AgentModels {
+            models: vec![declared, discovered],
+            fetched_at_ms: Some(1_700_000_000_000),
+            error: None,
+        },
+        &json!({
+            "models": [
+                {
+                    "id": "sonnet",
+                    "label": "Sonnet",
+                    "default": true,
+                    "efforts": ["low", "high"],
+                    "source": "declared"
+                },
+                { "id": "opus[1m]", "label": "Opus (1M context)", "source": "discovered" }
+            ],
+            "fetched_at_ms": 1_700_000_000_000u64
+        }),
+    );
+    assert_wire(
+        &AgentModels {
+            models: Vec::new(),
+            fetched_at_ms: None,
+            error: Some(ModelListingError {
+                code: ModelListingFailure::CliMissing,
+                message: "the program was not found".to_owned(),
+            }),
+        },
+        &json!({
+            "models": [],
+            "error": { "code": "cli_missing", "message": "the program was not found" }
+        }),
+    );
+}
+
+#[test]
+fn the_models_params_name_a_kind_and_omit_an_absent_account_and_an_unset_refresh() {
+    assert_wire(
+        &AgentModelsParams {
+            kind: "claude".to_owned(),
+            account: None,
+            refresh: false,
+        },
+        &json!({ "kind": "claude" }),
+    );
+    assert_wire(
+        &AgentModelsParams {
+            kind: "claude".to_owned(),
+            account: Some("acc-1".to_owned()),
+            refresh: true,
+        },
+        &json!({ "kind": "claude", "account": "acc-1", "refresh": true }),
+    );
+}
+
+#[test]
+fn every_listing_failure_has_its_snake_case_code() {
+    let codes: Vec<Value> = [
+        ModelListingFailure::CliMissing,
+        ModelListingFailure::NotSignedIn,
+        ModelListingFailure::TimedOut,
+        ModelListingFailure::Failed,
+        ModelListingFailure::NoModels,
+    ]
+    .into_iter()
+    .map(|code| serde_json::to_value(code).expect("a failure encodes"))
+    .collect();
+    assert_eq!(
+        codes,
+        [
+            json!("cli_missing"),
+            json!("not_signed_in"),
+            json!("timed_out"),
+            json!("failed"),
+            json!("no_models"),
+        ]
+    );
+}
+
+#[test]
 fn a_mode_carries_its_icon_tone_and_whether_it_is_offered_and_an_older_one_reads_as_offered() {
     let mode = PermissionMode {
         id: "hush".to_owned(),
@@ -1231,6 +1338,117 @@ fn rename_takes_a_session_and_a_title() {
             title: "New name".to_owned(),
         },
         &json!({ "session": "s1", "title": "New name" }),
+    );
+}
+
+/// Fast mode (decision 0165): a start asks for it, a kind and a model say whether they offer it, and a session says
+/// whether it was asked for. Each is absent when off, and an older peer decodes without them.
+#[test]
+fn fast_mode_is_asked_on_a_start_offered_by_kinds_and_models_and_shown_on_a_session() {
+    let asked = AgentStartParams {
+        workspace: Some("main".to_owned()),
+        kind: "claude".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: Some("opus".to_owned()),
+        effort: None,
+        fast: Some(true),
+    };
+    assert_wire(
+        &asked,
+        &json!({ "workspace": "main", "kind": "claude", "read_only": false, "model": "opus", "fast": true }),
+    );
+    let plain = AgentStartParams {
+        fast: None,
+        model: None,
+        ..asked
+    };
+    assert_wire(
+        &plain,
+        &json!({ "workspace": "main", "kind": "claude", "read_only": false }),
+    );
+
+    let choices = KindModel {
+        choices: vec![
+            KindModelChoice {
+                id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                default: false,
+                efforts: None,
+                fast: true,
+            },
+            KindModelChoice {
+                id: "haiku".to_owned(),
+                label: "Haiku".to_owned(),
+                default: false,
+                efforts: None,
+                fast: false,
+            },
+        ],
+    };
+    assert_wire(
+        &choices,
+        &json!({ "choices": [
+            { "id": "opus", "label": "Opus", "fast": true },
+            { "id": "haiku", "label": "Haiku" }
+        ]}),
+    );
+
+    let kinds: AgentKinds = serde_json::from_value(json!({ "kinds": [
+        {
+            "id": "claude", "name": "Claude", "icon": "claude", "owner": "core",
+            "installed": true, "resumable": true, "status_mechanism": "claude-settings",
+            "credentials": { "supported": true, "imported": false },
+            "fast": { "supported": true }
+        },
+        {
+            "id": "codex", "name": "Codex", "icon": "codex", "owner": "core",
+            "installed": false, "resumable": true, "status_mechanism": "codex-notify",
+            "credentials": { "supported": true, "imported": false },
+            "fast": { "supported": false, "reason": "the kind declares no fast mode" }
+        },
+        {
+            "id": "old", "name": "Old", "icon": "bot", "owner": "core",
+            "installed": false, "resumable": false, "status_mechanism": "none",
+            "credentials": { "supported": false, "imported": false }
+        }
+    ]}))
+    .expect("kinds decode with and without fast mode");
+    assert_eq!(
+        kinds.kinds[0].fast,
+        Some(massorca_protocol::methods::agents::KindFast {
+            supported: true,
+            reason: None
+        })
+    );
+    assert_eq!(
+        kinds.kinds[1]
+            .fast
+            .as_ref()
+            .and_then(|fast| fast.reason.as_deref()),
+        Some("the kind declares no fast mode")
+    );
+    assert!(kinds.kinds[2].fast.is_none());
+
+    let session: AgentSession = serde_json::from_value(json!({
+        "id": "s-1", "kind": "claude", "workspace_id": "w-1", "read_only": false,
+        "created_at_ms": 1, "execution": { "state": "live" },
+        "fast": { "on": true, "confirmed": false }
+    }))
+    .expect("a session with fast mode decodes");
+    assert_eq!(
+        session.fast,
+        Some(massorca_protocol::methods::agents::SessionFast {
+            on: true,
+            confirmed: false
+        })
     );
 }
 

@@ -266,6 +266,8 @@ impl Service {
             kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
             // The service's own environment: where the vendor CLIs it starts save their conversations (decision 0160).
             vendor_env: Some(massorca_core_agents::VendorEnv::process()),
+            // The host's search path, the one the extension install check uses (decision 0164).
+            vendor_search: massorca_core_agents::VendorSearch::host(),
         });
         // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
         let guarded = agents.clone();

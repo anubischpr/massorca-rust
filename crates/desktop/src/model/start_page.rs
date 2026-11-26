@@ -244,6 +244,7 @@ pub fn start_params(
         request_id: None,
         permission_mode,
         model: options.model,
+        fast: None,
         effort: options.effort,
     }
 }
@@ -310,8 +311,30 @@ pub fn first_workspace_of(state: &StoreState, project_id: &str) -> Option<String
         .map(|workspace| workspace.id.clone())
 }
 
+/// What a refused start says above the composer. A second writer in a busy workspace reads plainly until the service
+/// lets folder workspaces share writers.
+pub fn start_refusal_sentence(refusal: &crate::service::Refusal) -> String {
+    if refusal.code() == Some(massorca_protocol::codes::AGENT_WORKSPACE_BUSY) {
+        return "Another session is already working in this workspace, and a second one cannot write here yet. Wait for it to finish, or stop it first.".to_owned();
+    }
+    refusal.sentence()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_busy_workspace_refusal_reads_plainly() {
+        use massorca_protocol::{codes, message::ErrorBody};
+        let busy =
+            crate::service::Refusal::from(&massorca_client::ClientError::Remote(ErrorBody {
+                code: codes::AGENT_WORKSPACE_BUSY.to_owned(),
+                message: "session x already writes in this workspace".to_owned(),
+                data: None,
+            }));
+        let sentence = super::start_refusal_sentence(&busy);
+        assert!(sentence.starts_with("Another session is already working in this workspace"));
+    }
+
     use super::*;
     use crate::service::fixtures::{project, workspace};
 

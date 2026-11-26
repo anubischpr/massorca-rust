@@ -115,6 +115,8 @@ pub struct ApprovalRow {
     pub state: ApprovalState,
     /// The CLI offered rules for the `always` scope, so the card offers it.
     pub can_always: bool,
+    /// What an `always` answer writes, one line each, shown above the Always button so the person sees it first.
+    pub suggestions: Vec<SharedString>,
 }
 
 /// Only `Allowed` authorizes the tool. `Cancelled` covers every end without an answer.
@@ -160,6 +162,9 @@ pub enum TranscriptAction {
 
 pub type TranscriptActionHandler = Rc<dyn Fn(TranscriptAction, &mut Window, &mut App)>;
 
+/// Called when the list is scrolled to its first row, so the owner can load the older ones.
+pub type ReachTopHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// Rows drawn beyond the viewport, so a short scroll does not wait for them.
 const OVERDRAW: f32 = SPACE_12;
 
@@ -167,6 +172,8 @@ const OVERDRAW: f32 = SPACE_12;
 struct TranscriptUi {
     list: ListState,
     expanded: HashSet<SharedString>,
+    /// The id of the first row the list last placed, to tell rows added above it from rows added below.
+    first: Option<SharedString>,
 }
 
 /// Draws a chat session's transcript. Rows are bottom-aligned and the list follows the newest one while the agent
@@ -177,6 +184,7 @@ pub struct TranscriptView {
     rows: Rc<Vec<TranscriptRow>>,
     host_unreachable: Option<SharedString>,
     on_action: Option<TranscriptActionHandler>,
+    on_reach_top: Option<ReachTopHandler>,
 }
 
 impl std::fmt::Debug for TranscriptView {
@@ -195,12 +203,19 @@ impl TranscriptView {
             rows: rows.into(),
             host_unreachable: None,
             on_action: None,
+            on_reach_top: None,
         }
     }
 
     /// The host the session runs on cannot be reached: the answers are disabled, since they would not reach the agent.
     pub fn host_unreachable(mut self, host: Option<SharedString>) -> Self {
         self.host_unreachable = host;
+        self
+    }
+
+    /// Called when the first row is in view, as often as the list is scrolled there; the owner loads what is older.
+    pub fn on_reach_top(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_reach_top = Some(Rc::new(handler));
         self
     }
 
@@ -223,14 +238,35 @@ impl RenderOnce for TranscriptView {
             TranscriptUi {
                 list,
                 expanded: HashSet::new(),
+                first: None,
             }
         });
         let list_state = ui.read(cx).list.clone();
+        let first = self.rows.first().map(|row| row.id().clone());
+        let previous_first = ui.read(cx).first.clone();
+        let held = list_state.item_count();
         // Rows that arrived are measured by the list; rows that changed in place are measured again, and the scroll holds.
-        if list_state.item_count() == self.rows.len() {
+        // Rows added above the first one (an older page) are spliced in so the rows in view stay where they are.
+        let added_above = previous_first
+            .as_ref()
+            .filter(|_| held > 0 && self.rows.len() > held)
+            .and_then(|previous| self.rows.iter().position(|row| row.id() == previous))
+            .filter(|above| *above > 0 && above + held == self.rows.len());
+        if held == self.rows.len() {
+            list_state.remeasure();
+        } else if let Some(above) = added_above {
+            list_state.splice(0..0, above);
             list_state.remeasure();
         } else {
             list_state.reset(self.rows.len());
+        }
+        ui.update(cx, |ui, _| ui.first = first);
+        if let Some(reach_top) = self.on_reach_top.clone() {
+            list_state.set_scroll_handler(move |event, window, cx| {
+                if event.visible_range.start == 0 {
+                    reach_top(window, cx);
+                }
+            });
         }
         let rows = self.rows;
         let host = self.host_unreachable;

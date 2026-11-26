@@ -10,8 +10,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentKind,
-    AgentListParams, AgentPromptParams, AgentResumeParams, AgentSession, AgentSessionList,
-    AgentSetModeParams, AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel,
+    AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -20,6 +21,7 @@ use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
+use crate::agent_title::{self, AgentTitleArgs};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
@@ -31,6 +33,8 @@ use crate::terminal_attach;
 pub enum AgentCommand {
     /// Lists the agent kinds: built in and declared in the profile, each one's package state, whether its program is detected, and any problems.
     Kinds,
+    /// Lists the models a kind's picker offers for an account: the declared models, then the ones its vendor CLI lists.
+    Models(ModelsArgs),
     /// Starts an agent in a workspace. The agent keeps running after this command exits.
     Start(AgentStartArgs),
     /// Lists agent sessions, newest first: every session, or those of one workspace.
@@ -146,8 +150,9 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
-    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only or the parent
-    /// works in a plain folder, which the child then shares.
+    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only, the parent
+    /// works in a plain folder, or --same-workspace is given; a child that shares the parent's workspace and writes makes
+    /// the parent wait. The parent is told when the child finishes.
     Delegate(AgentDelegateArgs),
     /// Shows a session's delegation tree: its root and the root's children.
     Tree {
@@ -166,6 +171,8 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: AccountsCommand,
     },
+    /// Names a chat from its first prompt and reply, by one run of the kind's one-shot form (decision 0167). Prints the slug.
+    Title(AgentTitleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -185,6 +192,10 @@ pub struct AgentDelegateArgs {
     /// Run the child in the parent's workspace; it declares that it does not write.
     #[arg(long, conflicts_with = "name")]
     pub read_only: bool,
+    /// Run a writing child in the parent's own workspace instead of a new worktree; the parent's queued prompts then
+    /// wait until the child finishes.
+    #[arg(long, conflicts_with = "name")]
+    pub same_workspace: bool,
     /// The child session's title; the first line of the prompt by default.
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
@@ -269,6 +280,18 @@ pub struct AgentHookArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ModelsArgs {
+    /// Agent kind, for example claude.
+    pub kind: String,
+    /// Account whose models are listed. Without it, the kind's active account, or the vendor's usual home when it has none.
+    #[arg(long)]
+    pub account: Option<String>,
+    /// Asks the vendor CLI again instead of answering from the cache.
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AgentStartArgs {
     /// Agent kind, for example claude.
     pub kind: String,
@@ -294,6 +317,10 @@ pub struct AgentStartArgs {
     /// The reasoning effort, passed to the kind's effort flag; a kind that declares no effort flag refuses it.
     #[arg(long, value_name = "EFFORT")]
     pub effort: Option<String>,
+    /// Fast mode: passed to the settings the kind declares for it. Needs a kind and a model that offer it; a kind that
+    /// declares no fast mode, or a model that does not take it, refuses the start.
+    #[arg(long)]
+    pub fast: bool,
     /// Start the session as a structured chat (`agent.chat.start`) instead of in a terminal. A kind that cannot run as a
     /// chat (no chat support, or a CLI version outside its range) is refused with agent.chat_unsupported.
     #[arg(long, conflicts_with = "args")]
@@ -365,6 +392,35 @@ pub struct AgentListArgs {
     /// List hidden (archived) sessions too.
     #[arg(long)]
     pub archived: bool,
+}
+
+/// The `agent models` text: one line per model with its default, its efforts and where it came from, then the listing's
+/// failure when it has one.
+fn models_text(models: &AgentModels) -> Vec<String> {
+    let mut lines: Vec<String> = models
+        .models
+        .iter()
+        .map(|model| {
+            let default = if model.default { "  default" } else { "" };
+            let efforts = match &model.efforts {
+                Some(levels) if levels.is_empty() => "  efforts: none".to_owned(),
+                Some(levels) => format!("  efforts: {}", levels.join(", ")),
+                None => String::new(),
+            };
+            let source = match model.source {
+                ModelSource::Declared => "declared",
+                ModelSource::Discovered => "listed",
+            };
+            format!("{}  {}{default}{efforts}  {source}", model.id, model.label)
+        })
+        .collect();
+    if models.models.is_empty() {
+        lines.push("no models".to_owned());
+    }
+    if let Some(error) = &models.error {
+        lines.push(format!("listing failed: {}", error.message));
+    }
+    lines
 }
 
 /// The `agent kinds` text: the shared table and problems, then a `models:` and an `efforts:` line for each kind that
@@ -453,6 +509,16 @@ pub async fn execute(
             let kinds = client.agent_kinds().await?;
             output.success(&kinds, &kinds_text(&kinds.kinds));
         }
+        AgentCommand::Models(args) => {
+            let models = client
+                .agent_models(&AgentModelsParams {
+                    kind: args.kind,
+                    account: args.account,
+                    refresh: args.refresh,
+                })
+                .await?;
+            output.success(&models, &models_text(&models));
+        }
         AgentCommand::Start(args) => {
             let params = AgentStartParams {
                 workspace: args.workspace,
@@ -468,6 +534,7 @@ pub async fn execute(
                 permission_mode: args.mode,
                 model: args.model,
                 effort: args.effort,
+                fast: args.fast.then_some(true),
             };
             let started = if args.chat {
                 client.agent_chat_start(&params).await?
@@ -638,6 +705,9 @@ pub async fn execute(
         AgentCommand::Accounts { command } => {
             agent_accounts::execute(target, &client, command, output, json).await?;
         }
+        AgentCommand::Title(args) => {
+            agent_title::execute(&client, args, output).await?;
+        }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();
             let parent = args
@@ -659,6 +729,7 @@ pub async fn execute(
                     name: args.name,
                     title: args.title,
                     read_only: args.read_only,
+                    same_workspace: args.same_workspace,
                     request_id: None,
                     permission_mode: args.mode,
                 })

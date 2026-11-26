@@ -1,12 +1,11 @@
 //! The Add extension dialog: a package in a folder on This computer, reviewed like a catalogue install before anything
-//! installs. A git URL is listed as not available yet.
+//! installs.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, WeakEntity, div, px};
-use massorca_ui::components::button::{Button, ButtonVariant};
+use gpui::{AnyElement, App, Context, Entity, WeakEntity, div};
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::{SPACE_1, TYPE_BODY_SM};
+use massorca_ui::tokens::TYPE_BODY_SM;
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use crate::model::marketplace::HostTarget;
@@ -77,7 +76,7 @@ impl Shell {
         match folder_source(&path, on_this_computer) {
             Ok(source) => {
                 self.marketplace_add = None;
-                self.open_folder_review(source, cx);
+                self.open_package_review(source, cx);
             }
             Err(reason) => {
                 if let Some(dialog) = self.marketplace_add.as_mut() {
@@ -113,24 +112,6 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
             matches!(shell.marketplace_pick.target(), HostTarget::Local),
             true,
         ))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_1))
-                .child(
-                    div()
-                        .text_style(TYPE_BODY_SM)
-                        .text_color(theme.palette.text.secondary)
-                        .child("From a git URL"),
-                )
-                .child(
-                    Button::new("marketplace-add-git-url", "Install from a git URL")
-                        .variant(ButtonVariant::Secondary)
-                        .disabled(true)
-                        .tooltip("Not available yet"),
-                ),
-        )
         .action("Review")
         .cancel_label("Cancel")
         .on_action(move |_, cx| {

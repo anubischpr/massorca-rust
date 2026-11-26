@@ -164,10 +164,8 @@ mod tests {
     #[cfg(unix)]
     mod with_fake_ssh {
         use super::*;
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
+        use massorca_process::test_executable::write_executable;
         use std::path::Path;
-        use std::thread;
 
         /// A stand-in `ssh`: prints its arguments, fails on demand, then echoes stdin.
         fn fake_ssh(dir: &Path) -> PathBuf {
@@ -182,9 +180,7 @@ case "$*" in
 esac
 cat
 "#;
-            fs::write(&path, script).expect("write the fake ssh");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-                .expect("make the fake ssh executable");
+            write_executable(&path, script);
             path
         }
 
@@ -196,29 +192,12 @@ cat
             }
         }
 
-        /// Retries the one spawn error a freshly written script can hit while a parallel test forks.
-        fn run_retrying(
-            ssh: &SystemSsh,
-            command: &str,
-            stdin: Option<&[u8]>,
-        ) -> Result<RemoteOutput, SshError> {
-            const TEXT_FILE_BUSY: i32 = 26;
-            for _ in 0..100 {
-                match ssh.run(command, stdin) {
-                    Err(SshError::Spawn(err)) if err.raw_os_error() == Some(TEXT_FILE_BUSY) => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    other => return other,
-                }
-            }
-            ssh.run(command, stdin)
-        }
-
         #[test]
         fn arguments_arrive_as_given_and_stdin_reaches_the_command() {
             let dir = tempfile::tempdir().expect("temp dir");
             let input: Vec<u8> = (0..2_000_000_u32).map(|i| (i % 251) as u8).collect();
-            let output = run_retrying(&ssh_with(dir.path()), "cat > file", Some(&input))
+            let output = ssh_with(dir.path())
+                .run("cat > file", Some(&input))
                 .expect("the fake ssh runs");
             assert_eq!(output.status, 0);
             let header =
@@ -233,7 +212,7 @@ cat
         #[test]
         fn exit_255_is_an_ssh_failure_with_its_error_text() {
             let dir = tempfile::tempdir().expect("temp dir");
-            match run_retrying(&ssh_with(dir.path()), "FAIL255 now", None) {
+            match ssh_with(dir.path()).run("FAIL255 now", None) {
                 Err(SshError::Failed { status, stderr }) => {
                     assert_eq!(status, 255);
                     assert_eq!(stderr, "boom");
@@ -245,8 +224,9 @@ cat
         #[test]
         fn other_exit_codes_come_back_as_the_remote_status() {
             let dir = tempfile::tempdir().expect("temp dir");
-            let output =
-                run_retrying(&ssh_with(dir.path()), "EXIT3", None).expect("the fake ssh runs");
+            let output = ssh_with(dir.path())
+                .run("EXIT3", None)
+                .expect("the fake ssh runs");
             assert_eq!(output.status, 3);
         }
     }

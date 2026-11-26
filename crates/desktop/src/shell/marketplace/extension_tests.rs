@@ -6,15 +6,17 @@ use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, probl
 use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
 use crate::service::{
-    AccountCommand, Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate,
+    AccountCommand, Command, ExtensionCommand, ExtensionHistory, ExtensionsRead, Refusal,
+    RollbackAnswer, StoreUpdate,
 };
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
-    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
-    ExtensionReview, ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk,
-    RiskLevel, SourceKind, SourceRef, UninstallEffects,
+    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionLog,
+    ExtensionRemoved, ExtensionReview, ExtensionRun, ExtensionRunAction, ExtensionRunOutcome,
+    ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk, RiskLevel, SourceKind,
+    SourceRef, UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -64,7 +66,7 @@ pub(super) fn catalogue_package() -> ExtensionItem {
 }
 
 /// What `extensions.inspect` answers for the package; a vendor installer is listed when `runs_installer`.
-fn review(runs_installer: bool) -> ExtensionReview {
+pub(super) fn review(runs_installer: bool) -> ExtensionReview {
     ExtensionReview {
         id: "acme.notes".to_owned(),
         name: "Notes".to_owned(),
@@ -124,6 +126,7 @@ pub(super) fn open_listed(
             number: 1,
             installed: Ok(installed),
             catalogue: Ok(catalogue),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -354,6 +357,7 @@ fn the_enabled_switch_sends_the_change_and_shows_only_what_the_service_then_repo
             number: 2,
             installed: Ok(vec![installed_package(false)]),
             catalogue: Ok(vec![installed_package(false)]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -426,6 +430,7 @@ fn uninstall_sends_the_removal_and_closes_the_confirm_when_the_service_answers(
             number: 2,
             installed: Ok(Vec::new()),
             catalogue: Ok(vec![catalogue_package()]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -627,6 +632,7 @@ fn open_agent<'a>(
             number: 1,
             installed: Ok(installed),
             catalogue: Ok(catalogue),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -1034,6 +1040,7 @@ fn update_sends_the_consent_of_the_checked_review_and_the_list_refreshes(cx: &mu
             number: 2,
             installed: Ok(vec![updated_folder_package()]),
             catalogue: Ok(Vec::new()),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -1139,6 +1146,7 @@ fn add_account_turns_on_after_the_install_without_a_restart(cx: &mut TestAppCont
             number: 2,
             installed: Ok(vec![installed_agent("codex", true)]),
             catalogue: Ok(vec![installed_agent("codex", true)]),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -1271,4 +1279,273 @@ fn an_agent_page_header_draws_the_agents_own_mark(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("marketplace-header-agent").is_some());
     assert!(cx.debug_bounds("marketplace-header-icon").is_none());
+}
+
+/// The service's history of the installed package: rollback and the log offered, and an update that replaced 0.9.0.
+fn kept_history() -> ExtensionHistory {
+    let update = ExtensionRun {
+        at_ms: 1_700_000_000_000,
+        action: ExtensionRunAction::Update,
+        from_version: Some("0.9.0".to_owned()),
+        to_version: Some("1.0.0".to_owned()),
+        outcome: ExtensionRunOutcome::Ok,
+        output: Vec::new(),
+    };
+    ExtensionHistory {
+        rollback_offered: true,
+        log_offered: true,
+        runs: [("acme.notes".to_owned(), vec![update])]
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The package as a rollback answers it: the version it restores, installed.
+fn restored_package() -> ExtensionInstalled {
+    ExtensionInstalled {
+        id: "acme.notes".to_owned(),
+        version: "0.9.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        enabled: true,
+        installed_at_ms: 1_700_000_000_000,
+        cli: Vec::new(),
+    }
+}
+
+/// Opens the More menu of the installed package's row, after the service's next read sends `history`.
+fn open_installed_menu(rig: &mut Rig, cx: &mut VisualTestContext, history: ExtensionHistory) {
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![installed_package(true)]),
+            catalogue: Ok(vec![installed_package(true)]),
+            history,
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "rail-marketplace");
+    click(cx, "marketplace-nav-installed");
+    click(cx, "button:marketplace-row-1000-more");
+}
+
+#[gpui::test]
+fn roll_back_asks_without_consent_then_sends_the_consent_the_confirm_shows(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    assert!(
+        shown(cx, "menu-item-0"),
+        "the menu offers Roll back to 0.9.0 first"
+    );
+    click(cx, "menu-item-0");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert_eq!(params.consent, None, "the first call names no consent");
+            let _ = reply.send(Ok(RollbackAnswer::ConsentNeeded {
+                version: "0.9.0".to_owned(),
+                consent: CONSENT.to_owned(),
+            }));
+        }
+        _ => panic!("Roll back sends the rollback to the service"),
+    }
+    cx.run_until_parked();
+    let confirm = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_rollback.clone())
+        .expect("the confirm opens with the consent the service named");
+    assert_eq!(
+        (confirm.from.as_str(), confirm.version.as_str()),
+        ("1.0.0", "0.9.0")
+    );
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { params, reply })) => {
+            assert_eq!(
+                params.consent.as_deref(),
+                Some(CONSENT),
+                "the confirm sends the consent it shows"
+            );
+            let _ = reply.send(Ok(RollbackAnswer::Restored(restored_package())));
+        }
+        _ => panic!("the confirm sends the rollback again"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "a rollback that worked closes the confirm"
+    );
+}
+
+#[gpui::test]
+fn a_rollback_with_no_version_kept_says_so_and_opens_no_confirm(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    click(cx, "menu-item-0");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Rollback { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.no_previous_version".to_owned(),
+                message: "nothing is kept".to_owned(),
+            }));
+        }
+        _ => panic!("Roll back sends the rollback to the service"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "nothing kept opens no confirm"
+    );
+    let error = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone())
+        .map(|(_, text)| text);
+    assert_eq!(
+        error.as_deref(),
+        Some("There is no earlier version of this package to roll back to.")
+    );
+}
+
+#[gpui::test]
+fn without_the_offer_the_row_menu_has_no_roll_back(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, ExtensionHistory::default());
+    assert!(!shown(cx, "menu-item-1"), "Remove is the only entry");
+    click(cx, "menu-item-0");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_uninstall.is_some()),
+        "the first entry is Remove, which asks the uninstall confirm"
+    );
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_rollback.is_none()),
+        "no roll back is offered without the service's offer"
+    );
+}
+
+/// A run of the installed package, as the service lists it.
+fn logged_run(
+    action: ExtensionRunAction,
+    from: Option<&str>,
+    to: Option<&str>,
+    output: Vec<String>,
+) -> ExtensionRun {
+    ExtensionRun {
+        at_ms: 1_700_000_000_000,
+        action,
+        from_version: from.map(str::to_owned),
+        to_version: to.map(str::to_owned),
+        outcome: ExtensionRunOutcome::Ok,
+        output,
+    }
+}
+
+/// Chooses View log from the open More menu, and answers the service's read of the package's runs with `runs`.
+fn answer_run_log(rig: &mut Rig, cx: &mut VisualTestContext, runs: Vec<ExtensionRun>) {
+    click(cx, "menu-item-1");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Log { id, reply })) => {
+            assert_eq!(id, "acme.notes");
+            let _ = reply.send(Ok(ExtensionLog { id, runs }));
+        }
+        _ => panic!("View log asks the service for the package's runs"),
+    }
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn view_log_lists_the_runs_and_opens_output_only_for_a_run_that_wrote_some(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(
+        &mut rig,
+        cx,
+        vec![
+            logged_run(ExtensionRunAction::Install, None, Some("0.9.0"), Vec::new()),
+            logged_run(
+                ExtensionRunAction::Update,
+                Some("0.9.0"),
+                Some("1.0.0"),
+                vec!["npm WARN deprecated".to_owned()],
+            ),
+        ],
+    );
+    assert!(
+        !shown(cx, "button:marketplace-run-0-output"),
+        "a run that wrote no output has no details"
+    );
+    assert!(
+        shown(cx, "button:marketplace-run-1-output"),
+        "a run that wrote output opens its details"
+    );
+}
+
+#[gpui::test]
+fn a_package_with_no_runs_says_so(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(&mut rig, cx, Vec::new());
+    assert!(
+        shown(cx, "marketplace-run-log-empty"),
+        "an empty log says no runs are recorded yet"
+    );
+}
+
+#[gpui::test]
+fn copy_details_puts_the_run_log_on_the_clipboard(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    open_installed_menu(&mut rig, cx, kept_history());
+    answer_run_log(
+        &mut rig,
+        cx,
+        vec![logged_run(
+            ExtensionRunAction::Update,
+            Some("0.9.0"),
+            Some("1.0.0"),
+            vec!["npm WARN deprecated".to_owned()],
+        )],
+    );
+    draw(cx);
+    click(cx, "button:marketplace-run-log-copy");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(
+        copied.as_deref().is_some_and(|text| {
+            text.contains("Updated · 0.9.0 to 1.0.0 · Done\nnpm WARN deprecated")
+        }),
+        "{copied:?}"
+    );
 }

@@ -5,7 +5,8 @@ use std::cmp::Ordering;
 
 use massorca_protocol::methods::agents::Activity;
 use massorca_protocol::methods::chat::{
-    ChatBatch, ChatCursor, ChatEvent, ChatItem, ChatItemBody, ChatSnapshot, ChatUpdate, EndReason,
+    ChatBatch, ChatCursor, ChatEvent, ChatHistoryPage, ChatItem, ChatItemBody, ChatSnapshot,
+    ChatUpdate, EndReason,
 };
 
 /// What the reader does after an event: keep the stream, or resubscribe after the last applied cursor.
@@ -23,9 +24,10 @@ enum Appended {
 }
 
 /// The transcript of one chat session as far as its stream has delivered it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChatTranscript {
     items: Vec<ChatItem>,
+    has_older: bool,
     cursor: Option<ChatCursor>,
     latest_turn: Option<ChatItem>,
     activity: Option<Activity>,
@@ -37,6 +39,21 @@ impl ChatTranscript {
     /// The held items, oldest first by `position`.
     pub fn items(&self) -> &[ChatItem] {
         &self.items
+    }
+
+    /// Items older than the oldest one held exist; `agent.chat.history` pages them.
+    pub fn has_older(&self) -> bool {
+        self.has_older
+    }
+
+    /// Where the next page of older items starts: the oldest held item's position in the journal's epoch.
+    pub fn history_cursor(&self) -> Option<ChatCursor> {
+        let epoch = self.cursor.as_ref()?.epoch.clone();
+        let oldest = self.items.first()?;
+        Some(ChatCursor {
+            epoch,
+            seq: oldest.position,
+        })
     }
 
     pub fn item(&self, id: &str) -> Option<&ChatItem> {
@@ -92,8 +109,21 @@ impl ChatTranscript {
         }
     }
 
+    /// Adds a page of older items. A page from another epoch than the stream's is dropped: the stream resets, and its
+    /// snapshot replaces everything.
+    pub fn prepend(&mut self, page: ChatHistoryPage) {
+        if self.cursor.as_ref().map(|cursor| &cursor.epoch) != Some(&page.epoch) {
+            return;
+        }
+        for item in page.items {
+            self.put(item);
+        }
+        self.has_older = page.has_older;
+    }
+
     fn replace(&mut self, snapshot: ChatSnapshot) {
         self.items.clear();
+        self.has_older = snapshot.has_older;
         self.latest_turn = None;
         for item in snapshot.items {
             self.put(item);
@@ -620,5 +650,52 @@ mod tests {
             at_ms: 1,
             seen_at_ms: None,
         }
+    }
+
+    fn older_page(epoch: &str, items: Vec<ChatItem>, has_older: bool) -> ChatHistoryPage {
+        ChatHistoryPage {
+            epoch: epoch.to_owned(),
+            items,
+            has_older,
+        }
+    }
+
+    #[test]
+    fn an_older_page_goes_before_the_held_items_and_moves_the_paging_cursor() {
+        let mut transcript = ChatTranscript::default();
+        transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
+            cursor: cursor(9),
+            items: vec![user("c", 8, "three"), user("d", 9, "four")],
+            has_older: true,
+            latest_turn: None,
+            activity: None,
+        })));
+        assert!(transcript.has_older());
+        assert_eq!(transcript.history_cursor(), Some(cursor(8)));
+
+        transcript.prepend(older_page(
+            "epoch-1",
+            vec![user("a", 2, "one"), user("b", 5, "two")],
+            false,
+        ));
+
+        let ids: Vec<&str> = transcript
+            .items()
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        assert_eq!(ids, ["a", "b", "c", "d"]);
+        assert!(!transcript.has_older());
+        assert_eq!(transcript.history_cursor(), Some(cursor(2)));
+    }
+
+    #[test]
+    fn an_older_page_of_another_epoch_changes_nothing() {
+        let mut transcript = ChatTranscript::default();
+        transcript.apply(snapshot(9, vec![user("c", 8, "three")]));
+
+        transcript.prepend(older_page("epoch-2", vec![user("a", 2, "one")], false));
+
+        assert_eq!(transcript.items().len(), 1);
     }
 }
