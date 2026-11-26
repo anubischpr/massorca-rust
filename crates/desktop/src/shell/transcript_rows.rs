@@ -213,10 +213,8 @@ mod tests {
             id: id.to_owned(),
             position,
             seq: position,
-            turn: None,
-            parent: None,
-            at_ms: 0,
             body,
+            ..crate::service::fixtures::base_chat_item()
         }
     }
 
@@ -224,13 +222,12 @@ mod tests {
         let mut transcript = ChatTranscript::default();
         transcript.apply(ChatEvent::Snapshot(Box::new(ChatSnapshot {
             cursor: ChatCursor {
-                epoch: "epoch-1".to_owned(),
                 seq: 1,
+                ..crate::service::fixtures::base_chat_cursor()
             },
             items,
-            has_older: false,
             latest_turn,
-            activity: None,
+            ..crate::service::fixtures::base_chat_snapshot()
         })));
         transcript
     }
@@ -447,12 +444,8 @@ mod tests {
                     "tool",
                     1,
                     wire::ChatItemBody::ToolUse(wire::ToolUse {
-                        tool_use_id: "tu-1".to_owned(),
-                        name: "Bash".to_owned(),
-                        input_summary: "cargo test".to_owned(),
                         status: wire::ToolStatus::Unknown,
-                        output_summary: None,
-                        truncated: false,
+                        ..crate::service::fixtures::base_tool_use()
                     }),
                 ),
                 item(
@@ -572,14 +565,13 @@ mod tests {
         let mut offered = approval("Bash", wire::ApprovalState::Pending);
         offered.suggestions = vec![
             wire::ApprovalSuggestion {
-                kind: "addRules".to_owned(),
                 rules: vec!["Bash(touch probe.txt)".to_owned()],
                 destination: "session".to_owned(),
+                ..crate::service::fixtures::base_approval_suggestion()
             },
             wire::ApprovalSuggestion {
-                kind: "addRules".to_owned(),
                 rules: vec!["Read".to_owned(), "Edit".to_owned()],
-                destination: "localSettings".to_owned(),
+                ..crate::service::fixtures::base_approval_suggestion()
             },
         ];
         let transcript = transcript(

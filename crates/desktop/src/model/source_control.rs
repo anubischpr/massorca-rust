@@ -287,15 +287,7 @@ mod tests {
     fn entry(path: &str) -> StatusEntry {
         StatusEntry {
             path: path.to_owned(),
-            original_path: None,
-            staged: None,
-            unstaged: None,
-            untracked: false,
-            conflict: None,
-            staged_lines: None,
-            unstaged_lines: None,
-            submodule: false,
-            path_lossy: false,
+            ..crate::service::fixtures::base_status_entry()
         }
     }
 
@@ -306,10 +298,9 @@ mod tests {
                 oid: Some("a".repeat(40)),
                 ..BranchState::default()
             },
-            operation: None,
             entries,
             totals: StatusTotals::default(),
-            truncated: false,
+            ..crate::service::fixtures::base_git_status()
         }
     }
 
@@ -365,15 +356,13 @@ mod tests {
         let mut both = entry("src/lib/main.rs");
         both.staged = Some(ChangeKind::Modified);
         both.staged_lines = Some(LineCounts {
-            added: 3,
             removed: 1,
-            binary: false,
+            ..crate::service::fixtures::base_line_counts()
         });
         both.unstaged = Some(ChangeKind::Modified);
         both.unstaged_lines = Some(LineCounts {
             added: 2,
-            removed: 0,
-            binary: false,
+            ..crate::service::fixtures::base_line_counts()
         });
         let panel = ready(&with_status(status(vec![both])));
         assert_eq!(panel.staged.len(), 1);
@@ -412,8 +401,8 @@ mod tests {
         renamed.original_path = Some("docs/old.png".into());
         renamed.staged_lines = Some(LineCounts {
             added: 0,
-            removed: 0,
             binary: true,
+            ..crate::service::fixtures::base_line_counts()
         });
         let panel = ready(&with_status(status(vec![renamed])));
         let row = &panel.staged[0];
@@ -426,12 +415,11 @@ mod tests {
     fn a_detached_head_and_the_upstream_counts_are_on_the_branch_line() {
         let mut detached = status(Vec::new());
         detached.branch = BranchState {
-            head: None,
             oid: Some("b".repeat(40)),
             upstream: Some("origin/main".into()),
             ahead: Some(2),
             behind: Some(5),
-            upstream_gone: false,
+            ..crate::service::fixtures::base_branch_state()
         };
         let panel = ready(&with_status(detached));
         assert!(panel.branch.detached);
@@ -471,21 +459,14 @@ mod tests {
     #[test]
     fn history_waits_for_its_answer_then_lists_commits_with_more_pages_flagged() {
         let commit = Commit {
-            id: "0123456789abcdef".into(),
-            parents: Vec::new(),
             author: Signature {
-                name: "Ada".into(),
-                email: "ada@example.invalid".into(),
-                time_ms: 1,
+                ..crate::service::fixtures::base_signature()
             },
             committer: Signature {
-                name: "Ada".into(),
-                email: "ada@example.invalid".into(),
-                time_ms: 1,
+                ..crate::service::fixtures::base_signature()
             },
-            subject: "first".into(),
             message: "first\n".into(),
-            message_truncated: false,
+            ..crate::service::fixtures::base_commit()
         };
         let mut git = with_status(status(Vec::new()));
         assert_eq!(ready(&git).history, History::Loading);

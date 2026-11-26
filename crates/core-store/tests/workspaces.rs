@@ -311,13 +311,13 @@ fn renaming_sets_the_name_and_branch_and_keeps_the_path() {
 
     assert!(
         store
-            .rename_workspace(&row.id, "fix-login", Some("fix-login"))
+            .rename_workspace(&row.id, "fix-login", Some("fix-login"), false)
             .unwrap()
     );
     let found = store.get_workspace(&row.id).unwrap().unwrap();
     assert_eq!(found.name, "fix-login");
     assert_eq!(found.branch.as_deref(), Some("fix-login"));
     assert_eq!(found.path, row.path);
-    assert!(found.name_generated);
-    assert!(!store.rename_workspace("missing", "x", None).unwrap());
+    assert!(!found.name_generated, "the flag is written with the name");
+    assert!(!store.rename_workspace("missing", "x", None, false).unwrap());
 }

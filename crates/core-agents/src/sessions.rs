@@ -124,6 +124,36 @@ pub enum Change {
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
 pub type Listener = Box<dyn Fn(Change) + Send + Sync>;
 
+/// A prompt of the person that reached a session's run (decision 0118). It holds the text, so it is never printed.
+pub struct PromptDelivered {
+    /// The session the prompt reached.
+    pub session: String,
+    /// Its workspace.
+    pub workspace: String,
+    /// Its kind.
+    pub kind: String,
+    /// Whether it is a delegated child, which never names a workspace.
+    pub child: bool,
+    /// The prompt's text.
+    pub text: String,
+}
+
+/// Prints every field but the text, which is replaced by its length, as a queued prompt is.
+impl std::fmt::Debug for PromptDelivered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptDelivered")
+            .field("session", &self.session)
+            .field("workspace", &self.workspace)
+            .field("kind", &self.kind)
+            .field("child", &self.child)
+            .field("text", &format_args!("{} bytes", self.text.len()))
+            .finish()
+    }
+}
+
+/// Receives every prompt of the person once it is written. Called outside the status lock, so it must not block.
+pub type PromptListener = Box<dyn Fn(PromptDelivered) + Send + Sync>;
+
 /// Shortest id prefix a session selector may be.
 pub const MIN_SELECTOR_PREFIX: usize = 8;
 
@@ -293,6 +323,7 @@ struct Inner {
     /// held in memory only.
     status: Mutex<LiveRuns>,
     listener: OnceLock<Listener>,
+    prompt_listener: OnceLock<PromptListener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
     /// The accounts a call is working on: sign-ins still open, and removals (decision 0059). See `accounts`.
@@ -409,6 +440,7 @@ impl Agents {
                 config,
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
+                prompt_listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
@@ -439,6 +471,28 @@ impl Agents {
     /// Sets the receiver of every status change. Only the first call takes effect.
     pub fn set_listener(&self, listener: Listener) {
         let _ = self.inner.listener.set(listener);
+    }
+
+    /// Sets the receiver of every prompt of the person (decision 0118). Only the first call takes effect.
+    pub fn set_prompt_listener(&self, listener: PromptListener) {
+        let _ = self.inner.prompt_listener.set(listener);
+    }
+
+    /// Tells the prompt listener that the person's prompt reached `session`. A session that cannot be read is not told.
+    pub(crate) fn announce_prompt(&self, session: &str, text: &str) {
+        let Some(listener) = self.inner.prompt_listener.get() else {
+            return;
+        };
+        let Ok(row) = self.reload(session) else {
+            return;
+        };
+        listener(PromptDelivered {
+            session: row.id,
+            workspace: row.workspace_id,
+            kind: row.kind,
+            child: row.parent_id.is_some(),
+            text: text.to_owned(),
+        });
     }
 
     pub(crate) fn notify(&self, change: Change) {
@@ -1395,13 +1449,29 @@ impl Agents {
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
+        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses)?;
+        // Only the person's prompts are announced: a system prompt, such as a delegated child's report, is not work.
+        if lift_queue_pauses {
+            self.announce_prompt(&row.id, text);
+        }
+        Ok(receipt)
+    }
+
+    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does.
+    fn type_prompt(
+        &self,
+        row: &AgentSessionRow,
+        text: &str,
+        force: bool,
+        lift_queue_pauses: bool,
+    ) -> Result<PromptReceipt, AgentError> {
         // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
         // writing child as a terminal one does (decision 0170).
         if self.run_type_of(&row.id)? == RunType::Chat {
-            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), &row) {
+            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), row) {
                 return Err(child_writing(&row.id, &child));
             }
-            return self.chat_prompt(&row, text, force, lift_queue_pauses);
+            return self.chat_prompt(row, text, force, lift_queue_pauses);
         }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.

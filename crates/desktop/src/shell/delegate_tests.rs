@@ -90,7 +90,7 @@ fn started_child() -> AgentDelegated {
             title: Some("Write the tests".to_owned()),
             ..agent("c", "w1", 20)
         },
-        note: None,
+        ..crate::service::fixtures::base_agent_delegated()
     }
 }
 

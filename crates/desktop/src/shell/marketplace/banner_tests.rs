@@ -14,13 +14,13 @@ fn banner_package() -> ExtensionItem {
     let mut package = catalogue_package();
     package.listing.mention = Some("notes".to_owned());
     package.listing.banner = Some(Banner {
-        image: None,
         colors: vec!["#3F9B6E".to_owned(), "#8E8E93".to_owned()],
         examples: vec![BannerExample {
-            kind: "mention".to_owned(),
             text: Some("@notes".to_owned()),
             caption: "@notes summarise my notes".to_owned(),
+            ..crate::service::fixtures::base_banner_example()
         }],
+        ..crate::service::fixtures::base_banner()
     });
     package
 }

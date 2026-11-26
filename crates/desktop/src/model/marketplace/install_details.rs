@@ -173,9 +173,9 @@ mod tests {
 
     fn with_reasons(mut risky: ExtensionReview) -> ExtensionReview {
         let reason = |subject: &str, copy: &str| RiskReason {
-            level: RiskLevel::High,
             subject: subject.to_owned(),
             copy: copy.to_owned(),
+            ..crate::service::fixtures::base_risk_reason()
         };
         risky.risk = Risk {
             level: RiskLevel::High,
