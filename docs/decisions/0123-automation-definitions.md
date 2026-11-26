@@ -43,11 +43,18 @@ version leaves out.
   recomputes the next run; a name or prompt change keeps it. Enabling schedules the next run from now and checks the
   definition still holds; disabling clears the next run. A create with no project is refused.
 
+## Desktop
+
+- D6 Page. The Automations page (`docs/design/artboards/ws-automations.dc.html`, D-AG-14) lists each automation with
+  its schedule, its project and its next run. A switch enables or disables it, and Delete asks before it removes the
+  automation. Without a service the page says so and lists nothing; it shows no sample data.
+- D7 Editor. The editor (D-AG-15) holds the fields of one form: name, project, prompt, agent, cadence with its time,
+  weekday or cron expression, and zone. Cron sits in the same form in this version, not behind an advanced toggle.
+  The form checks what it can before sending; the service checks the rest.
+
 ## Not in this version
 
 - Runs and run history (AUTO-03, AUTO-04), the precheck (AUTO-05), the agent launch and its arguments (AUTO-06),
   completion and usage (AUTO-07), host ownership (AUTO-08), destinations and workspace modes (AUTO-02), SSH and
   remote scheduling (AUTO-09), the calendar (AUTO-30).
 - An events topic for automation changes. Clients re-read the list after a change.
-- The CLI (`massorca automations`) and the desktop page are described by the same owner direction (AUTO-01, D-AG-14,
-  D-AG-15, D-AG-16). This decision is amended when they land.
