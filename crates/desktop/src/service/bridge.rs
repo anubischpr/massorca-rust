@@ -19,19 +19,23 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
-    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
+    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCancelParams,
+    PairingCancelled, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
     TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
     TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
-use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+};
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
 use massorca_protocol::methods::workspaces::{
@@ -46,20 +50,31 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
+use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
-use super::hosts::{self, SshAdded, SshFailed, SshHost};
+use super::host_sessions::{self, Followed};
+use super::host_terminal::{self, HostAttach};
+use super::hosted_services::{self, ServicesCommand};
+use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
+use super::team_room::{self, RoomCommand};
+use super::team_routines::{self, RoutineCommand};
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
+/// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
+const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
+/// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
+const WORKSPACE_UNIQUE_NAME_CAPABILITY: &str = "workspace-unique-name/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -72,7 +87,13 @@ pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
+        unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
+    },
+    /// `git.branches` for one workspace: the local branch names, the current one first.
+    GitBranches {
+        workspace: String,
+        reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
     Remove {
         params: WorkspaceRemoveParams,
@@ -82,12 +103,21 @@ pub(crate) enum Command {
         params: ProjectAddParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
     },
+    /// `project.inspect`, answered on its oneshot: what a path would register as.
+    InspectProject {
+        params: ProjectInspectParams,
+        reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
+    },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
     /// A Bot Teams write, answered on its oneshot.
     Team(TeamCommand),
+    /// A team's Conference room: a read, or a post answered on its oneshot (decision 0102).
+    Room(RoomCommand),
+    /// A team routine call: a write answered on its oneshot, or a run history read.
+    Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
@@ -118,6 +148,11 @@ pub(crate) enum Command {
         call: skills::PlacementCall,
     },
     Secret(SecretCommand),
+    /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
+    HostedServices {
+        host: Option<String>,
+        command: ServicesCommand,
+    },
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
     SetConfig {
@@ -153,6 +188,14 @@ pub(crate) enum Command {
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
+    /// `agent.stop` on a paired host's own connection, answered on its oneshot; never sent to This PC's service.
+    HostAgentStop {
+        host: String,
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// A terminal of a paired host, attached over that host's own connection; its items and writes are the attach's.
+    HostTerminalAttach(HostAttach),
     /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
     AgentForget {
         params: ForgetSessionParams,
@@ -169,6 +212,8 @@ pub(crate) enum Command {
     },
     /// A prompt queue call (decision 0084), answered on its oneshot.
     AgentQueue(QueueCommand),
+    /// A chat session call, or a change of the chat session whose transcript is followed (decision 0101).
+    Chat(ChatCommand),
     GitDiffFile {
         params: GitDiffFileParams,
         reply: oneshot::Sender<Result<GitDiffFile, Refusal>>,
@@ -209,6 +254,16 @@ pub(crate) enum Command {
         ssh_args: Vec<String>,
         reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
     },
+    /// Forgets a paired host, revoking this device there first. Needs no connection to this computer's service.
+    RemoveHost {
+        name: String,
+        reply: oneshot::Sender<Result<HostRemoval, Refusal>>,
+    },
+    /// Counts what a paired host holds, for the remove confirm. Needs no connection to this computer's service.
+    CountHostLoss {
+        name: String,
+        reply: oneshot::Sender<Result<HostLoss, Refusal>>,
+    },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
         offer: String,
@@ -225,6 +280,10 @@ pub(crate) enum Command {
     CreateOffer {
         params: PairingCreateParams,
         reply: oneshot::Sender<Result<PairingCreated, Refusal>>,
+    },
+    CancelOffer {
+        params: PairingCancelParams,
+        reply: oneshot::Sender<Result<PairingCancelled, Refusal>>,
     },
     NetworkStatus {
         reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
@@ -313,7 +372,28 @@ impl ServiceHandle {
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        self.ask(|reply| Command::Create { params, reply }).await
+        self.create_workspace_with(params, false).await
+    }
+
+    /// `workspace.create` with the collision-free option when `unique_name` is set (capability `workspace-unique-name/1`).
+    pub async fn create_workspace_with(
+        &self,
+        params: WorkspaceCreateParams,
+        unique_name: bool,
+    ) -> Result<Workspace, Refusal> {
+        self.ask(|reply| Command::Create {
+            params,
+            unique_name,
+            reply,
+        })
+        .await
+    }
+
+    /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
+    /// repository, so any workspace of the project lists them all.
+    pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
+        self.ask(|reply| Command::GitBranches { workspace, reply })
+            .await
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -325,6 +405,15 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
+    pub async fn inspect_project(&self, path: String) -> Result<ProjectInspection, Refusal> {
+        self.ask(|reply| Command::InspectProject {
+            params: ProjectInspectParams { path },
+            reply,
+        })
+        .await
     }
 
     /// `team.create`. The teams change through the read that follows the answer, not from the answer.
@@ -424,6 +513,15 @@ impl ServiceHandle {
             .await
     }
 
+    /// `pairing.cancel`: retires a pending offer before it expires.
+    pub async fn cancel_offer(
+        &self,
+        params: PairingCancelParams,
+    ) -> Result<PairingCancelled, Refusal> {
+        self.ask(|reply| Command::CancelOffer { params, reply })
+            .await
+    }
+
     /// `network.status`: this computer's listeners and counts. The store keeps the answer too.
     pub async fn network_status(&self) -> Result<NetworkStatus, Refusal> {
         self.ask(|reply| Command::NetworkStatus { reply }).await
@@ -476,12 +574,16 @@ impl ServiceBridge {
             updates: updates_tx,
             connection: connection_tx,
             watching: BTreeSet::new(),
+            chat_watching: BTreeSet::new(),
+            chat_mirrors: ChatMirrors::default(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
+            room_reads: Arc::new(Sequence::default()),
             extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
             closing: closing.subscribe(),
+            followed: Followed::default(),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -575,10 +677,16 @@ struct Link {
     connection: watch::Sender<ConnectionState>,
     /// The workspaces the UI follows. Kept across connections, so a reconnect watches them again.
     watching: BTreeSet<String>,
+    /// The chat sessions whose transcripts the UI follows. Kept across connections, as `watching` is.
+    chat_watching: BTreeSet<String>,
+    /// What each followed transcript looked like when the stream last applied an event.
+    chat_mirrors: ChatMirrors,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
     team_reads: Arc<Sequence>,
+    /// Numbers the Conference room reads, so a stale answer never replaces a newer one.
+    room_reads: Arc<Sequence>,
     /// Numbers the extension reads across the connections of this bridge.
     extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
@@ -587,11 +695,18 @@ struct Link {
     accounts_order: Arc<AccountsFreshness>,
     /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
     closing: watch::Receiver<bool>,
+    /// The paired hosts a task follows, so the poll leaves them to it (STAT-16).
+    followed: Followed,
 }
 
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
+        hosts::check_hosts_again(
+            self.profile.clone(),
+            self.updates.clone(),
+            self.followed.clone(),
+        );
         let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
@@ -639,8 +754,34 @@ impl Link {
             Command::RefreshHosts
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
+            | Command::RemoveHost { .. }
+            | Command::CountHostLoss { .. }
             | Command::AcceptOffer { .. } => {
-                hosts::spawn(self.profile.clone(), command, self.updates.clone());
+                hosts::spawn(
+                    self.profile.clone(),
+                    command,
+                    self.updates.clone(),
+                    &self.followed,
+                );
+                None
+            }
+            Command::HostAgentStop {
+                host,
+                session,
+                reply,
+            } => {
+                host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
+                None
+            }
+            Command::HostTerminalAttach(attach) => {
+                host_terminal::spawn_attach(self.profile.clone(), attach);
+                None
+            }
+            Command::HostedServices {
+                host: Some(host),
+                command,
+            } => {
+                hosted_services::spawn_host(self.profile.clone(), host, command);
                 None
             }
             Command::HostRead { host, request } => {
@@ -707,7 +848,12 @@ impl Link {
                     None => return None,
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -732,7 +878,12 @@ impl Link {
                     }
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
-                            decline_while_down(&mut self.watching, command);
+                            decline_while_down(
+                                &mut self.watching,
+                                (&mut self.chat_watching, &self.chat_mirrors),
+                                &self.updates,
+                                command,
+                            );
                         }
                     }
                 },
@@ -768,11 +919,20 @@ impl Link {
         self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
             massorca_protocol::capabilities::AGENT_NO_PROJECT,
         )));
+        self.emit(StoreUpdate::AgentImportDetectOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
+        ));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
         self.emit(StoreUpdate::AgentChatOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_CHAT),
+        ));
+        self.emit(StoreUpdate::AgentFastOffered(
+            client.has_capability(AGENT_FAST_CAPABILITY),
+        ));
+        self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
+            client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
         ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
@@ -795,6 +955,14 @@ impl Link {
             Err(ClientError::Remote(_) | ClientError::Protocol(_)) => {}
             Err(error) => return Err(error),
         }
+        // Settings shows a refused read as unknown; only a lost link ends the connection.
+        match client.service_info().await {
+            Ok(info) => self.emit(StoreUpdate::ServiceGit(Ok(info.git))),
+            Err(error @ (ClientError::Remote(_) | ClientError::Protocol(_))) => {
+                self.emit(StoreUpdate::ServiceGit(Err(Refusal::from(&error))));
+            }
+            Err(error) => return Err(error),
+        }
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -814,6 +982,10 @@ impl Link {
         let mut watches = Watches::default();
         for workspace in &self.watching {
             watches.start(client, workspace, &self.updates, &self.freshness);
+        }
+        let mut chat_watches = ChatWatches::default();
+        for session in &self.chat_watching {
+            chat_watches.start(client, session, &self.chat_mirrors, &self.updates);
         }
         loop {
             let outcome = tokio::select! {
@@ -842,6 +1014,17 @@ impl Link {
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
                             }
+                            Some(Command::Routine(command)) => {
+                                team_routines::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.team_reads,
+                                );
+                            }
+                            Some(Command::Room(command)) => {
+                                team_room::spawn_call(client, command, &self.updates, &self.room_reads);
+                            }
                             Some(Command::Extension(command)) => {
                                 extensions::spawn_call(
                                     client,
@@ -849,6 +1032,9 @@ impl Link {
                                     &self.updates,
                                     &self.extension_reads,
                                 );
+                            }
+                            Some(Command::HostedServices { command, .. }) => {
+                                hosted_services::spawn_local(client, command);
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
@@ -871,6 +1057,27 @@ impl Link {
                                     &self.updates,
                                     &self.accounts_order,
                                 );
+                            }
+                            Some(Command::Chat(ChatCommand::Watch { session })) => {
+                                chat_watches.start(
+                                    client,
+                                    &session,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                                self.chat_watching.insert(session);
+                            }
+                            Some(Command::Chat(ChatCommand::Unwatch { session })) => {
+                                chat_watches.stop(&session);
+                                chat::note_unwatch(
+                                    &session,
+                                    &mut self.chat_watching,
+                                    &self.chat_mirrors,
+                                    &self.updates,
+                                );
+                            }
+                            Some(Command::Chat(command)) => {
+                                chat::spawn_call(client, command, &self.updates);
                             }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
@@ -943,6 +1150,10 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
+            // The id is the team's: its room is read again.
+            TOPIC_TEAM_ROOM_CHANGED => team_room::read(client, &self.room_reads, id.clone())
+                .await
+                .map(StoreUpdate::TeamRoom),
             // The events carry only the package id, so both lists are read again (decision 0062). A package can
             // carry an agent kind, and there is no kind event, so the kinds are read again too.
             TOPIC_EXTENSION_INSTALLED
@@ -984,7 +1195,7 @@ impl Link {
             TOPIC_AGENT_CHANGED => client
                 .agent_show(&id)
                 .await
-                .map(StoreUpdate::AgentChanged)
+                .map(|session| StoreUpdate::AgentChanged(Box::new(session)))
                 .or_else(|error| {
                     gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
                         StoreUpdate::AgentGone(id.clone())
@@ -1042,10 +1253,34 @@ fn spawn_call(
 ) {
     let client = client.clone();
     match command {
-        Command::Create { params, reply } => {
+        Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .workspace_create(&params)
+                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .await
+                    .map(|listed| {
+                        listed
+                            .branches
+                            .into_iter()
+                            .map(|branch| branch.name)
+                            .collect()
+                    })
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::Create {
+            params,
+            unique_name,
+            reply,
+        } => {
+            tokio::spawn(async move {
+                let request = WorkspaceCreateRequest {
+                    create: &params,
+                    unique_name,
+                };
+                let result = client
+                    .call::<_, Workspace>(massorca_protocol::methods::workspaces::CREATE, &request)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1064,6 +1299,15 @@ fn spawn_call(
             tokio::spawn(async move {
                 let result = client
                     .project_add(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::InspectProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectInspectParams, ProjectInspection>(projects::INSPECT, &params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1131,6 +1375,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::CancelOffer { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .pairing_cancel(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::NetworkStatus { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1171,7 +1424,9 @@ fn spawn_call(
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_)
         | Command::Team(_)
+        | Command::Routine(_)
         | Command::Secret(_)
+        | Command::HostedServices { .. }
         | Command::Account(_)
         | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -1179,8 +1434,19 @@ fn spawn_call(
 }
 
 /// While the link is down a watch still changes what the bridge follows; the next connection starts it.
-fn decline_while_down(watching: &mut BTreeSet<String>, command: Command) {
+fn decline_while_down(
+    watching: &mut BTreeSet<String>,
+    chat: (&mut BTreeSet<String>, &ChatMirrors),
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    command: Command,
+) {
     match command {
+        Command::Chat(ChatCommand::Watch { session }) => {
+            chat.0.insert(session);
+        }
+        Command::Chat(ChatCommand::Unwatch { session }) => {
+            chat::note_unwatch(&session, chat.0, chat.1, updates);
+        }
         Command::GitWatch { workspace } => {
             watching.insert(workspace);
         }
@@ -1198,10 +1464,16 @@ fn refuse_while_down(command: Command) {
         Command::Create { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::GitBranches { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Remove { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::AddProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::ListConfig { reply } => {
@@ -1211,9 +1483,14 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
+        Command::Room(command) => team_room::refuse(command, refusal),
+        Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
+        Command::HostAgentStop { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Skills { .. } | Command::HostSkills { .. } | Command::SkillPlacement { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
@@ -1222,6 +1499,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::CreateOffer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::CancelOffer { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {
@@ -1252,8 +1532,12 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::HostedServices { command, .. } => {
+            hosted_services::refuse_while_down(command, refusal);
+        }
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
+        Command::Chat(command) => chat::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }
@@ -1274,6 +1558,7 @@ mod tests {
             name: None,
             title: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: None,
             permission_mode: None,

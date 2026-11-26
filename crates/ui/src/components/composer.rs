@@ -110,6 +110,8 @@ pub struct Composer {
     access_note: Option<SharedString>,
     /// Each access mode's secondary text by index, `None` for none; see `set_access_details`.
     access_details: Vec<Option<SharedString>>,
+    /// Each access mode's tag by index, `None` for none; see `set_access_tags`.
+    access_tags: Vec<Option<SharedString>>,
     agent_name: SharedString,
     voice: bool,
     /// Whether the attach button, its menu and dropped files are offered.
@@ -186,6 +188,7 @@ impl Composer {
             access_index: 0,
             access_note: None,
             access_details: Vec::new(),
+            access_tags: Vec::new(),
             agent_name: "Claude".into(),
             voice: true,
             attach_offered: true,
@@ -361,10 +364,15 @@ impl Composer {
         self.disabled_reason.as_ref()
     }
 
-    /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
-    /// otherwise the first model offered is chosen.
-    pub fn set_picker_agents(&mut self, agents: Vec<AgentOption>, cx: &mut Context<Self>) {
-        let (choice, favourites, none_installed) = {
+    /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it; otherwise
+    /// `preselect` is chosen when the list offers it, and the first model offered when it does not.
+    pub fn set_picker_agents(
+        &mut self,
+        agents: Vec<AgentOption>,
+        preselect: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let (choice, favourites, none_installed, fast_reason) = {
             let state = self.picker.read(cx).state();
             if state.agents() == agents.as_slice() {
                 return;
@@ -373,22 +381,35 @@ impl Composer {
                 state.choice().clone(),
                 state.favourites().to_vec(),
                 state.no_agents_installed(),
+                state.fast_reason().cloned(),
             )
         };
         let mut state = PickerState::new(agents, choice.clone()).with_favourites(favourites);
         state.set_no_agents_installed(none_installed);
+        state.set_fast_reason(fast_reason);
         if state.locate(choice.model.as_ref()).is_none() {
             let first = state
                 .agents()
                 .iter()
-                .position(|agent| !agent.models.is_empty());
-            if let Some(agent) = first {
-                state.select_model(RowRef { agent, model: 0 });
+                .position(|agent| !agent.models.is_empty())
+                .map(|agent| RowRef { agent, model: 0 });
+            let row = preselect
+                .as_deref()
+                .and_then(|id| state.locate(id))
+                .or(first);
+            if let Some(row) = row {
+                state.select_model(row);
             }
         }
         self.picker = cx.new(|cx| ModelPicker::new(state, cx));
         self._picker_events = Self::subscribe_picker(&self.picker, cx);
         cx.notify();
+    }
+
+    /// Why Fast is off on every model while the service does not offer it; see `ModelPicker::set_fast_reason`.
+    pub fn set_picker_fast_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
+        self.picker
+            .update(cx, |picker, cx| picker.set_fast_reason(reason, cx));
     }
 
     fn situation(&self, cx: &App) -> Situation {
@@ -510,6 +531,7 @@ mod tests {
                 kind: AgentKind::Claude,
                 availability: AgentAvailability::Ready,
                 list: ModelList::Loaded,
+                brand: None,
                 models: vec![ModelOption {
                     id: "opus".into(),
                     name: "Opus 5.5".into(),
@@ -794,6 +816,7 @@ mod tests {
             kind,
             availability: AgentAvailability::Ready,
             list: ModelList::Loaded,
+            brand: None,
             models: vec![ModelOption {
                 id: model.into(),
                 name: model.into(),
@@ -827,14 +850,33 @@ mod tests {
                     offered(AgentKind::Codex, "codex"),
                     offered(AgentKind::Claude, "opus"),
                 ],
+                None,
                 cx,
             )
         });
         assert_eq!(chosen_model(&composer, cx), "opus");
         composer.update(cx, |composer, cx| {
-            composer.set_picker_agents(vec![offered(AgentKind::Codex, "codex")], cx)
+            composer.set_picker_agents(vec![offered(AgentKind::Codex, "codex")], None, cx)
         });
         assert_eq!(chosen_model(&composer, cx), "codex");
+    }
+
+    #[gpui::test]
+    fn a_new_agent_list_without_the_choice_takes_the_preselected_model_over_the_first(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_agents(
+                vec![
+                    offered(AgentKind::Codex, "codex"),
+                    offered(AgentKind::Claude, "haiku"),
+                ],
+                Some("haiku".into()),
+                cx,
+            )
+        });
+        assert_eq!(chosen_model(&composer, cx), "haiku");
     }
 
     #[gpui::test]

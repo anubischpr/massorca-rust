@@ -11,6 +11,7 @@ use crate::service::fixtures::{agent_kind, project, workspace};
 use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
 use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::PackageState;
+use massorca_protocol::methods::projects::{ProjectInspectParams, ProjectInspection, ProjectKind};
 use massorca_protocol::methods::workspaces::WorkspaceRemoved;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -103,6 +104,7 @@ fn removed() -> WorkspaceRemoved {
         branch_deleted: true,
         branch_kept_reason: None,
         directory_kept: false,
+        archive: None,
     }
 }
 
@@ -242,6 +244,16 @@ fn add_a_project_is_refused_under_its_path_then_added_and_chosen_on_the_start_pa
         .read_with(cx, |shell, _| assert!(shell.dialogs.add_project.is_some()));
     cx.simulate_input("/missing");
     cx.simulate_keystrokes("enter");
+    // The dialog asks the service what the path is first. It refuses a missing folder there too, and the
+    // add gets the same refusal, so the refusal shows under the field.
+    let (inspect, inspect_reply) = next_inspect(&mut rig.script);
+    assert_eq!(inspect.path, "/missing");
+    inspect_reply
+        .send(Err(Refusal::PathProblem {
+            message: "That folder does not exist.".into(),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
     let Some(Command::AddProject { params, reply }) = rig.script.next() else {
         panic!("a project.add call was expected");
     };
@@ -270,6 +282,11 @@ fn add_a_project_is_refused_under_its_path_then_added_and_chosen_on_the_start_pa
         assert_eq!(dialog.form.path_error, None);
     });
     cx.simulate_keystrokes("enter");
+    let (_, inspect_reply) = next_inspect(&mut rig.script);
+    inspect_reply
+        .send(Ok(inspection(ProjectKind::Git, "/missing2", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
     let Some(Command::AddProject { reply, .. }) = rig.script.next() else {
         panic!("a second project.add call was expected");
     };
@@ -284,6 +301,212 @@ fn add_a_project_is_refused_under_its_path_then_added_and_chosen_on_the_start_pa
             Some(ProjectChoice::Project("p9".to_owned()))
         );
     });
+}
+
+/// The `project.inspect` a submitted path sends first, for the test to answer.
+fn next_inspect(
+    script: &mut Script,
+) -> (
+    ProjectInspectParams,
+    tokio::sync::oneshot::Sender<Result<ProjectInspection, Refusal>>,
+) {
+    match script.next() {
+        Some(Command::InspectProject { params, reply }) => (params, reply),
+        _ => panic!("a project.inspect call was expected"),
+    }
+}
+
+pub(super) fn inspection(
+    kind: ProjectKind,
+    path: &str,
+    registered: Option<&str>,
+) -> ProjectInspection {
+    ProjectInspection {
+        path: path.to_owned(),
+        kind,
+        registered: registered.map(str::to_owned),
+    }
+}
+
+/// Opens "Add a project" and sends `path` with Enter; the dialog then asks the service what the path is.
+fn send_path(rig: &Rig, cx: &mut VisualTestContext, path: &str) {
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.open_add_project(window, cx));
+    draw(cx);
+    cx.simulate_input(path);
+    cx.simulate_keystrokes("enter");
+}
+
+#[gpui::test]
+fn a_git_folder_is_added_without_a_warning(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    send_path(&rig, cx, "/repos/gamma");
+    let (inspect, reply) = next_inspect(&mut rig.script);
+    assert_eq!(inspect.path, "/repos/gamma");
+    reply
+        .send(Ok(inspection(ProjectKind::Git, "/repos/gamma", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    let Some(Command::AddProject { params, reply }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    assert_eq!(
+        params.kind, None,
+        "the service picks the kind of a repository"
+    );
+    reply
+        .send(Ok(project("p9", "gamma")))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.dialogs.add_project.is_none());
+        assert_eq!(
+            shell.home_project,
+            Some(ProjectChoice::Project("p9".to_owned()))
+        );
+    });
+}
+
+#[gpui::test]
+fn a_plain_folder_is_held_for_the_warning_and_nothing_is_added_yet(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    send_path(&rig, cx, "/repos/notes");
+    let (_, reply) = next_inspect(&mut rig.script);
+    reply
+        .send(Ok(inspection(ProjectKind::Folder, "/repos/notes", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        rig.script.next().is_none(),
+        "no project.add before the person decides"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .dialogs
+            .add_project
+            .as_ref()
+            .expect("the dialog stays open");
+        assert_eq!(dialog.form.plain_folder.as_deref(), Some("/repos/notes"));
+        assert!(!dialog.form.busy);
+    });
+    assert!(
+        cx.debug_bounds("dialog-action").is_some(),
+        "the warning offers Continue without Git"
+    );
+    assert!(cx.debug_bounds("dialog-cancel").is_some(), "and Cancel");
+}
+
+#[gpui::test]
+fn continue_without_git_adds_the_folder_as_a_plain_folder(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    send_path(&rig, cx, "/repos/notes");
+    let (_, reply) = next_inspect(&mut rig.script);
+    reply
+        .send(Ok(inspection(ProjectKind::Folder, "/repos/notes", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    click(cx, "dialog-action");
+    let Some(Command::AddProject { params, reply }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    assert_eq!(params.path, "/repos/notes");
+    assert_eq!(
+        params.kind,
+        Some(ProjectKind::Folder),
+        "the person chose to add it without Git"
+    );
+    let mut added = project("p9", "notes");
+    added.kind = ProjectKind::Folder;
+    reply.send(Ok(added)).expect("the shell waits");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.dialogs.add_project.is_none());
+        assert_eq!(
+            shell.home_project,
+            Some(ProjectChoice::Project("p9".to_owned()))
+        );
+    });
+}
+
+#[gpui::test]
+fn cancel_at_the_warning_adds_nothing_and_returns_to_the_path(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    send_path(&rig, cx, "/repos/notes");
+    let (_, reply) = next_inspect(&mut rig.script);
+    reply
+        .send(Ok(inspection(ProjectKind::Folder, "/repos/notes", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    click(cx, "dialog-cancel");
+    assert!(rig.script.next().is_none(), "nothing is added");
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .dialogs
+            .add_project
+            .as_ref()
+            .expect("the dialog is back on the path");
+        assert_eq!(dialog.form.plain_folder, None);
+        assert_eq!(dialog.form.path, "/repos/notes");
+    });
+}
+
+#[gpui::test]
+fn a_folder_already_added_is_not_warned_about_and_the_add_refuses_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    send_path(&rig, cx, "/repos/alpha");
+    let (_, reply) = next_inspect(&mut rig.script);
+    reply
+        .send(Ok(inspection(
+            ProjectKind::Folder,
+            "/repos/alpha",
+            Some("p1"),
+        )))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    let Some(Command::AddProject { params, reply }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    assert_eq!(params.kind, None);
+    reply
+        .send(Err(Refusal::PathProblem {
+            message: "That folder is already a project.".into(),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell.dialogs.add_project.as_ref().expect("still open");
+        assert_eq!(dialog.form.plain_folder, None);
+        assert_eq!(
+            dialog.form.path_error.as_deref(),
+            Some("That folder is already a project.")
+        );
+    });
+}
+
+#[gpui::test]
+fn a_plain_folder_project_shows_the_no_git_marker_in_the_sidebar(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-no-git-p1").is_none(),
+        "a repository has no marker"
+    );
+    let mut notes = project("p2", "notes");
+    notes.kind = ProjectKind::Folder;
+    rig.updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha"), notes],
+            workspaces: Vec::new(),
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-no-git-p2").is_some(),
+        "the plain folder shows No Git"
+    );
+    assert!(cx.debug_bounds("sidebar-no-git-p1").is_none());
 }
 
 #[gpui::test]

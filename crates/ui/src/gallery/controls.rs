@@ -49,11 +49,12 @@ pub fn stories() -> Vec<Story> {
 }
 
 /// Every button variant, in gallery order.
-const VARIANTS: [(&str, ButtonVariant); 4] = [
+const VARIANTS: [(&str, ButtonVariant); 5] = [
     ("Primary", ButtonVariant::Primary),
     ("Secondary", ButtonVariant::Secondary),
     ("Ghost", ButtonVariant::Ghost),
     ("Danger", ButtonVariant::Danger),
+    ("Danger ghost", ButtonVariant::DangerGhost),
 ];
 
 /// Icon buttons in gallery order, each with its accessible name.

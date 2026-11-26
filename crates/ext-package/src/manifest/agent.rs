@@ -25,7 +25,6 @@ pub const RESERVED_PUBLISHER: &str = "massorca";
 /// of these bare, never a path; the manifest refuses any other, and the install refuses it again before it runs.
 pub const VENDOR_PROGRAMS: [&str; 5] = ["winget", "brew", "npm", "powershell", "bash"];
 
-/// Whether a vendor command's argv starts with an allowlisted program.
 /// Whether a cli block declares a vendor command: an install, an uninstall or a verify. Only a built-in may (0062, V1).
 pub fn declares_vendor_commands(cli: &AgentCli) -> bool {
     cli.verify.is_some()
@@ -34,9 +33,17 @@ pub fn declares_vendor_commands(cli: &AgentCli) -> bool {
         || !cli.uninstall.is_empty()
 }
 
+/// Whether a vendor command's argv starts with an allowlisted program.
 pub fn is_vendor_program(argv: &[String]) -> bool {
     argv.first()
         .is_some_and(|program| VENDOR_PROGRAMS.contains(&program.as_str()))
+}
+
+/// Whether an uninstall command may run: an allowlisted program, or the CLI's own `binary`, the program its `verify` step
+/// already runs. A vendor's own `self-uninstall` removes what its installer put in place (decision 0164). An install never
+/// gets this: it starts an allowlisted program only.
+pub fn is_uninstall_program(argv: &[String], binary: &str) -> bool {
+    is_vendor_program(argv) || argv.first().is_some_and(|program| program == binary)
 }
 
 /// Whether an id or publisher is the first party's: publisher `massorca` or an id `massorca.*`. Only the built-in
@@ -253,12 +260,26 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
             "must be an https URL to the vendor's official install docs",
         );
     }
-    check_steps(&cli.install, &at(base, "install"), true, problems);
-    check_steps(&cli.update, &at(base, "update"), false, problems);
-    check_steps(&cli.uninstall, &at(base, "uninstall"), false, problems);
+    check_steps(&cli.install, &at(base, "install"), true, None, problems);
+    check_steps(&cli.update, &at(base, "update"), false, None, problems);
+    check_steps(
+        &cli.uninstall,
+        &at(base, "uninstall"),
+        false,
+        Some(&cli.binary),
+        problems,
+    );
 }
 
-fn check_steps(steps: &[CliStep], base: &str, manual_allowed: bool, problems: &mut Problems) {
+/// Checks a list of steps. An install starts an allowlisted program; an uninstall, given the CLI's `own_binary`, may start
+/// that binary as well (decision 0164).
+fn check_steps(
+    steps: &[CliStep],
+    base: &str,
+    manual_allowed: bool,
+    own_binary: Option<&str>,
+    problems: &mut Problems,
+) {
     let mut seen = HashSet::new();
     let mut manual_os = HashSet::new();
     for (index, step) in steps.iter().enumerate() {
@@ -277,14 +298,19 @@ fn check_steps(steps: &[CliStep], base: &str, manual_allowed: bool, problems: &m
                 "has one entry per operating system in this list",
             );
         }
-        if !is_vendor_program(&step.command) {
-            problems.add(
-                at(&here, "command"),
-                format!(
-                    "must start with an allowlisted program: {}",
-                    VENDOR_PROGRAMS.join(", ")
+        let allowed = match own_binary {
+            Some(binary) => is_uninstall_program(&step.command, binary),
+            None => is_vendor_program(&step.command),
+        };
+        if !allowed {
+            let programs = VENDOR_PROGRAMS.join(", ");
+            let message = match own_binary {
+                Some(binary) => format!(
+                    "must start with an allowlisted program: {programs}, or the CLI's own binary `{binary}`"
                 ),
-            );
+                None => format!("must start with an allowlisted program: {programs}"),
+            };
+            problems.add(at(&here, "command"), message);
         }
     }
     for (index, step) in steps.iter().enumerate() {

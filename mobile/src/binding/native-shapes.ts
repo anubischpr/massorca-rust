@@ -16,6 +16,7 @@ import type {
   OfferSummary,
   ProtocolInfo,
   TerminalEvent,
+  TerminalSummary,
   WhoAmI,
   WorkspaceSummary,
 } from './types';
@@ -91,6 +92,7 @@ export interface RustHost {
   whoami(): Promise<Rust.WhoAmI>;
   protocol(): Rust.ProtocolInfo;
   workspaces(project: string | undefined): Promise<Rust.WorkspaceSummary[]>;
+  terminals(workspace: string | undefined): Promise<Rust.TerminalSummary[]>;
   gitStatus(workspace: string): Promise<Rust.GitStatusSummary>;
   watchGit(workspace: string): RustWatch<RustGitEvent>;
   watchAgents(workspace: string | undefined): RustWatch<RustAgentEvent>;
@@ -148,6 +150,21 @@ export function workspaceSummary(raw: Rust.WorkspaceSummary): WorkspaceSummary {
     branch: raw.branch,
     state: raw.state,
     missing: raw.missing,
+  };
+}
+
+export function terminalSummary(raw: Rust.TerminalSummary): TerminalSummary {
+  return {
+    id: raw.id,
+    workspaceId: raw.workspaceId,
+    state: raw.state,
+    title: raw.title,
+    cols: raw.cols,
+    rows: raw.rows,
+    shell: raw.shell,
+    cwd: raw.cwd,
+    createdAtMs: raw.createdAtMs,
+    holdsSecrets: raw.holdsSecrets,
   };
 }
 

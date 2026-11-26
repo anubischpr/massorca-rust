@@ -62,7 +62,7 @@ pub(crate) struct HostPrograms {
 
 impl HostPrograms {
     #[cfg(test)]
-    fn searching(env: SearchEnv) -> Self {
+    pub(crate) fn searching(env: SearchEnv) -> Self {
         Self {
             env: Some(env),
             service_env: None,
@@ -148,6 +148,42 @@ impl CommandRunner for HostPrograms {
 }
 
 impl HostPrograms {
+    /// Runs `program` with `input` on its stdin and its output discarded, since it may repeat the input or the host.
+    /// `env` is added to the allowlisted variables. `input` must fit a pipe buffer (4 KiB): it is written before the wait.
+    pub(crate) fn run_with_input(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        input: &[u8],
+        timeout: Duration,
+    ) -> io::Result<Exit> {
+        let (search, _) = self.search_path();
+        let resolved = resolve(program, &search).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("`{program}` was not found on PATH"),
+            )
+        })?;
+        let work = WorkDir::create()?;
+        let mut command = massorca_process::command(&resolved);
+        command
+            .args(args)
+            .current_dir(work.path())
+            .env_clear()
+            .envs(self.passed_env(&search))
+            .envs(env.iter().copied())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut child, tree) = ProcessTree::spawn(&mut command)?;
+        if let Some(mut stdin) = child.stdin.take() {
+            // A child that exits without reading closes the pipe; its exit code is the answer.
+            let _ = stdin.write_all(input);
+        }
+        wait_until(&mut child, tree, Instant::now() + timeout)
+    }
+
     /// One run. The log gets the argv line and the exit status (or the timeout) whatever happens, and up to
     /// `max_log_bytes` of output of this run; an earlier run's bytes never count against it.
     fn run_capped(
@@ -454,6 +490,9 @@ impl Sink {
 #[cfg(test)]
 mod tests {
     use std::fs;
+
+    #[cfg(unix)]
+    use massorca_process::test_executable::write_executable;
 
     use super::*;
 
@@ -974,12 +1013,10 @@ mod tests {
         )
         .expect("a program");
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = dir.path().join("printpath");
-            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
-        }
+        write_executable(
+            &dir.path().join("printpath"),
+            "#!/bin/sh\necho \"PATH=$PATH\"\n",
+        );
         let host = HostPrograms::searching(SearchEnv {
             path: Some(dir.path().as_os_str().to_owned()),
             pathext: windows_pathext(),
@@ -1010,12 +1047,10 @@ mod tests {
         )
         .expect("a program");
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = dir.path().join("printpath");
-            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
-        }
+        write_executable(
+            &dir.path().join("printpath"),
+            "#!/bin/sh\necho \"PATH=$PATH\"\n",
+        );
         let search = std::env::join_paths([
             PathBuf::from("."),
             PathBuf::from("bin"),

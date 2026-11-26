@@ -1,10 +1,11 @@
-//! `massorca workspace create|list|show|current|rm` (alias `ws`): creating and removing workspaces through the service.
+//! `massorca workspace create|list|show|current|rm|update|rename|check` (alias `ws`): creating and removing workspaces through the service.
 
 use std::path::Path;
 
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceListParams,
-    WorkspaceRef, WorkspaceRemoveParams, WorkspaceSetup, WorkspaceUpdateParams,
+    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRenameParams, WorkspaceSetup,
+    WorkspaceUpdateParams,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
@@ -76,6 +77,7 @@ pub async fn execute(
             force,
             discard_ignored,
             forget_orphan,
+            allow_failed_archive,
         } => {
             let removed = client
                 .workspace_remove(&WorkspaceRemoveParams {
@@ -83,6 +85,7 @@ pub async fn execute(
                     force,
                     discard_ignored,
                     forget_orphan,
+                    allow_failed_archive,
                 })
                 .await?;
             output.success(&removed, &workspace_text::removal_lines(&removed));
@@ -101,6 +104,23 @@ pub async fn execute(
                 .await?;
             let line = workspace_text::workspace_line(&updated, "updated");
             output.success(&updated, &[line]);
+        }
+        WorkspaceCommand::Rename {
+            workspace,
+            new_name,
+            from_generated,
+            expected_branch,
+        } => {
+            let renamed = client
+                .workspace_rename(&WorkspaceRenameParams {
+                    workspace: paths.selector(&workspace)?,
+                    name: new_name,
+                    from_generated,
+                    expected_branch,
+                })
+                .await?;
+            let line = workspace_text::workspace_line(&renamed, "renamed");
+            output.success(&renamed, &[line]);
         }
         WorkspaceCommand::Check { workspace } => {
             let check = client
@@ -134,6 +154,8 @@ fn create_params(
         path,
         request_id: args.request_id,
         no_setup: args.no_setup,
+        unique_name: args.unique,
+        name_generated: args.name_generated,
     })
 }
 
@@ -146,6 +168,10 @@ fn setup_lines(setup: Option<&WorkspaceSetup>) -> Vec<String> {
             format!("watch it: massorca terminal attach {terminal}"),
         ],
         Some(WorkspaceSetup::Skipped) => vec!["setup skipped (--no-setup)".to_owned()],
+        Some(WorkspaceSetup::Untrusted { reason, hash }) => vec![
+            format!("setup skipped: {reason}"),
+            format!("script hash: {hash}"),
+        ],
         Some(WorkspaceSetup::Failed { reason }) => vec![format!("setup not started: {reason}")],
         Some(WorkspaceSetup::Unknown) => {
             vec!["setup: an outcome this client does not know".to_owned()]

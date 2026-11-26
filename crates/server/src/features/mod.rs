@@ -1,5 +1,6 @@
 //! Core features. Each registers its capabilities, methods, commands and settings through the registries, and the service keeps the handles for its lifetime.
 
+mod agent_chat;
 mod agent_redaction;
 mod agents;
 mod command_schema;
@@ -11,8 +12,11 @@ mod events;
 pub(crate) mod extension_process;
 mod extensions;
 mod git;
+mod glab_login;
 mod host;
+mod hosted_services;
 mod projects;
+mod script_trust;
 mod secret_params;
 mod secret_refusals;
 mod secrets;
@@ -22,6 +26,8 @@ pub(crate) mod skills;
 mod teams;
 mod terminal_attach;
 mod terminals;
+mod tools;
+mod workspace_archive;
 mod workspace_domain;
 mod workspace_setup;
 mod workspaces;
@@ -55,16 +61,20 @@ pub(crate) fn register_core(
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
     handles.extend(host::register(registries)?);
+    handles.extend(tools::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
+    handles.extend(script_trust::register(registries)?);
     handles.extend(devices::register(registries)?);
     handles.extend(workspaces::register(registries)?);
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
+    handles.extend(agent_chat::register(registries)?);
     handles.extend(extensions::register(registries)?);
     handles.extend(skills::register(registries)?);
     handles.extend(skill_placement::register(registries)?);
+    handles.extend(hosted_services::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);

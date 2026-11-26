@@ -288,6 +288,7 @@ fn resumable_session(store: &Store, kind: &str) -> String {
         request_id: None,
         created_at: now_ms(),
         comment: None,
+        name_generated: false,
     };
     store.insert_workspace(&workspace).expect("workspace");
     let session = AgentSessionRow {

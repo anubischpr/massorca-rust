@@ -53,6 +53,18 @@ pub const SKILL_RECORD_INVALID: &str = "skill.record_invalid";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// `workspace.rename` refused a name a person typed; only a name the service chose is renamed (decision 0111).
+pub const WORKSPACE_NAME_NOT_GENERATED: &str = "workspace.name_not_generated";
+/// The worktree is no longer on the branch the workspace records, or the one the caller expected.
+pub const WORKSPACE_BRANCH_CHANGED: &str = "workspace.branch_changed";
+/// The workspace's branch has an upstream or a remote copy, so renaming it would split it from what others see.
+pub const WORKSPACE_BRANCH_PUBLISHED: &str = "workspace.branch_published";
+/// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
+pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
+/// The project's `orca.yaml` defines no script of the kind asked for.
+pub const SCRIPT_NOT_FOUND: &str = "script.not_found";
+/// The script's content no longer has the hash the caller asked to trust.
+pub const SCRIPT_CHANGED: &str = "script.changed";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.
@@ -150,6 +162,10 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 /// The service has no network listener, so an offer would name no address.
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+/// An address given for a pairing offer is not one a device could dial (a wildcard, port 0, a path, credentials).
+pub const PAIRING_INVALID_ADDRESS: &str = "pairing.invalid_address";
+/// `pairing.cancel` named an offer that is not pending: unknown, used or expired.
+pub const PAIRING_OFFER_NOT_FOUND: &str = "pairing.offer_not_found";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
@@ -220,6 +236,12 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
+/// The kind declares no one-shot form, so it cannot name a chat (decision 0167).
+pub const AGENT_ONESHOT_UNSUPPORTED: &str = "agent.oneshot_unsupported";
+/// A one-shot run that names a chat did not finish within its time limit (decision 0167).
+pub const AGENT_ONESHOT_TIMEOUT: &str = "agent.oneshot_timeout";
+/// A one-shot run that names a chat exited with a failure, or printed no usable title (decision 0167).
+pub const AGENT_ONESHOT_FAILED: &str = "agent.oneshot_failed";
 /// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
 pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 /// The kind declares no permission mode of that id, or none at all; the data names the kind, the mode and the known ids.
@@ -238,6 +260,19 @@ pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
 /// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
 pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
+/// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The
+/// error's `data` is the kind's `KindChat` (decision 0101).
+pub const AGENT_CHAT_UNSUPPORTED: &str = "agent.chat_unsupported";
+/// A chat method was called on a session that does not run as a chat (decision 0101).
+pub const AGENT_NOT_CHAT: &str = "agent.not_chat";
+/// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (decision 0101).
+/// The error's `data` is the approval item when it exists.
+pub const AGENT_APPROVAL_SETTLED: &str = "agent.approval_settled";
+/// `agent.chat.approval.answer` names a `seq` the approval item no longer has: the CLI sent the request again, with new
+/// input, since the person saw it (decision 0101). The error's `data` is the item as it is now.
+pub const AGENT_APPROVAL_CHANGED: &str = "agent.approval_changed";
+/// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes (decision 0101).
+pub const AGENT_CURSOR_STALE: &str = "agent.cursor_stale";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
@@ -277,6 +312,15 @@ pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
+
+/// `marketplace.service.*` names a service this build does not know.
+pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";
+/// The service cannot do this from here: a status-only row, GitLab without `glab`, or a GitLab disconnect.
+pub const SERVICE_UNAVAILABLE: &str = "marketplace.service_unavailable";
+/// The service's program refused the token. The message is a fixed sentence, never the program's output.
+pub const SERVICE_REJECTED: &str = "marketplace.service_rejected";
+/// The service's program could not be run or did not finish in time.
+pub const SERVICE_FAILED: &str = "marketplace.service_failed";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

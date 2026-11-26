@@ -20,7 +20,7 @@ use crate::service::Refusal;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
-use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
@@ -90,6 +90,13 @@ pub(super) enum MenuTarget {
         session: Option<String>,
         workspace: String,
         rows: Vec<SessionMenuRow>,
+    },
+    /// A session a paired host runs: the host it runs on, the session, its rows, and its folder on that host.
+    RemoteSession {
+        host: String,
+        session: String,
+        rows: Vec<SessionMenuRow>,
+        path: Option<String>,
     },
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
@@ -280,6 +287,90 @@ impl Shell {
         );
     }
 
+    /// The context menu of a session row that a paired host runs (STAT-16). Its rows are decided from the host's own
+    /// report: Stop is offered only while the host is reached and the run has not ended.
+    pub(super) fn open_remote_session_menu(
+        &mut self,
+        host: String,
+        session: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.service.is_none() {
+            return;
+        }
+        let (rows, path) = {
+            let state = self.store.read(cx).state();
+            let Some(held) = state.host_sessions.get(&host) else {
+                return;
+            };
+            let Some(agent) = held.sessions.iter().find(|agent| agent.id == session) else {
+                return;
+            };
+            let facts = SessionFacts {
+                running: held.reached && agent.execution.state != TerminalState::Exited,
+                has_terminal: false,
+            };
+            let path = held
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == agent.workspace_id)
+                .map(|workspace| workspace.path.clone());
+            let rows = session_menu(SessionMenuFacts {
+                session: Some(facts),
+                local: false,
+                delete_offered: false,
+            });
+            (rows, path)
+        };
+        self.open_menu(
+            session_menu_entries(&rows),
+            MenuTarget::RemoteSession {
+                host,
+                session,
+                rows,
+                path,
+            },
+            OverlayLayer::Page,
+            window.mouse_position(),
+            window,
+            cx,
+        );
+    }
+
+    /// Runs a chosen row of a session a paired host runs. Stop reaches that host's own connection, never This PC's
+    /// service. The rows that act on This PC's folders or terminals are not offered for these sessions.
+    pub(super) fn run_remote_session_action(
+        &mut self,
+        host: &str,
+        session: &str,
+        path: Option<&str>,
+        action: SessionMenuId,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SessionMenuId::Stop => {
+                let Some(service) = self.service.clone() else {
+                    return;
+                };
+                let (host, session) = (host.to_owned(), session.to_owned());
+                cx.spawn(async move |_, _| {
+                    // The host's follower reports the change; a refusal leaves the session as it was.
+                    let _ = service.host_agent_stop(&host, &session).await;
+                })
+                .detach();
+            }
+            SessionMenuId::CopyPath => {
+                if let Some(path) = path {
+                    cx.write_to_clipboard(ClipboardItem::new_string(path.to_owned()));
+                }
+            }
+            SessionMenuId::OpenFolder
+            | SessionMenuId::RevealInWorkPanel
+            | SessionMenuId::Delete => {}
+        }
+    }
+
     /// Runs a chosen workspace row. Rows that are off never reach here.
     fn run_workspace_action(&mut self, id: &str, action: WorkspaceMenuId, cx: &mut Context<Self>) {
         match action {
@@ -417,7 +508,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Sends the path. The dialog stays open and busy until the service answers.
+    /// Sends the path. The service says first whether it is a Git repository: a plain folder waits for the
+    /// warning (WS-31), anything else goes to `project.add`. The dialog stays open and busy until then.
     pub(super) fn submit_add_project(&mut self, cx: &mut Context<Self>) {
         let (Some(handle), Some(dialog)) =
             (self.service.clone(), self.dialogs.add_project.as_mut())
@@ -430,11 +522,57 @@ impl Shell {
         dialog.form.begin();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            match handle.inspect_project(params.path.clone()).await {
+                Ok(found) if found.kind == ProjectKind::Folder && found.registered.is_none() => {
+                    this.update(cx, |shell, cx| {
+                        shell.warn_about_plain_folder(params.path, cx)
+                    })
+                    .ok();
+                }
+                // A repository, a folder already added, or an answer this build cannot read: `project.add` decides.
+                _ => {
+                    let result = handle.add_project(params).await;
+                    this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
+                        .ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The folder is not a Git repository: the add waits on the warning, and nothing is added yet (WS-31).
+    fn warn_about_plain_folder(&mut self, path: String, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.hold_plain_folder(path);
+        }
+        cx.notify();
+    }
+
+    /// Continue without Git: the held folder is added as a plain folder, the one add the warning allows (WS-31).
+    pub(super) fn continue_add_project_without_git(&mut self, cx: &mut Context<Self>) {
+        let (Some(handle), Some(dialog)) =
+            (self.service.clone(), self.dialogs.add_project.as_mut())
+        else {
+            return;
+        };
+        let Some(params) = dialog.form.continue_without_git() else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
             let result = handle.add_project(params).await;
             this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
                 .ok();
         })
         .detach();
+    }
+
+    /// Cancel on the warning: nothing is added, and the path form comes back with the path still typed (WS-31).
+    pub(super) fn cancel_plain_folder(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.dialogs.add_project.as_mut() {
+            dialog.form.cancel_plain_folder();
+        }
+        cx.notify();
     }
 
     /// A new project closes the dialog and becomes the project of the page with no workspace. A
@@ -552,6 +690,16 @@ impl Shell {
             } => {
                 if let Some(SessionMenuRow::Item(action)) = rows.get(row).copied() {
                     self.run_session_action(session.as_deref(), &workspace, action, cx);
+                }
+            }
+            MenuTarget::RemoteSession {
+                host,
+                session,
+                rows,
+                path,
+            } => {
+                if let Some(SessionMenuRow::Item(action)) = rows.get(row).copied() {
+                    self.run_remote_session_action(&host, &session, path.as_deref(), action, cx);
                 }
             }
             MenuTarget::StartProject(choices) => match choices.get(row).cloned().flatten() {

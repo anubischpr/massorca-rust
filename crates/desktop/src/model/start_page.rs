@@ -191,45 +191,25 @@ pub struct StartOptions {
     pub effort: Option<String>,
 }
 
-/// The protocol value of a picker effort label: the values the Claude kind's `--effort` takes.
-pub fn effort_value(label: &str) -> Option<&'static str> {
-    match label {
-        "Low" => Some("low"),
-        "Medium" => Some("medium"),
-        "High" => Some("high"),
-        "Extra High" => Some("xhigh"),
-        "Max" => Some("max"),
-        _ => None,
-    }
-}
-
-/// Whether the picker row `model` is a real model of `kind`, not the kind's own row. No kind declares models yet, so
-/// each kind's only row is itself; the per-kind model lists from the kind options PR make the other rows real.
-pub fn is_real_model(kind: &str, model: &str) -> bool {
-    model != kind
-}
-
-/// The options a start sends for the picker's row `model` of `kind`, whose effort is the index `effort` of `efforts`
-/// (the labels). Sent only when the service offers `agent-options/1`, the row is a real model, and the effort names a
-/// level the model offers.
-pub fn start_options(
-    offered: bool,
-    kind: &str,
-    model: &str,
-    efforts: &[&str],
-    effort: Option<usize>,
-) -> StartOptions {
-    if !offered || !is_real_model(kind, model) {
+/// The options a start sends: the declared model id and the declared effort id the picker chose (decisions 0094 and
+/// 0096). Sent only when the service offers `agent-options/1`; a row with no declared model passes `None` for both.
+pub fn start_options(offered: bool, model: Option<&str>, effort: Option<&str>) -> StartOptions {
+    if !offered {
         return StartOptions::default();
     }
-    let effort = effort
-        .and_then(|index| efforts.get(index))
-        .and_then(|label| effort_value(label))
-        .map(str::to_owned);
     StartOptions {
-        model: Some(model.to_owned()),
-        effort,
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
     }
+}
+
+/// Why Fast is off on every model until the service offers `agent-fast/1`. No declared model carries a Fast flag yet, and
+/// `agent.start` has no field for a speed, so Fast stays off even once the service offers it.
+pub const FAST_NEEDS_NEWER_SERVICE: &str = "Fast mode needs a newer service.";
+
+/// The reason Fast is off on every model, or `None` once the service offers fast speed.
+pub fn fast_reason(service_offers_fast: bool) -> Option<&'static str> {
+    (!service_offers_fast).then_some(FAST_NEEDS_NEWER_SERVICE)
 }
 
 /// The grid a new session's terminal starts at, from the first source that has one: the grid the session view last
@@ -264,6 +244,7 @@ pub fn start_params(
         request_id: None,
         permission_mode,
         model: options.model,
+        fast: None,
         effort: options.effort,
     }
 }
@@ -330,8 +311,30 @@ pub fn first_workspace_of(state: &StoreState, project_id: &str) -> Option<String
         .map(|workspace| workspace.id.clone())
 }
 
+/// What a refused start says above the composer. A second writer in a busy workspace reads plainly until the service
+/// lets folder workspaces share writers.
+pub fn start_refusal_sentence(refusal: &crate::service::Refusal) -> String {
+    if refusal.code() == Some(massorca_protocol::codes::AGENT_WORKSPACE_BUSY) {
+        return "Another session is already working in this workspace, and a second one cannot write here yet. Wait for it to finish, or stop it first.".to_owned();
+    }
+    refusal.sentence()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_busy_workspace_refusal_reads_plainly() {
+        use massorca_protocol::{codes, message::ErrorBody};
+        let busy =
+            crate::service::Refusal::from(&massorca_client::ClientError::Remote(ErrorBody {
+                code: codes::AGENT_WORKSPACE_BUSY.to_owned(),
+                message: "session x already writes in this workspace".to_owned(),
+                data: None,
+            }));
+        let sentence = super::start_refusal_sentence(&busy);
+        assert!(sentence.starts_with("Another session is already working in this workspace"));
+    }
+
     use super::*;
     use crate::service::fixtures::{project, workspace};
 
@@ -565,66 +568,47 @@ mod tests {
         );
     }
 
-    const LEVELS: [&str; 5] = ["Low", "Medium", "High", "Extra High", "Max"];
-
-    #[test]
-    fn each_picker_effort_label_is_the_protocol_value_the_claude_kind_takes() {
-        let values: Vec<_> = LEVELS.iter().map(|label| effort_value(label)).collect();
-        assert_eq!(
-            values,
-            [
-                Some("low"),
-                Some("medium"),
-                Some("high"),
-                Some("xhigh"),
-                Some("max")
-            ]
-        );
-        assert_eq!(effort_value("Turbo"), None);
-    }
-
     #[test]
     fn without_the_capability_neither_model_nor_effort_is_sent() {
-        let options = start_options(false, "claude", "opus", &LEVELS, Some(2));
+        let options = start_options(false, Some("opus"), Some("xhigh"));
         assert_eq!(options, StartOptions::default());
         let params = start_params(Some("w1"), "claude", "hi", None, options, (120, 40));
         assert_eq!((params.model, params.effort), (None, None));
     }
 
     #[test]
-    fn a_kind_row_is_not_a_model_so_neither_is_sent_even_when_offered() {
-        assert!(!is_real_model("claude", "claude"));
+    fn a_declared_model_sends_its_id_and_the_declared_effort_id_as_it_is() {
+        // An effort id no label table names still goes out unchanged: the id is the protocol value.
         assert_eq!(
-            start_options(true, "claude", "claude", &[], None),
-            StartOptions::default()
-        );
-    }
-
-    #[test]
-    fn a_real_model_sends_its_model_and_the_effort_the_row_chose() {
-        let options = start_options(true, "claude", "opus", &LEVELS, Some(3));
-        assert_eq!(
-            options,
+            start_options(true, Some("opus"), Some("xhigh")),
             StartOptions {
                 model: Some("opus".to_owned()),
                 effort: Some("xhigh".to_owned()),
             }
         );
+        assert_eq!(
+            start_options(true, Some("codex-x"), Some("ultra"))
+                .effort
+                .as_deref(),
+            Some("ultra")
+        );
     }
 
     #[test]
-    fn a_model_without_an_effort_sends_the_model_alone_and_an_unknown_level_sends_no_effort() {
+    fn fast_is_off_with_its_reason_until_the_service_offers_agent_fast() {
+        assert_eq!(fast_reason(false), Some(FAST_NEEDS_NEWER_SERVICE));
+        assert_eq!(fast_reason(true), None);
+    }
+
+    #[test]
+    fn a_model_without_an_effort_sends_the_model_alone_and_no_model_sends_neither() {
         assert_eq!(
-            start_options(true, "claude", "haiku", &[], None).effort,
-            None
+            start_options(true, Some("haiku"), None),
+            StartOptions {
+                model: Some("haiku".to_owned()),
+                effort: None,
+            }
         );
-        assert_eq!(
-            start_options(true, "claude", "opus", &["Turbo"], Some(0)).effort,
-            None
-        );
-        assert_eq!(
-            start_options(true, "claude", "opus", &LEVELS, Some(9)).effort,
-            None
-        );
+        assert_eq!(start_options(true, None, None), StartOptions::default());
     }
 }

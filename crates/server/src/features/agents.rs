@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use massorca_core_agents::oneshot::{TitleRequest, title_timeout};
 use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps, SecretGrant};
 use massorca_core_git::{Git, GitError, MergeOutcome};
 use massorca_core_workspace::DomainError;
@@ -11,14 +12,16 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, ImportCandidate, ImportCandidates, ImportCandidatesParams, PromptReceipt,
-    QueuedPrompt,
+    AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
+    ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -63,16 +66,60 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // Fast mode on a start, a kind, a model and a session (decision 0165).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_FAST, Owner::Core)?,
         // Import source detection, and an import without a folder (decision 0097).
         registries
             .capabilities
             .register(capabilities::AGENT_IMPORT_DETECT, Owner::Core)?,
+        // The models a kind's picker offers for an account (decision 0166).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_MODELS, Owner::Core)?,
+        // Archive and delete of a session, and the delete's preview (decision 0163).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_ARCHIVE, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            agents::ARCHIVE_SESSION,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Workspace,
+            archive_session,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RENAME,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Workspace,
+            rename,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::FORGET_PREVIEW,
+            capabilities::AGENT_ARCHIVE,
+            Permission::Read,
+            forget_preview,
+        )?,
+        // Chat titles (decision 0167): `agent.generate_title`, a one-shot run of the kind that names a chat.
+        registries
+            .capabilities
+            .register(capabilities::AGENT_TITLE, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
             agents_cap,
             Permission::Read,
             kinds,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::MODELS,
+            agents_cap,
+            Permission::Workspace,
+            models,
         )?,
         methods.register(
             Owner::Core,
@@ -312,6 +359,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             accounts_check,
         )?,
+        methods.register(
+            Owner::Core,
+            agents::GENERATE_TITLE,
+            capabilities::AGENT_TITLE,
+            Permission::Workspace,
+            generate_title,
+        )?,
     ])
 }
 
@@ -323,6 +377,15 @@ async fn kinds(ctx: RequestCtx, _params: NoParams) -> Result<AgentKinds, ErrorBo
     on_agents(&ctx, |agents| Ok(agents.kinds())).await
 }
 
+/// The models a kind's picker offers for an account (decision 0166). The vendor CLI may take seconds to answer, so the
+/// listing runs on the service's worker rather than on the connection.
+async fn models(ctx: RequestCtx, params: AgentModelsParams) -> Result<AgentModels, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.agent_models(&params.kind, params.account.as_deref(), params.refresh)
+    })
+    .await
+}
+
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| agents.start(params, grant)).await?;
@@ -330,7 +393,10 @@ async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession
 }
 
 async fn list(ctx: RequestCtx, params: AgentListParams) -> Result<AgentSessionList, ErrorBody> {
-    let sessions = on_agents(&ctx, move |agents| agents.list(params.workspace.as_deref())).await?;
+    let sessions = on_agents(&ctx, move |agents| {
+        agents.list_visible(params.workspace.as_deref(), params.include_archived)
+    })
+    .await?;
     Ok(AgentSessionList {
         sessions: sessions
             .into_iter()
@@ -364,9 +430,105 @@ async fn mark_seen(
     Ok(for_caller(&ctx, session))
 }
 
-async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    let session = on_agents(&ctx, move |agents| agents.forget(&params.session)).await?;
+/// Forgets an exited session; with `remove_workspace`, also removes its workspace (decision 0163). Every check runs
+/// before anything changes: the forget's, that no other session uses the workspace, and the removal's own refusals. The
+/// session is then forgotten and the workspace removed through `workspace.remove`'s path; a removal that fails after
+/// the forget is reported in `workspace_error`, never dropped.
+async fn forget(ctx: RequestCtx, params: AgentForgetParams) -> Result<AgentForgotten, ErrorBody> {
+    let AgentForgetParams {
+        session,
+        remove_workspace,
+        force,
+        discard_ignored,
+        expect_dirty,
+    } = params;
+    let waivers = massorca_core_workspace::RemovalWaivers {
+        force,
+        discard_ignored,
+        ..massorca_core_workspace::RemovalWaivers::NONE
+    };
+    let expect_clean = expect_dirty == Some(false);
+    let workspace = if remove_workspace {
+        let selector = session.clone();
+        Some(
+            on_agents(&ctx, move |agents| {
+                agents.check_forget_with_workspace(&selector, waivers, expect_clean)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    let forgotten = on_agents(&ctx, move |agents| agents.forget(&session)).await?;
+    let mut result = AgentForgotten {
+        session: for_caller(&ctx, forgotten),
+        workspace_removed: None,
+        workspace_error: None,
+    };
+    if let Some(workspace) = workspace {
+        // Checked again where no start, resume or terminal can interleave; a refusal now lands in `workspace_error`.
+        let begun = on_agents(&ctx, move |agents| {
+            agents.begin_workspace_removal(&workspace, waivers, expect_clean)
+        })
+        .await;
+        let removed = match begun {
+            Ok(begun) => super::workspaces::finish_begun_removal(&ctx, begun.id, waivers).await,
+            Err(error) => Err(error),
+        };
+        match removed {
+            Ok(removed) => result.workspace_removed = Some(removed),
+            Err(error) => {
+                tracing::warn!(code = %error.code, "a forgotten session's workspace was not removed");
+                result.workspace_error = Some(WorkspaceRemovalError {
+                    code: error.code,
+                    message: error.message,
+                });
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Sets a live or exited session's title (decision 0163).
+async fn rename(ctx: RequestCtx, params: AgentRenameParams) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.rename(&params.session, &params.title)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
+}
+
+/// Archives (hides) an exited session, or clears that (decision 0163).
+async fn archive_session(
+    ctx: RequestCtx,
+    params: AgentArchiveSessionParams,
+) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.set_archived(&params.session, params.archived)
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// What `agent.forget` with `remove_workspace` would meet, read without changing anything (decision 0163). A caller
+/// below `workspace` scope gets no path, and a fixed blocker message with the blocker's code, since a refusal (a git
+/// error among them) can name paths.
+async fn forget_preview(
+    ctx: RequestCtx,
+    params: AgentSessionRef,
+) -> Result<AgentForgetPreview, ErrorBody> {
+    let mut preview = on_agents(&ctx, move |agents| agents.forget_preview(&params.session)).await?;
+    if authorize(&ctx.principal, Permission::Workspace).is_err() {
+        preview.workspace.path = None;
+        if preview.workspace.blocker.is_some() {
+            preview.workspace.blocker =
+                Some("the workspace cannot be removed now; blocker_code says why".to_owned());
+        }
+        if preview.forget_blocker.is_some() {
+            preview.forget_blocker = Some("the session cannot be forgotten now".to_owned());
+        }
+    }
+    Ok(preview)
 }
 
 /// Releases an exited session: its output is archived, its terminal freed, its record kept (decision 0090).
@@ -407,6 +569,8 @@ async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSessi
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| {
+        // A chat resume probes its CLI's version, which can take seconds: before the gate (decision 0101).
+        agents.prepare_chat_resume(&params.session);
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
         agents.resume_at(
@@ -855,6 +1019,58 @@ async fn accounts_check(
     Ok(account_for_caller(&ctx.principal, account))
 }
 
+/// `agent.generate_title`: names a chat from its first prompt and reply by one run of the kind's one-shot form, with the
+/// time limit of [`title_timeout`] (decision 0167). A caller below host-admin may name only the kind's active account.
+async fn generate_title(
+    ctx: RequestCtx,
+    params: GenerateTitleParams,
+) -> Result<GenerateTitleResult, ErrorBody> {
+    let host_admin = is_host_admin(&ctx);
+    if !host_admin && params.account.is_some() {
+        let kind = params.kind.clone();
+        let accounts = on_agents(&ctx, move |agents| agents.accounts_list(&kind)).await?;
+        let active = accounts
+            .iter()
+            .find(|account| account.active)
+            .map(|account| account.id.as_str());
+        if let Some(refusal) = title_account_refusal(host_admin, params.account.as_deref(), active)
+        {
+            return Err(refusal);
+        }
+    }
+    let request = TitleRequest {
+        kind: params.kind,
+        account: params.account,
+        model: params.model,
+        prompt: params.prompt,
+        reply: params.reply,
+    };
+    let slug = on_agents(&ctx, move |agents| {
+        agents.generate_title(request, title_timeout())
+    })
+    .await?;
+    Ok(GenerateTitleResult { slug })
+}
+
+/// Whether a caller may name `requested` as the account of a title run (decision 0167). Host-admin may name any account. Below
+/// it, only the kind's `active` account: the method takes no project, so no project's own choice is reachable. No account
+/// named means the active account runs, which every caller may have.
+pub(super) fn title_account_refusal(
+    host_admin: bool,
+    requested: Option<&str>,
+    active: Option<&str>,
+) -> Option<ErrorBody> {
+    match requested {
+        None => None,
+        Some(_) if host_admin => None,
+        Some(requested) if Some(requested) == active => None,
+        Some(_) => Some(ErrorBody::new(
+            codes::PERMISSION_DENIED,
+            "only the kind's active account may name a chat for this caller",
+        )),
+    }
+}
+
 /// Where an import without a folder would copy each kind's files from (decision 0097). Metadata only; host paths only
 /// for a caller that sees account details ([`sees_account_details`]).
 async fn accounts_import_candidates(
@@ -930,7 +1146,10 @@ pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
 }
 
 /// Refuses a caller below host-admin scope when `session`'s run holds vault secrets (decision 0071).
-async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<(), ErrorBody> {
+pub(super) async fn require_admin_for_session(
+    ctx: &RequestCtx,
+    session: String,
+) -> Result<(), ErrorBody> {
     if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
         return Ok(());
     }
@@ -941,7 +1160,7 @@ async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<
     Ok(())
 }
 
-async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+pub(super) async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,
     F: FnOnce(&Agents) -> Result<T, AgentError> + Send + 'static,
@@ -960,7 +1179,9 @@ where
 mod tests {
     use massorca_protocol::methods::agents::{CandidateFile, ImportCandidate};
 
-    use super::candidate_for_caller;
+    use massorca_protocol::codes;
+
+    use super::{candidate_for_caller, title_account_refusal};
 
     fn detected() -> ImportCandidate {
         ImportCandidate {
@@ -986,5 +1207,24 @@ mod tests {
         assert_eq!(masked.files[0].path, None);
         assert_eq!(masked.files[0].env, None);
         assert!(masked.ready && masked.files[0].found && masked.files[0].required);
+    }
+
+    #[test]
+    fn below_host_admin_a_title_may_name_only_the_active_account() {
+        assert_eq!(
+            title_account_refusal(true, Some("other"), Some("active")),
+            None
+        );
+        assert_eq!(title_account_refusal(false, None, Some("active")), None);
+        assert_eq!(
+            title_account_refusal(false, Some("active"), Some("active")),
+            None
+        );
+        let refused = title_account_refusal(false, Some("other"), Some("active"))
+            .expect("a caller below host-admin is refused another account");
+        assert_eq!(refused.code, codes::PERMISSION_DENIED);
+        let no_active = title_account_refusal(false, Some("other"), None)
+            .expect("nothing is active, so no named account is the active one");
+        assert_eq!(no_active.code, codes::PERMISSION_DENIED);
     }
 }

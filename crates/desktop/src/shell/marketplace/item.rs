@@ -5,17 +5,19 @@ use super::MarketplaceFrame;
 use super::catalogue::{item_mark, kind_icon};
 use super::host_pick::host_picker_row;
 use super::item_images;
+use crate::model::home_start::HOME_START;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
     PARTS, Part, ProblemAlert, ProblemTone, absent_reason, account_block, advanced_rows,
-    banner_tag, connection_rows, information, information_links, problem_alert, settings_rows,
-    state_chip, uninstall_body,
+    banner_palette_slot, banner_tag, connection_rows, information, information_links,
+    problem_alert, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
 use gpui::{
     AnyElement, App, ClipboardItem, Context, ElementId, ImageSource, IntoElement, ObjectFit,
-    ParentElement, Role, SharedString, Styled, StyledImage, WeakEntity, div, img, prelude::*, px,
+    ParentElement, Role, SharedString, Styled, StyledImage, WeakEntity, Window, div, img,
+    prelude::*, px,
 };
 use massorca_ui::components::account_connection_list::{
     AccountConnectionList, AccountRow, AccountStatus,
@@ -25,12 +27,12 @@ use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::danger_zone::DangerZone;
 use massorca_ui::components::empty_state::EmptyState;
-use massorca_ui::components::invocation_banner::{InvocationBanner, hex_colour};
+use massorca_ui::components::invocation_banner::{BannerFill, InvocationBanner, hex_colour};
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
-    Color, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
-    TYPE_BODY_STRONG, TYPE_TITLE_SM,
+    Color, Palette, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY,
+    TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_TITLE_SM,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
@@ -72,7 +74,10 @@ pub(super) fn item_page(
     for part in PARTS {
         let section = match part {
             Part::Logo | Part::Name | Part::Host => continue,
-            Part::Banner => banner(item, cx),
+            Part::Banner => match banner(frame, item, cx) {
+                Some(section) => section,
+                None => continue,
+            },
             Part::Connection => connection(frame, item, cx),
             Part::Information => information_section(item, cx),
             Part::Settings => settings_section(frame, item, cx),
@@ -193,32 +198,98 @@ fn banner_image(picture: ImageSource) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat; or why there are none.
-fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
-    if let Some(reason) = absent_reason(item, Part::Banner) {
-        return div()
-            .debug_selector(|| "marketplace-part-banner".to_owned())
-            .child(absent_note(reason, cx))
-            .into_any_element();
+/// Part 4: the example prompts, each a pill that opens a new chat with it, and how to ask the item in any chat. The
+/// part is left out when the item has no example prompts.
+fn banner(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Option<AnyElement> {
+    if item.examples.is_empty() {
+        return None;
     }
     let mention = item
         .extension
         .as_deref()
         .and_then(|entry| entry.listing.mention.as_deref());
+    let theme = *cx.theme();
+    let fill = banner_fill(banner_tint(item), banner_palette_slot(item), &theme.palette);
+    let shell = frame.shell.clone();
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
+        item.name.clone(),
         banner_tag(mention, &item.name),
-    );
-    if let Some((first, accent)) = banner_tint(item) {
-        banner = banner.tint(first, accent);
+        kind_icon(item.kind),
+    )
+    .fill(fill)
+    .on_select(move |prompt, window, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.start_chat_with_prompt(&prompt, window, cx)
+        });
+    });
+    if let Some(agent) = item_mark(item) {
+        banner = banner.agent(agent);
     }
     for example in &item.examples {
         banner = banner.example(example.clone());
     }
-    div()
-        .debug_selector(|| "marketplace-part-banner".to_owned())
-        .child(banner)
-        .into_any_element()
+    Some(
+        div()
+            .debug_selector(|| "marketplace-part-banner".to_owned())
+            .child(banner)
+            .into_any_element(),
+    )
+}
+
+/// Where the banner's gradient starts: the listing's own colours, or else the palette colour of the item's slot.
+pub(super) fn banner_fill(
+    listed: Option<(Color, Option<Color>)>,
+    slot: usize,
+    palette: &Palette,
+) -> BannerFill {
+    match listed {
+        Some((first, second)) => BannerFill::Listed(first, second),
+        None => BannerFill::Palette(palette_colour(palette, slot)),
+    }
+}
+
+/// The palette colour of a slot: `banner.palette.1` to `.8`, slots counted from one.
+fn palette_colour(palette: &Palette, slot: usize) -> Color {
+    let banner = &palette.banner;
+    let colours = [
+        banner.palette_1,
+        banner.palette_2,
+        banner.palette_3,
+        banner.palette_4,
+        banner.palette_5,
+        banner.palette_6,
+        banner.palette_7,
+        banner.palette_8,
+    ];
+    colours[slot.saturating_sub(1) % colours.len()]
+}
+
+impl Shell {
+    /// A banner pill's press: opens a new chat with the prompt in its composer, not sent, as the Canvas would open it.
+    pub(super) fn start_chat_with_prompt(
+        &mut self,
+        prompt: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let composer = match self.model.selected_workspace().map(str::to_owned) {
+            Some(workspace) => {
+                self.open_new_session(&workspace, cx);
+                self.start_composer(&workspace, cx)
+            }
+            None => {
+                self.model.close_session();
+                self.model.select_workspace(None);
+                self.start_composer(HOME_START, cx)
+            }
+        };
+        composer.update(cx, |composer, cx| {
+            composer.set_draft(prompt, cx);
+            composer.focus(window, cx);
+        });
+        cx.notify();
+    }
 }
 
 /// The colours the listing gives the banner, parsed; none when it gives none or one is not `#RRGGBB`.

@@ -15,6 +15,7 @@ import {
   type OfferSummary,
   type ProtocolInfo,
   type TerminalEvent,
+  type TerminalSummary,
   type TerminalView,
   type WhoAmI,
   type Watch,
@@ -31,6 +32,7 @@ export type FakeCall =
   | 'whoami'
   | 'protocol'
   | 'workspaces'
+  | 'terminals'
   | 'gitStatus'
   | 'watchAgents'
   | 'watchGit'
@@ -51,6 +53,7 @@ export interface FakeOptions {
   readonly protocol?: ProtocolInfo;
   readonly whoami?: WhoAmI;
   readonly workspaces?: readonly WorkspaceSummary[];
+  readonly terminals?: readonly TerminalSummary[];
 }
 
 interface FakeState {
@@ -66,6 +69,7 @@ interface FakeState {
   readonly protocol: ProtocolInfo;
   readonly whoami: WhoAmI;
   readonly workspaces: readonly WorkspaceSummary[];
+  readonly terminals: readonly TerminalSummary[];
   gitStatus: GitStatusSummary;
 }
 
@@ -215,6 +219,11 @@ class FakeHost implements Host {
     return this.state.workspaces.filter((w) => project === undefined || w.projectId === project);
   }
 
+  async terminals(workspace?: string): Promise<TerminalSummary[]> {
+    enter(this.state, 'terminals');
+    return this.state.terminals.filter((t) => workspace === undefined || t.workspaceId === workspace);
+  }
+
   async gitStatus(_workspace: string): Promise<GitStatusSummary> {
     enter(this.state, 'gitStatus');
     return this.state.gitStatus;
@@ -256,6 +265,7 @@ export class FakeMassOrca implements MassOrcaBinding {
       protocol: options.protocol ?? DEFAULT_PROTOCOL,
       whoami: options.whoami ?? DEFAULT_WHOAMI,
       workspaces: options.workspaces ?? [],
+      terminals: options.terminals ?? [],
       gitStatus: EMPTY_GIT_STATUS,
     };
   }

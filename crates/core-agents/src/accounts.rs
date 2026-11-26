@@ -138,7 +138,7 @@ fn undecided(account: &str) -> AgentError {
 /// Repairs the state file of an account home before a launch (decision 0099), under the homes gate. A state file that
 /// cannot be repaired refuses the launch, as the check reports the account as needing a sign-in: the CLI would open its
 /// first-run setup instead.
-fn repair_state(decl: &KindDecl, home: &Path) -> Result<(), AgentError> {
+pub(crate) fn repair_state(decl: &KindDecl, home: &Path) -> Result<(), AgentError> {
     let Some(rule) = decl
         .credentials
         .as_ref()
@@ -355,7 +355,10 @@ impl Agents {
             ));
         }
         match project {
-            None => self.store().set_active_agent_account(kind, account)?,
+            None => {
+                self.store().set_active_agent_account(kind, account)?;
+                self.forget_listings(kind, account);
+            }
             Some(project) => {
                 if self.store().get_project(project)?.is_none() {
                     return Err(AgentError::new(
@@ -396,6 +399,7 @@ impl Agents {
             self.store().delete_agent_account(account)?;
         }
         drop(mark);
+        self.forget_listings(kind, account);
         // Announced once, with the state the account had when it was removed (decision 0059).
         self.notify_account(kind, account, parse_state(&row.state));
         Ok(AccountsRemoved {
@@ -639,11 +643,25 @@ impl Agents {
                     self.sign_out(decl, program, kind, account);
                 }
                 self.discard_marked(kind, account, refused);
+                self.forget_listings(kind, account);
             }
-            SignInOutcome::Undecided => self.leave_undecided(kind, account),
-            SignInOutcome::Unknown => self.keep_marked(kind, account, AccountState::Unknown, None),
+            SignInOutcome::Undecided => {
+                self.leave_undecided(kind, account);
+                self.forget_listings(kind, account);
+            }
+            SignInOutcome::Unknown => {
+                self.keep_marked(kind, account, AccountState::Unknown, None);
+                self.forget_listings(kind, account);
+            }
             SignInOutcome::SignedIn { identity } => {
                 let kept = self.keep_signed_in(kind, account, identity);
+                // An import that updated an existing account changed that account's files (decision 0098).
+                match &kept {
+                    Kept::New => self.forget_listings(kind, account),
+                    Kept::Updated(existing) => self.forget_listings(kind, existing),
+                    Kept::Duplicate(existing) => self.forget_listings(kind, existing),
+                    Kept::NotUpdated { existing, .. } => self.forget_listings(kind, existing),
+                }
                 drop(mark);
                 return kept;
             }
@@ -963,6 +981,7 @@ impl Agents {
             for (account, state) in removed {
                 self.notify_account(kind, &account, state);
             }
+            self.model_cache().invalidate_kind(kind);
         }
         let Some(first) = problems.first() else {
             return Ok(());
@@ -1070,6 +1089,7 @@ impl Agents {
         self.keep_marked(kind, &account, AccountState::Unknown, None);
         drop(mark);
         self.store().set_active_agent_account(kind, &account)?;
+        self.forget_listings(kind, &account);
         Ok(imported)
     }
 
@@ -1245,6 +1265,7 @@ impl Agents {
         // kind refuses to start until an account is activated, and the next start tries the move again.
         if !had_active {
             self.store().set_active_agent_account(kind, &account)?;
+            self.forget_listings(kind, &account);
         }
         if let Err(error) = credentials::adopt_legacy_home(self.profile_dir(), kind, &account) {
             let _ = self.store().delete_agent_account(&account);
@@ -1432,6 +1453,7 @@ impl Agents {
         if self.store().delete_agent_account(account).is_err() {
             tracing::warn!(kind, "a discarded account's row could not be deleted");
         }
+        self.forget_listings(kind, account);
     }
 
     /// Whether `account` is being removed, signing in, or used by a live run.
@@ -1445,6 +1467,7 @@ impl Agents {
     pub(crate) fn make_active_if_none(&self, kind: &str, account: &str) {
         if matches!(self.store().get_active_agent_account(kind), Ok(None)) {
             let _ = self.store().set_active_agent_account(kind, account);
+            self.forget_listings(kind, account);
         }
     }
 

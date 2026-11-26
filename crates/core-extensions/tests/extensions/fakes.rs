@@ -86,8 +86,15 @@ impl ProgramResolver for FakeHost {
     }
 }
 
-/// The CLI a built-in's install or uninstall command names, by the package it names.
+/// The CLI a built-in's install or uninstall command names: the program itself when it is that CLI's own binary (decision
+/// 0164), else the CLI of the package it names.
 pub fn cli_named_by(argv: &[String]) -> Option<&'static str> {
+    if argv
+        .first()
+        .is_some_and(|program| program == "gentle-shell")
+    {
+        return Some("gentle-shell");
+    }
     const PACKAGES: [(&str, &str); 9] = [
         ("@openai/codex", "codex"),
         ("@anthropic-ai/claude-code", "claude"),
@@ -122,7 +129,10 @@ impl CommandRunner for FakeHost {
             && self.installs_binary
             && let Some(cli) = cli_named_by(argv)
         {
-            if argv.iter().any(|part| part == "uninstall") {
+            if argv
+                .iter()
+                .any(|part| part == "uninstall" || part == "self-uninstall")
+            {
                 self.remove_program(cli);
             } else if argv
                 .iter()

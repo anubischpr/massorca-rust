@@ -172,6 +172,39 @@ mod tests {
         }
     }
 
+    /// The Gentle Shell package installs with npm and uninstalls through its own CLI (decision 0164): the vendor's
+    /// `self-uninstall` removes its data and the npm package, and MassOrca runs it only for a CLI it installed.
+    #[test]
+    fn the_gentle_shell_package_uninstalls_through_its_own_cli() {
+        use massorca_ext_package::manifest::agent::CliOs;
+
+        let bytes = find("massorca.gentle-shell")
+            .and_then(|entry| entry.file("extension.json"))
+            .expect("the package is in the catalogue");
+        let loaded = manifest::load(bytes).expect("valid");
+        let cli = loaded.contributes.agent_adapters[0]
+            .cli
+            .as_ref()
+            .expect("a cli block");
+        for os in [CliOs::Windows, CliOs::Linux, CliOs::Macos] {
+            let install = cli
+                .install
+                .iter()
+                .find(|step| step.os == os)
+                .expect("an install step");
+            assert_eq!(install.command, ["npm", "install", "-g", "gentle-pi"]);
+            let uninstall = cli
+                .uninstall
+                .iter()
+                .find(|step| step.os == os)
+                .expect("an uninstall step");
+            assert_eq!(
+                uninstall.command,
+                ["gentle-shell", "self-uninstall", "--yes"]
+            );
+        }
+    }
+
     /// A piped download must fail the step when the download fails, not run what arrived.
     #[test]
     fn every_shell_script_step_fails_on_a_failed_pipe() {

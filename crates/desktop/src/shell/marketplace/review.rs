@@ -8,9 +8,10 @@ use crate::model::marketplace::{
 };
 use crate::service::Refusal;
 use crate::shell::Shell;
-use gpui::Context;
+use crate::shell::path_field::PickKind;
+use gpui::{Context, Window};
 use massorca_protocol::methods::extensions::{
-    ExtensionInstallParams, ExtensionInstalled, ExtensionReview,
+    ExtensionInstallParams, ExtensionInstalled, ExtensionReview, SourceKind,
 };
 
 impl Shell {
@@ -72,8 +73,23 @@ impl Shell {
         .detach();
     }
 
-    /// Opens the review of a package in a folder on This computer, which asks the service what installing it does.
-    pub(super) fn open_folder_review(&mut self, source: String, cx: &mut Context<Self>) {
+    /// From a file (.zip): the picker chooses one file, which is reviewed under its file: source as a folder package is.
+    pub(super) fn pick_extension_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = self.path_picker.pick(PickKind::File, cx);
+        let shell = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let Some(path) = picked.await else {
+                    return;
+                };
+                let source = format!("file:{}", path.display());
+                let _ = shell.update(cx, |shell, cx| shell.open_package_review(source, cx));
+            })
+            .detach();
+    }
+
+    /// Opens the review of a package at a `dir:` or `file:` source, which asks the service what installing it does.
+    pub(super) fn open_package_review(&mut self, source: String, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
         };
@@ -157,7 +173,8 @@ impl Shell {
             source: dialog.source.clone(),
             consent: Some(review.consent.clone()),
             run_installer: review.runs_installer,
-            sha256: None,
+            // An archive installs only against the hash its review read; a folder is not pinned.
+            sha256: (review.source.kind == SourceKind::File).then(|| review.sha256.clone()),
             agent_token: None,
         };
         dialog.sending = true;

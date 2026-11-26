@@ -1,6 +1,6 @@
 //! The Bot Teams reads the bridge runs (capability `teams/1`): every team the service lists, each with its
-//! Board and bots. A read takes a number when it starts, and the store applies only the newest answer, so a
-//! slow read never replaces a newer one.
+//! Board, bots, projects and routines. A read takes a number when it starts, and the store applies only the
+//! newest answer, so a slow read never replaces a newer one.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -10,25 +10,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef, TaskStopParams};
+use massorca_protocol::methods::team_room::{TeamRoomPostParams, TeamRoomPosted};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
-    TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
+    Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Routine, RoutineList,
+    Team, TeamAccess, TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
     TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
+use super::team_room::RoomCommand;
 use super::update::StoreUpdate;
 
 /// A team as the service reports it: its Board, every task of the team in four columns, its bots in creation
-/// order, and its projects.
+/// order, its projects, and its routines in creation order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamRecord {
     pub team: Team,
     pub board: Board,
     pub bots: Vec<Bot>,
     pub projects: Vec<ProjectRecord>,
+    pub routines: Vec<Routine>,
 }
 
 /// A project of a team as the service reports it, with its own Board: the cards of that project only.
@@ -49,7 +52,7 @@ pub struct TeamsRead {
 /// Numbers the reads of one bridge. The bridge keeps one for its whole life, so the numbers stay ordered
 /// across reconnects.
 #[derive(Debug, Default)]
-pub(super) struct Sequence {
+pub(crate) struct Sequence {
     last: AtomicU64,
 }
 
@@ -89,6 +92,15 @@ async fn fetch(client: &Client) -> Result<Vec<TeamRecord>, ClientError> {
     Ok(records)
 }
 
+/// A team's routines. A host that predates routines answers `method.not_found`, and its teams still read.
+fn team_routines(answer: Result<RoutineList, ClientError>) -> Result<Vec<Routine>, ClientError> {
+    match answer {
+        Ok(list) => Ok(list.routines),
+        Err(ClientError::Remote(body)) if body.code == codes::METHOD_NOT_FOUND => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
 async fn team_record(client: &Client, team: Team) -> Result<TeamRecord, ClientError> {
     let team_ref = TeamRef {
         team: team.id.clone(),
@@ -113,11 +125,13 @@ async fn team_record(client: &Client, team: Team) -> Result<TeamRecord, ClientEr
             Err(error) => return Err(error),
         }
     }
+    let routines = team_routines(client.team_routine_list(&team_ref).await)?;
     Ok(TeamRecord {
         team,
         board,
         bots,
         projects,
+        routines,
     })
 }
 
@@ -335,7 +349,7 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
     }
 }
 
-fn spawn_write<T, Fut>(
+pub(super) fn spawn_write<T, Fut>(
     client: &Client,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
     sequence: &Arc<Sequence>,
@@ -380,7 +394,8 @@ fn teams_refusal(error: &ClientError) -> Refusal {
         ClientError::Remote(body)
             if body.code == codes::TEAM_NOT_FOUND
                 || body.code == codes::BOT_NOT_FOUND
-                || body.code == codes::TEAM_PROJECT_NOT_FOUND =>
+                || body.code == codes::TEAM_PROJECT_NOT_FOUND
+                || body.code == codes::TEAM_ROUTINE_NOT_FOUND =>
         {
             Refusal::Failed {
                 code: body.code.clone(),
@@ -402,6 +417,20 @@ impl ServiceHandle {
             })
         })
         .await
+    }
+
+    /// Reads a team's Conference room; the answer reaches the store.
+    pub fn read_team_room(&self, team: String) {
+        self.send(Command::Room(RoomCommand::Read { team }));
+    }
+
+    /// `team.room_post`: a person's line to a team's room. The room is read again once the service answers.
+    pub async fn post_to_team_room(
+        &self,
+        params: TeamRoomPostParams,
+    ) -> Result<TeamRoomPosted, Refusal> {
+        self.ask(|reply| Command::Room(RoomCommand::Post { params, reply }))
+            .await
     }
 
     /// `team.update`. The team shows the change when the read that follows the answer lands.
@@ -461,12 +490,15 @@ pub struct TeamIds {
 }
 
 impl TeamIds {
-    /// Numbers every id a team names: the team, its bots, its cards and the bots on them, and each project with
-    /// the cards of its Board.
+    /// Numbers every id a team names: the team, its bots, its routines, its cards and the bots on them, and each
+    /// project with the cards of its Board.
     pub fn register(&mut self, record: &TeamRecord) {
         self.number(&record.team.id);
         for bot in &record.bots {
             self.number(&bot.id);
+        }
+        for routine in &record.routines {
+            self.number(&routine.id);
         }
         self.register_board(&record.board);
         for project in &record.projects {
@@ -522,5 +554,14 @@ mod tests {
         assert_eq!(ids.get("t1"), first);
         assert_ne!(ids.get("t2"), first);
         assert_eq!(ids.get("unknown"), None);
+    }
+
+    #[test]
+    fn a_host_without_routines_reads_its_team_with_none() {
+        use massorca_protocol::ErrorBody;
+        let missing = ClientError::Remote(ErrorBody::new(codes::METHOD_NOT_FOUND, "unknown"));
+        assert_eq!(team_routines(Err(missing)).ok(), Some(Vec::new()));
+        let gone = ClientError::Remote(ErrorBody::new(codes::TEAM_NOT_FOUND, "gone"));
+        assert!(team_routines(Err(gone)).is_err());
     }
 }

@@ -183,6 +183,7 @@ fn capture(pattern: Option<&str>, output: &str) -> Option<String> {
 
 /// What a run of a kind's program produced: its exit code (`None` when it did not finish) and its output, which is
 /// matched and never logged.
+#[derive(Clone)]
 pub(crate) struct RunOutput {
     pub(crate) exit: Option<i32>,
     pub(crate) output: String,
@@ -308,7 +309,7 @@ fn run_command(command: &mut Command, timeout: Duration) -> RunOutput {
 }
 
 /// Reads a stream to its end, or to the output limit, on a thread of its own. The text arrives on the channel once read.
-fn read_limited<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<String> {
+pub(crate) fn read_limited<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<String> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -321,7 +322,7 @@ fn read_limited<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<S
 }
 
 /// The text of a stream, or nothing when it did not end within [`OUTPUT_GRACE`].
-fn collect(stream: mpsc::Receiver<String>) -> String {
+pub(crate) fn collect(stream: mpsc::Receiver<String>) -> String {
     stream.recv_timeout(OUTPUT_GRACE).unwrap_or_default()
 }
 

@@ -13,36 +13,50 @@
       "label": "auto",
       "description": "Approves workspace edits and runs commands in the sandbox; where the account or platform cannot, agy runs in default.",
       "args": ["--mode=auto"],
-      "may_fall_back": true
+      "may_fall_back": true,
+      "icon": "sparkles",
+      "tone": "normal"
     },
     {
       "id": "accept-edits",
       "label": "accept-edits",
       "description": "Approves file edits in the workspace; still asks before terminal commands.",
-      "args": ["--mode=accept-edits"]
+      "args": ["--mode=accept-edits"],
+      "icon": "file-pen",
+      "tone": "normal"
     },
     {
       "id": "plan",
       "label": "plan",
       "description": "Analyses and outlines steps before writing code.",
-      "args": ["--mode=plan"]
+      "args": ["--mode=plan"],
+      "icon": "map",
+      "tone": "normal"
     },
     {
       "id": "always-proceed",
       "label": "always-proceed",
       "description": "Overrides permissions in every mode.",
       "args": ["--dangerously-skip-permissions"],
-      "bypass": true
+      "bypass": true,
+      "icon": "shield-alert",
+      "tone": "warning"
     }
   ],
   "default_permission_mode": "auto",
-  "model": { "flag": "--model", "choices": [] },
+  "model": {
+    "flag": "--model",
+    "choices": [],
+    "discover": { "args": ["models"], "format": "lines" }
+  },
   "effort": {
     "flag": "--effort",
     "levels": [
       { "id": "low", "label": "Low" },
       { "id": "medium", "label": "Medium" },
-      { "id": "high", "label": "High" }
+      { "id": "high", "label": "High" },
+      { "id": "xhigh", "label": "Extra high" },
+      { "id": "max", "label": "Max" }
     ],
     "default": "high"
   }

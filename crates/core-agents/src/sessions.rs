@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::credentials;
+use crate::fast_mode;
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
     now_ms,
@@ -27,8 +28,9 @@ use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
     AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind, ResumeState,
+    PromptReceipt, ReceiptKind, ResumeState, SessionFast,
 };
+use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
@@ -47,13 +49,17 @@ use crate::prompt;
 use crate::provided_env::{
     EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
 };
-use crate::resolve::{SearchEnv, resolve_first};
+use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
 use crate::status::{self, HookRules};
 
+mod archive;
+mod chat;
 mod delegation;
 mod queue;
 
+pub use chat::ChatOpened;
+use chat::{ChatRun, RunStart, Started};
 use delegation::DelegationView;
 
 pub use delegation::{
@@ -107,6 +113,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
+    /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
+    /// of the session do.
+    Chat(Box<crate::chat::ChatChanged>),
 }
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
@@ -254,6 +263,9 @@ pub struct AgentsConfig {
     /// The variables the vendor CLIs read, for the check that a session's saved conversation exists (decision 0160).
     /// `None` checks only account homes in the profile.
     pub vendor_env: Option<crate::VendorEnv>,
+    /// The search path agent programs are found on when kinds are listed and started: the host's, as the extension
+    /// install check searches it (decision 0164).
+    pub vendor_search: VendorSearch,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -288,6 +300,17 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
+    /// The model listings the service keeps (decision 0166), held in memory.
+    models: crate::model_catalog::ModelCache,
+    /// How long a model listing may run before it is stopped (decision 0166).
+    listing_timeout: Duration,
+    /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
+    /// are held.
+    chat_runs: Mutex<HashMap<String, Arc<ChatRun>>>,
+    /// The journal writers of chat sessions, by session. Every journal change and every read that must line up with the
+    /// stream (a snapshot or a replay) holds it, so a stream knows which batches its first event already covers. Taken
+    /// after the status lock when both are held.
+    journals: Mutex<HashMap<String, crate::chat::journal::JournalState>>,
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
@@ -312,6 +335,10 @@ pub(crate) struct LiveRun {
     switching: bool,
     /// A queued prompt is being typed into the run (decision 0084): no other input waits for it, `force` or not.
     delivering: bool,
+    /// The run reported `done` since the last prompt typed into it or reported (decision 0170): its turn is over, and a
+    /// later `waiting` (an idle notification) does not reopen it. Set by a `done` report; cleared by a `working` report
+    /// and by every prompt typed. A kind that never reports `done` never sets it.
+    finished: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -358,6 +385,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Agents {
+    /// The model listings the service keeps (decision 0166).
+    pub(crate) fn model_cache(&self) -> &crate::model_catalog::ModelCache {
+        &self.inner.models
+    }
+
+    /// How long a model listing may run (decision 0166).
+    pub(crate) fn listing_timeout(&self) -> Duration {
+        self.inner.listing_timeout
+    }
+}
+
+impl Agents {
     /// The service, with its exit sweep running every [`SWEEP_INTERVAL`] for as long as the service exists.
     pub fn new(config: AgentsConfig) -> Self {
         let agents = Self {
@@ -370,6 +409,14 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
+                models: crate::model_catalog::ModelCache::default(),
+                listing_timeout: crate::model_catalog::listing_timeout_from(
+                    std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
+                        .ok()
+                        .as_deref(),
+                ),
+                chat_runs: Mutex::new(HashMap::new()),
+                journals: Mutex::new(HashMap::new()),
                 sign_in_timeout: crate::sign_in::sign_in_timeout_from(
                     std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
                         .ok()
@@ -428,11 +475,16 @@ impl Agents {
         self.inner.config.kind_packages.as_ref()
     }
 
-    /// Every declared kind, read again from the profile, with programs resolved on the service's `PATH`.
+    /// The search path agent programs are found on: the host's, or the one the config names (decision 0164).
+    pub(crate) fn program_search(&self) -> SearchEnv {
+        self.inner.config.vendor_search.env()
+    }
+
+    /// Every declared kind, read again from the profile, with programs resolved on the program search (decision 0164).
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
         let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
-            .views(profile_dir, &SearchEnv::current());
+            .views(profile_dir, &self.program_search());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
@@ -466,6 +518,11 @@ impl Agents {
         params: AgentStartParams,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        // A test service may start a fake kind as a chat run (decision 0101); a release build never does.
+        #[cfg(feature = "test-hooks")]
+        if crate::chat::is_test_chat_kind(&params.kind) {
+            return self.start_chat(params, grant, Box::new(crate::chat::TestAdapter::default()));
+        }
         self.start_session(params, None, grant)
     }
 
@@ -531,6 +588,19 @@ impl Agents {
         parent: Option<&AgentSessionRow>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        self.start_session_as(params, parent, grant, RunStart::Terminal)
+    }
+
+    /// [`Self::start_session`], with the run in a terminal or as a chat (decision 0101). A chat's first prompt goes to
+    /// its standard input once the session exists, never to its arguments.
+    fn start_session_as(
+        &self,
+        params: AgentStartParams,
+        parent: Option<&AgentSessionRow>,
+        grant: SecretGrant,
+        run: RunStart,
+    ) -> Result<AgentSession, AgentError> {
+        let chat = matches!(run, RunStart::Chat(_));
         let parent_holds = parent.is_some_and(|parent| parent.holds_secrets);
         let parent_id = parent.map(|parent| parent.id.clone());
         let _gate = lock(&self.inner.start_gate);
@@ -544,18 +614,24 @@ impl Agents {
             None => None,
         };
         let (decl, program) = self.startable_kind(&params.kind)?;
-        let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
-            .with_caller_args(&params.args);
+        let mode = modes::plan_start(
+            &decl,
+            params.permission_mode.as_deref(),
+            Some(program.as_path()),
+        )?
+        .with_caller_args(&params.args);
         // The model and effort the kind's declared flags take (decision 0094), after the mode's own arguments.
         let mode_args = [
             mode.args.clone(),
             decl.option_args(params.model.as_deref(), params.effort.as_deref())?,
         ]
         .concat();
+        // Fast mode, refused before anything starts when the kind or its model does not take it (decision 0165).
+        let fast = decl.fast_for(params.model.as_deref(), params.fast.unwrap_or(false))?;
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
-            if decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
+            if !chat && decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
                 return Err(AgentError::new(
                     codes::AGENT_PROMPT_INVALID,
                     format!(
@@ -579,15 +655,15 @@ impl Agents {
                 (workspace, Some(made))
             }
         };
-        // A delegated child in a plain folder writes beside its delegation tree, which counts as one writer (decision 0161).
+        // Only a worktree keeps one writing session at a time; a folder takes several (decision 0169). In a worktree, a
+        // delegated child picked into its parent's worktree writes beside its delegation tree, which counts as one writer
+        // there; the parent waits, and the tree's own refusals keep two of its sessions from writing at once (0170).
         let group = match parent {
-            Some(parent) if workspace.kind == WorkspaceKind::Folder => {
-                Some(self.tree_root_of(parent)?)
-            }
-            _ => None,
+            Some(parent) => Some(self.tree_root_of(parent)?),
+            None => None,
         };
         if !params.read_only
-            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
+            && keeps_one_writer(workspace.kind)
             && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
@@ -620,7 +696,7 @@ impl Agents {
             session_id: &session_id,
             token: &token,
             run: Run::First {
-                prompt: params.prompt.as_deref(),
+                prompt: params.prompt.as_deref().filter(|_| !chat),
                 new_ref: &new_ref,
             },
             profile_dir: self.profile_dir(),
@@ -633,6 +709,7 @@ impl Agents {
             caller_env: &params.env,
             instructions,
             inherited_path: inherited_path.as_deref(),
+            fast,
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
@@ -640,6 +717,7 @@ impl Agents {
         // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        fast_mode::record(&run_dir, fast.is_some());
         // What the resume state reads later (decision 0160): the account this run uses, and no resume to classify.
         resume_state::record_probe(&run_dir, &decl, None)
             .and_then(|()| resume_state::record_run_account(&run_dir, access.account.as_deref()))
@@ -648,32 +726,42 @@ impl Agents {
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
-        live.insert(
-            session_id.clone(),
-            LiveRun {
-                token,
-                rules: HookRules::of(&decl),
-                prompt: PromptRules::of(&decl),
-                pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
-                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
-                typed_since_report: false,
-                switching: false,
-                delivering: false,
-                account: access.account.clone(),
-            },
-        );
+        // A chat run reports through its journal, not hooks, and takes prompts on standard input (decision 0101).
+        if !chat {
+            live.insert(
+                session_id.clone(),
+                LiveRun {
+                    token,
+                    rules: HookRules::of(&decl),
+                    prompt: PromptRules::of(&decl),
+                    pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
+                    pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
+                    typed_since_report: false,
+                    switching: false,
+                    delivering: false,
+                    finished: false,
+                    account: access.account.clone(),
+                },
+            );
+        }
         let agent_ref = plan.agent_ref.clone();
         let size = PtySize {
             cols: params.cols.unwrap_or(DEFAULT_COLS),
             rows: params.rows.unwrap_or(DEFAULT_ROWS),
         };
         let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
-        let terminal_id = self
-            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
-            .inspect_err(|_| {
-                live.remove(&session_id);
-                remove_dir(&run_dir);
-            })?;
+        let started = match run {
+            RunStart::Terminal => self
+                .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+                .map(Started::Terminal),
+            RunStart::Chat(adapter) => self
+                .spawn_chat_run(&session_id, plan, &workspace.id, &workspace.path, adapter)
+                .map(Started::Chat),
+        }
+        .inspect_err(|_| {
+            live.remove(&session_id);
+            remove_dir(&run_dir);
+        })?;
         crash_point("agent-start-spawned");
 
         let row = AgentSessionRow {
@@ -684,7 +772,10 @@ impl Agents {
             title: params.title,
             read_only: params.read_only,
             agent_ref,
-            terminal_id: Some(terminal_id.clone()),
+            terminal_id: match &started {
+                Started::Terminal(terminal_id) => Some(terminal_id.clone()),
+                Started::Chat(_) => None,
+            },
             request_id: params.request_id,
             created_at: now_ms(),
             exit: None,
@@ -697,11 +788,22 @@ impl Agents {
             retained: false,
             released_at: None,
         };
-        if let Err(error) = self.store().insert_agent_session(&row) {
+        let inserted = match &started {
+            Started::Terminal(_) => self.store().insert_agent_session(&row),
+            Started::Chat(chat_run) => self
+                .store()
+                .insert_chat_agent_session(&row, &chat_run.run_id),
+        };
+        if let Err(error) = inserted {
             live.remove(&session_id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
             drop(live);
-            let _ = self.inner.config.terminals.close(&terminal_id);
+            match &started {
+                Started::Terminal(terminal_id) => {
+                    let _ = self.inner.config.terminals.close(terminal_id);
+                }
+                Started::Chat(chat_run) => self.abandon_chat_run(&session_id, chat_run),
+            }
             remove_dir(&run_dir);
             return Err(error.into());
         }
@@ -710,8 +812,34 @@ impl Agents {
         if let Some(made) = made.as_mut() {
             made.keep();
         }
-        let mut session = self.view_with(&mut live, row)?;
-        self.notify(Change::Updated(Box::new(session.clone())));
+        let viewed = self.view_with(&mut live, row);
+        if let Ok(session) = &viewed {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        drop(live);
+        // Later starts need neither gate: a chat's first message is handed on outside them.
+        drop((_gate, gate));
+        let begun = match (&started, &viewed) {
+            // Its journal opens, its output is read and its first prompt is sent only now that its row exists.
+            (Started::Chat(chat_run), Ok(_)) => {
+                self.begin_chat(&session_id, chat_run, params.prompt.as_deref())
+            }
+            _ => Ok(()),
+        };
+        let mut session = match viewed.and_then(|session| begun.map(|()| session)) {
+            Ok(session) => session,
+            Err(mut error) => {
+                // A chat run whose start failed after its row exists is ended, so no program outlives the call; the
+                // error names the session it leaves, ended.
+                if let Started::Chat(chat_run) = &started {
+                    self.abandon_chat_run(&session_id, chat_run);
+                    error
+                        .data
+                        .get_or_insert_with(|| json!({ "session": session_id }));
+                }
+                return Err(error);
+            }
+        };
         session.secrets_withheld = withheld(grant);
         Ok(session)
     }
@@ -743,8 +871,18 @@ impl Agents {
         cols: Option<u16>,
         rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
-        let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
+        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run. Its kind's version probe can take
+        // seconds, so it runs before the start gate is taken; a chat resume needs the same support as a chat start.
+        let chat = self.run_type_of(&row.id)? == RunType::Chat;
+        let mut adapter = if chat {
+            let (decl, program) = self.resumable_kind(&row)?;
+            Some(self.chat_adapter_of(&decl, &program)?)
+        } else {
+            None
+        };
+        let _gate = lock(&self.inner.start_gate);
+        let row = self.resolve(&row.id)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
             return Err(AgentError::new(
                 codes::AGENT_BUSY,
@@ -795,6 +933,7 @@ impl Agents {
             permission_mode,
             &row.mode,
             row.pending_permission_mode.as_deref(),
+            Some(program.as_path()),
         )?;
         let workspace = self
             .inner
@@ -809,14 +948,28 @@ impl Agents {
                 format!("the workspace directory is missing: {}", workspace.path),
             ));
         }
-        // In a plain folder the session's delegation tree counts as one writer (decision 0161).
-        let group = if workspace.kind == WorkspaceKind::Folder {
-            Some(self.tree_root_of(&row)?)
-        } else {
-            None
-        };
+        // A resumed child never writes beside another writer of its tree in a shared worktree, as a new child would not
+        // (decision 0170); a folder takes several writers (decision 0169).
         if !row.read_only
-            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
+            && keeps_one_writer(workspace.kind)
+            && let Some(parent) = &row.parent_id
+            && let Some(parent) = self.store().get_agent_session(parent)?
+        {
+            let holder = self.tree_writer(&lock(&self.inner.status), &parent, &workspace.id)?;
+            if let Some(holder) = holder {
+                let mut error = AgentError::new(
+                    codes::AGENT_WORKSPACE_BUSY,
+                    format!("session {holder} already writes in this workspace"),
+                );
+                error.data = Some(json!({ "session": holder }));
+                return Err(error);
+            }
+        }
+        // Only a worktree keeps one writing session at a time, where the session's delegation tree counts as one writer
+        // (decisions 0169, 0170).
+        let group = Some(self.tree_root_of(&row)?);
+        if !row.read_only
+            && keeps_one_writer(workspace.kind)
             && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
@@ -867,11 +1020,14 @@ impl Agents {
             caller_env: &no_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
+            // A resume takes no fast mode: the start's choice is not kept with the session (decision 0165).
+            fast: None,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
+        fast_mode::record(&run_dir, false);
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -880,44 +1036,68 @@ impl Agents {
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
-        live.insert(
-            row.id.clone(),
-            LiveRun {
-                token,
-                rules: HookRules::of(&decl),
-                prompt: PromptRules::of(&decl),
-                pending: None,
-                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
-                typed_since_report: false,
-                switching: false,
-                delivering: false,
-                account: access.account.clone(),
-            },
-        );
+        // A chat run reports through its journal, not hooks (decision 0101).
+        if !chat {
+            live.insert(
+                row.id.clone(),
+                LiveRun {
+                    token,
+                    rules: HookRules::of(&decl),
+                    prompt: PromptRules::of(&decl),
+                    pending: None,
+                    pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
+                    typed_since_report: false,
+                    switching: false,
+                    delivering: false,
+                    finished: false,
+                    account: access.account.clone(),
+                },
+            );
+        }
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
         let size = PtySize {
             cols: cols.unwrap_or(DEFAULT_COLS),
             rows: rows.unwrap_or(DEFAULT_ROWS),
         };
-        let terminal_id = self
-            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
-            .inspect_err(|_| {
-                live.remove(&row.id);
-                remove_dir(&run_dir);
-            })?;
+        let started = match adapter.take() {
+            None => self
+                .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+                .map(Started::Terminal),
+            Some(adapter) => self
+                .spawn_chat_run(&row.id, plan, &workspace.id, &workspace.path, adapter)
+                .map(Started::Chat),
+        }
+        .inspect_err(|_| {
+            live.remove(&row.id);
+            remove_dir(&run_dir);
+        })?;
         crash_point("agent-resume-spawned");
-        let restarted = self.store().restart_agent_session(
-            &row.id,
-            &terminal_id,
-            holds_secrets,
-            &mode.mode,
-            still_pending.as_deref(),
-        );
+        let restarted = match &started {
+            Started::Terminal(terminal_id) => self.store().restart_agent_session(
+                &row.id,
+                terminal_id,
+                holds_secrets,
+                &mode.mode,
+                still_pending.as_deref(),
+            ),
+            Started::Chat(chat_run) => self.store().restart_chat_agent_session(
+                &row.id,
+                &chat_run.run_id,
+                holds_secrets,
+                &mode.mode,
+                still_pending.as_deref(),
+            ),
+        };
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
             drop(live);
-            let _ = self.inner.config.terminals.close(&terminal_id);
+            match &started {
+                Started::Terminal(terminal_id) => {
+                    let _ = self.inner.config.terminals.close(terminal_id);
+                }
+                Started::Chat(chat_run) => self.abandon_chat_run(&row.id, chat_run),
+            }
             remove_dir(&run_dir);
             restarted?;
             return Err(AgentError::new(
@@ -926,17 +1106,35 @@ impl Agents {
             ));
         }
         clear_starting(&run_dir);
-        if let Some(previous) = row.terminal_id.as_deref().filter(|old| *old != terminal_id) {
-            // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited terminal.
-            let _ = self.inner.config.terminals.pin(previous, false);
-        }
+        // A session run again is in use again: its archive is cleared, so lists show it (decision 0163).
+        self.store().set_agent_session_archived(&row.id, None)?;
         let fresh = self.reload(&row.id)?;
-        if fresh.retained {
-            // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
-            let _ = self.inner.config.terminals.pin(&terminal_id, true);
+        if let Started::Terminal(terminal_id) = &started {
+            if let Some(previous) = row.terminal_id.as_deref().filter(|old| old != terminal_id) {
+                // The previous run's terminal is no longer the session's: unpinned, it is evicted like any exited
+                // terminal.
+                let _ = self.inner.config.terminals.pin(previous, false);
+            }
+            if fresh.retained {
+                // A retained session keeps every run's terminal from eviction, not only the first (decision 0090).
+                let _ = self.inner.config.terminals.pin(terminal_id, true);
+            }
         }
         let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
+        drop(live);
+        if let Started::Chat(chat_run) = &started {
+            // The journal carries on in its epoch; the run's output is let in now that the row names it (decision
+            // 0101, D9). A resume sends no prompt.
+            drop((_gate, gate));
+            if let Err(mut error) = self.begin_chat(&row.id, chat_run, None) {
+                self.abandon_chat_run(&row.id, chat_run);
+                error
+                    .data
+                    .get_or_insert_with(|| json!({ "session": row.id }));
+                return Err(error);
+            }
+        }
         session.secrets_withheld = withheld(grant);
         Ok(session)
     }
@@ -992,7 +1190,7 @@ impl Agents {
                 &format!("kind {} declares no resume form", row.kind),
             ));
         }
-        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
                 format!(
@@ -1061,9 +1259,32 @@ impl Agents {
             row.agent_ref = learned;
         }
         // The report answers whatever was typed before it, so the run's typed-since-report flag clears (decision 0058).
+        // A `done` finishes the turn and a `working` opens one; only the first `done` of a turn is new (decision 0170).
+        let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            match row
+                .activity
+                .as_ref()
+                .map(|activity| activity.state.as_str())
+            {
+                Some("done") => {
+                    newly_finished = !run.finished;
+                    run.finished = true;
+                }
+                Some("working") => run.finished = false,
+                _ => {}
+            }
         }
+        // A delegated child's ended turn is told to its parent, through the parent's queue, once (decision 0170).
+        let parent = match row.activity.as_ref() {
+            Some(activity) if newly_finished && row.parent_id.is_some() => {
+                let outcome = delegation::turn_outcome(activity.outcome.as_deref());
+                let key = format!("done:{}", activity.at);
+                self.queue_child_notice(&live, &row, &outcome, &key)
+            }
+            _ => None,
+        };
         let session = self.view_with(&mut live, row)?;
         // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
         // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
@@ -1085,6 +1306,7 @@ impl Agents {
                 // Only a prompt counts as typed (decision 0058): a mode switch starts no turn for a report to answer.
                 if text.is_some() {
                     run.typed_since_report = true;
+                    run.finished = false;
                 }
                 let chunks: Vec<Vec<u8>> = switch.into_iter().chain(text).collect();
                 (!chunks.is_empty()).then_some((chunks, switching))
@@ -1100,6 +1322,10 @@ impl Agents {
         }
         if ready {
             self.drain_queue(&params.session);
+        }
+        // The notice, and any prompt the child's work held (decision 0170), may go now.
+        if let Some(parent) = parent {
+            self.drain_queue(&parent);
         }
         Ok(())
     }
@@ -1127,6 +1353,14 @@ impl Agents {
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
+        // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
+        // writing child as a terminal one does (decision 0170).
+        if self.run_type_of(&row.id)? == RunType::Chat {
+            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), &row) {
+                return Err(child_writing(&row.id, &child));
+            }
+            return self.chat_prompt(&row, text, force, lift_queue_pauses);
+        }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.
         let (session_id, terminal, bytes) = {
@@ -1136,6 +1370,10 @@ impl Agents {
             // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
             // this, because a prompt could make the agent write into the worktree while git merges into it.
             self.refuse_while_merging(&session.workspace_id)?;
+            // A parent waits while its writing child works in its workspace (decision 0170); force types anyway.
+            if !force && let Some(child) = self.writing_child(&live, &self.reload(&session.id)?) {
+                return Err(child_writing(&session.id, &child));
+            }
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
@@ -1150,6 +1388,7 @@ impl Agents {
             // Accepted under the lock, so a second prompt on the same idle sees the flag. A kind with no status mechanism
             // never hears back, so it never sets the flag: it stays always ready (0054).
             run.typed_since_report = run.prompt.has_status;
+            run.finished = false;
             (session.id.clone(), terminal, bytes)
         };
         self.inner
@@ -1280,7 +1519,7 @@ impl Agents {
         let decl = self.declared_kind(id).ok()?;
         decl.permission_modes
             .iter()
-            .find(|mode| mode.bypass && modes::plan(&decl, mode).is_ok())
+            .find(|mode| mode.bypass && modes::plan(&decl, mode, None).is_ok())
             .map(|mode| mode.id.clone())
     }
 
@@ -1434,6 +1673,9 @@ impl Agents {
         let row = self.reload(id)?;
         // The person's stop pauses the queue before the run is killed, so a grace-period idle cannot deliver (decision 0084, D5).
         self.pause_queue_stopped(&row.id);
+        if row.exit.is_none() && row.terminal_id.is_none() {
+            self.stop_chat_run(&row.id, force);
+        }
         if row.exit.is_none()
             && let Some(terminal) = &row.terminal_id
         {
@@ -1468,6 +1710,7 @@ impl Agents {
         }
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
+        self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
         drop(live);
@@ -1538,9 +1781,16 @@ impl Agents {
     pub fn set_retained(&self, selector: &str, retained: bool) -> Result<AgentSession, AgentError> {
         let id = self.resolve(selector)?.id;
         let mut live = lock(&self.inner.status);
-        // Pinned before the flag is saved, so a failed pin leaves the session as it was.
+        // Pinned before the flag is saved, so a failed pin leaves the session as it was. An archived session keeps its
+        // terminal pinned whatever its retain says (decision 0163).
+        let archived = self.store().agent_session_archived_at(&id)?.is_some();
         if let Some(terminal) = &self.reload(&id)?.terminal_id {
-            match self.inner.config.terminals.pin(terminal, retained) {
+            match self
+                .inner
+                .config
+                .terminals
+                .pin(terminal, retained || archived)
+            {
                 // A terminal the manager no longer has has nothing left to keep.
                 Ok(()) | Err(TerminalError::NotFound) => {}
                 Err(error) => return Err(error.into()),
@@ -1699,7 +1949,7 @@ impl Agents {
                 format!("agent kind {id} is invalid: {}", entry.problems.join("; ")),
             )
         })?;
-        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+        let program = resolve_first(&decl.program, &self.program_search()).ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
                 format!("agent kind {id} is not installed: none of its programs was found"),
@@ -1737,7 +1987,7 @@ impl Agents {
     }
 
     /// A session whose run writes in the workspace now, outside the delegation tree rooted at `group` when one is given
-    /// (decision 0161).
+    /// (decision 0170).
     fn live_writer(
         &self,
         workspace_id: &str,
@@ -1791,6 +2041,11 @@ impl Agents {
 
     /// The record of a row read before the status lock: the row is read again under the lock, so a change applied
     /// in between is neither lost nor overwritten.
+    /// The fast mode of a session's current or last run (decision 0165).
+    fn fast_of(&self, session: &str) -> Option<SessionFast> {
+        fast_mode::of_run(&paths::run_dir(self.profile_dir(), session))
+    }
+
     fn view(&self, row: AgentSessionRow) -> Result<AgentSession, AgentError> {
         let mut live = lock(&self.inner.status);
         let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
@@ -1814,11 +2069,45 @@ impl Agents {
         mut row: AgentSessionRow,
         catalog: Option<&Catalog>,
     ) -> Result<AgentSession, AgentError> {
+        let run = self.run_of(&row)?;
+        let execution = self.execution_in(live, &mut row, run)?;
+        let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
+        let placement = self.delegation_view(&row);
+        let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
+        let fast = self.fast_of(&row.id);
+        let shared_folder_with = if execution.state == TerminalState::Exited {
+            Vec::new()
+        } else {
+            self.shared_folder_with(live, &row)?
+        };
+        let mut session = record(row, execution, resume, placement, run, archived, fast);
+        session.shared_folder_with = shared_folder_with;
+        Ok(session)
+    }
+
+    /// The run a row is: a terminal run, or a chat. Only a session without a terminal can be a chat; the store says
+    /// which (decision 0101).
+    fn run_of(&self, row: &AgentSessionRow) -> Result<RunType, AgentError> {
+        match &row.terminal_id {
+            Some(_) => Ok(RunType::Terminal),
+            None => self.run_type_of(&row.id),
+        }
+    }
+
+    /// The execution of a row's run, read now. An end the terminal reports is applied to `row` as in [`Self::view_with`].
+    /// It never reads the session's own view, so it can be called for a sibling session without recursion.
+    fn execution_in(
+        &self,
+        live: &mut LiveRuns,
+        row: &mut AgentSessionRow,
+        run: RunType,
+    ) -> Result<Execution, AgentError> {
         let execution = match (&row.exit, &row.terminal_id) {
             (Some(exit), _) => {
                 live.remove(&row.id);
                 exited(exit)
             }
+            (None, None) if run == RunType::Chat => self.chat_execution(live, row)?,
             (None, None) => Execution {
                 state: TerminalState::Exited,
                 exit: None,
@@ -1831,19 +2120,49 @@ impl Agents {
                         CoreState::Unverifiable => running(TerminalState::Unverifiable),
                         CoreState::Exited => {
                             let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
-                            self.record_exit(live, &mut row, &terminal, exit)?
+                            self.record_exit(live, row, &terminal, exit)?
                         }
                     },
                     Err(TerminalError::NotFound) => {
-                        self.record_exit(live, &mut row, &terminal, gone())?
+                        self.record_exit(live, row, &terminal, gone())?
                     }
                     Err(error) => return Err(error.into()),
                 }
             }
         };
-        let resume = self.resume_of(&row, execution.state == TerminalState::Exited, catalog);
-        let placement = self.delegation_view(&row);
-        Ok(record(row, execution, resume, placement))
+        Ok(execution)
+    }
+
+    /// The other live writing sessions of the folder workspace a live writing session `row` writes in, in the store's
+    /// order (decision 0169). Empty for a read-only session and for a workspace that is not a folder, since a worktree
+    /// keeps one writer.
+    fn shared_folder_with(
+        &self,
+        live: &mut LiveRuns,
+        row: &AgentSessionRow,
+    ) -> Result<Vec<String>, AgentError> {
+        if row.read_only {
+            return Ok(Vec::new());
+        }
+        let mut others = Vec::new();
+        for mut other in self.store().list_agent_sessions(Some(&row.workspace_id))? {
+            if other.id == row.id || other.read_only {
+                continue;
+            }
+            let run = self.run_of(&other)?;
+            if self.execution_in(live, &mut other, run)?.state != TerminalState::Exited {
+                others.push(other.id);
+            }
+        }
+        // The kind is read only when another writer exists, so a session alone in its workspace costs no more.
+        if others.is_empty() {
+            return Ok(others);
+        }
+        let folder = self
+            .store()
+            .get_workspace(&row.workspace_id)?
+            .is_some_and(|workspace| workspace.kind == massorca_core_store::WorkspaceKind::Folder);
+        Ok(if folder { others } else { Vec::new() })
     }
 
     /// The session's resume state (decision 0160), from its kind as declared now: in `catalog`, else a catalog loaded
@@ -1890,10 +2209,29 @@ impl Agents {
         terminal: &str,
         exit: RunExit,
     ) -> Result<Execution, AgentError> {
-        let changed = self
-            .store()
-            .set_agent_session_exit(&row.id, terminal, &exit)?;
+        self.record_run_exit(live, row, RunRef::Terminal(terminal), exit)
+    }
+
+    /// [`Self::record_exit`] for a run in a terminal or a chat run (decision 0101): the same rules, with the end recorded
+    /// only while the row still names that run.
+    fn record_run_exit(
+        &self,
+        live: &mut LiveRuns,
+        row: &mut AgentSessionRow,
+        run: RunRef<'_>,
+        exit: RunExit,
+    ) -> Result<Execution, AgentError> {
+        let changed = match run {
+            RunRef::Terminal(terminal) => self
+                .store()
+                .set_agent_session_exit(&row.id, terminal, &exit)?,
+            RunRef::Chat(run_id) => self
+                .store()
+                .set_agent_session_chat_exit(&row.id, run_id, &exit)?,
+        };
         let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
+        // A turn that ended before the exit was told to the parent then (decision 0170).
+        let told = live.get(&row.id).is_some_and(|run| run.finished);
         if let Some(catalog) = &catalog {
             live.remove(&row.id);
             self.inner.found_transcripts.clear();
@@ -1911,16 +2249,28 @@ impl Agents {
                 &paths::run_dir(self.profile_dir(), &row.id),
                 catalog.find(&row.kind).and_then(|entry| entry.valid()),
                 facts,
-                || self.inner.config.terminals.text(terminal).ok(),
+                || match run {
+                    RunRef::Terminal(terminal) => self.inner.config.terminals.text(terminal).ok(),
+                    RunRef::Chat(_) => self.chat_output(&row.id),
+                },
             );
-            if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+            let cut = status::on_exit(row.activity.as_ref(), exit.at);
+            if let Some(activity) = &cut {
                 self.store().set_agent_session_status(
                     &row.id,
-                    Some(&activity),
+                    Some(activity),
                     row.result.as_deref(),
                     None,
                 )?;
-                row.activity = Some(activity);
+                row.activity = cut.clone();
+            }
+            if !told && row.parent_id.is_some() {
+                let outcome = delegation::exit_outcome(&exit, cut.is_some());
+                let key = format!("exit:{}", exit.at);
+                // The caller holds the status lock, so the parent's queue is drained on a thread of its own.
+                if let Some(parent) = self.queue_child_notice(live, row, &outcome, &key) {
+                    self.drain_parent_later(parent);
+                }
             }
         }
         let execution = exited(&exit);
@@ -1928,23 +2278,43 @@ impl Agents {
         if let Some(catalog) = &catalog {
             let resume = self.resume_of(row, true, Some(catalog));
             let placement = self.delegation_view(row);
+            let run_type = match run {
+                RunRef::Terminal(_) => RunType::Terminal,
+                RunRef::Chat(_) => RunType::Chat,
+            };
+            let archived = self.store().agent_session_archived_at(&row.id)?.is_some();
+            let fast = self.fast_of(&row.id);
             self.notify(Change::Updated(Box::new(record(
                 row.clone(),
                 execution.clone(),
                 resume,
                 placement,
+                run_type,
+                archived,
+                fast,
             ))));
         }
         Ok(execution)
     }
 }
 
-/// The wire record of a row with its execution, its resume state and what it may delegate.
+/// The run an end belongs to: the terminal of a terminal run, or the id of a chat run (decision 0101).
+#[derive(Debug, Clone, Copy)]
+enum RunRef<'a> {
+    Terminal(&'a str),
+    Chat(&'a str),
+}
+
+/// The wire record of a row with its execution, its resume state, what it may delegate, its run type, whether it is
+/// archived and its fast mode (decision 0165).
 fn record(
     row: AgentSessionRow,
     execution: Execution,
     resume: ResumeState,
     placement: DelegationView,
+    run: RunType,
+    archived: bool,
+    fast: Option<SessionFast>,
 ) -> AgentSession {
     AgentSession {
         id: row.id,
@@ -1956,6 +2326,7 @@ fn record(
         brought_back_at_ms: row.brought_back_at,
         agent_ref: row.agent_ref,
         terminal_id: row.terminal_id,
+        run,
         created_at_ms: row.created_at,
         execution,
         activity: row.activity.as_ref().and_then(activity_of),
@@ -1966,11 +2337,24 @@ fn record(
         mode_confirmed: row.mode.confirmed,
         retained: row.retained,
         released: row.released_at.is_some(),
+        archived,
         mode_source: row.mode.source.as_deref().map(mode_source_of),
         pending_permission_mode: row.pending_permission_mode,
         resume: Some(resume),
         delegation: placement.options,
         notes: placement.notes,
+        fast,
+        shared_folder_with: Vec::new(),
+    }
+}
+
+/// Whether a workspace of `kind` takes one writing session at a time (`agent.workspace_busy`). Only a worktree does: a
+/// folder has no git index to corrupt, so several sessions may write in it (decision 0169). A kind a newer peer adds
+/// is not a folder, so it keeps the refusal.
+fn keeps_one_writer(kind: WorkspaceKind) -> bool {
+    match kind {
+        WorkspaceKind::Worktree | WorkspaceKind::Unknown => true,
+        WorkspaceKind::Folder => false,
     }
 }
 
@@ -2006,6 +2390,19 @@ fn input_refusal(
         ));
     }
     None
+}
+
+/// The refusal of a prompt to a parent whose writing child works in its workspace (decision 0170), naming the child in
+/// `data.child`.
+fn child_writing(session: &str, child: &str) -> AgentError {
+    let mut error = AgentError::new(
+        codes::AGENT_BUSY,
+        format!(
+            "session {session} waits while its child session {child} writes in the same workspace; queue the prompt, or use force"
+        ),
+    );
+    error.data = Some(json!({ "child": child }));
+    error
 }
 
 /// A stored mode source in wire form; a value a newer build wrote reads as `unknown`.
@@ -2260,9 +2657,17 @@ pub(crate) mod tests {
         service_with(Arc::new(crate::BuiltInPackages))
     }
 
-    /// [`service`], with kinds from `packages`.
+    /// [`service`], with kinds from `packages`, and the process `PATH` as the program search.
     pub(crate) fn service_with(
         packages: Arc<dyn KindPackages>,
+    ) -> (Agents, String, tempfile::TempDir) {
+        service_searching(packages, VendorSearch::fixed(SearchEnv::current()))
+    }
+
+    /// [`service_with`], with the programs searched for on `vendor_search`.
+    pub(crate) fn service_searching(
+        packages: Arc<dyn KindPackages>,
+        vendor_search: VendorSearch,
     ) -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
@@ -2292,6 +2697,7 @@ pub(crate) mod tests {
             request_id: None,
             created_at: now_ms(),
             comment: None,
+            name_generated: false,
         };
         store.insert_workspace(&workspace).unwrap();
         let agents = Agents::new(AgentsConfig {
@@ -2308,6 +2714,7 @@ pub(crate) mod tests {
             env_provider: None,
             kind_packages: packages,
             vendor_env: None,
+            vendor_search,
         });
         (agents, workspace.id, profile)
     }
@@ -2413,6 +2820,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching,
             delivering: false,
+            finished: false,
             account: None,
         };
         let idle = Some(ActivityState::Idle);
@@ -2452,6 +2860,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching: false,
             delivering: false,
+            finished: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -2543,6 +2952,7 @@ pub(crate) mod tests {
                 typed_since_report: false,
                 switching: false,
                 delivering: false,
+                finished: false,
                 account: None,
             },
         );
@@ -2728,5 +3138,74 @@ mod not_enabled_tests {
             error.message,
             "Antigravity is turned off; install or enable it in the Marketplace."
         );
+    }
+
+    /// A Gentle Shell that only the registry's user `Path` lists (the bundled install, decision 0092) is listed as detected
+    /// and starts on its launcher, as the extension's install check finds it (decision 0164). Without that folder it is
+    /// neither detected nor startable.
+    #[cfg(windows)]
+    #[test]
+    fn a_launcher_only_on_the_registry_user_path_is_listed_detected_and_started() {
+        use std::ffi::OsString;
+
+        use super::tests::service_searching;
+        use crate::resolve::merge_search_path;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle").join("bin");
+        let process = dir.path().join("process");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&process).unwrap();
+        let launcher = bundle.join("gentle-shell.cmd");
+        std::fs::write(&launcher, "@echo off\r\n").unwrap();
+        let process_text = process.display().to_string();
+        let user = bundle.display().to_string();
+        let pathext = Some(".COM;.EXE;.BAT;.CMD".to_owned());
+        let process_only = SearchEnv {
+            path: Some(OsString::from(&process_text)),
+            pathext: pathext.clone(),
+        };
+        let with_user_path = SearchEnv {
+            path: Some(OsString::from(merge_search_path(
+                &process_text,
+                None,
+                Some(&user),
+            ))),
+            pathext,
+        };
+        let is_launcher = |found: &str| found.eq_ignore_ascii_case(&launcher.to_string_lossy());
+
+        let (without, _, _profile) = service_searching(
+            Arc::new(crate::BuiltInPackages),
+            VendorSearch::fixed(process_only),
+        );
+        let listed = without.kinds();
+        let gentle = listed
+            .kinds
+            .iter()
+            .find(|kind| kind.id == "gentle-shell")
+            .expect("the built-in kind is listed");
+        assert!(!gentle.detected, "{gentle:?}");
+        assert!(without.startable_kind("gentle-shell").is_err());
+
+        let (with, _, _profile) = service_searching(
+            Arc::new(crate::BuiltInPackages),
+            VendorSearch::fixed(with_user_path),
+        );
+        let listed = with.kinds();
+        let gentle = listed
+            .kinds
+            .iter()
+            .find(|kind| kind.id == "gentle-shell")
+            .expect("the built-in kind is listed");
+        assert!(gentle.detected, "{gentle:?}");
+        assert!(
+            gentle.program_path.as_deref().is_some_and(is_launcher),
+            "{gentle:?}"
+        );
+        let (_, program) = with
+            .startable_kind("gentle-shell")
+            .expect("it starts on its launcher");
+        assert!(is_launcher(&program.to_string_lossy()), "{program:?}");
     }
 }

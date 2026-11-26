@@ -3612,6 +3612,7 @@ dependencies = [
  "massorca-protocol",
  "massorca-server",
  "predicates",
+ "qrcode",
  "rustix",
  "serde",
  "serde_json",
@@ -3773,6 +3774,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-core-tools"
+version = "0.1.0"
+dependencies = [
+ "massorca-core-terminal",
+ "massorca-process",
+ "massorca-protocol",
+ "tempfile",
+]
+
+[[package]]
 name = "massorca-core-vault"
 version = "0.1.0"
 dependencies = [
@@ -3827,7 +3838,9 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "jiff",
  "massorca-client",
+ "massorca-core-agents",
  "massorca-core-remote",
  "massorca-net",
  "massorca-process",
@@ -3835,6 +3848,7 @@ dependencies = [
  "massorca-protocol",
  "massorca-server",
  "massorca-ui",
+ "qrcode",
  "serde",
  "serde_json",
  "tempfile",
@@ -3842,6 +3856,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
@@ -3940,6 +3955,7 @@ dependencies = [
  "massorca-core-schedule",
  "massorca-core-store",
  "massorca-core-terminal",
+ "massorca-core-tools",
  "massorca-core-vault",
  "massorca-core-watch",
  "massorca-core-workspace",
@@ -5362,6 +5378,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

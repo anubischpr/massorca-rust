@@ -39,6 +39,7 @@ machine.
 | `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities) and its host's git: `present <version>`, `missing`, `too_old <version> (requires 2.25.0)` or `unknown (<reason>)`. Starts the service when it is not running. A service older than the git field shows `not reported`; update that service. With `--json`, the same state is `git` (`state`, `version`, `required` or `reason`). |
+| `service tools` | Shows the developer tools on the service's host, one line each: `git`, `gh`, `glab` and the shells (`pwsh`, `powershell` on Windows; `bash`, `zsh`, `sh` elsewhere). Each line is `<id>: <state> [version] [(path)]`, with state `present`, `missing`, `too_old`, `unknown` or `other`. A forge CLI's version is read with `--version`; a shell is found but never started, so its version is not read. WSL is never probed. Detection runs on the service's host, so `--host` lists that host's tools. The answer is kept for the service run; `--refresh` detects again. With `--json`, the list is `tools`, each with `id`, `kind` (`vcs`, `forge`, `shell`), `state`, `version` and `path` (`null` when not reported). |
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
 | `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
@@ -52,19 +53,22 @@ machine.
 | `project list` | Lists every project, ordered by name, with its icon in an `ICON` column. |
 | `project show <PROJECT>` | Shows one project, with its icon when it has one. `PROJECT` is its id, name or path. |
 | `project update <PROJECT> (--icon ICON \| --clear-icon)` | Sets the project's icon with `--icon`, which takes the forms of `project add --icon`, or removes it with `--clear-icon`, so the project shows the default icon. Prints the icon. |
+| `project scripts <PROJECT> [--workspace WORKSPACE]` | Shows the scripts as `project trust-scripts` without `--hash` does, and changes nothing. |
+| `project trust-scripts <PROJECT> [--workspace WORKSPACE] [--hash HASH]...` | Shows the `setup` and `archive` scripts of the project's `orca.yaml`, or of `WORKSPACE`'s copy (its `setup` only: removal reads `archive` from the project's), each with its SHA-256 and whether it is `trusted`, `not trusted` or `changed since it was trusted`, and the command that trusts it. `--hash` trusts the shown script with that hash; repeat it for both. A hash no shown script has exits 2 with `usage.unknown_script_hash`, and one that no longer matches the file is refused with `script.changed`. Trusting needs host-admin. A script runs only while its exact content is trusted (decision 0095). |
 | `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
-| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). |
-| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup] [--unique] [--name-generated]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. `--name-generated` marks `NAME` as derived rather than typed, so `workspace rename --from-generated` may replace it; it is ignored with `--branch` or `--existing-branch` and is meant for scripts and tests (capability `workspace-rename/1`). When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). A script whose content is not trusted does not run: the output prints `setup skipped: <reason>` and its hash, and `--json` carries `setup.outcome` `untrusted` (decision 0095). A taken name, branch (local or remote-tracking, any case) or folder is refused unless `--unique`, which uses the first free of `NAME`, `NAME-2` .. `NAME-100` (cut to stay within 64 characters) and prints the name used; it does not combine with `--branch`, `--existing-branch` or `--path` (capability `workspace-unique-name/1`). |
+| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project, with git's `locked` and `prunable` state. Each other linked worktree of a project that no workspace records, under its workspaces root or elsewhere, is listed as `unregistered` with the same state; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
 | `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
-| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--allow-failed-archive]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. A worktree's trusted `archive` script runs first; `--allow-failed-archive` removes it even when that script fails. |
 | `workspace update <WORKSPACE> [--name NAME] [--comment TEXT]` | Renames a workspace or sets its comment; `--comment ""` clears it. At least one of the two is required. A rename changes only the name: the directory and the branch keep theirs. Prints the workspace. |
+| `workspace rename <WORKSPACE> <NEW_NAME> --from-generated [--expected-branch B]` | Renames a workspace whose name the service chose (a blank-name create, or one created with `--name-generated`, and never one on a named or existing branch; `workspace show` prints `name generated: yes`) and, for a worktree, its branch, under the branch prefix. A taken name, local or remote-tracking branch (any case, the workspace's own excluded) moves on to `NEW_NAME-2` .. `NEW_NAME-100`. The folder is never moved. Refused with `workspace.name_not_generated` for a typed name, `workspace.branch_changed` when the worktree is not on the recorded branch or on `--expected-branch`, `git.detached_head` on a detached HEAD, and `workspace.branch_published` when the branch has an upstream or a remote copy; these checks run even when the name does not change. `--from-generated` is required (capability `workspace-rename/1`, decision 0111). |
 | `workspace check <WORKSPACE>` | Reports whether the workspace's folder exists and is readable and, for a worktree, whether git still lists it. Prints `NAME: ok` or the first failure, with the path. A failed check still exits 0; `--json` carries `ok` and `reason`. Changes nothing. |
 | `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
-| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. An agent run's terminal also shows `git credential guard: on`: git inside it never waits for a credential prompt. |
 | `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
 | `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
 | `terminal attach <TERMINAL>` | Interactive: shows the terminal and types into it. `Ctrl+]` detaches. |
@@ -72,7 +76,8 @@ machine.
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
 | `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
-| `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
+| `pair offer [--ttl <SECS>] [--standard] [--address <HOST[:PORT]>]... [--no-qr]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. `--address` (repeatable or comma-separated, at most 8) lists exactly these addresses in the offer instead of the bound listeners, for a device behind NAT, in a container or an emulator; see Hosts and pairing. Text output ends with the offer as a QR code for a phone to scan (light modules drawn as blocks, for a dark terminal); `--no-qr` leaves it out. A service that predates it is refused with `service.capability_missing`; an address no device can dial with `pairing.invalid_address`. |
+| `pair cancel <OFFER-ID>\|--all` | Retires a pending offer before it expires, so a code that leaked no longer pairs. `pair offer` prints the offer id after the offer (`offer_id` in `--json`); `--all` retires every pending offer and reports how many. An offer that is used, expired or unknown is `pairing.offer_not_found`. A service that predates it is refused with `service.capability_missing`. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
 | `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
@@ -89,11 +94,12 @@ machine.
 | `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Then one `modes:` line per kind that declares permission modes: each mode's id and label, marked `default` (the vendor CLI's own default), `bypass` (lifts the vendor's prompts or sandbox), `live` (switches in a running session) and `may fall back` (the vendor may start in another mode without failing). Problems follow. Then one `models:` line and one `efforts:` line for each kind that declares model choices or effort levels, listing the ids with the default marked (decision 0096). |
-| `agent start <KIND> [--workspace <WS>] [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [--model MODEL] [--effort EFFORT] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own; without `--workspace`, in a folder of its own in the conversations folder (see the notes below). `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
-| `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
+| `agent models <KIND> [--account <ACCOUNT>] [--refresh]` | Lists the models the kind's picker offers for an account: each model's id, label, `default` mark, `efforts` (the levels it takes, or `none`) and whether it is `declared` or `listed`. The declared models come first, then the models the account's vendor CLI lists. Without `--account`, the active account is listed, or the vendor's usual home when the kind has none. A failed listing prints `listing failed:` with its message and still lists the declared models. A listing is cached for 10 minutes; `--refresh` asks the vendor CLI again. Only `antigravity` and `claude` list models (decision 0166). `--json` prints the `agent.models` result. |
+| `agent start <KIND> [--workspace <WS>] [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [--model MODEL] [--effort EFFORT] [--fast] [--chat] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own; without `--workspace`, in a folder of its own in the conversations folder (see the notes below). With `--chat` the run is a structured chat instead (`agent.chat.start`, see the notes below): no terminal, and no arguments after `--`. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. `--fast` asks for fast mode (decision 0165): the kind passes its fast settings, and the start is refused with `agent.option_unsupported` unless the kind declares fast mode and the model (the default one, without `--model`) takes it. The session then shows `fast: requested` until something confirms the vendor took it; nothing does yet. |
+| `agent list [--workspace WS] [--archived]` | Lists agent sessions, newest first: execution, activity and title. Hidden (archived) sessions are listed only with `--archived`. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
-| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
+| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. For a chat session it sends TEXT as a message (receipt `sent_to_chat`); `--force` hands it to the agent while a turn runs, which runs it next. |
 | `agent queue add <SESSION> <TEXT>` | Queues TEXT behind the session's busy agent and prints the queued prompt (`waiting`, with its reason). A kind that reports no activity is refused with `agent.queue_unavailable`; past 100 queued prompts with `agent.queue_full`. |
 | `agent queue list <SESSION>` | Lists the session's queued prompts, head first, with their states and reasons. |
 | `agent queue edit <ID> <TEXT>` | Replaces the text of a waiting or failed queued prompt. A prompt being sent is refused with `agent.busy`. |
@@ -102,13 +108,16 @@ machine.
 | `agent queue resume <SESSION>` | Lifts the session's queue pauses (after a stop or a service restart) and types the head once the agent is ready. Prints the queue. |
 | `agent resume <SESSION> [--mode MODE]` | Starts a new run of an exited session with the kind's resume arguments, in a new terminal. The session keeps its id and agent ref. The run is in MODE; without it, in the mode `agent mode` set for this resume unless that is a bypass mode (a pending bypass is used only with `--mode`), else the last chosen mode unless it was a bypass mode, else the vendor's own default. |
 | `agent mode <SESSION> <MODE> [--force]` | Switches the session's permission mode. A kind that reports no activity cannot say whether its agent is mid-prompt, so a live switch into it needs `--force`; without it the switch fails with `agent.mode_unavailable`. Where the kind declares a live switch and the run is live, types it into the run once the agent is ready and prints `switched to MODE in the running session`; no hook confirms it, so the mode shows as requested. Otherwise prints `MODE applies at the next resume`, shows it as `next resume mode: MODE`, and leaves the running mode as it is. Fails with `agent.mode_unknown` for a mode the kind does not list, `agent.mode_unavailable` for a mode a resume could not apply, and `agent.resume_unavailable` when the session can neither switch now nor resume. |
-| `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal, generated files and archived output. |
+| `agent forget <SESSION> [--remove-workspace [--force] [--discard-ignored]]` | Forgets a session whose run has ended, with its terminal, generated files and archived output. `--remove-workspace` also removes its workspace as `workspace rm` would (the worktree and the branch it created; a folder workspace keeps its files), only when no other session uses it (`agent.busy` names them) and no team, task or running terminal does (`workspace.busy`), checked before anything is deleted and again as the removal begins; `--force` discards uncommitted and untracked changes, which refuse with `workspace.dirty` otherwise; `--discard-ignored` deletes ignored files such as build output, which refuse with `workspace.ignored_files` otherwise. |
+| `agent forget <SESSION> --preview` | Prints what forgetting the session with its workspace would meet: whether it can be forgotten, the workspace, whether it is removable and why not, its uncommitted changes, untracked and ignored files, and the other sessions, teams, tasks and running terminals that use it. Changes nothing. |
+| `agent rename <SESSION> <TITLE>` | Sets a session's title, live or exited. The title is trimmed and must be 1 to 120 characters without control characters (`request.invalid_params` otherwise). |
+| `agent hide <SESSION> [--off]` | Hides (archives) an exited session from `agent list`, keeping its record, terminal output and workspace; `--off` shows it again. Refused with `agent.busy` while the run is live. Shown as `archived`. |
 | `agent release <SESSION>` | Archives the newest 256 KiB of an exited session's terminal output, frees its terminal and keeps the record, marked released. Refused with `agent.busy` while the run is live. Clears the retain. A run whose terminal was already evicted, or that ended before a service restart, has no output left and archives an empty text. |
 | `agent retain <SESSION> [--off]` | Keeps the session's exited terminal from being evicted, durably; `--off` clears it. Listed as `retained`. |
 | `agent archive <SESSION>` | Prints the archived output of a released session. Withheld for a run that holds vault secrets, unless the caller is host-admin. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
-| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`, or in the parent's folder when that is a plain folder workspace. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--same-workspace] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only` or `--same-workspace`, or in the parent's folder when that is a plain folder workspace. While a writing child works in the parent's own workspace, the parent waits. When the child's turn or run ends, the parent's queue gets a one-line notice. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
@@ -130,6 +139,7 @@ machine.
 | `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
 | `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
 | `agent accounts check <KIND> [<ACCOUNT>]` | Runs the kind's check on an account, or on the active one, and prints its state. |
+| `agent title --kind <KIND> --prompt TEXT [--reply TEXT] [--model MODEL] [--account ACCOUNT]` | Names a chat from its first prompt and reply by one run of the kind's one-shot form, with the account's home: `--account`, else the kind's active account. Prints the slug alone (`--json`: `{ slug }`): at most four lowercase words joined by `-`, at most 48 characters of `a-z`, `0-9` and `-`, accents folded (`canción` is `cancion`). Refused with `agent.oneshot_unsupported` for a kind with no one-shot form, `agent.credentials_invalid` with no usable account, `agent.oneshot_timeout` after 30 seconds and `agent.oneshot_failed` when the run fails or names no usable title. Below host-admin only the kind's active account may be named (`permission.denied` otherwise). The title is English ASCII, whatever the chat's language. Needs a service that offers `agent-title/1` (decision 0167). |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
 which must be an absolute path.
@@ -158,6 +168,13 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+- Before anything is stopped or removed, the project's `orca.yaml` `scripts.archive` runs in the
+  worktree, in a service terminal titled `Archive`, for up to 120 seconds, and the output prints
+  `archive script ran in terminal <ID>`. A non-zero exit or a timeout refuses the removal with
+  `workspace.archive_failed`, and the workspace stays `ready`; `--allow-failed-archive` removes it
+  anyway and prints `archive failed, removed anyway: <reason>`. An untrusted script does not run
+  (`archive skipped: <reason>`) and the removal goes ahead. Folder workspaces have no archive
+  script (decision 0095).
 
 ### Terminals
 
@@ -196,6 +213,14 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
   never detected, and never started. `--json` prints the `agent.kinds` result, where
   `installed` is deprecated and equals `detected`.
+- `agent start --chat` (decision 0101) starts the session as a structured chat: the service runs the kind's CLI with
+  piped streams, keeps its transcript, and answers its permission requests through `agent.chat.approval.answer`.
+  Only a kind with a `chat` block whose CLI version is in range can: `agent kinds --json` shows each kind's `chat`
+  (`supported`, and otherwise `reason`: `not_detected`, `version_unknown` or `version_outside_range`, with the probed
+  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x. Any other
+  kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
+  without `--chat` instead. `agent resume` of a chat session resumes it as a chat, `agent stop`, `agent status` and the
+  queue work as for a terminal session.
 - `agent start` without `--workspace` starts a session with no project (decision 0094). It
   runs in its own folder, named after the session, inside the conversations folder
   (`conversations.folder`, default `~/MassOrca/Conversations`, made on first use). The session
@@ -208,9 +233,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `request.invalid_params` naming the allowed ids. A resumed run keeps the kind's default model
   and effort.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
-  shell in between), with the first prompt as the kind declares. A workspace holds one live
-  session that is not `--read-only`; a second writing start fails with
-  `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
+  shell in between), with the first prompt as the kind declares. A worktree workspace holds one
+  live session that is not `--read-only`; a second writing start there fails with
+  `agent.workspace_busy`. A folder workspace takes several writing sessions (decision 0169), and each lists the
+  others that are live in `shared_folder_with`. A kind that is not installed fails with `agent.not_installed`.
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
@@ -237,8 +263,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; a
   session whose agent saved no conversation for its ref fails with `agent.resume_not_found`
   before any run starts (decision 0160); another
-  writing session in the workspace
-  fails with `agent.workspace_busy`.
+  writing session in the same worktree
+  fails with `agent.workspace_busy`; in a folder workspace it runs beside the others (decision 0169).
 - `agent status` shows, for an exited session that cannot resume, a line
   `resume: unavailable: REASON (CODE)`, for example
   `resume: unavailable: the agent saved no conversation for this session (agent.resume_not_found)`.
@@ -292,10 +318,25 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A writing child of a parent in
   a plain folder workspace runs in that folder, with no copy, and its `note` and
   `notes` say "This workspace has no Git, so the child works in this folder."; the
-  parent's delegation tree counts as one writer there, and any other writing start in the
-  folder still fails with `agent.workspace_busy` (decision 0161). A parent in a worktree with
+  folder takes several writers, so the child's writing start is not refused there (decisions 0161, 0169). A parent in a worktree with
   no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
-  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  runs in the parent's workspace and does not hold its writing slot. `--same-workspace` (not with
+  `--name`) runs a writing child in the parent's own worktree, the person's manual pick; its `note`
+  and `notes` say "The child works in its parent's worktree, and the parent waits until it
+  finishes." (decision 0170). A second writing `--same-workspace` child, while another writing
+  session of the tree (a sibling or a grandchild) works unfinished in that worktree, or an ancestor
+  of the delegating session has a live run there, fails with `agent.workspace_busy` naming it in
+  `data.session`; `agent resume` of such a child is refused the same way. While a writing child works unfinished in the
+  parent's own workspace (that pick, or a plain folder), the parent waits: its queued prompts hold with reason `child_writing`, and
+  `agent prompt` to it fails with `agent.busy` naming the child in `data.child`, unless `--force`.
+  A child is finished from its first `done` report until its next prompt; a later `waiting` does
+  not reopen it, and a kind that never reports `done` (Antigravity, Gentle Shell, a chat run)
+  finishes only when its run ends. When a child becomes finished, or its run ends unfinished, the
+  parent's queue gets a one-line notice:
+  "MassOrca: child session ID finished: OUTCOME. Read its result with massorca agent status
+  ID --json, or bring it back with massorca agent bring-back ID." OUTCOME is `done`, `failed`,
+  `cancelled`, `interrupted`, `stopped` or `exited`; neither the child's title nor its result text is in it. A
+  parent with no live run gets the notice paused (`paused_stopped`). A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
   delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
   Each session's `--json` record carries `delegation`: `writing_child` (`own_worktree`,
@@ -362,6 +403,15 @@ massorca pair offer
 # on the other computer, reading the offer from stdin
 massorca pair accept - --name vps
 ```
+
+The offer lists the addresses the service is bound to. When the other device reaches this computer at a
+different address (a NAT, a container, or an Android emulator, which reaches its computer at `10.0.2.2`), give it
+with `--address`: `massorca pair offer --address 10.0.2.2`. It takes a host name, `host:port`, an IPv4 or IPv6
+literal (`[fd7a::1]:7347`) or a `wss://` or `https://` URL; a value without a port takes the listener's port.
+Wildcard addresses (`0.0.0.0`, `::`), port 0, paths, queries and user names are refused.
+
+An offer is a credential until it is used or expires. If one leaks, retire it with
+`massorca pair cancel <OFFER-ID>`, or every pending one with `massorca pair cancel --all`.
 
 The accepted host is stored in this profile. `--host vps` then addresses it, and `host list`,
 `host status` and `host remove` manage it. A host that does not answer is reported as

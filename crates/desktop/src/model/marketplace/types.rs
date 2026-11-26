@@ -225,6 +225,10 @@ pub struct MarketplaceSnapshot {
     pub sign_in: Option<SignInFlow>,
     /// False while `DEFAULT_AGENT_KEY` does not exist, so no agent can be made the default.
     pub default_agent_available: bool,
+    /// Whether the service offers `extensions.rollback` for This computer's packages (`extensions-rollback/1`).
+    pub rollback_offered: bool,
+    /// Whether the service offers `extensions.log` for This computer's packages (`extensions-log/1`).
+    pub log_offered: bool,
 }
 
 impl MarketplaceSnapshot {

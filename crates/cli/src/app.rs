@@ -205,6 +205,12 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(skills::execute(&target, autostart, command, output))
         }
+        Commands::Marketplace { command } => {
+            let target = globals.target()?;
+            block_on(crate::marketplace::execute(
+                &target, autostart, command, output,
+            ))
+        }
     }
 }
 
@@ -226,6 +232,10 @@ fn service_command(
         ServiceCommand::Info => {
             let target = globals.target()?;
             block_on(control::info(&target, globals.autostart, output))
+        }
+        ServiceCommand::Tools { refresh } => {
+            let target = globals.target()?;
+            block_on(control::tools(&target, globals.autostart, refresh, output))
         }
         ServiceCommand::Stop => {
             globals.local_only("service stop")?;
@@ -255,6 +265,10 @@ fn pair_command(globals: &Globals, command: PairCommand, output: Output) -> Resu
         PairCommand::Offer(args) => {
             let target = globals.target()?;
             block_on(pair::offer(&target, globals.autostart, &args, output))
+        }
+        PairCommand::Cancel(args) => {
+            let target = globals.target()?;
+            block_on(pair::cancel(&target, globals.autostart, &args, output))
         }
         PairCommand::Accept(args) => {
             globals.local_only("pair accept")?;

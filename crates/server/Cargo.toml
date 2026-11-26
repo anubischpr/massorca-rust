@@ -16,6 +16,7 @@ jiff.workspace = true
 massorca-core-agents.workspace = true
 massorca-core-extensions.workspace = true
 massorca-core-git.workspace = true
+massorca-core-tools.workspace = true
 massorca-core-remote.workspace = true
 massorca-core-schedule.workspace = true
 massorca-core-watch.workspace = true
@@ -47,6 +48,7 @@ rustix.workspace = true
 win32job.workspace = true
 
 [dev-dependencies]
+massorca-process = { workspace = true, features = ["test-support"] }
 massorca-core-store = { workspace = true, features = ["test-support"] }
 massorca-client.workspace = true
 massorca-ext-package.workspace = true

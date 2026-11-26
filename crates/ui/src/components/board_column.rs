@@ -3,12 +3,12 @@
 //! key handler to each card and draws the lifted card through `lifted`.
 
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
-use crate::components::badge::{Badge, BadgeTone};
+use crate::components::badge::Badge;
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
 use crate::tokens::{
-    LAYOUT_BOARD_COLUMN_WIDTH, RADIUS_LG, RADIUS_SM, SIZE_CONTROL_COMFORTABLE, SPACE_1, SPACE_2,
-    SPACE_HALF, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_TITLE_SM,
+    LAYOUT_BOARD_COLUMN_WIDTH, RADIUS_LG, SIZE_CONTROL_COMFORTABLE, SPACE_1, SPACE_2, SPACE_HALF,
+    TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_TITLE_SM,
 };
 use std::fmt;
 
@@ -176,7 +176,7 @@ impl BoardCard {
                     .into_any_element(),
             );
         } else if self.unassigned {
-            meta_items.push(unassigned_chip(theme).into_any_element());
+            meta_items.push(unassigned_chip().into_any_element());
         }
         if let Some(time) = &self.time {
             meta_items.push(
@@ -311,15 +311,11 @@ fn status_line(state: AgentState, word: SharedString, theme: &Theme) -> impl Int
         )
 }
 
-/// The "Unassigned" chip: the Badge's neutral tone in a `border.subtle` frame, because Badge has
-/// no bordered neutral tone (bt-board `.chip`).
-fn unassigned_chip(theme: &Theme) -> impl IntoElement {
+/// The "Unassigned" chip: the Badge tag variant (bt-board `.chip`, ruling B9).
+fn unassigned_chip() -> impl IntoElement {
     div()
         .debug_selector(|| "board-card-unassigned".into())
-        .rounded(px(RADIUS_SM))
-        .border_1()
-        .border_color(theme.palette.border.subtle)
-        .child(Badge::text("Unassigned").tone(BadgeTone::Neutral))
+        .child(Badge::tag("Unassigned"))
 }
 
 /// The unreachable glyph and the last known state of a card whose host cannot be reached.
@@ -459,7 +455,7 @@ impl RenderOnce for BoardColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokens::SIZE_BADGE_HEIGHT;
+    use crate::tokens::SIZE_TAG_HEIGHT;
 
     #[test]
     fn the_accessible_name_counts_tasks_in_the_plural_except_for_one() {
@@ -688,8 +684,8 @@ mod tests {
         let chip = cx
             .debug_bounds("board-card-unassigned")
             .expect("the chip is drawn");
-        // The Badge is SIZE_BADGE_HEIGHT tall; the frame adds a 1 px border above and below.
-        assert_px(height(chip), SIZE_BADGE_HEIGHT + 2., "the chip's frame");
+        // The tag is 20 px tall, as bt-board's `.chip` is.
+        assert_px(height(chip), SIZE_TAG_HEIGHT, "the tag");
     }
 
     #[gpui::test]

@@ -12,6 +12,7 @@ pub mod events;
 pub mod extensions;
 pub mod git;
 pub mod host;
+pub mod hosted_services;
 pub mod projects;
 pub mod secrets;
 pub mod service;

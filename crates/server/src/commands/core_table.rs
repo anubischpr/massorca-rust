@@ -32,6 +32,15 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "service.tools",
+            "Show the git, forge CLI and shell tools on the service's host",
+            "service.tools",
+            json!({
+                "type": "object",
+                "properties": { "refresh": { "type": "boolean" } }
+            }),
+        ),
+        command(
             "agent-context",
             "List every command with its method, permission and parameters",
             "commands.describe",
@@ -159,6 +168,34 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.scripts",
+            "Show a project's orca.yaml scripts with their hashes and trust",
+            "project.scripts",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": { "project": { "type": "string" }, "workspace": { "type": "string" } }
+            }),
+        ),
+        command(
+            "project.trust-scripts",
+            "Show a project's orca.yaml scripts and trust one by its hash",
+            "project.trust_script",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "hash": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Hashes of shown scripts to trust; each is sent to project.trust_script"
+                    }
+                }
+            }),
+        ),
+        command(
             "workspace.create",
             "Create a workspace",
             "workspace.create",
@@ -221,7 +258,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "type": "object",
                 "properties": {
                     "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
-                    "admin": { "type": "boolean" }
+                    "admin": { "type": "boolean" },
+                    "addresses": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
+                }
+            }),
+        ),
+        command(
+            "pair.cancel",
+            "Retire a pending pairing offer before it expires",
+            "pairing.cancel",
+            json!({
+                "type": "object",
+                "properties": {
+                    "offer_id": { "type": "string" },
+                    "all": { "type": "boolean" }
                 }
             }),
         ),
@@ -254,7 +304,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             json!({
                 "type": "object",
                 "required": ["workspace"],
-                "properties": { "workspace": { "type": "string" }, "force": { "type": "boolean" } }
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "force": { "type": "boolean" },
+                    "allow_failed_archive": { "type": "boolean" }
+                }
             }),
         ),
         command(
@@ -268,6 +322,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "workspace": { "type": "string" },
                     "name": { "type": "string" },
                     "comment": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "workspace.rename",
+            "Rename a workspace whose name the service chose, and its branch",
+            "workspace.rename",
+            json!({
+                "type": "object",
+                "required": ["workspace", "name", "from_generated"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from_generated": { "type": "boolean" },
+                    "expected_branch": { "type": "string" }
                 }
             }),
         ),
@@ -397,6 +466,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "agent.models",
+            "List the models a kind's picker offers for an account: declared choices, then the vendor CLI's listing",
+            "agent.models",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "refresh": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.start",
             "Start an agent in a workspace, or with no project in the conversations folder",
             "agent.start",
@@ -420,7 +503,10 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.list",
             "List agent sessions",
             "agent.list",
-            json!({ "type": "object", "properties": { "workspace": { "type": "string" } } }),
+            json!({
+                "type": "object",
+                "properties": { "workspace": { "type": "string" }, "archived": { "type": "boolean" } }
+            }),
         ),
         command(
             "agent.status",
@@ -546,9 +632,45 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.forget",
-            "Forget an agent session whose run has ended",
+            "Forget an agent session whose run has ended; with remove_workspace, remove its workspace too",
             "agent.forget",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "remove_workspace": { "type": "boolean" },
+                    "force": { "type": "boolean" },
+                    "discard_ignored": { "type": "boolean" },
+                    "expect_dirty": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.forget_preview",
+            "Say what forgetting an agent session would do to it and to its workspace, changing nothing",
+            "agent.forget_preview",
             selector("session"),
+        ),
+        command(
+            "agent.rename",
+            "Set an agent session's title",
+            "agent.rename",
+            json!({
+                "type": "object",
+                "required": ["session", "title"],
+                "properties": { "session": { "type": "string" }, "title": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.hide",
+            "Archive (hide) an exited agent session from agent lists, or show it again with archived false",
+            "agent.archive_session",
+            json!({
+                "type": "object",
+                "required": ["session", "archived"],
+                "properties": { "session": { "type": "string" }, "archived": { "type": "boolean" } }
+            }),
         ),
         command(
             "agent.release",
@@ -594,6 +716,82 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             json!({
                 "type": "object",
                 "properties": { "workspace": { "type": "string" }, "session": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.chat.subscribe",
+            "Stream a chat session's transcript from a cursor",
+            "agent.chat.subscribe",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "after": {
+                        "type": "object",
+                        "properties": { "epoch": { "type": "string" }, "seq": { "type": "integer" } }
+                    },
+                    "limit": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.start",
+            "Start an agent session whose run is a structured chat",
+            "agent.chat.start",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "title": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "permission_mode": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.approval.answer",
+            "Answer a chat session's permission request",
+            "agent.chat.approval.answer",
+            json!({
+                "type": "object",
+                "required": ["session", "request_id", "decision"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "request_id": { "type": "string" },
+                    "decision": { "type": "string", "enum": ["allow", "deny"] },
+                    "scope": { "type": "string", "enum": ["once", "always"] },
+                    "message": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.interrupt",
+            "Interrupt a chat session's running turn and keep the session",
+            "agent.chat.interrupt",
+            selector("session"),
+        ),
+        command(
+            "agent.chat.history",
+            "Page back through a chat session's transcript",
+            "agent.chat.history",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "before": {
+                        "type": "object",
+                        "properties": { "epoch": { "type": "string" }, "seq": { "type": "integer" } }
+                    },
+                    "limit": { "type": "integer" }
+                }
             }),
         ),
         command(
@@ -759,6 +957,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "required": ["kind"],
                 "properties": {
                     "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.title",
+            "Name a chat from its first prompt and reply",
+            "agent.generate_title",
+            json!({
+                "type": "object",
+                "required": ["kind", "prompt"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "reply": { "type": "string" },
+                    "model": { "type": "string" },
                     "account": { "type": "string" }
                 }
             }),

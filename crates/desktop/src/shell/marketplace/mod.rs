@@ -3,6 +3,10 @@
 
 mod accounts;
 mod add_folder;
+#[cfg(test)]
+mod add_menu_tests;
+#[cfg(test)]
+mod banner_tests;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]
@@ -10,13 +14,22 @@ mod extension_tests;
 mod extension_updates;
 mod host_pick;
 mod import;
+#[cfg(test)]
+mod import_tests;
+mod installed;
 mod item;
 mod item_images;
 #[cfg(test)]
 mod item_images_tests;
+mod log_view;
+mod more_menu;
 mod package;
 mod program_update;
 mod review;
+mod rollback;
+mod services;
+#[cfg(test)]
+mod services_tests;
 mod sign_in;
 mod skills;
 #[cfg(test)]
@@ -31,6 +44,9 @@ use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
 pub(super) use host_pick::{HostPick, host_picker_for};
+pub(super) use log_view::RunLogView;
+pub(super) use rollback::RollbackConfirm;
+pub(super) use services::ServiceDialog;
 pub(super) use skills::PlacementReview;
 use std::collections::BTreeSet;
 
@@ -111,6 +127,10 @@ pub(super) struct MarketplaceFrame {
     host_picker: Entity<SelectView>,
     /// The status word beside the picker, for the host it shows.
     host_status: &'static str,
+    /// The Services section's rows of the picked host.
+    services: crate::model::marketplace::HostedServicesView,
+    /// A refused disconnect, with the service it concerns.
+    service_error: Option<(String, String)>,
     /// The Skills section's host and what it shows for that host (SKL-01).
     skills: skills::SkillsSection,
     /// Whether the item page shows Update: a host program MassOrca installed, and the service offers updates.
@@ -145,6 +165,8 @@ pub(super) fn frame(
         host_note: shell.picked_note(cx),
         host_picker: shell.marketplace_host_select.clone(),
         host_status: shell.picker_status(cx),
+        services: shell.marketplace_services.clone(),
+        service_error: shell.marketplace_service_error.clone(),
         skills: skills::section_of(shell, cx),
         updatable: match page {
             MarketplacePage::Item(id) => shell.updatable_program(id, cx).is_some(),
@@ -159,7 +181,14 @@ pub(super) fn page(frame: MarketplaceFrame, window: &mut Window, cx: &mut App) -
     let nav = catalogue::nav_column(&frame, window, cx);
     let content = match frame.page {
         MarketplacePage::Item(id) => item::item_page(&frame, id, cx),
-        page => catalogue::catalogue_view(&frame, page, cx),
+        page @ MarketplacePage::Category(ItemKind::Service) => div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_6))
+            .child(catalogue::catalogue_view(&frame, page, window, cx))
+            .child(services::section(&frame, cx))
+            .into_any_element(),
+        page => catalogue::catalogue_view(&frame, page, window, cx),
     };
     let content = match &frame.host_note {
         Some(note) => div()
@@ -203,6 +232,9 @@ impl Shell {
             self.read_skills(&target, false);
         }
         self.model.open_page(Page::Marketplace(page));
+        if page == MarketplacePage::Category(ItemKind::Service) {
+            self.read_hosted_services(cx);
+        }
         cx.notify();
     }
 
