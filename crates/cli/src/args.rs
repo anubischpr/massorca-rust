@@ -514,7 +514,8 @@ pub enum PairCommand {
 #[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
 pub struct PairCancelArgs {
     /// The offer id `pair offer` printed.
-    #[arg(value_name = "OFFER-ID")]
+    // Ids are base64url and may start with '-'.
+    #[arg(value_name = "OFFER-ID", allow_hyphen_values = true)]
     pub offer_id: Option<String>,
     /// Retires every pending offer of the service.
     #[arg(long)]

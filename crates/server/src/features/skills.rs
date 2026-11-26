@@ -32,6 +32,8 @@ pub(crate) struct SkillScans {
     options: DiscoveryOptions,
     scanner: Scanner,
     state: Arc<Mutex<ScanState>>,
+    /// Held while a placement reads and rewrites the placement record, so two requests never interleave.
+    pub(crate) placements: Arc<Mutex<()>>,
 }
 
 impl fmt::Debug for SkillScans {
@@ -70,7 +72,15 @@ impl SkillScans {
             options,
             scanner,
             state: Arc::new(Mutex::new(ScanState::default())),
+            placements: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// The home folder skills are read from and placed in; a service without one has nothing to scan.
+    pub(crate) fn home(&self) -> Result<PathBuf, ErrorBody> {
+        self.options.home.clone().ok_or_else(|| {
+            ErrorBody::new(codes::INTERNAL, "there is no home folder to scan skills in")
+        })
     }
 
     /// The scan of `request`. A caller joins a scan of the same request that is already running, `refresh` or not, so
@@ -172,24 +182,29 @@ async fn discover(
         .iter()
         .map(core_kind)
         .collect::<Result<Vec<_>, _>>()?;
-    let domain = shared(&ctx);
+    let request = discovery_request(&ctx, source_kinds).await?;
+    let scan = ctx.state.skills.scan(request, params.refresh).await?;
+    let show_paths = authorize(&ctx.principal, Permission::HostAdmin).is_ok();
+    Ok(to_wire(&scan, show_paths))
+}
+
+/// What one scan reads on this host: the home folder, the environment overrides and every registered project.
+pub(crate) async fn discovery_request(
+    ctx: &RequestCtx,
+    source_kinds: Vec<core::SkillSourceKind>,
+) -> Result<DiscoveryRequest, ErrorBody> {
+    let domain = shared(ctx);
     let projects = blocking(move || domain.list_projects()).await?;
     let scans = &ctx.state.skills;
-    let home = scans.options.home.clone().ok_or_else(|| {
-        ErrorBody::new(codes::INTERNAL, "there is no home folder to scan skills in")
-    })?;
-    let request = DiscoveryRequest {
-        home,
+    Ok(DiscoveryRequest {
+        home: scans.home()?,
         folders: projects
             .iter()
             .map(|project| PathBuf::from(&project.path))
             .collect(),
         env: scans.options.env.clone(),
         source_kinds,
-    };
-    let scan = scans.scan(request, params.refresh).await?;
-    let show_paths = authorize(&ctx.principal, Permission::HostAdmin).is_ok();
-    Ok(to_wire(&scan, show_paths))
+    })
 }
 
 fn core_kind(kind: &wire::SkillSourceKind) -> Result<core::SkillSourceKind, ErrorBody> {

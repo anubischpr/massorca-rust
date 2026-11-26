@@ -28,8 +28,8 @@ use super::{
 use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
-    ApprovalAnswer, ChatAdapter, ChatChanged, ClaudeAdapter, JournalOp, KILL_GRACE, approval_key,
-    claude, version,
+    ApprovalAnswer, ChatAdapter, ChatChanged, ClaudeAdapter, CodexAdapter, JournalOp, KILL_GRACE,
+    approval_key, claude, codex, version,
 };
 use crate::kind::KindDecl;
 use crate::launch::LaunchPlan;
@@ -182,7 +182,7 @@ impl Agents {
         plan: LaunchPlan,
         workspace_id: &str,
         cwd: &str,
-        adapter: Box<dyn ChatAdapter>,
+        mut adapter: Box<dyn ChatAdapter>,
     ) -> Result<Arc<ChatRun>, AgentError> {
         if !plan.files.is_empty() {
             crate::credentials::create_agents_dir(self.profile_dir())?;
@@ -251,6 +251,16 @@ impl Agents {
                 format!("the chat start of session {session} failed on purpose (test)"),
             ));
         }
+        // A dialect's handshake goes before any prompt (decision 0173).
+        let opening = lock(&run.adapter).opening();
+        if !opening.is_empty() {
+            run.pipe.write(&opening).map_err(|error| {
+                AgentError::new(
+                    codes::AGENT_NOT_LIVE,
+                    format!("the chat run of session {session} did not take its opening: {error}"),
+                )
+            })?;
+        }
         if let Some(text) = prompt {
             self.send_chat_text(session, run, text)?;
         }
@@ -285,17 +295,20 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<usize, AgentError> {
-        let bytes = lock(&run.adapter).encode_prompt(text);
         let mut refused = false;
+        let mut bytes = Vec::new();
         self.change_journal(session, |writer| {
             if !writer.busy() {
-                return writer.start_turn(text).map(drop);
-            }
-            if force {
+                writer.start_turn(text)?;
+            } else if force {
                 // Shown at once; its turn ends with the running one (decision 0101, D7).
-                return writer.hold_turn(text).map(drop);
+                writer.hold_turn(text)?;
+            } else {
+                refused = true;
+                return Ok(());
             }
-            refused = true;
+            // Only a prompt the journal took is encoded: an adapter that holds prompts keeps no trace of a refused one.
+            bytes = lock(&run.adapter).encode_prompt(text);
             Ok(())
         })?;
         if refused {
@@ -572,10 +585,12 @@ impl Agents {
             }],
         };
         let mut sends = Vec::new();
+        let mut learned = None;
         let applied = self.change_journal(session, |writer| {
             for op in ops {
                 match op {
                     JournalOp::Send { bytes } => sends.push(bytes),
+                    JournalOp::LearnRef { agent_ref } => learned = Some(agent_ref),
                     op => writer.apply(op)?,
                 }
             }
@@ -584,11 +599,39 @@ impl Agents {
         if let Err(error) = applied {
             tracing::warn!(session = %session, code = error.code, "a chat line could not be journaled");
         }
+        if let Some(agent_ref) = learned
+            && let Err(error) = self.learn_chat_ref(session, agent_ref)
+        {
+            tracing::warn!(session = %session, code = error.code, "a chat run's conversation id could not be kept");
+        }
         for bytes in sends {
             if run.pipe.write(&bytes).is_err() {
                 tracing::warn!(session = %session, "a chat run did not take an answer the adapter wrote");
             }
         }
+    }
+
+    /// Keeps the conversation id a chat run named as the session's agent ref, when it has none (decision 0173): the same
+    /// rule a hook report's learned ref follows, so a fork never keeps its source's.
+    fn learn_chat_ref(&self, session: &str, agent_ref: String) -> Result<(), AgentError> {
+        let live = lock(&self.inner.status);
+        let Some(row) = self.store().get_agent_session(session)? else {
+            return Ok(());
+        };
+        if row.agent_ref.is_some() {
+            return Ok(());
+        }
+        let Some(kept) = self.kept_learned_ref(&row, Some(agent_ref))? else {
+            return Ok(());
+        };
+        let changed = self
+            .store()
+            .set_agent_session_ref_if_unset(session, &kept)?;
+        drop(live);
+        if changed && let Ok(shown) = self.show(session) {
+            self.notify(Change::Updated(Box::new(shown)));
+        }
+        Ok(())
     }
 
     /// A chat run's end: recorded through the session's exit path, then its open turn ends (`interrupted` when the run
@@ -839,6 +882,7 @@ fn chat_adapter_for(decl: &KindDecl, program: &Path) -> Result<Box<dyn ChatAdapt
     }
     match decl.chat.as_ref().map(|chat| chat.adapter.as_str()) {
         Some(claude::ADAPTER_NAME) => Ok(Box::new(ClaudeAdapter::new())),
+        Some(codex::ADAPTER_NAME) => Ok(Box::new(CodexAdapter::new())),
         _ => Err(chat_unsupported(decl, Some(&chat))),
     }
 }

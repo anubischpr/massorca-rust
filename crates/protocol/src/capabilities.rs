@@ -91,10 +91,15 @@ pub const TEAM_ROOM_REPLIES: &str = "team-room/3";
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).
 pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// Updating a host program a tool package installed (`extensions.program_update_review`, `extensions.program_update`,
+/// decision 0151).
+pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
+/// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
+pub const SKILLS_PLACE: &str = "skills-place/1";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
