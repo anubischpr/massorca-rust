@@ -1,6 +1,7 @@
 //! A paired host kept in reach (REM-07): one connection held open, and reconnected with the network backoff
 //! (decision 0040) when it drops. Losing contact says nothing about whether the host or its work stopped. A refusal,
-//! a changed server key or any other final failure is not retried until `reconnect` asks.
+//! a changed server key or any other final failure is not retried until `reconnect` asks. Everything else that talks
+//! to the host borrows the link's connection through a [`LiveWatch`] instead of dialing its own.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -68,24 +69,79 @@ impl<H: HostStorage + Clone + 'static> Connect for HostDial<H> {
 }
 
 /// One host's live link: a task that keeps it connected and publishes its state. Dropping it stops the task and
-/// closes the connection.
+/// closes the connection, for every borrower too.
 #[derive(Debug)]
 pub struct LiveHost {
     state: watch::Receiver<LiveState>,
+    connection: watch::Receiver<Option<Client>>,
     nudge: Arc<Notify>,
     task: JoinHandle<()>,
+}
+
+/// A view of one link that its borrowers keep: the link's state and its connection while it has one. Every receiver
+/// closes once the link stops.
+#[derive(Clone, Debug)]
+pub struct LiveWatch {
+    state: watch::Receiver<LiveState>,
+    connection: watch::Receiver<Option<Client>>,
+}
+
+impl LiveWatch {
+    /// The link's connection once its attempt under way has settled, or why there is none. A stopped link is
+    /// `Disconnected`. The connection taken counts as seen by [`LiveWatch::changed`].
+    pub async fn client(&mut self) -> Result<Client, Arc<ClientError>> {
+        let settled = self
+            .state
+            .wait_for(|state| !matches!(state, LiveState::Connecting))
+            .await
+            .map(|state| state.clone());
+        let connection = self.connection.borrow_and_update().clone();
+        match settled {
+            Ok(LiveState::Connected { .. }) => {
+                connection.ok_or_else(|| Arc::new(ClientError::Disconnected))
+            }
+            Ok(LiveState::Unreachable { error, .. } | LiveState::Ended { error }) => Err(error),
+            Ok(LiveState::Connecting) | Err(_) => Err(Arc::new(ClientError::Disconnected)),
+        }
+    }
+
+    /// The connection now, if the link has one, marked as seen.
+    pub fn current(&mut self) -> Option<Client> {
+        self.connection.borrow_and_update().clone()
+    }
+
+    /// Waits until the link's connection changes from the one last seen: lost, or replaced. `false` once the link has
+    /// stopped. Cancel-safe.
+    pub async fn changed(&mut self) -> bool {
+        self.connection.changed().await.is_ok()
+    }
 }
 
 impl LiveHost {
     /// Starts the link on the current Tokio runtime; the first attempt runs at once.
     pub fn start<C: Connect + Send + 'static>(connect: C, backoff: Backoff) -> Self {
         let (state, receiver) = watch::channel(LiveState::Connecting);
+        let (connection, held) = watch::channel(None);
         let nudge = Arc::new(Notify::new());
-        let task = tokio::spawn(run(connect, backoff, state, Arc::clone(&nudge)));
+        let link = Link {
+            state,
+            connection,
+            nudge: Arc::clone(&nudge),
+        };
+        let task = tokio::spawn(run(connect, backoff, link));
         Self {
             state: receiver,
+            connection: held,
             nudge,
             task,
+        }
+    }
+
+    /// A view of this link for a borrower of its connection.
+    pub fn watch(&self) -> LiveWatch {
+        LiveWatch {
+            state: self.state.clone(),
+            connection: self.connection.clone(),
         }
     }
 
@@ -109,21 +165,33 @@ impl LiveHost {
 impl Drop for LiveHost {
     fn drop(&mut self) {
         self.task.abort();
+        if let Some(client) = self.connection.borrow().as_ref() {
+            client.close();
+        }
     }
 }
 
-async fn run<C: Connect>(
-    mut connect: C,
-    mut backoff: Backoff,
+/// The task's side of a link.
+struct Link {
     state: watch::Sender<LiveState>,
+    connection: watch::Sender<Option<Client>>,
     nudge: Arc<Notify>,
-) {
+}
+
+async fn run<C: Connect>(mut connect: C, mut backoff: Backoff, link: Link) {
+    let Link {
+        state,
+        connection,
+        nudge,
+    } = link;
     loop {
         let error = match connect.connect().await {
             Ok(client) => {
                 // A request that came while the attempt ran is answered by this fresh connection.
                 consume(&nudge).await;
                 let server = &client.welcome().server;
+                // Lent before it is announced, so a borrower that sees `Connected` finds it.
+                connection.send_replace(Some(client.clone()));
                 state.send_replace(LiveState::Connected {
                     server: server.name.clone(),
                     version: server.version.clone(),
@@ -133,6 +201,9 @@ async fn run<C: Connect>(
                     () = client.closed() => false,
                     () = nudge.notified() => true,
                 };
+                connection.send_replace(None);
+                // Borrowers lose it too, so a reconnect never leaves a second connection open.
+                client.close();
                 drop(client);
                 if asked {
                     backoff.reset();
