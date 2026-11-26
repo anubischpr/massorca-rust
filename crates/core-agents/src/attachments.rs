@@ -12,8 +12,9 @@ use crate::sessions::AgentError;
 
 /// The most files one prompt sends (decision 0172).
 pub const MAX_ATTACHMENTS: usize = 10;
-/// The most bytes of one image a chat run sends (decision 0172), the largest image the Messages API takes per image.
-pub const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+/// The most bytes of one image a chat run sends (decision 0172). Its base64 form, which is what the API counts, stays under
+/// 5 MB, the per-image limit of Amazon Bedrock (the first-party API allows 10 MB).
+pub const MAX_IMAGE_BYTES: u64 = 3 * 1024 * 1024;
 /// The most bytes of any other file a prompt names (decision 0172).
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
@@ -325,6 +326,19 @@ mod tests {
             refused(root.path(), &["big.txt"]).code,
             codes::AGENT_ATTACHMENT_INVALID
         );
+    }
+
+    #[test]
+    fn an_image_over_its_size_cap_is_refused_and_one_at_the_cap_is_taken() {
+        let root = workspace(&[
+            ("over.png", MAX_IMAGE_BYTES as usize + 1),
+            ("at.png", MAX_IMAGE_BYTES as usize),
+        ]);
+        assert_eq!(
+            refused(root.path(), &["over.png"]).code,
+            codes::AGENT_ATTACHMENT_INVALID
+        );
+        assert!(resolve(root.path(), &names(&["at.png"])).is_ok());
     }
 
     #[test]
