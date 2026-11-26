@@ -5,6 +5,7 @@
 
 pub mod agents;
 pub mod catalogue;
+pub mod contributions;
 mod error;
 pub mod hooks;
 pub mod host;
