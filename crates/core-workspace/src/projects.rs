@@ -25,6 +25,32 @@ pub struct RemovedProject {
 }
 
 impl Workspaces {
+    /// The checkout that git reads of a project run in when no workspace is named: a git project's own directory. A
+    /// folder project has none (`git.not_a_repository`), and a missing directory is `path.not_found` (decision 0112).
+    pub fn project_checkout(&self, selector: &str) -> Result<PathBuf, DomainError> {
+        let project = self.resolve_project(selector)?;
+        if matches!(project.kind, StoreKind::Folder) {
+            return Err(DomainError::new(
+                codes::GIT_NOT_A_REPOSITORY,
+                format!(
+                    "project {:?} is a folder, not a git repository",
+                    project.name
+                ),
+            ));
+        }
+        let checkout = PathBuf::from(&project.path);
+        if !checkout.is_dir() {
+            return Err(DomainError::new(
+                codes::PATH_NOT_FOUND,
+                format!(
+                    "the directory of project {:?} is missing: {}",
+                    project.name, project.path
+                ),
+            ));
+        }
+        Ok(checkout)
+    }
+
     /// Registers a git repository (at its main worktree) or a folder. Without `kind`, a directory
     /// inside a repository is a git project and any other directory is a folder.
     pub fn add_project(&self, params: ProjectAddParams) -> Result<Project, DomainError> {

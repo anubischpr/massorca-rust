@@ -79,20 +79,26 @@ impl Repository {
     }
 }
 
+/// The git runner a caller gets: one without the `workspace` permission starts no program the repository names
+/// (decision 0078).
+pub(crate) fn git_runner(ctx: &RequestCtx) -> Git {
+    let git = ctx.state.workspaces.git().clone();
+    if ctx.principal.holds(Permission::Workspace) {
+        return git;
+    }
+    let hooks = ctx.state.profile.dir().join(EMPTY_HOOKS_DIR);
+    // A failure here surfaces as the runner's refusal: it checks the folder before every run.
+    let _ = std::fs::create_dir_all(&hooks);
+    git.for_untrusted_caller(hooks)
+}
+
 /// Resolves `selector` to a git work tree. A folder workspace, a missing directory and a workspace being removed are refused.
-/// A caller without `workspace` permission gets a runner that starts no program the repository names (decision 0078).
 pub(crate) async fn repository(
     ctx: &RequestCtx,
     selector: String,
 ) -> Result<Repository, ErrorBody> {
+    let git = git_runner(ctx);
     let workspaces = Arc::clone(&ctx.state.workspaces);
-    let mut git = workspaces.git().clone();
-    if !ctx.principal.holds(Permission::Workspace) {
-        let hooks = ctx.state.profile.dir().join(EMPTY_HOOKS_DIR);
-        // A failure here surfaces as the runner's refusal: it checks the folder before every run.
-        let _ = std::fs::create_dir_all(&hooks);
-        git = git.for_untrusted_caller(hooks);
-    }
     let workspace = blocking(move || {
         workspaces
             .show_workspace(&selector)

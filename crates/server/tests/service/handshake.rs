@@ -48,6 +48,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::EXTENSIONS_LOG,
             capabilities::EXTENSIONS_ROLLBACK,
             capabilities::EXTENSIONS,
+            capabilities::GIT_PROJECT_BRANCHES,
             capabilities::GIT,
             capabilities::HOST,
             capabilities::NETWORK,

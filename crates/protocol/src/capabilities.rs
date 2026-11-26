@@ -72,6 +72,8 @@ pub const AGENT_MODELS: &str = "agent-models/1";
 /// one-shot run of the kind.
 pub const AGENT_TITLE: &str = "agent-title/1";
 pub const GIT: &str = "git/1";
+/// `project` on `git.branches`: a git project's own checkout, listed with no workspace.
+pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).

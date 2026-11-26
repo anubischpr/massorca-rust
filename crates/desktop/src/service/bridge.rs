@@ -1245,7 +1245,12 @@ fn spawn_call(
         Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .git_branches(
+                        &massorca_protocol::methods::git::branch::GitBranchesParams {
+                            workspace: Some(workspace),
+                            project: None,
+                        },
+                    )
                     .await
                     .map(|listed| {
                         listed

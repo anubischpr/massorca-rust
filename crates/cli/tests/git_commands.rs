@@ -28,6 +28,37 @@ fn workspace(sandbox: &Sandbox) -> PathBuf {
 }
 
 #[test]
+fn git_branches_with_a_project_lists_its_checkout_with_no_workspace() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let repo_text = repo.to_string_lossy().into_owned();
+    let root_text = sandbox.home().join("ws").to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "project",
+            "add",
+            &repo_text,
+            "--workspaces-root",
+            &root_text,
+        ],
+    );
+
+    let listed = sandbox.json_ok("default", &["git", "branches", "--project", "repo"]);
+    assert_eq!(listed["branches"][0]["current"], true);
+    assert_eq!(listed["branches"].as_array().expect("branches").len(), 1);
+    let text = sandbox
+        .run("default", &["git", "branches", "--project", "repo"])
+        .success();
+    assert!(
+        stdout_text(&text).starts_with("* "),
+        "{}",
+        stdout_text(&text)
+    );
+}
+
+#[test]
 fn status_reports_changes_as_json_and_text() {
     let sandbox = Sandbox::new();
     let dir = workspace(&sandbox);

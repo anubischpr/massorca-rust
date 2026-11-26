@@ -4,6 +4,7 @@ use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::branch::{
     self, GitBranch, GitBranchCreateParams, GitBranchDeleteParams, GitBranchDeleted,
     GitBranchRenameParams, GitBranchSwitchParams, GitBranchSwitched, GitBranches,
+    GitBranchesParams,
 };
 use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{
@@ -96,8 +97,11 @@ impl Client {
         self.call(diff::DIFF_FILE, params).await
     }
 
-    /// `git.branches`: the local branches, the current one first.
-    pub async fn git_branches(&self, params: &GitWorkspaceRef) -> Result<GitBranches, ClientError> {
+    /// `git.branches`: the local branches of a workspace's checkout or a project's, the current one first.
+    pub async fn git_branches(
+        &self,
+        params: &GitBranchesParams,
+    ) -> Result<GitBranches, ClientError> {
         self.call(branch::BRANCHES, params).await
     }
 
