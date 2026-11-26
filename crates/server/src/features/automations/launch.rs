@@ -1,0 +1,188 @@
+//! Starts an automation run's agent (decision 0125): the automation's prompt and agent, through the same agent start a
+//! task uses, in its project. A git project runs in one worktree kept for the automation, made on its first run, so runs
+//! never write in the person's own checkout and worktrees do not pile up; a folder project runs in its folder. The run
+//! gets no vault secrets and the agent's default permission mode.
+
+use std::collections::BTreeMap;
+
+use massorca_core_agents::{Agents, SecretGrant};
+use massorca_core_store::{AutomationRow, AutomationRunRow, Store, now_ms};
+use massorca_core_workspace::Workspaces;
+use massorca_protocol::methods::agents::AgentStartParams;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
+use massorca_protocol::{ErrorBody, codes};
+
+
+/// Why a run receives no vault secrets: an automation records no host-admin creator.
+const WITHHELD: &str =
+    "vault secrets do not go to automation runs: an automation records no host-admin creator";
+/// The name of a folder project's workspace when the project has none at its own path.
+const FOLDER_WORKSPACE: &str = "automations";
+
+/// Starts the agent of a stored dispatching run and records what happened on it: dispatched with its session, or failed
+/// with the reason. It never fails its caller. Returns the workspace it made, if any, so the caller can announce it.
+pub(super) fn dispatch(
+    store: &Store,
+    agents: &Agents,
+    workspaces: &Workspaces,
+    automation: &AutomationRow,
+    run: &AutomationRunRow,
+) -> Option<String> {
+    let (started, made) = match start(agents, workspaces, automation, run) {
+        Ok((session, workspace, made)) => (Ok((session, workspace)), made),
+        Err(error) => (Err(error), None),
+    };
+    match started {
+        Ok((session, workspace)) => {
+            record(|| {
+                store.mark_automation_run_dispatched(&run.id, &session, &workspace, now_ms())
+            });
+        }
+        Err(error) => {
+            record(|| store.fail_automation_run(&run.id, &error.code, &error.message, now_ms()));
+        }
+    }
+    made
+}
+
+/// Writes a run's state, trying once more when the write fails. A run still dispatching is failed at the next service
+/// start, so its state never lives only in the log.
+fn record(mut write: impl FnMut() -> Result<bool, massorca_core_store::StoreError>) {
+    for attempt in 1..=2 {
+        match write() {
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(
+                    attempt,
+                    "an automation run's state could not be saved: {error}"
+                );
+            }
+        }
+    }
+}
+
+/// The session and workspace of the started agent, and the workspace made for it when one was made.
+fn start(
+    agents: &Agents,
+    workspaces: &Workspaces,
+    automation: &AutomationRow,
+    run: &AutomationRunRow,
+) -> Result<(String, String, Option<String>), ErrorBody> {
+    let project_id = automation.project_id.as_deref().ok_or_else(|| {
+        ErrorBody::new(
+            codes::AUTOMATION_NO_PROJECT,
+            "the automation has no project",
+        )
+    })?;
+    let project = workspaces.show_project(project_id)?;
+    let (workspace, made) = place(workspaces, automation, &project)?;
+    let session = agents.start(
+        AgentStartParams {
+            workspace: Some(workspace.id.clone()),
+            kind: automation.agent_kind.clone(),
+            prompt: Some(automation.prompt.clone()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            read_only: false,
+            title: Some(automation.name.clone()),
+            cols: None,
+            rows: None,
+            // A retry of this run finds its session instead of starting a second one.
+            request_id: Some(format!("automation.run:{}", run.id)),
+            permission_mode: None,
+            model: None,
+            fast: None,
+            effort: None,
+        },
+        SecretGrant::Withhold(WITHHELD),
+    )?;
+    let made = made.then(|| workspace.id.clone());
+    Ok((session.id, workspace.id, made))
+}
+
+/// Where the automation's runs work, and whether this call made it.
+fn place(
+    workspaces: &Workspaces,
+    automation: &AutomationRow,
+    project: &Project,
+) -> Result<(Workspace, bool), ErrorBody> {
+    match project.kind {
+        ProjectKind::Git => {
+            let created = workspaces.create_workspace_once(WorkspaceCreateParams {
+                project: project.id.clone(),
+                name: worktree_name(&automation.id),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                refresh_base: false,
+                path: None,
+                request_id: Some(format!("automation.worktree:{}", automation.id)),
+                no_setup: false,
+                unique_name: false,
+                name_generated: false,
+            })?;
+            Ok((created.workspace, !created.repeated))
+        }
+        ProjectKind::Folder => folder(workspaces, project),
+        ProjectKind::Unknown => Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            format!(
+                "project {} is of a kind this host cannot run in",
+                project.name
+            ),
+        )),
+    }
+}
+
+/// The automation's worktree name: `automation-` and the end of its id, which is unique.
+fn worktree_name(automation_id: &str) -> String {
+    let tail: String = automation_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    let start = tail.len().saturating_sub(8);
+    format!("automation-{}", &tail[start..])
+}
+
+/// A folder project's workspace at the project's own path, made when it has none; shared by several writers.
+fn folder(workspaces: &Workspaces, project: &Project) -> Result<(Workspace, bool), ErrorBody> {
+    let found = workspaces
+        .list_workspaces(Some(&project.id))?
+        .into_iter()
+        .find(|workspace| workspace.path == project.path);
+    let (workspace, made) = match found {
+        Some(workspace) => (workspace, false),
+        None => {
+            let created = workspaces.create_workspace_once(WorkspaceCreateParams {
+                project: project.id.clone(),
+                name: FOLDER_WORKSPACE.to_owned(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                refresh_base: false,
+                path: None,
+                request_id: Some(format!("automation.folder:{}", project.id)),
+                no_setup: false,
+                unique_name: true,
+                name_generated: false,
+            })?;
+            (created.workspace, !created.repeated)
+        }
+    };
+    workspaces.share_writers(&workspace.id)?;
+    Ok((workspace, made))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worktree_name;
+
+    #[test]
+    fn the_worktree_is_named_after_the_end_of_the_automation_id() {
+        assert_eq!(
+            worktree_name("0192f3a4-7b1c-7e2d-9f00-1a2b3c4d5e6f"),
+            "automation-3c4d5e6f"
+        );
+    }
+}

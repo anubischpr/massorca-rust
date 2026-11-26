@@ -40,6 +40,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_SEEN,
             capabilities::AGENT_TITLE,
             capabilities::AGENTS,
+            capabilities::AUTOMATION_RUNS,
             capabilities::AUTOMATIONS,
             capabilities::BINARY_FRAMES,
             capabilities::CALENDAR,

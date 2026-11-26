@@ -1,9 +1,13 @@
-//! Scheduled automation definitions (decision 0123): `automation.create`, `list`, `show`, `update`, `rm`, `enable` and
-//! `disable` under capability `automations/1`. A definition is stored and listed here; no run is started.
+//! Scheduled automations: their definitions (decision 0123), `automation.create`, `list`, `show`, `update`, `rm`,
+//! `enable` and `disable` under capability `automations/1`; and their runs (decision 0125): the agent launch,
+//! `automation.run_now` and `automation.runs` under capability `automation-runs/1`.
 
 mod calls;
 mod definition;
+mod launch;
 mod occurrences;
+mod run_calls;
+mod runs;
 mod selectors;
 mod view;
 
@@ -73,6 +77,23 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             cap,
             Permission::Workspace,
             calls::disable,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::AUTOMATION_RUNS, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            automations::RUN_NOW,
+            capabilities::AUTOMATION_RUNS,
+            Permission::Workspace,
+            run_calls::run_now,
+        )?,
+        methods.register(
+            Owner::Core,
+            automations::RUNS,
+            capabilities::AUTOMATION_RUNS,
+            Permission::Read,
+            run_calls::runs,
         )?,
     ])
 }
