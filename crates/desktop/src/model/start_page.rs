@@ -467,8 +467,7 @@ mod tests {
         KindChat {
             supported,
             reason,
-            version: None,
-            range: None,
+            ..crate::service::fixtures::base_kind_chat()
         }
     }
 

@@ -113,14 +113,10 @@ pub(super) mod tests {
                 terms: None,
             },
             kinds: vec![KindView {
-                id: "claude".to_owned(),
-                readable: true,
                 program: vec!["claude".to_owned()],
                 args: vec!["--json".to_owned()],
                 env: vec!["CLAUDE_HOME".to_owned()],
-                credential_home_env: None,
-                own_credential_home: true,
-                credential_files: Vec::new(),
+                ..crate::service::fixtures::base_kind_view()
             }],
             mcp_servers: Vec::new(),
             cli: vec![CliPlan {

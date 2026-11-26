@@ -509,10 +509,9 @@ fn report_kind_chats(rig: &Rig, cx: &mut VisualTestContext, chats: Vec<(&str, Ki
 
 fn supported_chat() -> KindChat {
     KindChat {
-        supported: true,
-        reason: None,
         version: Some("2.2.0".to_owned()),
         range: Some(">=2.1.0, <2.3.0".to_owned()),
+        ..crate::service::fixtures::base_kind_chat()
     }
 }
 
@@ -520,8 +519,7 @@ fn unsupported_chat(reason: Option<ChatUnsupportedReason>) -> KindChat {
     KindChat {
         supported: false,
         reason,
-        version: None,
-        range: None,
+        ..crate::service::fixtures::base_kind_chat()
     }
 }
 
@@ -1577,7 +1575,7 @@ fn claude_with_models() -> AgentKind {
         label: label.into(),
         default,
         efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
-        fast: false,
+        ..crate::service::fixtures::base_kind_model_choice()
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.model = Some(KindModel {

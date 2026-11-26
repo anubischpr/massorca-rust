@@ -1126,6 +1126,49 @@ pub(crate) mod fixtures {
             fast: None,
         }
     }
+
+    /// Every `KindChat` field at its usual value; tests override the fields they vary.
+    pub fn base_kind_chat() -> massorca_protocol::methods::chat::KindChat {
+        massorca_protocol::methods::chat::KindChat {
+            supported: true,
+            reason: None,
+            version: None,
+            range: None,
+        }
+    }
+
+    /// Every `KindEffort` field at its usual value; tests override the fields they vary.
+    pub fn base_kind_effort() -> massorca_protocol::methods::agents::KindEffort {
+        massorca_protocol::methods::agents::KindEffort {
+            levels: Vec::new(),
+            default: None,
+        }
+    }
+
+    /// Every `KindModelChoice` field at its usual value; tests override the fields they vary.
+    pub fn base_kind_model_choice() -> massorca_protocol::methods::agents::KindModelChoice {
+        massorca_protocol::methods::agents::KindModelChoice {
+            id: String::new(),
+            label: String::new(),
+            default: false,
+            efforts: None,
+            fast: false,
+        }
+    }
+
+    /// Every `KindView` field at its usual value; tests override the fields they vary.
+    pub fn base_kind_view() -> massorca_protocol::methods::extensions::KindView {
+        massorca_protocol::methods::extensions::KindView {
+            id: "claude".to_owned(),
+            readable: true,
+            program: Vec::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            credential_home_env: None,
+            own_credential_home: true,
+            credential_files: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1392,10 +1435,9 @@ mod tests {
         let now = Instant::now();
         let mut state = StoreState::default();
         let claude = KindChat {
-            supported: true,
-            reason: None,
             version: Some("2.2.0".to_owned()),
             range: Some(">=2.1.0, <2.3.0".to_owned()),
+            ..crate::service::fixtures::base_kind_chat()
         };
         state.apply(
             StoreUpdate::AgentKindChatResync(BTreeMap::from([(

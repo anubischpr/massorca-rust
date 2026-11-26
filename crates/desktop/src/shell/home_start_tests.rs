@@ -42,10 +42,7 @@ fn offer_chat(rig: &Rig) {
         .send(StoreUpdate::AgentChatOffered(true))
         .expect("the store listens");
     let claude = KindChat {
-        supported: true,
-        reason: None,
-        version: None,
-        range: None,
+        ..crate::service::fixtures::base_kind_chat()
     };
     rig.updates
         .send(StoreUpdate::AgentKindChatResync(BTreeMap::from([(
