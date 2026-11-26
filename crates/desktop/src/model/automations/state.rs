@@ -24,6 +24,8 @@ pub struct AutomationsState {
     notice: Option<String>,
     /// The run table open under the list.
     history: Option<RunHistory>,
+    /// The service's `automation.changed` count this page last read after.
+    changes_seen: u64,
 }
 
 impl AutomationsState {
@@ -117,6 +119,14 @@ impl AutomationsState {
 
     pub fn set_notice(&mut self, notice: Option<String>) {
         self.notice = notice;
+    }
+
+    /// Takes note of the service's `automation.changed` count; returns whether it grew since the last note, so the page
+    /// reads again.
+    pub fn note_changes(&mut self, count: u64) -> bool {
+        let grew = count != self.changes_seen;
+        self.changes_seen = count;
+        grew
     }
 
     pub fn history(&self) -> Option<&RunHistory> {
@@ -239,6 +249,14 @@ mod tests {
         state.ask_delete("b".to_owned());
         state.cancel_delete();
         assert_eq!(state.delete_target(), None);
+    }
+
+    #[test]
+    fn a_grown_change_count_asks_for_one_read() {
+        let mut state = AutomationsState::default();
+        assert!(!state.note_changes(0));
+        assert!(state.note_changes(2));
+        assert!(!state.note_changes(2));
     }
 
     #[test]

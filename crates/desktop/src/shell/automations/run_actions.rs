@@ -1,16 +1,11 @@
 //! The Automations page's run actions on the shell (decision 0125): Run now, and the run table of one automation. The
-//! table is read when it opens and after a run now, and again every few seconds while one of its runs is going.
-
-use std::time::Duration;
+//! table is read when it opens, after a run now, and when the service says an automation changed.
 
 use gpui::Context;
 use massorca_protocol::methods::automations::{AutomationRun, AutomationRunList};
 
 use super::super::Shell;
 use crate::service::Refusal;
-
-/// How long the page waits before it reads a table whose run is going.
-const POLL_EVERY: Duration = Duration::from_secs(5);
 
 const NOT_CONNECTED: &str = "Connect to MassOrca to run automations.";
 
@@ -82,7 +77,6 @@ impl Shell {
                 .map(|list| list.runs)
                 .map_err(|refusal| refusal.message()),
         );
-        self.plan_runs_poll(id.to_owned(), cx);
         cx.notify();
     }
 
@@ -92,34 +86,33 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match answer {
-            Ok(run) => {
-                let id = run.automation_id.clone();
-                self.automations.put_run(run);
-                self.plan_runs_poll(id, cx);
-            }
+            Ok(run) => self.automations.put_run(run),
             Err(refusal) => self.automations.set_notice(Some(refusal.message())),
         }
         cx.notify();
     }
 
-    /// Reads the table again after [`POLL_EVERY`] while one of its runs is going and it is still open.
-    fn plan_runs_poll(&mut self, id: String, cx: &mut Context<Self>) {
-        let planned = self
-            .automations
-            .history_of(&id)
-            .is_some_and(|history| history.plan_poll());
-        if !planned {
+    /// Reads the list and the open run table again when the service announced an automation change since the last
+    /// read. Called on each render of the shell.
+    pub(super) fn follow_automation_changes(&mut self, cx: &mut Context<Self>) {
+        let count = self.store.read(cx).state().automation_changes;
+        if !self.automations.note_changes(count) || !self.automations.is_read() {
             return;
         }
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        if let Some(id) = self
+            .automations
+            .history()
+            .map(|history| history.automation().to_owned())
+        {
+            self.read_automation_runs(id, cx);
+        }
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(POLL_EVERY).await;
-            this.update(cx, |shell, cx| {
-                if let Some(history) = shell.automations.history_of(&id) {
-                    history.poll_done();
-                    shell.read_automation_runs(id, cx);
-                }
-            })
-            .ok();
+            let list = service.automation_list().await;
+            this.update(cx, |shell, cx| shell.automations_read(list, cx))
+                .ok();
         })
         .detach();
     }
