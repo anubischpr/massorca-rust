@@ -291,6 +291,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
                 permission_mode: None,
                 model: None,
                 effort: None,
+                fast: None,
             },
             true,
         )

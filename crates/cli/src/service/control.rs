@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ClientError};
 use massorca_profile::Profile;
-use massorca_protocol::methods::service::{GitStatus, ServiceInfo};
+use massorca_protocol::methods::service::{GitStatus, ServiceInfo, ToolInfo, ToolState};
 use serde::Serialize;
 
 use crate::connect::{connect, connect_local, connect_running};
@@ -52,6 +52,42 @@ pub async fn status(profile: &Profile, output: Output) -> Result<(), CliError> {
     };
     output.success(&status, &lines);
     Ok(())
+}
+
+/// Shows the developer tools on the service's host, one line each. The service detects them, so `--host` picks whose.
+pub async fn tools(
+    target: &Target,
+    autostart: bool,
+    refresh: bool,
+    output: Output,
+) -> Result<(), CliError> {
+    let list = connect(target, autostart)
+        .await?
+        .service_tools(refresh)
+        .await?;
+    let lines: Vec<String> = list.tools.iter().map(tool_line).collect();
+    output.success(&list, &lines);
+    Ok(())
+}
+
+/// One tool as `id: state version (path)`, with the version and the path only when the service reported them.
+fn tool_line(tool: &ToolInfo) -> String {
+    let state = match tool.state {
+        ToolState::Present => "present",
+        ToolState::Missing => "missing",
+        ToolState::TooOld => "too_old",
+        ToolState::Unknown => "unknown",
+        ToolState::Other => "other",
+    };
+    let mut line = format!("{}: {state}", tool.id);
+    if let Some(version) = &tool.version {
+        line.push(' ');
+        line.push_str(version);
+    }
+    if let Some(path) = &tool.path {
+        line.push_str(&format!(" ({path})"));
+    }
+    line
 }
 
 /// Shows the service's identity, starting the service first unless autostart is off.

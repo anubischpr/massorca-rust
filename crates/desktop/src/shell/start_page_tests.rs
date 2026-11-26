@@ -1581,6 +1581,7 @@ fn claude_with_models() -> AgentKind {
         label: label.into(),
         default,
         efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
+        fast: false,
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.model = Some(KindModel {

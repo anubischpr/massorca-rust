@@ -81,6 +81,7 @@ impl DataSource for SampleDataSource {
                 ProjectGroup {
                     icon: ProjectGlyph::Folder,
                     owner: None,
+                    plain_folder: false,
                     id: "massorca-rust".into(),
                     name: "massorca-rust".into(),
                     hosts: vec![
@@ -121,6 +122,7 @@ impl DataSource for SampleDataSource {
                 ProjectGroup {
                     icon: ProjectGlyph::Folder,
                     owner: None,
+                    plain_folder: false,
                     id: "datalake".into(),
                     name: "datalake".into(),
                     hosts: vec![HostGroup {

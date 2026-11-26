@@ -28,6 +28,7 @@ fn start_params() -> AgentStartParams {
         permission_mode: None,
         model: None,
         effort: None,
+        fast: None,
     }
 }
 

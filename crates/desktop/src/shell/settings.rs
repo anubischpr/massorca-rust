@@ -25,6 +25,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use super::Shell;
 use super::path_field::{PickKind, path_field};
 use crate::model::app_theme::ThemeChoice;
+use crate::model::git_availability::GitRow;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
@@ -62,6 +63,8 @@ pub(super) struct SettingsFrame<'a> {
     pub connection: ConnectionState,
     /// Each paired remote host by name, with the state its last check left (D-HO-07).
     pub hosts: Vec<(String, HostState)>,
+    /// This computer's Git as its service reported it on connect, for the Git row of Sources (GIT-01).
+    pub git: GitRow,
     pub shell: WeakEntity<Shell>,
     pub folder: &'a FolderSetting,
     pub folder_field: &'a Entity<TextField>,
@@ -251,7 +254,7 @@ fn group(
         if spec.body == RowBody::PairedHosts {
             let theme = *cx.theme();
             for (name, state) in &frame.hosts {
-                group = group.row(host_row(name, state, &theme));
+                group = group.row(host_row(name, state, &theme, frame));
             }
             continue;
         }
@@ -260,8 +263,8 @@ fn group(
     group.into_any_element()
 }
 
-/// One paired host: its name, the line its state leaves under it, and the state word as the control.
-fn host_row(name: &str, state: &HostState, theme: &Theme) -> AnyElement {
+/// One paired host: its name, the line its state leaves under it, the state word and Remove (D-HO-03).
+fn host_row(name: &str, state: &HostState, theme: &Theme, frame: &SettingsFrame<'_>) -> AnyElement {
     let selector = format!("settings-host-{name}");
     let row = SettingsRow::new(SharedString::from(selector.clone()), name.to_owned());
     let row = match &state.detail {
@@ -270,7 +273,16 @@ fn host_row(name: &str, state: &HostState, theme: &Theme) -> AnyElement {
     };
     div()
         .debug_selector(move || selector.clone())
-        .child(row.control(value_box(state.word, theme)))
+        .child(
+            row.control(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .child(value_box(state.word, theme))
+                    .child(super::host_remove::remove_button(name, &frame.shell)),
+            ),
+        )
         .into_any_element()
 }
 
@@ -354,6 +366,14 @@ fn row(
             )),
         ),
         RowBody::AddHost => (row, Some(add_host_button(id.clone(), frame))),
+        RowBody::GitAvailability => {
+            let key = frame.git.state.key();
+            let control = div()
+                .debug_selector(move || format!("settings-git-{key}"))
+                .child(value_box(frame.git.word.clone(), &theme))
+                .into_any_element();
+            (row.helper(frame.git.detail.clone()), Some(control))
+        }
         RowBody::PairingLink => (
             row,
             Some(page_link(

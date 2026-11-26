@@ -16,7 +16,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -53,6 +53,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                 name: project.name.clone(),
                 icon: ProjectGlyph::of(project.icon.as_ref()),
                 owner: remote_owner_of(project),
+                plain_folder: project.kind == ProjectKind::Folder,
                 hosts: vec![HostGroup {
                     name: LOCAL_HOST.to_owned(),
                     reach,
@@ -84,6 +85,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             name: NO_PROJECT_LABEL.to_owned(),
             icon: ProjectGlyph::Folder,
             owner: None,
+            plain_folder: false,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,

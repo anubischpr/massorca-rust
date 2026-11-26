@@ -20,6 +20,7 @@ pub mod diff_view;
 pub mod empty_state;
 pub mod error_state;
 pub mod extension_card;
+pub mod extension_manager_row;
 pub mod file_tree;
 pub mod icon_button;
 pub mod invocation_banner;

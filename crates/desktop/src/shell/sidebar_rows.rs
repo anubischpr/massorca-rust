@@ -62,6 +62,14 @@ fn project_row(id: SharedString, name: &str, icon: &ProjectGlyph) -> SidebarRow 
     }
 }
 
+/// The No Git marker of a folder project's row (WS-02): a warning badge with its word, found by its selector.
+fn no_git_marker(project_id: &str) -> impl IntoElement {
+    let selector = format!("sidebar-no-git-{project_id}");
+    div()
+        .debug_selector(move || selector)
+        .child(Badge::text("No Git").tone(BadgeTone::Warning))
+}
+
 /// One row of the project tree, identified by its position in the list.
 pub(super) fn tree_row(
     row: &TreeRow,
@@ -76,6 +84,7 @@ pub(super) fn tree_row(
             name,
             icon,
             owner,
+            plain_folder,
             expanded,
         } => {
             let (click_shell, click_id) = (shell.clone(), project_id.clone());
@@ -91,6 +100,11 @@ pub(super) fn tree_row(
                     let id = key_id.clone();
                     change(&key_shell, cx, move |shell| shell.toggle_project(&id));
                 });
+            let row = if *plain_folder {
+                row.trailing(no_git_marker(project_id))
+            } else {
+                row
+            };
             // The owner or org reads after the name, in the secondary text (A10).
             match owner {
                 Some(owner) => row.secondary(owner.clone()),

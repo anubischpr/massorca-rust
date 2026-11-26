@@ -21,7 +21,8 @@ Inventory IDs: none (shared primitive). Used across the inventory wherever a ver
 | primary | `accent.default` | `text.on-accent` | none | The one main action of a view or dialog. One per view. |
 | secondary | `surface.raised` | `text.primary` | `border.strong` | Other actions next to a primary in dialogs, sheets and forms. Never in a toolbar, a placement bar or a composer. |
 | ghost | none (sits on its surface) | `text.secondary` | none | Low-emphasis actions in rows, panels and toolbars. Always used for placement buttons (host, project, worktree), toolbar buttons and composer chips (A12): no border and no fill at rest, `fill.hover.<surface>` with a `text.primary` label on hover, `fill.selected.<surface>` while its menu is open, the focus ring on keyboard focus. |
-| danger | `status.danger.solid` | `status.danger.on` | none | Destructive action inside a confirm (Dialog, X-DLG-01), or a delete control. |
+| danger | `status.danger.solid` | `status.danger.on` | none | The confirming button inside a destructive Dialog (X-DLG-01): "Delete project", "Remove host". Only inside the confirm (ruling P5). |
+| danger-ghost | none (sits on its surface) | `status.danger.fg` | none | A quiet trigger for a destructive or irreversible action outside a confirm: "Delete project", "Delete routine", "Remove host", "Remove account", "Delete secret", "Uninstall" in the item page Danger zone. It always opens the destructive Dialog, where the solid `danger` button confirms. At most one per view, never the view's main action, and placed last (bottom of a page or section, right end of a row). Ruling P5, 2026-11-25. |
 
 | Size | Height | Horizontal padding | Icon | Label style |
 |---|---|---|---|---|
@@ -31,18 +32,20 @@ Inventory IDs: none (shared primitive). Used across the inventory wherever a ver
 
 Android: default height `size.touch.default` (44 dp) with a 48 dp hit target (`size.hit.touch`); the screen's single bottom primary action uses `size.touch.large` (48 dp).
 
+danger-ghost (ruling P5): same sizes as the other variants (desktop 28 px default, Android 44 dp with a 48 dp hit target); optional leading icon 16 px (`trash-2` to delete, `x` or `unplug` to remove); the focus ring is the standard `border.focus` ring, never red; on Android it is a text button in `status.danger.fg` with `status.danger.bg` as its ripple and pressed fill, no border. It uses only existing tokens.
+
 Icon placement: none, leading or trailing. An icon-only button is an IconButton, never a Button with an empty label.
 
 ## States
 
-| State | primary | secondary | ghost | danger |
-|---|---|---|---|---|
-| default | `accent.default` | `surface.raised`, `border.strong` | transparent, `text.secondary` | `status.danger.solid` |
-| hover | `accent.hover` | `fill.hover.raised` | `fill.hover.<surface>`, `text.primary` | `status.danger.hover` |
-| pressed | `accent.pressed` | `fill.pressed.raised` | `fill.pressed.<surface>` | `status.danger.pressed` |
+| State | primary | secondary | ghost | danger | danger-ghost |
+|---|---|---|---|---|---|
+| default | `accent.default` | `surface.raised`, `border.strong` | transparent, `text.secondary` | `status.danger.solid` | transparent, label and icon `status.danger.fg` |
+| hover | `accent.hover` | `fill.hover.raised` | `fill.hover.<surface>`, `text.primary` | `status.danger.hover` | fill `status.danger.bg`, label `status.danger.fg` |
+| pressed | `accent.pressed` | `fill.pressed.raised` | `fill.pressed.<surface>` | `status.danger.pressed` | fill `status.danger.bg`, 1 px border `status.danger.border` |
 | focus-visible | ring `border.focus` 2 px, offset `border.focus.offset` (2 px); on accent fills the inset ring uses `text.on-accent` when the ring would be clipped | same | same | same |
 | selected / active | not applicable (a toggling control is a Switch or SegmentedControl) | | | |
-| disabled | `fill.disabled`, label `text.disabled` | `border.disabled`, label `text.disabled` | label `text.disabled` | `fill.disabled`, label `text.disabled` |
+| disabled | `fill.disabled`, label `text.disabled` | `border.disabled`, label `text.disabled` | label `text.disabled` | `fill.disabled`, label `text.disabled` | label and icon `text.disabled`, no fill, no hover |
 | loading | label stays; icon slot shows a spinner (`size.icon.sm`, `duration.spinner`, `ease.linear`) after 200 ms; width fixed | same | same | same |
 | empty | not applicable | | | |
 | error | never shown on the button; the failure goes to the region (ErrorState, Banner or Toast). The button returns to rest. | | | |

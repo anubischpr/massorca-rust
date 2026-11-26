@@ -19,7 +19,8 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
-    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
+    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCancelParams,
+    PairingCancelled, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
@@ -32,7 +33,9 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
-use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+};
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
 use massorca_protocol::methods::workspaces::{
@@ -57,11 +60,12 @@ use massorca_core_remote::bootstrap::RemoteMachine;
 use super::host_sessions::{self, Followed};
 use super::host_terminal::{self, HostAttach};
 use super::hosted_services::{self, ServicesCommand};
-use super::hosts::{self, SshAdded, SshFailed, SshHost};
+use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
 use super::team_room::{self, RoomCommand};
+use super::team_routines::{self, RoutineCommand};
 use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -103,6 +107,11 @@ pub(crate) enum Command {
         params: massorca_protocol::methods::projects::ProjectUpdateParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
     },
+    /// `project.inspect`, answered on its oneshot: what a path would register as.
+    InspectProject {
+        params: ProjectInspectParams,
+        reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
+    },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
@@ -111,6 +120,8 @@ pub(crate) enum Command {
     Team(TeamCommand),
     /// A team's Conference room: a read, or a post answered on its oneshot (decision 0102).
     Room(RoomCommand),
+    /// A team routine call: a write answered on its oneshot, or a run history read.
+    Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
@@ -242,6 +253,16 @@ pub(crate) enum Command {
         ssh_args: Vec<String>,
         reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
     },
+    /// Forgets a paired host, revoking this device there first. Needs no connection to this computer's service.
+    RemoveHost {
+        name: String,
+        reply: oneshot::Sender<Result<HostRemoval, Refusal>>,
+    },
+    /// Counts what a paired host holds, for the remove confirm. Needs no connection to this computer's service.
+    CountHostLoss {
+        name: String,
+        reply: oneshot::Sender<Result<HostLoss, Refusal>>,
+    },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
         offer: String,
@@ -258,6 +279,10 @@ pub(crate) enum Command {
     CreateOffer {
         params: PairingCreateParams,
         reply: oneshot::Sender<Result<PairingCreated, Refusal>>,
+    },
+    CancelOffer {
+        params: PairingCancelParams,
+        reply: oneshot::Sender<Result<PairingCancelled, Refusal>>,
     },
     NetworkStatus {
         reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
@@ -395,6 +420,15 @@ impl ServiceHandle {
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
+    /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
+    pub async fn inspect_project(&self, path: String) -> Result<ProjectInspection, Refusal> {
+        self.ask(|reply| Command::InspectProject {
+            params: ProjectInspectParams { path },
+            reply,
+        })
+        .await
+    }
+
     /// `team.create`. The teams change through the read that follows the answer, not from the answer.
     pub async fn create_team(&self, params: TeamCreateParams) -> Result<Team, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::CreateTeam { params, reply }))
@@ -489,6 +523,15 @@ impl ServiceHandle {
         params: PairingCreateParams,
     ) -> Result<PairingCreated, Refusal> {
         self.ask(|reply| Command::CreateOffer { params, reply })
+            .await
+    }
+
+    /// `pairing.cancel`: retires a pending offer before it expires.
+    pub async fn cancel_offer(
+        &self,
+        params: PairingCancelParams,
+    ) -> Result<PairingCancelled, Refusal> {
+        self.ask(|reply| Command::CancelOffer { params, reply })
             .await
     }
 
@@ -724,6 +767,8 @@ impl Link {
             Command::RefreshHosts
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
+            | Command::RemoveHost { .. }
+            | Command::CountHostLoss { .. }
             | Command::AcceptOffer { .. } => {
                 hosts::spawn(
                     self.profile.clone(),
@@ -887,6 +932,9 @@ impl Link {
         self.emit(StoreUpdate::AgentNoProjectOffered(client.has_capability(
             massorca_protocol::capabilities::AGENT_NO_PROJECT,
         )));
+        self.emit(StoreUpdate::AgentImportDetectOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
+        ));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
@@ -915,6 +963,14 @@ impl Link {
         match client.config_list().await {
             Ok(list) => self.emit(StoreUpdate::ConfigResync(list.values)),
             Err(ClientError::Remote(_) | ClientError::Protocol(_)) => {}
+            Err(error) => return Err(error),
+        }
+        // Settings shows a refused read as unknown; only a lost link ends the connection.
+        match client.service_info().await {
+            Ok(info) => self.emit(StoreUpdate::ServiceGit(Ok(info.git))),
+            Err(error @ (ClientError::Remote(_) | ClientError::Protocol(_))) => {
+                self.emit(StoreUpdate::ServiceGit(Err(Refusal::from(&error))));
+            }
             Err(error) => return Err(error),
         }
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
@@ -967,6 +1023,14 @@ impl Link {
                             }
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                            }
+                            Some(Command::Routine(command)) => {
+                                team_routines::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.team_reads,
+                                );
                             }
                             Some(Command::Room(command)) => {
                                 team_room::spawn_call(client, command, &self.updates, &self.room_reads);
@@ -1256,6 +1320,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::InspectProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectInspectParams, ProjectInspection>(projects::INSPECT, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::ListConfig { reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1318,6 +1391,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::CancelOffer { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .pairing_cancel(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::NetworkStatus { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1358,6 +1440,7 @@ fn spawn_call(
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_)
         | Command::Team(_)
+        | Command::Routine(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1409,6 +1492,9 @@ fn refuse_while_down(command: Command) {
         Command::UpdateProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::InspectProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1417,6 +1503,7 @@ fn refuse_while_down(command: Command) {
         }
         Command::Team(command) => teams::refuse(command, refusal),
         Command::Room(command) => team_room::refuse(command, refusal),
+        Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
@@ -1431,6 +1518,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::CreateOffer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::CancelOffer { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {
@@ -1487,6 +1577,7 @@ mod tests {
             name: None,
             title: None,
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: None,
             permission_mode: None,

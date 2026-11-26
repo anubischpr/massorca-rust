@@ -650,6 +650,95 @@ const FfiConverterTypeProtocolInfo = (() => {
 })();
 
 /**
+ * A terminal as the app lists it.
+ */
+export type TerminalSummary = {
+  id: string;
+  workspaceId: string;
+  /**
+   * `live`, `unverifiable` or `exited`; `unknown` for a state this build does not know.
+   */
+  state: string;
+  title?: string;
+  cols: number;
+  rows: number;
+  /**
+   * The program the terminal runs.
+   */
+  shell: string;
+  cwd: string;
+  createdAtMs: bigint;
+  /**
+   * Attaching needs host-admin scope because the program got vault secrets.
+   */
+  holdsSecrets: boolean;
+};
+
+/**
+ * Generated factory for {@link TerminalSummary} record objects.
+ */
+export const TerminalSummary = (() => {
+  const defaults = () => ({});
+  const create = (() => {
+    return uniffiCreateRecord<TerminalSummary, ReturnType<typeof defaults>>(
+      defaults,
+    );
+  })();
+  return Object.freeze({
+    create,
+    new: create,
+    defaults: () => Object.freeze(defaults()) as Partial<TerminalSummary>,
+  });
+})();
+
+const FfiConverterTypeTerminalSummary = (() => {
+  type TypeName = TerminalSummary;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      return {
+        id: FfiConverterString.readFromCursor(c),
+        workspaceId: FfiConverterString.readFromCursor(c),
+        state: FfiConverterString.readFromCursor(c),
+        title: FfiConverterOptionalString.readFromCursor(c),
+        cols: FfiConverterUInt16.readFromCursor(c),
+        rows: FfiConverterUInt16.readFromCursor(c),
+        shell: FfiConverterString.readFromCursor(c),
+        cwd: FfiConverterString.readFromCursor(c),
+        createdAtMs: FfiConverterInt64.readFromCursor(c),
+        holdsSecrets: FfiConverterBool.readFromCursor(c),
+      };
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      FfiConverterString.writeIntoCursor(value.id, c);
+      FfiConverterString.writeIntoCursor(value.workspaceId, c);
+      FfiConverterString.writeIntoCursor(value.state, c);
+      FfiConverterOptionalString.writeIntoCursor(value.title, c);
+      FfiConverterUInt16.writeIntoCursor(value.cols, c);
+      FfiConverterUInt16.writeIntoCursor(value.rows, c);
+      FfiConverterString.writeIntoCursor(value.shell, c);
+      FfiConverterString.writeIntoCursor(value.cwd, c);
+      FfiConverterInt64.writeIntoCursor(value.createdAtMs, c);
+      FfiConverterBool.writeIntoCursor(value.holdsSecrets, c);
+    }
+    allocationSize(value: TypeName): number {
+      return (
+        FfiConverterString.allocationSize(value.id) +
+        FfiConverterString.allocationSize(value.workspaceId) +
+        FfiConverterString.allocationSize(value.state) +
+        FfiConverterOptionalString.allocationSize(value.title) +
+        FfiConverterUInt16.allocationSize(value.cols) +
+        FfiConverterUInt16.allocationSize(value.rows) +
+        FfiConverterString.allocationSize(value.shell) +
+        FfiConverterString.allocationSize(value.cwd) +
+        FfiConverterInt64.allocationSize(value.createdAtMs) +
+        FfiConverterBool.allocationSize(value.holdsSecrets)
+      );
+    }
+  }
+  return new FFIConverter();
+})();
+
+/**
  * Who this phone is on a host.
  */
 export type WhoAmI = {
@@ -3159,6 +3248,13 @@ export interface HostLike {
    */
   protocol(): ProtocolInfo;
   /**
+   * The terminals of every workspace, or only those of `workspace` (its id), live and exited.
+   */
+  terminals(
+    workspace: string | undefined,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<Array<TerminalSummary>>;
+  /**
    * Follows the agent sessions of the host, or only those of `workspace` (its id). The first item is every selected
    * session.
    */
@@ -3338,6 +3434,61 @@ export class Host extends UniffiAbstractObject implements HostLike {
       return FfiConverterTypeProtocolInfo.lift(__rb);
     } finally {
       nativeModule().rustbuffer_free(__rb);
+    }
+  }
+
+  /**
+   * The terminals of every workspace, or only those of `workspace` (its id), live and exited.
+   */
+  async terminals(
+    workspace: string | undefined,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<Array<TerminalSummary>> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_terminals(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterOptionalString.lower(
+              workspace,
+              nativeModule().rustbuffer_alloc,
+            ),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterSequenceTypeTerminalSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
     }
   }
 
@@ -4370,6 +4521,11 @@ const FfiConverterOptionalTypeTerminalEvent = new FfiConverterOptional(
   FfiConverterTypeTerminalEvent,
 );
 
+// FfiConverter for Array<TerminalSummary>
+const FfiConverterSequenceTypeTerminalSummary = new FfiConverterArray(
+  FfiConverterTypeTerminalSummary,
+);
+
 // FfiConverter for Array<WorkspaceSummary>
 const FfiConverterSequenceTypeWorkspaceSummary = new FfiConverterArray(
   FfiConverterTypeWorkspaceSummary,
@@ -4477,6 +4633,14 @@ function uniffiEnsureInitialized() {
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_massorca_client_ffi_checksum_method_host_protocol',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_terminals() !==
+    12318
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_terminals',
     );
   }
   if (
@@ -4657,6 +4821,7 @@ export default Object.freeze({
     FfiConverterTypeProtocolInfo,
     FfiConverterTypeStorageError,
     FfiConverterTypeTerminalEvent,
+    FfiConverterTypeTerminalSummary,
     FfiConverterTypeTerminalView,
     FfiConverterTypeWhoAmI,
     FfiConverterTypeWorkspaceSummary,
