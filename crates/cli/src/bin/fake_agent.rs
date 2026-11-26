@@ -1259,13 +1259,22 @@ fn codex_awaited(wanted: &str, message: &Value) -> bool {
     }
 }
 
+/// The file a script's `{"hold_open":"<name>"}` step names, in the script's folder: the thread's answer waits for it.
+fn held_open_gate(script: &str, folder: &Path) -> Option<PathBuf> {
+    script.lines().find_map(|line| {
+        let step: Value = serde_json::from_str(line).ok()?;
+        Some(folder.join(step["hold_open"].as_str()?))
+    })
+}
+
 /// The app-server mode (decision 0173): a stand-in for `codex app-server`. It answers `initialize`, `thread/start` (with
 /// [`CODEX_THREAD_ENV`]'s thread), `thread/resume`, `turn/start` (turns `turn-1`, `turn-2`, ...) and `turn/interrupt`
 /// itself as they arrive. Once a thread is open it plays [`CODEX_SCRIPT_ENV`]'s script, or
 /// [`CODEX_RESUME_SCRIPT_ENV`]'s after a resume: `{"await":"<method>"|"response"}` waits for such a line,
 /// `{"sleep_ms":N}` waits, and any other line is written as it is, with `$THREAD` and `$TURN` filled in. Every input line
 /// is appended to [`CODEX_STDIN_LOG_ENV`]'s file and the arguments to [`CODEX_ARGS_LOG_ENV`]'s. After the script it
-/// serves requests until its input ends, then exits 0.
+/// serves requests until its input ends, then exits 0. A `{"hold_open":"<name>"}` step keeps the `thread/start` answer
+/// back until the file `<name>` in the script's folder exists, so a test can act while the thread still opens.
 fn codex_app_server() -> ExitCode {
     let args: Vec<Value> = env::args().skip(1).map(Value::from).collect();
     append_to(CODEX_ARGS_LOG_ENV, &Value::from(args).to_string());
@@ -1282,11 +1291,23 @@ fn codex_app_server() -> ExitCode {
     });
     let mut codex = FakeCodex::default();
     let next = || input.recv().ok();
+    // A script's `hold_open` step keeps the thread's answer back until its file exists, so a test can act while it opens.
+    let gate = env::var_os(CODEX_SCRIPT_ENV).and_then(|path| {
+        let path = PathBuf::from(path);
+        let text = fs::read_to_string(&path).ok()?;
+        held_open_gate(&text, path.parent()?)
+    });
     // The script starts once a thread is open.
     while codex.thread.is_empty() {
         let Some(message) = next() else {
             return ExitCode::SUCCESS;
         };
+        if let Some(gate) = gate
+            .as_deref()
+            .filter(|_| message["method"] == "thread/start")
+        {
+            wait_for_file(gate);
+        }
         codex.serve(&message);
     }
     let script = (codex.resumed)
@@ -1311,6 +1332,8 @@ fn codex_app_server() -> ExitCode {
             }
         } else if let Some(wait) = parsed["sleep_ms"].as_u64() {
             thread::sleep(Duration::from_millis(wait));
+        } else if parsed["hold_open"].is_string() {
+            // Read before the thread opened, above: nothing to play here.
         } else {
             let mut stdout = io::stdout().lock();
             let _ = writeln!(stdout, "{}", codex.fill(step));

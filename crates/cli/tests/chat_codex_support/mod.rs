@@ -21,6 +21,17 @@ pub fn await_method(method: &str) -> Value {
     json!({ "await": method })
 }
 
+/// A script step that keeps the thread's answer back until the file `name` in the script's folder exists (the fake
+/// app-server's `hold_open`): a test sends prompts while the thread still opens, then creates the file with [`open_gate`].
+pub fn hold_open(name: &str) -> Value {
+    json!({ "hold_open": name })
+}
+
+/// The file `hold_open(name)` waits for, in the sandbox's scripts folder.
+pub fn open_gate(sandbox: &Sandbox, name: &str) -> PathBuf {
+    sandbox.home().join("scripts").join(name)
+}
+
 /// `item/started` or `item/completed` of `item` in the running turn.
 pub fn item(completed: bool, item: Value) -> Value {
     let method = if completed {

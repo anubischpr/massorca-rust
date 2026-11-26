@@ -203,3 +203,39 @@ fn a_stopped_codex_chat_resumes_the_thread_it_learned() {
     assert_eq!(runs[1][0], "app-server", "the resume is not a CLI argument");
     assert!(!runs[1].iter().any(|arg| arg == THREAD), "{runs:?}");
 }
+
+#[test]
+fn a_prompt_refused_while_the_thread_still_opens_never_reaches_the_app_server() {
+    let (sandbox, logs) = sandbox(
+        &[
+            hold_open("thread.open"),
+            await_method("turn/start"),
+            turn_started(),
+            turn_completed("completed"),
+        ],
+        &[],
+    );
+    let session = start_chat(&sandbox, "first");
+    // The first prompt's turn runs while the thread still opens, so the next prompt is refused, not kept for later.
+    let busy = sandbox
+        .run(
+            "default",
+            &with_json(&["agent", "prompt", &session, "second"]),
+        )
+        .failure();
+    assert_eq!(single_document(&busy)["error"]["code"], "agent.busy");
+    std::fs::write(open_gate(&sandbox, "thread.open"), "").expect("the thread opens");
+    runtime().block_on(async {
+        let client = connect(sandbox.home()).await;
+        let mut transcript = Transcript::open(&client, &session).await;
+        transcript
+            .until("the turn's end", |items| {
+                (turns(items) == [(TurnState::Completed, Some(Outcome::Success))]).then_some(())
+            })
+            .await;
+    });
+    // Only the first prompt reached the app-server: the refused one was never held for it.
+    let turns_sent = sent_with(&logs, "turn/start");
+    assert_eq!(turns_sent.len(), 1, "{:?}", logs.stdin_lines());
+    assert_eq!(turns_sent[0]["params"]["input"][0]["text"], "first");
+}

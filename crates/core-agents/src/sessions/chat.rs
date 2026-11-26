@@ -295,17 +295,20 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<usize, AgentError> {
-        let bytes = lock(&run.adapter).encode_prompt(text);
         let mut refused = false;
+        let mut bytes = Vec::new();
         self.change_journal(session, |writer| {
             if !writer.busy() {
-                return writer.start_turn(text).map(drop);
-            }
-            if force {
+                writer.start_turn(text)?;
+            } else if force {
                 // Shown at once; its turn ends with the running one (decision 0101, D7).
-                return writer.hold_turn(text).map(drop);
+                writer.hold_turn(text)?;
+            } else {
+                refused = true;
+                return Ok(());
             }
-            refused = true;
+            // Only a prompt the journal took is encoded: an adapter that holds prompts keeps no trace of a refused one.
+            bytes = lock(&run.adapter).encode_prompt(text);
             Ok(())
         })?;
         if refused {
