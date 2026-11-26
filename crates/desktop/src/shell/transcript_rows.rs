@@ -69,7 +69,7 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
                 truncated: false,
             },
         },
-        wire::ChatItemBody::Plan { entries } => TranscriptRow::Plan {
+        wire::ChatItemBody::Plan { entries, .. } => TranscriptRow::Plan {
             id,
             plan: Rc::new(Plan {
                 steps: entries
@@ -83,6 +83,7 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
             path,
             patch,
             truncated,
+            ..
         } => TranscriptRow::Diff {
             id,
             diff: Rc::new(DiffModel::new(parse_patch(
@@ -101,6 +102,7 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
                 truncated: approval.truncated,
                 state: approval_state(approval.state),
                 can_always: approval.can_always,
+                suggestions: suggestion_lines(&approval.suggestions),
             },
         },
         wire::ChatItemBody::Notice { level, text } => TranscriptRow::Notice {
@@ -174,6 +176,24 @@ fn turn_state(state: wire::TurnState) -> Option<TurnState> {
     }
 }
 
+/// What an Always answer writes, one line per rule and where it is written.
+fn suggestion_lines(suggestions: &[wire::ApprovalSuggestion]) -> Vec<SharedString> {
+    suggestions
+        .iter()
+        .flat_map(|suggestion| {
+            let place = match suggestion.destination.as_str() {
+                "session" => "for this session".to_owned(),
+                "localSettings" => "in this project's local settings".to_owned(),
+                other => format!("in {other}"),
+            };
+            suggestion
+                .rules
+                .iter()
+                .map(move |rule| SharedString::from(format!("{rule} {place}")))
+        })
+        .collect()
+}
+
 /// "Run command?" for a shell command, otherwise the tool's own name.
 fn approval_title(tool: &str) -> String {
     if tool == "Bash" {
@@ -236,6 +256,7 @@ mod tests {
             truncated: false,
             tool_use_id: None,
             can_always: true,
+            suggestions: Vec::new(),
             state,
             scope: None,
             settled_at_ms: None,
@@ -376,6 +397,7 @@ mod tests {
                             status: wire::PlanStatus::InProgress,
                         },
                     ],
+                    document: None,
                 },
             )],
             None,
@@ -469,6 +491,7 @@ mod tests {
                         text: "Read".to_owned(),
                         status: wire::PlanStatus::Unknown,
                     }],
+                    document: None,
                 },
             )],
             None,
@@ -542,5 +565,45 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn an_approval_lists_each_rule_an_always_answer_writes_with_where() {
+        let mut offered = approval("Bash", wire::ApprovalState::Pending);
+        offered.suggestions = vec![
+            wire::ApprovalSuggestion {
+                kind: "addRules".to_owned(),
+                rules: vec!["Bash(touch probe.txt)".to_owned()],
+                destination: "session".to_owned(),
+            },
+            wire::ApprovalSuggestion {
+                kind: "addRules".to_owned(),
+                rules: vec!["Read".to_owned(), "Edit".to_owned()],
+                destination: "localSettings".to_owned(),
+            },
+        ];
+        let transcript = transcript(
+            vec![item("ask", 1, wire::ChatItemBody::Approval(offered))],
+            None,
+        );
+
+        let rows = transcript_rows(&transcript);
+
+        let TranscriptRow::Approval { approval, .. } = &rows[0] else {
+            panic!("an approval row");
+        };
+        let lines: Vec<&str> = approval
+            .suggestions
+            .iter()
+            .map(|line| line.as_ref())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "Bash(touch probe.txt) for this session",
+                "Read in this project's local settings",
+                "Edit in this project's local settings",
+            ]
+        );
     }
 }

@@ -53,6 +53,8 @@ pub struct AppState {
     pub agents: Agents,
     /// Installed extensions of the profile (decision 0062). Other features register remove guards and cleanups here.
     pub extensions: Arc<Extensions>,
+    /// Finds and runs host programs, such as `glab` for a GitLab connection (decision 0097).
+    pub(crate) host_programs: Arc<crate::features::extension_process::HostPrograms>,
     /// Skill discovery's inputs and the scan it shares for ten seconds (SKL-01).
     pub(crate) skills: crate::features::skills::SkillScans,
     /// Keeps the agents' remove guard registered on `extensions` while the service runs: a package whose kind a live or
@@ -62,6 +64,9 @@ pub struct AppState {
     pub(crate) _kind_cleanup: massorca_core_extensions::hooks::HookHandle,
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
+    /// Every chat journal change (`Change::Chat`) and every forgotten session, for the chat streams (decision 0101). Apart
+    /// from `agent_changes`, so a fast stream of text never makes a session watcher fall behind.
+    pub chat_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,
     /// Listeners, pairing offers and open device connections; empty when the service is local only.
     pub network: NetworkState,

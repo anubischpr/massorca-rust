@@ -208,7 +208,8 @@ fn kinds_list_their_permission_modes_with_the_default_and_bypass_marked() {
         listed["permission_modes"],
         json!([
             { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false, "may_fall_back": false },
-            { "id": "wild", "label": "Wild", "bypass": true, "live_switch": true, "may_fall_back": false }
+            // A bypass mode declared without a tone is listed as a warning (decision 0163).
+            { "id": "wild", "label": "Wild", "bypass": true, "live_switch": true, "may_fall_back": false, "tone": "warning" }
         ]),
         "the modes are listed without their arguments"
     );

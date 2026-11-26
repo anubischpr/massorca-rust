@@ -7,6 +7,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
 use crate::extension::ExtensionCommand;
+use crate::marketplace::MarketplaceCommand;
 use crate::skills::SkillCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
@@ -153,6 +154,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Lists, connects and disconnects the hosted services, such as GitLab and Gitea, on a host.
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -167,6 +173,12 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Shows the git, forge CLI and shell tools on the service's host. Works with --host.
+    Tools {
+        /// Detects the tools again instead of answering from the service's last detection.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
     /// The local trace logs of the profile.
@@ -310,6 +322,26 @@ pub enum ProjectCommand {
         /// Project id, name or path.
         project: String,
     },
+    /// Shows a project's orca.yaml setup and archive scripts with their hashes and whether each is trusted.
+    Scripts {
+        /// Project id, name or path.
+        project: String,
+        /// Reads the scripts from this workspace's folder, the copy a create of its branch runs.
+        #[arg(long, value_name = "WORKSPACE")]
+        workspace: Option<String>,
+    },
+    /// Shows a project's orca.yaml setup and archive scripts with their hashes; `--hash` trusts the shown script with
+    /// that hash. A script runs only once its exact content is trusted, and a changed script needs trust again.
+    TrustScripts {
+        /// Project id, name or path.
+        project: String,
+        /// Reads the scripts from this workspace's folder, the copy a create of its branch runs.
+        #[arg(long, value_name = "WORKSPACE")]
+        workspace: Option<String>,
+        /// Trusts the shown script with this hash. Repeat it to trust both scripts.
+        #[arg(long = "hash", value_name = "HASH")]
+        hashes: Vec<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -359,6 +391,12 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the workspaces of delegated children first, deepest first, with the same checks and flags.
+        #[arg(long)]
+        with_children: bool,
+        /// Remove the worktree even when the project's archive script fails or times out.
+        #[arg(long)]
+        allow_failed_archive: bool,
     },
     /// Renames a workspace or sets its comment. A worktree's directory and branch keep their names.
     Update {
@@ -370,6 +408,19 @@ pub enum WorkspaceCommand {
         /// The comment shown on the workspace; an empty one clears it.
         #[arg(long)]
         comment: Option<String>,
+    },
+    /// Renames a workspace whose name the service chose, and its unpublished branch. The folder keeps its name.
+    Rename {
+        /// Workspace id, name or path.
+        workspace: String,
+        /// The new name; a taken one moves on to `NAME-2` .. `NAME-100`.
+        new_name: String,
+        /// Required: only a name the service chose (a generated or derived one) is renamed.
+        #[arg(long, required = true)]
+        from_generated: bool,
+        /// Refuse unless the worktree is still on this branch.
+        #[arg(long, value_name = "BRANCH")]
+        expected_branch: Option<String>,
     },
     /// Checks that a workspace's folder exists and is readable and, for a worktree, that git still lists it.
     Check {
@@ -408,6 +459,14 @@ pub struct WorkspaceCreateArgs {
     /// Do not run the setup script of the new worktree's `orca.yaml`.
     #[arg(long)]
     pub no_setup: bool,
+    /// When the name, its branch or its folder is taken, use the next free `NAME-2` .. `NAME-100` instead of refusing.
+    /// Not with `--branch`, `--existing-branch` or `--path`.
+    #[arg(long)]
+    pub unique: bool,
+    /// Marks NAME as derived by a script, not typed, so `workspace rename --from-generated` may replace it. Ignored with
+    /// `--branch` or `--existing-branch`. For scripts and tests.
+    #[arg(long)]
+    pub name_generated: bool,
 }
 
 #[derive(Debug, Args)]
@@ -451,6 +510,19 @@ pub enum PairCommand {
     Offer(PairOfferArgs),
     /// Pairs this computer with the server of an offer, and stores the server as a host.
     Accept(PairAcceptArgs),
+    /// Retires a pending offer before it expires, so a code that leaked no longer pairs.
+    Cancel(PairCancelArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
+pub struct PairCancelArgs {
+    /// The offer id `pair offer` printed.
+    #[arg(value_name = "OFFER-ID")]
+    pub offer_id: Option<String>,
+    /// Retires every pending offer of the service.
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -464,6 +536,14 @@ pub struct PairOfferArgs {
     /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
     #[arg(long, value_name = "SECS")]
     pub ttl: Option<u32>,
+    /// Address the new device dials, in place of the addresses the service is bound to; repeatable or
+    /// comma-separated, at most 8. HOST takes the listener's port. Use it behind NAT, in a container or for an
+    /// emulator (10.0.2.2 reaches the computer running an Android emulator).
+    #[arg(long = "address", value_name = "HOST[:PORT]", value_delimiter = ',')]
+    pub addresses: Vec<String>,
+    /// Leaves out the QR code printed after the offer in text output.
+    #[arg(long)]
+    pub no_qr: bool,
 }
 
 #[derive(Debug, Args)]

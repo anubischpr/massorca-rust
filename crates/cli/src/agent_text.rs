@@ -115,6 +115,9 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if session.released {
         lines.push("released: yes".to_owned());
     }
+    if session.archived {
+        lines.push("archived: yes".to_owned());
+    }
     // Why an exited session cannot resume (decision 0160); a live run is not resumed anyway.
     if session.execution.state == massorca_protocol::methods::terminals::TerminalState::Exited
         && let Some(resume) = session.resume.as_ref().filter(|resume| !resume.available)
@@ -135,6 +138,14 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
         lines.push(format!("mode: {mode}{state}"));
     } else if session.mode_source == Some(ModeSource::VendorDefault) {
         lines.push("mode: the CLI's default".to_owned());
+    }
+    // Fast mode is requested until something confirms the vendor took it; nothing does yet (decision 0165).
+    if let Some(fast) = session.fast.filter(|fast| fast.on) {
+        lines.push(if fast.confirmed {
+            "fast: on".to_owned()
+        } else {
+            "fast: requested".to_owned()
+        });
     }
     if let Some(pending) = &session.pending_permission_mode {
         lines.push(format!("next resume mode: {pending}"));
@@ -333,6 +344,7 @@ fn execution_with_keeping(session: &AgentSession) -> String {
     for (flag, word) in [
         (session.retained, "retained"),
         (session.released, "released"),
+        (session.archived, "archived"),
     ] {
         if flag {
             text.push_str(", ");
@@ -340,6 +352,54 @@ fn execution_with_keeping(session: &AgentSession) -> String {
         }
     }
     text
+}
+
+/// What `agent forget --preview` found (decision 0163): whether the session can be forgotten, and whether and why its
+/// workspace could be removed with it.
+pub fn forget_preview_lines(
+    preview: &massorca_protocol::methods::agents::AgentForgetPreview,
+) -> Vec<String> {
+    let yes_no = |flag: bool| if flag { "yes" } else { "no" };
+    let workspace = &preview.workspace;
+    let mut lines = vec![
+        format!("session: {}", preview.session),
+        format!("can forget: {}", yes_no(preview.can_forget)),
+    ];
+    if let Some(blocker) = &preview.forget_blocker {
+        lines.push(format!("forget blocked: {blocker}"));
+    }
+    let kind = match workspace.kind {
+        massorca_protocol::methods::workspaces::WorkspaceKind::Worktree => "worktree",
+        massorca_protocol::methods::workspaces::WorkspaceKind::Folder => "folder (its files stay)",
+        massorca_protocol::methods::workspaces::WorkspaceKind::Unknown => "unknown",
+    };
+    lines.push(format!("workspace: {} ({kind})", workspace.id));
+    if let Some(path) = &workspace.path {
+        lines.push(format!("path: {path}"));
+    }
+    if let Some(branch) = &workspace.branch {
+        lines.push(format!("branch: {branch}"));
+    }
+    lines.push(format!("removable: {}", yes_no(workspace.removable)));
+    if let Some(blocker) = &workspace.blocker {
+        lines.push(format!("blocked: {blocker}"));
+    }
+    lines.push(format!("uncommitted changes: {}", yes_no(workspace.dirty)));
+    lines.push(format!("untracked files: {}", yes_no(workspace.untracked)));
+    if workspace.ignored_files {
+        lines.push("ignored files: yes".to_owned());
+    }
+    for (what, ids) in [
+        ("other sessions", &workspace.other_sessions),
+        ("teams", &workspace.other_teams),
+        ("tasks", &workspace.other_tasks),
+        ("running terminals", &workspace.running_terminals),
+    ] {
+        if !ids.is_empty() {
+            lines.push(format!("{what}: {}", ids.join(", ")));
+        }
+    }
+    lines
 }
 
 /// The archived output of a released session, one line per line of its text (decision 0090), or why there is none.

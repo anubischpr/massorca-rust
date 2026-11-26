@@ -4,8 +4,8 @@ use massorca_protocol::methods::projects::{
     Project, ProjectIcon, ProjectIconSource, ProjectInspection, ProjectKind,
 };
 use massorca_protocol::methods::workspaces::{
-    UnregisteredWorktree, Workspace, WorkspaceCheck, WorkspaceKind, WorkspaceRemoved,
-    WorkspaceState,
+    UnregisteredWorktree, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceKind,
+    WorkspaceRemoved, WorkspaceState,
 };
 
 pub fn project_kind(kind: ProjectKind) -> &'static str {
@@ -115,6 +115,9 @@ pub fn project_details(project: &Project) -> Vec<String> {
         format!("path: {}", project.path),
         format!("workspaces root: {}", project.workspaces_root),
     ];
+    if let Some(owner) = &project.remote_owner {
+        lines.push(format!("owner: {owner}"));
+    }
     if let Some(base) = &project.base_ref {
         lines.push(format!("base: {base}"));
     }
@@ -137,11 +140,18 @@ pub fn project_table(projects: &[Project]) -> Vec<String> {
                     .map_or_else(|| "-".to_owned(), icon_text),
                 project_kind(project.kind).to_owned(),
                 project.base_ref.clone().unwrap_or_else(|| "-".to_owned()),
+                project
+                    .remote_owner
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
                 project.path.clone(),
             ]
         })
         .collect();
-    table(&["ID", "NAME", "ICON", "KIND", "BASE", "PATH"], rows)
+    table(
+        &["ID", "NAME", "ICON", "KIND", "BASE", "OWNER", "PATH"],
+        rows,
+    )
 }
 
 /// One line for a workspace that was just created.
@@ -165,6 +175,14 @@ pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
     let mut lines = vec![
         format!("id: {}", workspace.id),
         format!("name: {}", workspace.name),
+        format!(
+            "name generated: {}",
+            if workspace.name_generated {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
         format!("project: {}", workspace.project_id),
         format!("kind: {}", workspace_kind(workspace.kind)),
     ];
@@ -208,7 +226,13 @@ pub fn workspace_table(workspaces: &[Workspace]) -> Vec<String> {
 /// What a removal did: the workspace, the branch when it was deleted or kept, and a directory left in place.
 pub fn removal_lines(removed: &WorkspaceRemoved) -> Vec<String> {
     let workspace = &removed.workspace;
-    let mut lines = vec![format!("removed workspace {}", workspace.name)];
+    // Children were removed first, so their lines come first.
+    let mut lines: Vec<String> = removed
+        .removed_children
+        .iter()
+        .flat_map(removal_lines)
+        .collect();
+    lines.push(format!("removed workspace {}", workspace.name));
     if removed.branch_deleted {
         if let Some(branch) = &workspace.branch {
             lines.push(format!("deleted branch {branch}"));
@@ -218,6 +242,22 @@ pub fn removal_lines(removed: &WorkspaceRemoved) -> Vec<String> {
     }
     if removed.directory_kept {
         lines.push(format!("kept directory {}", workspace.path));
+    }
+    match &removed.archive {
+        None => {}
+        Some(WorkspaceArchive::Succeeded { terminal }) => {
+            lines.push(format!("archive script ran in terminal {terminal}"));
+        }
+        Some(WorkspaceArchive::Untrusted { reason, hash }) => {
+            lines.push(format!("archive skipped: {reason}"));
+            lines.push(format!("script hash: {hash}"));
+        }
+        Some(WorkspaceArchive::Failed { reason, .. }) => {
+            lines.push(format!("archive failed, removed anyway: {reason}"));
+        }
+        Some(WorkspaceArchive::Unknown) => {
+            lines.push("archive: an outcome this client does not know".to_owned());
+        }
     }
     lines
 }
@@ -247,13 +287,23 @@ pub fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Vec<String> {
     lines
 }
 
-/// One line for a worktree under a workspaces root that no workspace records. It is reported
-/// only: a create with the same name and branch adopts it.
+/// One line for a linked worktree that no workspace records, with git's lock and prune reasons. It is reported only:
+/// a create at its path on the same branch adopts it.
 pub fn unregistered_line(worktree: &UnregisteredWorktree) -> String {
-    format!(
-        "unregistered worktree {} (branch {}): not a workspace; a create with this name and branch adopts it",
-        worktree.path,
+    let mut parts = vec![format!(
+        "branch {}",
         worktree.branch.as_deref().unwrap_or("-")
+    )];
+    if let Some(reason) = &worktree.locked {
+        parts.push(reason_text("locked", reason));
+    }
+    if let Some(reason) = &worktree.prunable {
+        parts.push(reason_text("prunable", reason));
+    }
+    format!(
+        "unregistered worktree {} ({}): not a workspace; a create at this path on the same branch adopts it",
+        worktree.path,
+        parts.join(", ")
     )
 }
 

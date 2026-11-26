@@ -1,10 +1,11 @@
 //! The dialogs the Marketplace draws over its page: the sign-in of an agent account (D-AC-02) and
 //! the confirm before an item is uninstalled (teams-extensions-settings.md 7.4, decision 0059).
 
-use super::{InstallReview, UninstallConfirm};
+use super::{InstallReview, RollbackConfirm, RunLogView, UninstallConfirm};
 use crate::model::marketplace::{
-    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, SignInFlow, SignInStep,
+    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, RunRow, SignInFlow, SignInStep,
     offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
+    rollback_details, rollback_outcome, run_log_text, run_row,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -34,12 +35,21 @@ pub(in crate::shell) fn dialog(
     if let Some(dialog) = super::add_folder::dialog(shell, weak, cx) {
         return Some(dialog);
     }
+    if let Some(dialog) = super::services::dialog(shell, weak, cx) {
+        return Some(dialog);
+    }
     let snapshot = shell.model().marketplace();
     if let Some(flow) = &snapshot.sign_in {
         return Some(sign_in(shell, weak, snapshot, flow));
     }
     if let Some(review) = &shell.marketplace_review {
         return install_review(review, snapshot, weak, cx);
+    }
+    if let Some(view) = &shell.marketplace_run_log {
+        return Some(run_log(view, weak, cx));
+    }
+    if let Some(confirm) = &shell.marketplace_rollback {
+        return Some(rollback(confirm, weak, cx));
     }
     let confirm = shell.marketplace_uninstall.as_ref()?;
     uninstall(confirm, snapshot, weak, cx)
@@ -240,6 +250,148 @@ fn stage(step: &SignInStep) -> SignInStage {
             reason: reason.clone().into(),
         },
     }
+}
+
+/// The run log: each run on one line, its output under Show details when it wrote any, and Copy details for the whole log.
+fn run_log(view: &RunLogView, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let (close, dismiss) = (weak.clone(), weak.clone());
+    let mut body = div().flex().flex_col().gap(px(SPACE_2));
+    match &view.runs {
+        None => {
+            body = body.child(
+                div()
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(theme.palette.text.secondary)
+                    .child("Reading the run log."),
+            );
+        }
+        Some(Err(sentence)) => {
+            body = body.child(
+                div()
+                    .text_style(TYPE_BODY)
+                    .text_color(theme.palette.text.primary)
+                    .child(sentence.clone()),
+            );
+        }
+        Some(Ok(runs)) if runs.is_empty() => {
+            body = body.child(
+                div()
+                    .debug_selector(|| "marketplace-run-log-empty".to_owned())
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(theme.palette.text.secondary)
+                    .child("No runs recorded yet."),
+            );
+        }
+        Some(Ok(runs)) => {
+            for (index, run) in runs.iter().enumerate() {
+                let open = view.open_output.contains(&index);
+                body = body.child(run_entry(index, &run_row(run), open, weak, cx));
+            }
+            let text = run_log_text(runs);
+            body = body.child(
+                Button::new("marketplace-run-log-copy", "Copy details")
+                    .variant(ButtonVariant::Ghost)
+                    .on_click(move |_, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                    }),
+            );
+        }
+    }
+    Dialog::new("marketplace-run-log", format!("{} log", view.name))
+        .open(true)
+        .child(body)
+        .action("Close")
+        .on_action(move |_, cx| {
+            let _ = close.update(cx, |shell, cx| shell.close_run_log(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.close_run_log(cx));
+        })
+        .into_any_element()
+}
+
+/// One run of the log: its line, and a ghost Show details toggle for its output when it wrote any.
+fn run_entry(
+    index: usize,
+    row: &RunRow,
+    open: bool,
+    weak: &WeakEntity<Shell>,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let mut entry = div().flex().flex_col().gap(px(SPACE_1)).child(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(theme.palette.text.primary)
+            .child(row.summary()),
+    );
+    if !row.output.is_empty() {
+        let (toggle, label) = (
+            weak.clone(),
+            if open { "Hide details" } else { "Show details" },
+        );
+        entry = entry.child(
+            Button::new(format!("marketplace-run-{index}-output"), label)
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    let _ =
+                        toggle.update(cx, |shell, cx| shell.set_run_log_output(index, !open, cx));
+                }),
+        );
+        if open {
+            for line in &row.output {
+                entry = entry.child(
+                    div()
+                        .text_style(TYPE_MONO_SM)
+                        .text_color(theme.palette.text.secondary)
+                        .child(line.clone()),
+                );
+            }
+        }
+    }
+    entry.into_any_element()
+}
+
+/// The confirm before a rollback: one sentence on what it puts back, and the versions and consent under Show details.
+fn rollback(confirm: &RollbackConfirm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let outcome = rollback_outcome(&confirm.name, &confirm.version);
+    let (ok, dismiss, toggle) = (weak.clone(), weak.clone(), weak.clone());
+    let (open, lines) = (
+        confirm.details_open,
+        rollback_details(&confirm.from, &confirm.version, &confirm.consent),
+    );
+    let mut dialog = Dialog::new("marketplace-rollback", outcome.title)
+        .open(true)
+        .busy(confirm.sending)
+        .child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(outcome.sentence),
+        )
+        .child(details(
+            "marketplace-rollback-details",
+            open,
+            lines,
+            move |cx| {
+                let _ = toggle.update(cx, |shell, cx| shell.set_rollback_details(!open, cx));
+            },
+            cx,
+        ))
+        .action(outcome.button)
+        .cancel_label("Cancel")
+        .on_action(move |_, cx| {
+            let _ = ok.update(cx, |shell, cx| shell.confirm_marketplace_rollback(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.cancel_marketplace_rollback(cx));
+        });
+    if let Some(error) = &confirm.error {
+        dialog = dialog.error(error.clone());
+    }
+    dialog.into_any_element()
 }
 
 /// The confirm before an uninstall: it names the item and what is removed, and keeps the refusal.

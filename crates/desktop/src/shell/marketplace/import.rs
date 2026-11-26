@@ -2,14 +2,17 @@
 //! into a new account. The folder is only read, and the answer never carries a secret.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, WeakEntity, div};
+use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, div, px};
 use massorca_protocol::methods::agents::AccountsImportParams;
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::TYPE_BODY_SM;
+use massorca_ui::tokens::{SPACE_1, TYPE_BODY, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
-use crate::model::marketplace::{HostTarget, import_outcome};
+use crate::model::marketplace::{
+    FolderField, HostTarget, ImportCandidate, ImportCandidates, MANUAL_PLACEHOLDER, candidate_for,
+    folder_field, import_outcome, import_update_sentence,
+};
 use crate::shell::Shell;
 use crate::shell::path_field::{PickKind, path_field};
 
@@ -20,12 +23,32 @@ const NO_FOLDER: &str = "Enter the folder that holds the login files.";
 pub(in crate::shell) struct ImportDialog {
     kind: String,
     field: Entity<TextField>,
+    /// The placeholder the field shows while empty: the folder the import expects, else the manual prompt.
+    placeholder: String,
+    /// What the service detected for the kind; `None` while the capability is absent or not yet answered.
+    detection: Option<ImportCandidates>,
     error: Option<String>,
     /// An import is running, so Import waits for its answer.
     running: bool,
+    /// Redraws the dialog as the folder changes, so its status line follows what is typed.
+    _changes: Subscription,
+    /// The sentence of an import that updated an existing account, shown until Done.
+    done: Option<String>,
 }
 
 impl ImportDialog {
+    /// The candidate the service listed for this kind.
+    fn candidate(&self) -> Option<&ImportCandidate> {
+        self.detection
+            .as_ref()
+            .and_then(|found| candidate_for(found, &self.kind))
+    }
+
+    /// What the dialog shows for the folder `edited` holds: `None` when it opens, the typed text afterwards.
+    fn folder(&self, edited: Option<&str>) -> FolderField {
+        folder_field(self.detection.is_some(), self.candidate(), edited)
+    }
+
     #[cfg(test)]
     pub(in crate::shell) fn field(&self) -> &Entity<TextField> {
         &self.field
@@ -35,24 +58,51 @@ impl ImportDialog {
     pub(in crate::shell) fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
+
+    #[cfg(test)]
+    pub(in crate::shell) fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    #[cfg(test)]
+    pub(in crate::shell) fn detection(&self) -> Option<&ImportCandidates> {
+        self.detection.as_ref()
+    }
+}
+
+/// The folder field holding `text`, showing `placeholder` while empty, with the subscription that redraws the dialog.
+fn folder_entity(
+    cx: &mut Context<Shell>,
+    placeholder: &str,
+    text: &str,
+) -> (Entity<TextField>, Subscription) {
+    let field = cx.new(|cx| {
+        TextField::new(cx)
+            .label("Folder")
+            .placeholder(placeholder.to_owned())
+            .with_text(text)
+            .mono()
+    });
+    let changes = cx.observe(&field, |_, _, cx| cx.notify());
+    (field, changes)
 }
 
 impl Shell {
-    /// Opens the import dialog of `kind`, with an empty folder field.
+    /// Opens the import dialog of `kind`; its folder field fills in once the service answers what it detects.
     pub(super) fn open_account_import(&mut self, kind: &str, cx: &mut Context<Self>) {
-        let field = cx.new(|cx| {
-            TextField::new(cx)
-                .label("Folder")
-                .placeholder("Folder that holds the login files")
-                .mono()
-        });
+        let (field, changes) = folder_entity(cx, MANUAL_PLACEHOLDER, "");
         self.marketplace_accounts.import = Some(ImportDialog {
             kind: kind.to_owned(),
             field,
+            placeholder: MANUAL_PLACEHOLDER.to_owned(),
+            detection: None,
             error: None,
             running: false,
+            _changes: changes,
+            done: None,
         });
         cx.notify();
+        self.detect_account_import(kind, cx);
     }
 
     pub(super) fn close_account_import(&mut self, cx: &mut Context<Self>) {
@@ -60,8 +110,50 @@ impl Shell {
         cx.notify();
     }
 
-    /// Imports from the folder the field holds. The dialog stays open with the reason when nothing was kept, and the
-    /// rows follow the read the answer triggers.
+    /// Asks the service what it detects for `kind`. Without the capability the answer is none and the field stays manual.
+    fn detect_account_import(&self, kind: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        if !self.store.read(cx).state().agent_import_detect {
+            return;
+        }
+        let kind = kind.to_owned();
+        cx.spawn(async move |this, cx| {
+            let detection = service.accounts_import_candidates(&kind).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.finish_account_detection(&kind, detection, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Prefills the folder from what the service detected, unless the person has typed into the field already.
+    pub(in crate::shell) fn finish_account_detection(
+        &mut self,
+        kind: &str,
+        detection: Option<ImportCandidates>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.marketplace_accounts.import.as_mut() else {
+            return;
+        };
+        if dialog.kind != kind || detection.is_none() {
+            return;
+        }
+        dialog.detection = detection;
+        let shown = dialog.folder(None);
+        let typed = dialog.field.read(cx).text().to_owned();
+        let text = if typed.is_empty() { shown.value } else { typed };
+        let (field, changes) = folder_entity(cx, &shown.placeholder, &text);
+        dialog.field = field;
+        dialog._changes = changes;
+        dialog.placeholder = shown.placeholder;
+        cx.notify();
+    }
+
+    /// Imports from the folder the field holds, or from the detected folder while it is kept. The dialog stays open
+    /// with the reason when nothing was kept, and the rows follow the read the answer triggers.
     pub(super) fn submit_account_import(&mut self, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
@@ -72,8 +164,9 @@ impl Shell {
         if dialog.running {
             return;
         }
-        let from = dialog.field.read(cx).text().trim().to_owned();
-        if from.is_empty() {
+        let typed = dialog.field.read(cx).text().to_owned();
+        let from = dialog.folder(Some(typed.as_str())).from;
+        if from.as_deref().is_some_and(str::is_empty) {
             dialog.error = Some(NO_FOLDER.to_owned());
             cx.notify();
             return;
@@ -82,14 +175,17 @@ impl Shell {
         dialog.error = None;
         let params = AccountsImportParams {
             kind: dialog.kind.clone(),
-            from: Some(from),
+            from,
             label: None,
         };
+        let agent = agent_name(self, &params.kind);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = service.accounts_import(params).await;
             let outcome = match result {
-                Ok(imported) => import_outcome(&imported),
+                Ok(imported) => {
+                    import_outcome(&imported).map(|()| import_update_sentence(&imported, &agent))
+                }
                 Err(refusal) => Err(refusal.sentence()),
             };
             let _ = this.update(cx, |shell, cx| shell.finish_account_import(outcome, cx));
@@ -97,9 +193,19 @@ impl Shell {
         .detach();
     }
 
-    fn finish_account_import(&mut self, outcome: Result<(), String>, cx: &mut Context<Self>) {
+    fn finish_account_import(
+        &mut self,
+        outcome: Result<Option<String>, String>,
+        cx: &mut Context<Self>,
+    ) {
         match outcome {
-            Ok(()) => self.marketplace_accounts.import = None,
+            Ok(None) => self.marketplace_accounts.import = None,
+            Ok(Some(sentence)) => {
+                if let Some(dialog) = self.marketplace_accounts.import.as_mut() {
+                    dialog.running = false;
+                    dialog.done = Some(sentence);
+                }
+            }
             Err(reason) => {
                 if let Some(dialog) = self.marketplace_accounts.import.as_mut() {
                     dialog.running = false;
@@ -114,15 +220,31 @@ impl Shell {
 /// The import dialog, if one is open.
 pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Option<AnyElement> {
     let import = shell.marketplace_accounts.import.as_ref()?;
-    let agent = shell
-        .model()
-        .marketplace()
-        .items
-        .iter()
-        .find(|item| item.agent_kind.as_deref() == Some(import.kind.as_str()))
-        .map_or_else(|| import.kind.clone(), |item| item.name.clone());
+    let agent = agent_name(shell, &import.kind);
+    if let Some(sentence) = &import.done {
+        return Some(updated_dialog(&agent, sentence, weak, cx));
+    }
     let theme = *cx.theme();
+    let typed = import.field.read(cx).text().to_owned();
+    let folder = import.folder(Some(typed.as_str()));
     let (submit, dismiss) = (weak.clone(), weak.clone());
+    let mut folder_section = div().flex().flex_col().gap(px(SPACE_1)).child(path_field(
+        "account-import-browse",
+        "account-import-field",
+        weak.clone(),
+        &import.field,
+        PickKind::Folder,
+        matches!(shell.marketplace_pick.target(), HostTarget::Local),
+        !import.running,
+    ));
+    if let Some(status) = folder.status {
+        folder_section = folder_section.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(status),
+        );
+    }
     let mut dialog = Dialog::new("marketplace-import", format!("Import account to {agent}"))
         .open(true)
         .child(
@@ -133,15 +255,7 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
                     "Copies the agent's login files from a folder where the service runs into a new account. The folder is only read.",
                 ),
         )
-        .child(path_field(
-            "account-import-browse",
-            "account-import-field",
-            weak.clone(),
-            &import.field,
-            PickKind::Folder,
-            matches!(shell.marketplace_pick.target(), HostTarget::Local),
-            !import.running,
-        ))
+        .child(folder_section)
         .action(if import.running { "Importing..." } else { "Import" })
         .action_disabled(import.running)
         .cancel_label("Cancel")
@@ -155,4 +269,38 @@ pub(super) fn dialog(shell: &Shell, weak: &WeakEntity<Shell>, cx: &App) -> Optio
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
+}
+
+/// The name of the agent of `kind` as the Marketplace lists it, or the kind itself when no listed item offers it.
+fn agent_name(shell: &Shell, kind: &str) -> String {
+    shell
+        .model()
+        .marketplace()
+        .items
+        .iter()
+        .find(|item| item.agent_kind.as_deref() == Some(kind))
+        .map_or_else(|| kind.to_owned(), |item| item.name.clone())
+}
+
+/// The dialog after an import that updated an existing account: its sentence, and Done, which closes it.
+fn updated_dialog(agent: &str, sentence: &str, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let (done, dismiss) = (weak.clone(), weak.clone());
+    Dialog::new("marketplace-import", format!("Import account to {agent}"))
+        .open(true)
+        .child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(sentence.to_owned()),
+        )
+        .action("Done")
+        .cancel_label("Close")
+        .on_action(move |_, cx| {
+            let _ = done.update(cx, |shell, cx| shell.close_account_import(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.close_account_import(cx));
+        })
+        .into_any_element()
 }

@@ -122,6 +122,8 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created")
@@ -142,6 +144,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             request_id: None,
             permission_mode: None,
             model: None,
+            fast: None,
             effort: None,
         })
         .await
@@ -197,6 +200,8 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the second workspace is created");
@@ -209,6 +214,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
             name: None,
             title: Some("Check".to_owned()),
             read_only: true,
+            same_workspace: false,
             token: None,
             request_id: None,
             permission_mode: None,

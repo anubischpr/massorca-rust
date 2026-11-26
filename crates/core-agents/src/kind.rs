@@ -60,6 +60,10 @@ pub struct KindDecl {
     /// The `effort` a start may name, declared as `model` is (decision 0094).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<EffortDecl>,
+    /// Fast mode a start may ask for (decision 0165): the settings a run gets, and the choices of `model` that take it.
+    /// Absent means the kind has no fast mode, and a start that asks for it is refused with `agent.option_unsupported`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<FastDecl>,
     /// Inherited variables that no run of the kind and none of its account commands may see (decision 0160): markers
     /// that a process above the service left, such as another agent's session stamp. Names compare without case on
     /// Windows. A name the launch itself sets is set, not stripped.
@@ -77,10 +81,63 @@ pub struct KindDecl {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<InstructionsDecl>,
+    /// The kind's non-interactive form, which names a chat from its first prompt and reply (decision 0167). Absent means
+    /// the kind cannot name a chat by an agent run, and `agent.generate_title` refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oneshot: Option<OneshotDecl>,
+    /// How the kind runs as a structured chat (decision 0101). Absent means it runs in a terminal only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatDecl>,
+}
+
+/// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
+pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+
+/// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
+/// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
+/// with a major version above `max_major`, is refused rather than tried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatDecl {
+    /// One of [`CHAT_ADAPTERS`].
+    pub adapter: String,
+    /// The oldest supported version, `MAJOR.MINOR.PATCH`.
+    pub min_version: String,
+    /// The newest supported major version.
+    pub max_major: u64,
 }
 
 /// The placeholder of [`InstructionsDecl::args`] that the instruction text replaces.
 pub const TEXT_PLACEHOLDER: &str = "{text}";
+
+/// The placeholder of [`OneshotDecl::args`] that the prompt text replaces (decision 0167).
+pub const PROMPT_PLACEHOLDER: &str = "{prompt}";
+
+/// A kind's non-interactive form (decision 0167): the arguments of one run that prints its reply and exits, with
+/// [`PROMPT_PLACEHOLDER`] exactly once, as `["-p", "{prompt}", "--output-format", "text"]`. The prompt is one argument of
+/// the run, never a shell line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneshotDecl {
+    pub args: Vec<String>,
+    /// Whether a run that names a model also takes the kind's model flag (`model`). Absent means it does not.
+    #[serde(default)]
+    pub model_flag_reuse: bool,
+    /// Arguments a run takes only when the program's `--help` output lists their flag (decision 0167): tool restrictions and
+    /// the like, which a CLI without the flag would refuse. They follow `args`, in declared order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_args: Vec<OptionalArgDecl>,
+}
+
+/// One argument a run takes when the program's `--help` lists its flag (decision 0167): the flag, then its values, each one
+/// argument of the run. A value is literal text, never a placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalArgDecl {
+    pub flag: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
 
 /// A kind's channel for MassOrca's per-launch instructions (decision 0161): launch arguments with [`TEXT_PLACEHOLDER`]
 /// exactly once, as `["--append-system-prompt", "{text}"]`. The text is passed on a run's own command line only, never
@@ -142,6 +199,37 @@ pub struct ModelDecl {
     /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<ModelChoiceDecl>,
+    /// How the vendor CLI lists the models the account can use (decision 0166). Absent: the picker shows `choices` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discover: Option<DiscoverDecl>,
+}
+
+/// The listing a kind's vendor CLI prints its models in (decision 0166): the arguments after the kind's program, the text
+/// written to its stdin, and the format its output is read in. The listing runs with the account's home and never with
+/// the run identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoverDecl {
+    /// The arguments after the kind's program, such as `["models"]`. Never empty.
+    pub args: Vec<String>,
+    /// Text written to the listing's stdin and then closed: a request the CLI answers without starting a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<String>,
+    /// How the output is read.
+    pub format: ListingFormat,
+}
+
+/// Longest `stdin` a model listing may declare; a longer one is a problem with the declaration.
+pub const MAX_DISCOVER_STDIN: usize = 4096;
+
+/// The format a model listing's output is read in (decision 0166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListingFormat {
+    /// One model per line: its id, a tab, then its label.
+    Lines,
+    /// A stream-json `control_response` whose `models` lists the CLI's picker rows.
+    ClaudeControl,
 }
 
 /// One model a kind's picker offers.
@@ -158,6 +246,32 @@ pub struct ModelChoiceDecl {
     /// effort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub efforts: Option<Vec<String>>,
+    /// Whether the model takes fast mode (decision 0165). Only a kind that declares `fast` may set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
+}
+
+/// The `fast` option of a kind (decision 0165): the settings a run with fast mode on receives. A start that asks for it
+/// passes `settings` on `settings_flag`, or merges them into the settings file the run's hooks already use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FastDecl {
+    /// The settings object a run with fast mode on receives: non-empty, and it may not set `hooks`.
+    pub settings: serde_json::Map<String, serde_json::Value>,
+    /// The flag `settings` is passed with, `--settings` unless the kind says otherwise.
+    #[serde(default = "default_settings_flag")]
+    pub settings_flag: String,
+    /// The slash command that toggles fast mode in a running session, such as `/fast`. Declared for the live switch
+    /// that comes with `agent.set_options`; nothing sends it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
+    /// Whether `live` toggles rather than sets. Declared with `live`; nothing reads it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggle: bool,
+}
+
+fn default_settings_flag() -> String {
+    "--settings".to_owned()
 }
 
 /// The `effort` option of a kind (decision 0094): how a start's effort is passed, and the levels the picker shows
@@ -200,9 +314,14 @@ pub struct PermissionModeDecl {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Launch arguments that select the mode, after the kind's own. Empty means the mode has no launch flag.
+    /// Launch arguments that select the mode, after the kind's own. Empty means the mode has no launch flag. With
+    /// `launch_values`, `args` holds [`VALUE_PLACEHOLDER`] once, right after its flag (decision 0164).
     #[serde(default)]
     pub args: Vec<String>,
+    /// The vendor's spellings of the mode's launch value, in preference order (decision 0164). The launch passes the first
+    /// one the CLI's `--help` lists for the flag before the placeholder, else the first one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_values: Vec<String>,
     /// How a running session switches to the mode, when the vendor documents a deterministic way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_switch: Option<LiveSwitchDecl>,
@@ -213,6 +332,61 @@ pub struct PermissionModeDecl {
     /// arguments never confirm it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_fall_back: bool,
+    /// A lucide icon name for the mode (`file-pen`): lowercase letters and digits in `-`-separated words (decision 0163).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// How a picker presents the mode (decision 0163): [`MODE_TONE_NORMAL`] or [`MODE_TONE_WARNING`]; every bypass mode
+    /// warns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    /// Whether pickers offer the mode (decision 0163). An unoffered mode stays declared, so a session reporting it still
+    /// shows its name, and a caller naming it is still served.
+    #[serde(default = "offered", skip_serializing_if = "is_offered")]
+    pub selectable: bool,
+}
+
+impl PermissionModeDecl {
+    /// The launch arguments with the mode's placeholder replaced by `value` (decision 0164). A mode without launch values
+    /// passes `args` as declared.
+    pub(crate) fn args_for(&self, value: &str) -> Vec<String> {
+        launch_args(None, Some(self.args.as_slice()), value)
+    }
+
+    /// The flag the launch value follows in `args`, when the mode declares a placeholder for it (decision 0164).
+    pub(crate) fn value_flag(&self) -> Option<&str> {
+        let index = self
+            .args
+            .iter()
+            .position(|arg| arg.as_str() == VALUE_PLACEHOLDER)?;
+        self.args.get(index.checked_sub(1)?).map(String::as_str)
+    }
+}
+
+/// The tone of an ordinary mode.
+pub const MODE_TONE_NORMAL: &str = "normal";
+/// The tone of a mode that lifts the vendor's prompts or sandbox.
+pub const MODE_TONE_WARNING: &str = "warning";
+/// Longest icon name a mode may declare.
+const MAX_ICON_LEN: usize = 64;
+
+fn offered() -> bool {
+    true
+}
+
+fn is_offered(selectable: &bool) -> bool {
+    *selectable
+}
+
+/// Whether `icon` reads as a lucide icon name: lowercase letters and digits in `-`-separated words.
+fn valid_icon_name(icon: &str) -> bool {
+    icon.len() <= MAX_ICON_LEN
+        && !icon.is_empty()
+        && icon.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 /// How a live switch reaches the agent.
@@ -243,7 +417,7 @@ fn valid_option_flag(text: &str) -> bool {
 
 /// A value a start may name for `model` or `effort`: 1 to [`MAX_OPTION_VALUE_LEN`] letters, digits, `-`, `_`, `.`, `:` or
 /// `/`, never starting with `-`, so it cannot be read as a flag.
-fn valid_option_value(text: &str) -> bool {
+pub(crate) fn valid_option_value(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= MAX_OPTION_VALUE_LEN
         && !text.starts_with('-')
@@ -654,10 +828,38 @@ impl KindDecl {
         self.mode_problems(&mut problems);
         self.model_problems(&mut problems);
         self.effort_problems(&mut problems);
+        self.fast_problems(&mut problems);
         self.inherited_env_problems(&mut problems);
         self.resume_check_problems(&mut problems);
         self.instructions_problems(&mut problems);
+        self.oneshot_problems(&mut problems);
+        self.chat_problems(&mut problems);
         problems
+    }
+
+    /// `chat.adapter` names a dialect MassOrca speaks, and its range is a version and a major version no older than it.
+    fn chat_problems(&self, problems: &mut Vec<String>) {
+        let Some(chat) = &self.chat else {
+            return;
+        };
+        if !CHAT_ADAPTERS.contains(&chat.adapter.as_str()) {
+            problems.push(format!(
+                "chat.adapter {:?} must be one of {}",
+                chat.adapter,
+                CHAT_ADAPTERS.join(", ")
+            ));
+        }
+        match crate::chat::version::Version::parse_exact(&chat.min_version) {
+            Some(min) if min.major > chat.max_major => problems.push(format!(
+                "chat.max_major {} must not be below the major version of chat.min_version",
+                chat.max_major
+            )),
+            Some(_) => {}
+            None => problems.push(format!(
+                "chat.min_version {:?} must be MAJOR.MINOR.PATCH",
+                chat.min_version
+            )),
+        }
     }
 
     /// `instructions.args` holds [`TEXT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
@@ -692,6 +894,62 @@ impl KindDecl {
             no_placeholder("instructions.supported_when.args", &probe.args, problems);
             if probe.contains.trim().is_empty() {
                 problems.push("instructions.supported_when.contains must not be empty".to_owned());
+            }
+        }
+    }
+
+    /// `oneshot.args` holds [`PROMPT_PLACEHOLDER`] exactly once, as a whole argument or inside one, and no other
+    /// placeholder; `model_flag_reuse` needs a declared `model`; each `optional_args` flag is a valid flag, listed once,
+    /// with values free of control characters (decision 0167).
+    fn oneshot_problems(&self, problems: &mut Vec<String>) {
+        let Some(oneshot) = &self.oneshot else {
+            return;
+        };
+        let placeholders: usize = oneshot
+            .args
+            .iter()
+            .map(|arg| arg.matches(PROMPT_PLACEHOLDER).count())
+            .sum();
+        if placeholders != 1 {
+            problems.push(format!(
+                "oneshot.args must hold {PROMPT_PLACEHOLDER} exactly once, not {placeholders} times"
+            ));
+        }
+        if oneshot
+            .args
+            .iter()
+            .any(|arg| arg.replace(PROMPT_PLACEHOLDER, "").contains(['{', '}']))
+        {
+            problems.push(format!(
+                "oneshot.args may use {PROMPT_PLACEHOLDER} as its only placeholder"
+            ));
+        }
+        if oneshot.model_flag_reuse && self.model.is_none() {
+            problems.push("oneshot.model_flag_reuse needs a declared model".to_owned());
+        }
+        let mut flags = BTreeSet::new();
+        for optional in &oneshot.optional_args {
+            if !valid_option_flag(&optional.flag) {
+                problems.push(format!(
+                    "oneshot.optional_args flag {:?} must start with - and hold no spaces, = or control characters",
+                    optional.flag
+                ));
+            }
+            if !flags.insert(optional.flag.as_str()) {
+                problems.push(format!(
+                    "oneshot.optional_args lists {:?} twice",
+                    optional.flag
+                ));
+            }
+            if optional
+                .values
+                .iter()
+                .any(|value| value.chars().any(char::is_control))
+            {
+                problems.push(format!(
+                    "oneshot.optional_args values of {:?} must hold no control characters",
+                    optional.flag
+                ));
             }
         }
     }
@@ -787,6 +1045,49 @@ impl KindDecl {
         Ok(args)
     }
 
+    /// The `fast` declaration a start with fast mode asked for takes (decision 0165), or None when it is off. A kind with
+    /// no fast mode refuses it, and so does a model that the kind's choices do not mark as taking it: a start that names
+    /// no model is checked against the default choice. A kind with no model choices has nothing to check, so it passes.
+    pub(crate) fn fast_for(
+        &self,
+        model: Option<&str>,
+        on: bool,
+    ) -> Result<Option<&FastDecl>, AgentError> {
+        if !on {
+            return Ok(None);
+        }
+        let fast = self.fast.as_ref().ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_OPTION_UNSUPPORTED,
+                format!("kind {} declares no fast mode", self.id),
+            )
+        })?;
+        let choices: &[ModelChoiceDecl] = self
+            .model
+            .as_ref()
+            .map_or(&[], |model| model.choices.as_slice());
+        if !choices.is_empty() {
+            let named = model.map(str::to_owned).or_else(|| {
+                choices
+                    .iter()
+                    .find(|choice| choice.default)
+                    .map(|choice| choice.id.clone())
+            });
+            let takes = named
+                .as_deref()
+                .and_then(|id| choices.iter().find(|choice| choice.id == id))
+                .is_some_and(|choice| choice.fast);
+            if !takes {
+                let which = named.map_or_else(|| "no model".to_owned(), |id| format!("model {id}"));
+                return Err(AgentError::new(
+                    codes::AGENT_OPTION_UNSUPPORTED,
+                    format!("kind {} with {which} does not offer fast mode", self.id),
+                ));
+            }
+        }
+        Ok(Some(fast))
+    }
+
     fn unsupported(&self, name: &str) -> AgentError {
         AgentError::new(
             codes::AGENT_OPTION_UNSUPPORTED,
@@ -853,6 +1154,20 @@ impl KindDecl {
             model.args.as_deref(),
             problems,
         );
+        if let Some(discover) = &model.discover {
+            if discover.args.is_empty() {
+                problems.push("model.discover.args names no command to list the models".to_owned());
+            }
+            if discover
+                .stdin
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_DISCOVER_STDIN)
+            {
+                problems.push(format!(
+                    "model.discover.stdin is longer than {MAX_DISCOVER_STDIN} bytes"
+                ));
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         let mut defaults = 0;
         for choice in &model.choices {
@@ -919,6 +1234,43 @@ impl KindDecl {
         }
     }
 
+    /// Every rule the `fast` declaration breaks, and every model that marks fast mode without one (decision 0165).
+    fn fast_problems(&self, problems: &mut Vec<String>) {
+        if let Some(fast) = &self.fast {
+            if fast.settings.is_empty() {
+                problems.push("fast.settings must not be empty".to_owned());
+            }
+            if fast.settings.contains_key("hooks") {
+                problems.push(
+                    "fast.settings may not set hooks, which the status mechanism owns".to_owned(),
+                );
+            }
+            if !valid_option_flag(&fast.settings_flag) {
+                problems.push(format!(
+                    "fast.settings_flag {:?} must be a flag starting with -, with no spaces, = or control characters",
+                    fast.settings_flag
+                ));
+            }
+            if let Some(live) = &fast.live
+                && (live.len() < 2 || !live.starts_with('/') || live.contains(char::is_whitespace))
+            {
+                problems.push(format!(
+                    "fast.live {live:?} must be a slash command, such as /fast"
+                ));
+            }
+        }
+        if let Some(model) = &self.model {
+            for choice in model.choices.iter().filter(|choice| choice.fast) {
+                if self.fast.is_none() {
+                    problems.push(format!(
+                        "model.choices {:?} takes fast mode, but the kind declares no fast",
+                        choice.id
+                    ));
+                }
+            }
+        }
+    }
+
     fn mode_problems(&self, problems: &mut Vec<String>) {
         let mut seen = std::collections::HashSet::new();
         for mode in &self.permission_modes {
@@ -934,7 +1286,7 @@ impl KindDecl {
             if mode.label.trim().is_empty() {
                 problems.push(format!("{field}: label must not be empty"));
             }
-            no_placeholder(&format!("{field}.args"), &mode.args, problems);
+            launch_values_problems(&field, mode, problems);
             if let Some(switch) = &mode.live_switch
                 && (switch.text.trim().is_empty() || switch.text.chars().any(char::is_control))
             {
@@ -942,13 +1294,31 @@ impl KindDecl {
                     "{field}: live_switch.text must be one line of text without control characters"
                 ));
             }
-            let selectable = !mode.args.is_empty() || mode.live_switch.is_some();
-            if mode.bypass && !selectable {
+            if let Some(icon) = &mode.icon
+                && !valid_icon_name(icon)
+            {
+                problems.push(format!(
+                    "{field}: icon {icon:?} must be a lucide icon name: lowercase letters and digits in words joined by -"
+                ));
+            }
+            match mode.tone.as_deref() {
+                None | Some(MODE_TONE_NORMAL | MODE_TONE_WARNING) => {}
+                Some(tone) => problems.push(format!(
+                    "{field}: tone {tone:?} must be {MODE_TONE_NORMAL} or {MODE_TONE_WARNING}"
+                )),
+            }
+            if mode.bypass && mode.tone.as_deref() == Some(MODE_TONE_NORMAL) {
+                problems.push(format!(
+                    "{field}: a bypass mode warns, so its tone must be {MODE_TONE_WARNING}"
+                ));
+            }
+            let appliable = !mode.args.is_empty() || mode.live_switch.is_some();
+            if mode.bypass && !appliable {
                 problems.push(format!(
                     "{field}: a bypass mode needs its own args or live_switch"
                 ));
             }
-            if !selectable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
+            if !appliable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
                 problems.push(format!(
                     "{field}: a mode with no args and no live_switch can only be the default"
                 ));
@@ -1380,6 +1750,48 @@ fn no_placeholder(field: &str, args: &[String], problems: &mut Vec<String>) {
     }
 }
 
+/// The rules of a permission mode's `launch_values` (decision 0164). Without values, `args` holds no placeholder. With
+/// values, `args` holds [`VALUE_PLACEHOLDER`] exactly once, right after a flag, and the values are valid and distinct.
+fn launch_values_problems(field: &str, mode: &PermissionModeDecl, problems: &mut Vec<String>) {
+    if mode.launch_values.is_empty() {
+        no_placeholder(&format!("{field}.args"), &mode.args, problems);
+        return;
+    }
+    let placeholders: usize = mode
+        .args
+        .iter()
+        .map(|arg| arg.matches(VALUE_PLACEHOLDER).count())
+        .sum();
+    let after_flag = mode.args.iter().enumerate().any(|(index, arg)| {
+        arg.as_str() == VALUE_PLACEHOLDER && index > 0 && valid_option_flag(&mode.args[index - 1])
+    });
+    if placeholders != 1 || !after_flag {
+        problems.push(format!(
+            "{field}.args must hold {VALUE_PLACEHOLDER} exactly once, right after its flag"
+        ));
+    }
+    if mode
+        .args
+        .iter()
+        .any(|arg| arg.replace(VALUE_PLACEHOLDER, "").contains(['{', '}']))
+    {
+        problems.push(format!(
+            "{field}.args may use {VALUE_PLACEHOLDER} as its only placeholder"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for value in &mode.launch_values {
+        if !valid_option_value(value) {
+            problems.push(format!(
+                "{field}.launch_values {value:?} must be 1 to {MAX_OPTION_VALUE_LEN} letters, digits, - _ . : or /, not starting with -"
+            ));
+        }
+        if !seen.insert(value.as_str()) {
+            problems.push(format!("{field}.launch_values repeats {value:?}"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1396,6 +1808,50 @@ mod tests {
         let mut value = minimal();
         patch(&mut value);
         parse(value).problems()
+    }
+
+    #[test]
+    fn a_chat_block_names_a_known_adapter_and_a_version_range() {
+        let valid = problems_of(|value| {
+            value["chat"] = serde_json::json!({
+                "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        for (chat, expected) in [
+            (
+                serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
+                "chat.adapter \"acp\" must be one of claude-stream-json",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),
+                "chat.min_version \"2.1\" must be MAJOR.MINOR.PATCH",
+            ),
+            (
+                serde_json::json!({ "adapter": "claude-stream-json", "min_version": "3.0.0", "max_major": 2 }),
+                "chat.max_major 2 must not be below the major version of chat.min_version",
+            ),
+        ] {
+            let problems = problems_of(|value| value["chat"] = chat.clone());
+            assert_eq!(problems, [expected], "{chat}");
+        }
+    }
+
+    #[test]
+    fn the_built_in_claude_kind_runs_as_a_chat_from_2_1_258_through_2_x() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|kind| kind.id == "claude")
+            .expect("built in");
+        assert_eq!(
+            claude.chat,
+            Some(ChatDecl {
+                adapter: "claude-stream-json".to_owned(),
+                min_version: "2.1.258".to_owned(),
+                max_major: 2,
+            })
+        );
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
     }
 
     #[test]
@@ -2038,6 +2494,63 @@ mod tests {
     }
 
     #[test]
+    fn a_mode_presentation_names_a_known_tone_and_a_lucide_icon() {
+        let good = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"], "icon": "file-pen", "tone": "normal" },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "icon": "shield-alert", "tone": "warning" },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]),
+            Some("safe"),
+        );
+        assert!(good.is_empty(), "{good:?}");
+        let tone = with_modes(
+            serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "tone": "loud" }]),
+            Some("safe"),
+        );
+        assert!(tone.iter().any(|p| p.contains("tone")), "{tone:?}");
+        let calm_bypass = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "open", "label": "Open", "args": ["-o"], "bypass": true, "tone": "normal" }
+            ]),
+            Some("safe"),
+        );
+        assert!(
+            calm_bypass.iter().any(|p| p.contains("bypass mode warns")),
+            "{calm_bypass:?}"
+        );
+        for icon in [
+            "Shield",
+            "shield alert",
+            "-shield",
+            "shield-",
+            "shield--alert",
+            "",
+        ] {
+            let found = with_modes(
+                serde_json::json!([{ "id": "safe", "label": "Safe", "args": ["-s"], "icon": icon }]),
+                Some("safe"),
+            );
+            assert!(
+                found.iter().any(|p| p.contains("icon")),
+                "{icon:?}: {found:?}"
+            );
+        }
+        let kind = parse({
+            let mut value = minimal();
+            value["permission_modes"] = serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "hush", "label": "Hush", "args": ["-h"], "selectable": false }
+            ]);
+            value["default_permission_mode"] = serde_json::json!("safe");
+            value
+        });
+        assert!(kind.permission_mode("safe").unwrap().selectable);
+        assert!(!kind.permission_mode("hush").unwrap().selectable);
+    }
+
+    #[test]
     fn a_mode_may_say_that_the_vendor_falls_back_from_it() {
         let mut value = minimal();
         value["permission_modes"] = serde_json::json!([
@@ -2341,6 +2854,84 @@ mod tests {
     }
 
     #[test]
+    fn a_model_listing_needs_a_command_and_a_known_format() {
+        let valid = problems_of(|value| {
+            value["model"] = serde_json::json!({
+                "flag": "--model",
+                "discover": { "args": ["models"], "format": "lines" }
+            });
+        });
+        assert!(valid.is_empty(), "{valid:?}");
+        let no_command = problems_of(|value| {
+            value["model"] = serde_json::json!({
+                "flag": "--model",
+                "discover": { "args": [], "format": "lines" }
+            });
+        });
+        assert!(
+            no_command
+                .iter()
+                .any(|problem| problem.contains("model.discover")),
+            "{no_command:?}"
+        );
+        let unknown: Result<DiscoverDecl, _> =
+            serde_json::from_value(serde_json::json!({ "args": ["models"], "format": "table" }));
+        assert!(unknown.is_err(), "an unknown format is refused");
+    }
+
+    #[test]
+    fn the_built_in_kinds_list_models_only_where_their_vendor_has_a_listing() {
+        let claude =
+            KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
+        let discover = claude
+            .model
+            .as_ref()
+            .and_then(|model| model.discover.as_ref())
+            .expect("claude lists its models");
+        assert_eq!(discover.format, ListingFormat::ClaudeControl);
+        assert_eq!(
+            discover.args,
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose"
+            ]
+        );
+        assert!(
+            discover
+                .stdin
+                .as_deref()
+                .is_some_and(|text| text.contains("list_models"))
+        );
+
+        let antigravity = KindDecl::from_json(include_str!("../kinds/antigravity.json"))
+            .expect("antigravity parses");
+        let discover = antigravity
+            .model
+            .as_ref()
+            .and_then(|model| model.discover.as_ref())
+            .expect("agy lists its models");
+        assert_eq!(discover.format, ListingFormat::Lines);
+        assert_eq!(discover.args, ["models"]);
+        assert_eq!(discover.stdin, None);
+
+        for text in [
+            include_str!("../kinds/codex.json"),
+            include_str!("../kinds/gentle-shell.json"),
+        ] {
+            let kind = KindDecl::from_json(text).expect("parses");
+            assert!(
+                kind.model
+                    .as_ref()
+                    .is_none_or(|model| model.discover.is_none())
+            );
+        }
+    }
+
+    #[test]
     fn the_built_in_kinds_declare_the_reference_model_and_effort_choices() {
         let claude =
             KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses");
@@ -2431,7 +3022,14 @@ mod tests {
             .iter()
             .map(|level| level.id.as_str())
             .collect();
-        assert_eq!(levels, ["low", "medium", "high"]);
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(
+            antigravity
+                .effort
+                .as_ref()
+                .and_then(|effort| effort.default.as_deref()),
+            Some("high")
+        );
 
         let gentle = KindDecl::from_json(include_str!("../kinds/gentle-shell.json"))
             .expect("gentle-shell parses");
@@ -2722,5 +3320,267 @@ mod tests {
             .collect();
         constant.sort();
         assert_eq!(declared, constant);
+    }
+
+    #[test]
+    fn a_one_shot_form_names_the_prompt_once_and_no_other_placeholder() {
+        let oneshot =
+            |value: serde_json::Value| problems_of(|kind| kind["oneshot"] = value.clone());
+        assert!(oneshot(serde_json::json!({ "args": ["-p", "{prompt}"] })).is_empty());
+        assert!(
+            oneshot(serde_json::json!({ "args": ["-p"] }))
+                .iter()
+                .any(|problem| problem.contains("{prompt}")),
+            "the prompt is required"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}", "{prompt}"] }))
+                .iter()
+                .any(|problem| problem.contains("exactly once")),
+            "the prompt is named once"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}", "{ref}"] }))
+                .iter()
+                .any(|problem| problem.contains("only placeholder")),
+            "no other placeholder"
+        );
+        assert!(
+            oneshot(serde_json::json!({ "args": ["{prompt}"], "model_flag_reuse": true }))
+                .iter()
+                .any(|problem| problem.contains("model")),
+            "the reuse needs a declared model"
+        );
+    }
+
+    #[test]
+    fn an_optional_argument_has_a_flag_listed_once_and_values_without_control_characters() {
+        let optional = |list: serde_json::Value| {
+            problems_of(|kind| {
+                kind["oneshot"] = serde_json::json!({
+                    "args": ["-p", "{prompt}"],
+                    "optional_args": list.clone()
+                })
+            })
+        };
+        assert!(
+            optional(serde_json::json!([
+                { "flag": "--max-turns", "values": ["1"] },
+                { "flag": "--strict-mcp-config" }
+            ]))
+            .is_empty()
+        );
+        assert!(
+            optional(serde_json::json!([{ "flag": "max-turns" }]))
+                .iter()
+                .any(|problem| problem.contains("optional_args flag")),
+            "a flag starts with a dash"
+        );
+        assert!(
+            optional(
+                serde_json::json!([{ "flag": "--tools" }, { "flag": "--tools", "values": [""] }])
+            )
+            .iter()
+            .any(|problem| problem.contains("twice")),
+            "a flag is listed once"
+        );
+        assert!(
+            optional(serde_json::json!([{ "flag": "--tools", "values": ["a\nb"] }]))
+                .iter()
+                .any(|problem| problem.contains("control characters")),
+            "a value holds no line break"
+        );
+    }
+
+    #[test]
+    fn only_claude_among_the_built_in_kinds_declares_a_one_shot_form_that_reuses_its_model() {
+        let declared: Vec<(String, Vec<String>, bool)> = crate::catalog::built_ins()
+            .into_iter()
+            .filter_map(|decl| {
+                let oneshot = decl.oneshot?;
+                Some((decl.id, oneshot.args, oneshot.model_flag_reuse))
+            })
+            .collect();
+        assert_eq!(
+            declared,
+            vec![(
+                "claude".to_owned(),
+                ["-p", "{prompt}", "--output-format", "text"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                true
+            )]
+        );
+    }
+
+    #[test]
+    fn claude_runs_its_one_shot_form_with_the_restrictions_its_help_can_list() {
+        let claude = crate::catalog::built_ins()
+            .into_iter()
+            .find(|decl| decl.id == "claude")
+            .expect("claude is built in");
+        let expected: Vec<OptionalArgDecl> = serde_json::from_value(serde_json::json!([
+            { "flag": "--max-turns", "values": ["1"] },
+            { "flag": "--permission-mode", "values": ["default"] },
+            { "flag": "--strict-mcp-config" },
+            { "flag": "--mcp-config", "values": ["{\"mcpServers\":{}}"] },
+            { "flag": "--disallowedTools", "values": ["Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task"] },
+            { "flag": "--tools", "values": [""] },
+            { "flag": "--no-session-persistence" }
+        ]))
+        .expect("the restrictions parse");
+        assert_eq!(claude.oneshot.expect("declared").optional_args, expected);
+    }
+
+    #[test]
+    fn the_claude_declaration_is_byte_identical_in_the_kinds_and_the_package() {
+        assert_eq!(
+            include_str!("../kinds/claude.json"),
+            include_str!("../../../packages/agents/massorca.claude/agents/claude.json"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod fast_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn claude() -> KindDecl {
+        KindDecl::from_json(include_str!("../kinds/claude.json")).expect("claude parses")
+    }
+
+    fn fake_with(fast: serde_json::Value, model: serde_json::Value) -> KindDecl {
+        let value = json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "status": { "mechanism": "env-command", "events": { "stop": "done" } },
+            "model": model, "fast": fast
+        });
+        KindDecl::from_json(&value.to_string()).expect("parses")
+    }
+
+    fn problems_with(fast: serde_json::Value, model: serde_json::Value) -> Vec<String> {
+        fake_with(fast, model).problems()
+    }
+
+    #[test]
+    fn claude_declares_fast_mode_and_only_opus_takes_it() {
+        let claude = claude();
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let fast = claude.fast.as_ref().expect("claude declares fast mode");
+        assert_eq!(fast.settings.get("fastMode"), Some(&json!(true)));
+        assert_eq!(fast.settings.len(), 1);
+        assert_eq!(fast.settings_flag, "--settings");
+        assert_eq!(fast.live.as_deref(), Some("/fast"));
+        assert!(fast.toggle);
+        let model = claude.model.as_ref().expect("claude takes a model");
+        let takes: Vec<(&str, bool)> = model
+            .choices
+            .iter()
+            .map(|choice| (choice.id.as_str(), choice.fast))
+            .collect();
+        assert_eq!(
+            takes,
+            [
+                ("fable", false),
+                ("opus", true),
+                ("sonnet", false),
+                ("haiku", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kind_without_fast_mode_refuses_it_and_an_off_request_passes_nothing() {
+        let codex = KindDecl::from_json(include_str!("../kinds/codex.json")).expect("codex");
+        assert!(codex.fast.is_none());
+        assert!(codex.problems().is_empty(), "{:?}", codex.problems());
+        let error = codex
+            .fast_for(Some("gpt-5.5"), true)
+            .expect_err("codex has no fast mode");
+        assert_eq!(error.code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert!(error.message.contains("codex"), "{}", error.message);
+        assert!(codex.fast_for(Some("gpt-5.5"), false).unwrap().is_none());
+    }
+
+    #[test]
+    fn fast_mode_is_refused_for_a_model_without_it_and_named_in_the_refusal() {
+        let claude = claude();
+        let on = claude
+            .fast_for(Some("opus"), true)
+            .expect("opus takes fast mode")
+            .expect("on");
+        assert_eq!(on.settings_flag, "--settings");
+        let refused = claude
+            .fast_for(Some("sonnet"), true)
+            .expect_err("sonnet has no fast mode");
+        assert_eq!(refused.code, codes::AGENT_OPTION_UNSUPPORTED);
+        assert!(refused.message.contains("sonnet"), "{}", refused.message);
+        assert!(refused.message.contains("claude"), "{}", refused.message);
+        // The default model is sonnet, so a start that names no model is refused too.
+        assert!(claude.fast_for(None, true).is_err());
+        assert!(claude.fast_for(Some("unlisted"), true).is_err());
+    }
+
+    #[test]
+    fn a_kind_without_model_choices_passes_fast_mode_on_without_a_model_to_check() {
+        let kind = fake_with(
+            json!({ "settings": { "fastMode": true } }),
+            json!({ "flag": "--model" }),
+        );
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+        assert!(
+            kind.fast_for(Some("anything"), true)
+                .expect("passes")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_fast_declaration_with_a_bad_part_is_a_problem() {
+        assert!(!problems_with(json!({ "settings": {} }), json!({ "flag": "--model" })).is_empty());
+        assert!(
+            !problems_with(
+                json!({ "settings": { "fastMode": true }, "settings_flag": "settings" }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty()
+        );
+        assert!(
+            !problems_with(
+                json!({ "settings": { "fastMode": true }, "live": "fast" }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty()
+        );
+        assert!(
+            !problems_with(
+                json!({ "settings": { "hooks": {} } }),
+                json!({ "flag": "--model" })
+            )
+            .is_empty(),
+            "a fast setting may not replace the hooks"
+        );
+    }
+
+    #[test]
+    fn a_model_that_takes_fast_mode_needs_a_kind_that_declares_it() {
+        let problems = problems_with(
+            json!(null),
+            json!({ "flag": "--model", "choices": [{ "id": "big", "label": "Big", "fast": true }] }),
+        );
+        assert!(
+            problems.iter().any(|problem| problem.contains("big")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_fast_field_fails_to_parse() {
+        let value = json!({
+            "id": "fake", "name": "Fake", "program": ["fake"],
+            "fast": { "settings": { "fastMode": true }, "bogus": 1 }
+        });
+        assert!(KindDecl::from_json(&value.to_string()).is_err());
     }
 }

@@ -130,9 +130,9 @@ fn reporting_an_unregistered_worktree_removes_nothing() {
 }
 
 #[test]
-fn a_worktree_outside_the_workspaces_root_is_not_reported() {
+fn a_worktree_outside_the_workspaces_root_is_reported_too() {
     let fx = Fixture::new();
-    fx.repo_project();
+    let project = fx.repo_project();
     let outside = fx.path("elsewhere/outside");
     std::fs::create_dir_all(outside.parent().expect("has a parent")).expect("create parent");
     run_git(
@@ -140,10 +140,9 @@ fn a_worktree_outside_the_workspaces_root_is_not_reported() {
         &["worktree", "add", "-b", "outside", &text(&outside), "HEAD"],
     );
 
-    assert!(
-        fx.workspaces
-            .unregistered_worktrees(None)
-            .expect("list")
-            .is_empty()
-    );
+    let unregistered = fx.workspaces.unregistered_worktrees(None).expect("list");
+    assert_eq!(unregistered.len(), 1);
+    assert_eq!(unregistered[0].project_id, project.id);
+    assert_eq!(unregistered[0].path, text(&canonical(&outside)));
+    assert_eq!(unregistered[0].branch.as_deref(), Some("outside"));
 }

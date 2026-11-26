@@ -15,6 +15,7 @@ use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::workspaces::{WorkspaceCreateParams, WorkspaceRemoveParams};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -163,6 +164,8 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 
@@ -172,6 +175,8 @@ fn remove_params(workspace: &str) -> WorkspaceRemoveParams {
         force: false,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
+        allow_failed_archive: false,
     }
 }
 
@@ -415,6 +420,64 @@ async fn config_values_are_read_and_stored_through_the_bridge() {
         .expect("the default is stored");
     assert!(back.is_default);
 
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_setting_changed_by_another_client_reaches_the_store_through_the_change_event() {
+    const SCROLLBACK: &str = "terminal.scrollback";
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the connection", |s| {
+        s.connection.is_connected()
+    })
+    .await;
+
+    // The desktop's own write is stored by the service and held by the store.
+    handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: "appearance.text_size".to_owned(),
+            value: json!(110),
+        })
+        .await
+        .expect("the desktop's write is stored");
+    until(&mut updates, &mut state, "the desktop's write", |s| {
+        s.config_value("appearance.text_size")
+            .and_then(|config| config.value.as_u64())
+            == Some(110)
+    })
+    .await;
+
+    // Another client writes a setting; this bridge learns of it only from the change event.
+    let other = Client::connect(
+        &profile(home.path()),
+        ConnectOptions::new(PeerInfo {
+            name: "massorca-test-client".to_owned(),
+            version: "0.0.0-test".to_owned(),
+        }),
+    )
+    .await
+    .expect("a client connects");
+    other
+        .config_set(&ConfigSet {
+            owner: None,
+            key: SCROLLBACK.to_owned(),
+            value: json!(5000),
+        })
+        .await
+        .expect("the other client's write is stored");
+    until(&mut updates, &mut state, "the change event", |s| {
+        s.config_value(SCROLLBACK)
+            .and_then(|config| config.value.as_u64())
+            == Some(5000)
+    })
+    .await;
+
+    drop(other);
     drop(bridge);
     stop_service(service).await;
 }

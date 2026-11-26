@@ -7,6 +7,7 @@ use super::state::TeamsState;
 use super::types::{Column, ProjectId, Team, TeamId};
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
+use massorca_protocol::methods::teams::TeamCharacter;
 
 /// The Bot Teams Sidebar, ready to draw.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub struct TeamsSidebar {
 pub struct TeamRow {
     pub id: TeamId,
     pub name: String,
+    /// The team's character, drawn before its name (A57).
+    pub character: TeamCharacter,
     pub reach: HostReach,
     /// A page of this team is on screen.
     pub selected: bool,
@@ -94,6 +97,7 @@ fn team_row(team: &Team, current: Option<TeamPage>) -> TeamRow {
     TeamRow {
         id: team.id,
         name: team.name.clone(),
+        character: team.character,
         reach: team.reach,
         selected: current.is_some_and(|page| page.team() == team.id),
         conference: ChildRow {

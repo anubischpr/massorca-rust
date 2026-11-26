@@ -29,6 +29,8 @@ const FAILURES_OVERALL: usize = 30;
 const FAILURES_REMEMBERED: usize = 1024;
 
 struct PendingOffer {
+    /// Names the offer for retiring it; not a credential.
+    id: String,
     secret_hash: [u8; 32],
     expires_at: Instant,
     scopes: Scopes,
@@ -92,6 +94,13 @@ impl Drop for Reservation<'_> {
     }
 }
 
+/// A new offer: its id, and its secret, returned once and never stored.
+#[derive(Debug)]
+pub(crate) struct Minted {
+    pub(crate) id: String,
+    pub(crate) secret: Secret,
+}
+
 #[derive(Default)]
 pub(crate) struct Pairing {
     inner: Mutex<Inner>,
@@ -104,13 +113,14 @@ impl std::fmt::Debug for Pairing {
 }
 
 impl Pairing {
-    /// Mints a one-time secret valid for `ttl`. The secret is returned once and never stored.
+    /// Mints a one-time secret valid for `ttl`, and an id that names the offer. The secret is returned once and never
+    /// stored.
     pub(crate) fn create(
         &self,
         ttl: Duration,
         scopes: Scopes,
         now: Instant,
-    ) -> Result<Secret, ErrorBody> {
+    ) -> Result<Minted, ErrorBody> {
         let mut inner = self.lock();
         inner.prune(now);
         let live = inner
@@ -124,17 +134,46 @@ impl Pairing {
                 format!("{MAX_PENDING} offers are already pending; use or let one expire first"),
             ));
         }
+        let random = SystemRandom::new();
         let mut bytes = [0_u8; 32];
-        SystemRandom::new()
+        let mut id = [0_u8; 9];
+        random
             .fill(&mut bytes)
+            .and_then(|()| random.fill(&mut id))
             .map_err(|_| ErrorBody::new(codes::INTERNAL, "no randomness for a pairing secret"))?;
         let secret = URL_SAFE_NO_PAD.encode(bytes);
+        let id = URL_SAFE_NO_PAD.encode(id);
         inner.offers.push(PendingOffer {
+            id: id.clone(),
             secret_hash: hash(&secret),
             expires_at: now + ttl,
             scopes,
         });
-        Ok(Secret::new(secret))
+        Ok(Minted {
+            id,
+            secret: Secret::new(secret),
+        })
+    }
+
+    /// Retires the pending offer `id` names, so its secret no longer pairs. False when no such offer is pending: it
+    /// was never made, is used or being used, or has expired.
+    pub(crate) fn cancel(&self, id: &str, now: Instant) -> bool {
+        let mut inner = self.lock();
+        inner.prune(now);
+        let before = inner.offers.len();
+        inner
+            .offers
+            .retain(|offer| offer.id != id || offer.expires_at <= now);
+        inner.offers.len() < before
+    }
+
+    /// Retires every pending offer, and answers how many there were.
+    pub(crate) fn cancel_all(&self, now: Instant) -> usize {
+        let mut inner = self.lock();
+        inner.prune(now);
+        let before = inner.offers.len();
+        inner.offers.retain(|offer| offer.expires_at <= now);
+        before - inner.offers.len()
     }
 
     /// Takes the offer `secret` belongs to out of the pending list and holds it for the caller. Rate limiting is
@@ -263,7 +302,10 @@ mod tests {
     fn an_offer_is_used_once() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let secret = pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        let secret = pairing
+            .create(DEFAULT_TTL, Scopes::ADMIN, now)
+            .unwrap()
+            .secret;
         assert_eq!(pairing.pending(now), 1);
         assert_eq!(spend(&pairing, secret.expose(), PEER, now), Scopes::ADMIN);
         assert_eq!(
@@ -279,7 +321,8 @@ mod tests {
         let now = Instant::now();
         let secret = pairing
             .create(Duration::from_secs(1), Scopes::STANDARD, now)
-            .unwrap();
+            .unwrap()
+            .secret;
         let later = now + Duration::from_secs(2);
         assert_eq!(
             code(pairing.redeem(secret.expose(), PEER, later)),
@@ -295,7 +338,10 @@ mod tests {
     fn failures_are_limited_per_address_then_forgiven() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let secret = pairing.create(DEFAULT_TTL, Scopes::STANDARD, now).unwrap();
+        let secret = pairing
+            .create(DEFAULT_TTL, Scopes::STANDARD, now)
+            .unwrap()
+            .secret;
         for _ in 0..FAILURES_PER_ADDRESS {
             assert_eq!(
                 code(pairing.redeem("wrong", PEER, now)),
@@ -322,7 +368,10 @@ mod tests {
     fn the_overall_limit_never_locks_out_a_clean_address() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let secret = pairing.create(DEFAULT_TTL, Scopes::STANDARD, now).unwrap();
+        let secret = pairing
+            .create(DEFAULT_TTL, Scopes::STANDARD, now)
+            .unwrap()
+            .secret;
         for host in 0..FAILURES_OVERALL {
             let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, u8::try_from(host).unwrap()));
             assert_eq!(
@@ -347,7 +396,10 @@ mod tests {
     fn ipv6_failures_count_per_64_prefix() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let secret = pairing.create(DEFAULT_TTL, Scopes::STANDARD, now).unwrap();
+        let secret = pairing
+            .create(DEFAULT_TTL, Scopes::STANDARD, now)
+            .unwrap()
+            .secret;
         for host in 0..FAILURES_PER_ADDRESS {
             let ip = IpAddr::V6(Ipv6Addr::new(
                 0xfd7a,
@@ -380,7 +432,10 @@ mod tests {
     fn a_reservation_dropped_without_commit_keeps_the_offer() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let secret = pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        let secret = pairing
+            .create(DEFAULT_TTL, Scopes::ADMIN, now)
+            .unwrap()
+            .secret;
         let reservation = pairing.redeem(secret.expose(), PEER, now).unwrap();
         // While the device is being stored, nobody else can use the offer.
         assert_eq!(pairing.pending(now), 0);
@@ -407,11 +462,53 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_offer_no_longer_pairs_and_others_stay() {
+        let pairing = Pairing::default();
+        let now = Instant::now();
+        let first = pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        let second = pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        assert!(pairing.cancel(&first.id, now));
+        assert!(!pairing.cancel(&first.id, now), "already retired");
+        assert_eq!(
+            code(pairing.redeem(first.secret.expose(), PEER, now)),
+            codes::PAIRING_INVALID
+        );
+        assert_eq!(pairing.pending(now), 1);
+        spend(&pairing, second.secret.expose(), OTHER, now);
+        assert!(
+            !pairing.cancel(&second.id, now),
+            "a used offer is not pending"
+        );
+    }
+
+    #[test]
+    fn an_expired_offer_cannot_be_cancelled_and_all_counts_pending_ones() {
+        let pairing = Pairing::default();
+        let now = Instant::now();
+        let short = pairing
+            .create(Duration::from_secs(1), Scopes::ADMIN, now)
+            .unwrap();
+        pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        pairing.create(DEFAULT_TTL, Scopes::ADMIN, now).unwrap();
+        let later = now + Duration::from_secs(2);
+        assert!(!pairing.cancel(&short.id, later));
+        assert_eq!(pairing.cancel_all(later), 2);
+        assert_eq!(pairing.pending(later), 0);
+        assert_eq!(pairing.cancel_all(later), 0);
+    }
+
+    #[test]
     fn secrets_are_fresh_and_long() {
         let pairing = Pairing::default();
         let now = Instant::now();
-        let a = pairing.create(DEFAULT_TTL, Scopes::STANDARD, now).unwrap();
-        let b = pairing.create(DEFAULT_TTL, Scopes::STANDARD, now).unwrap();
+        let a = pairing
+            .create(DEFAULT_TTL, Scopes::STANDARD, now)
+            .unwrap()
+            .secret;
+        let b = pairing
+            .create(DEFAULT_TTL, Scopes::STANDARD, now)
+            .unwrap()
+            .secret;
         assert_ne!(a, b);
         assert_eq!(a.expose().len(), 43);
     }

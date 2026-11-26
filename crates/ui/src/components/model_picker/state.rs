@@ -5,6 +5,8 @@ use gpui::SharedString;
 
 use crate::components::agent_icon::AgentKind;
 
+use super::reasoning_slider::AgentBrand;
+
 /// Whether an agent can serve models right now; the rail says why in its tooltip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentAvailability {
@@ -35,12 +37,14 @@ pub struct ModelOption {
 }
 
 /// One agent or provider and its models.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentOption {
     pub kind: AgentKind,
     pub availability: AgentAvailability,
     pub list: ModelList,
     pub models: Vec<ModelOption>,
+    /// The brand colours the agent's Marketplace listing gives, which fill its reasoning slider.
+    pub brand: Option<AgentBrand>,
 }
 
 /// The chosen model, reasoning level and speed; what the trigger shows.
@@ -68,7 +72,7 @@ pub struct RowRef {
 
 /// The picker's rules without any window: the choice, favourites, the rail view, the
 /// search and the highlighted row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PickerState {
     agents: Vec<AgentOption>,
     choice: Choice,
@@ -78,6 +82,7 @@ pub struct PickerState {
     expanded: bool,
     highlight: usize,
     no_agents_installed: bool,
+    fast_reason: Option<SharedString>,
 }
 
 impl PickerState {
@@ -99,7 +104,17 @@ impl PickerState {
             expanded: false,
             highlight: 0,
             no_agents_installed: false,
+            fast_reason: None,
         }
+    }
+
+    /// Why Fast is off on every model while the service does not offer it; the Fast segment names it on hover.
+    pub fn fast_reason(&self) -> Option<&SharedString> {
+        self.fast_reason.as_ref()
+    }
+
+    pub fn set_fast_reason(&mut self, reason: Option<SharedString>) {
+        self.fast_reason = reason;
     }
 
     /// Starred models, in the order the user starred them.
@@ -176,6 +191,13 @@ impl PickerState {
             .and_then(|row| self.agents.get(row.agent))
             .or_else(|| self.agents.first())
             .map_or(AgentKind::Unknown, |agent| agent.kind)
+    }
+
+    /// The brand colours of the chosen model's agent, when its listing gives them.
+    pub fn current_brand(&self) -> Option<&AgentBrand> {
+        self.locate(&self.choice.model)
+            .and_then(|row| self.agents.get(row.agent))
+            .and_then(|agent| agent.brand.as_ref())
     }
 
     /// The model name and the reasoning level the trigger shows; the level is absent when the
@@ -358,6 +380,7 @@ pub(crate) mod fixtures {
             kind,
             availability: AgentAvailability::Ready,
             list: ModelList::Loaded,
+            brand: None,
             models,
         }
     }
@@ -472,6 +495,20 @@ mod tests {
             Some(3),
             "Max is offered, so it stays"
         );
+    }
+
+    #[test]
+    fn a_fast_reason_is_kept_until_it_is_cleared_and_standard_stays_chosen() {
+        let mut state = sample();
+        assert_eq!(state.fast_reason(), None);
+        state.set_fast_reason(Some("Fast mode needs a newer service.".into()));
+        assert_eq!(
+            state.fast_reason().map(|reason| reason.as_ref()),
+            Some("Fast mode needs a newer service.")
+        );
+        assert!(!state.choice().fast, "Standard stays chosen");
+        state.set_fast_reason(None);
+        assert_eq!(state.fast_reason(), None);
     }
 
     #[test]

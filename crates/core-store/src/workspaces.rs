@@ -89,9 +89,11 @@ pub struct WorkspaceRow {
     pub created_at: i64,
     /// The owner's short comment, set by `workspace.update`; `None` until one is set.
     pub comment: Option<String>,
+    /// The service chose the name (a creature name, or one derived for a unique create); only such a name is renamed.
+    pub name_generated: bool,
 }
 
-const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment FROM workspaces";
+const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated FROM workspaces";
 
 fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
     Ok(WorkspaceRow {
@@ -108,6 +110,7 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
         request_id: row.get("request_id")?,
         created_at: row.get("created_at")?,
         comment: row.get("comment")?,
+        name_generated: row.get("name_generated")?,
     })
 }
 
@@ -115,7 +118,7 @@ impl Store {
     /// Inserts a workspace. Conflicts on id, path key, request id or (project, name) are `StoreError::Conflict`.
     pub fn insert_workspace(&self, row: &WorkspaceRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 row.id,
                 row.project_id,
@@ -129,7 +132,8 @@ impl Store {
                 row.state,
                 row.request_id,
                 row.created_at,
-                row.comment
+                row.comment,
+                row.name_generated
             ],
         )?;
         Ok(())
@@ -191,6 +195,33 @@ impl Store {
         )
     }
 
+    /// The workspaces delegated writers run in below `workspace_id` (0055), a child's child included, deepest first.
+    /// A child session in its parent's workspace (a read-only one) adds none; `workspace_id` itself is never listed.
+    pub fn list_delegated_child_workspaces(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceRow>, StoreError> {
+        // The depth bound ends a cycle of workspaces, which delegation never makes but a store could hold.
+        self.query_all(
+            &format!(
+                "WITH RECURSIVE tree(child_id, depth) AS (
+                    SELECT ?1, 0
+                    UNION
+                    SELECT child.workspace_id, tree.depth + 1 FROM tree
+                    JOIN agent_sessions parent ON parent.workspace_id = tree.child_id
+                    JOIN agent_sessions child ON child.parent_id = parent.id
+                    WHERE child.workspace_id != parent.workspace_id AND tree.depth < 64
+                ), deepest(child_id, depth) AS (
+                    SELECT child_id, MAX(depth) FROM tree WHERE child_id != ?1 GROUP BY child_id
+                )
+                {SELECT_WORKSPACES} JOIN deepest ON deepest.child_id = workspaces.id
+                ORDER BY deepest.depth DESC, created_at, id"
+            ),
+            [workspace_id],
+            workspace_from_row,
+        )
+    }
+
     /// Returns whether a row changed.
     pub fn set_workspace_state(&self, id: &str, state: WorkspaceState) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
@@ -200,17 +231,33 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Sets a workspace's name and comment in one write; a `None` comment clears it. Returns whether a row changed.
-    /// A name another workspace of the project holds is `StoreError::Conflict`.
+    /// Sets a workspace's name, comment and generated-name flag in one write; a `None` comment clears it. Returns
+    /// whether a row changed. A name another workspace of the project holds is `StoreError::Conflict`.
     pub fn update_workspace(
         &self,
         id: &str,
         name: &str,
         comment: Option<&str>,
+        name_generated: bool,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE workspaces SET name = ?2, comment = ?3 WHERE id = ?1",
-            params![id, name, comment],
+            "UPDATE workspaces SET name = ?2, comment = ?3, name_generated = ?4 WHERE id = ?1",
+            params![id, name, comment, name_generated],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Sets a workspace's name and branch in one write; the path and the generated-name flag are kept. Returns whether
+    /// a row changed. A name another workspace of the project holds is `StoreError::Conflict`.
+    pub fn rename_workspace(
+        &self,
+        id: &str,
+        name: &str,
+        branch: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE workspaces SET name = ?2, branch = ?3 WHERE id = ?1",
+            params![id, name, branch],
         )?;
         Ok(changed > 0)
     }

@@ -135,6 +135,8 @@ pub enum RowBody {
     PairingLink,
     /// Opens the Add host dialog, its SSH path (D-HO-02).
     AddHost,
+    /// This computer's Git, as its service reported it on connect (GIT-01).
+    GitAvailability,
     Planned(Planned),
 }
 
@@ -383,23 +385,13 @@ const TERMINAL: &[RowSpec] = &[
 
 const SOURCES: &[RowSpec] = &[
     RowSpec {
+        label: "Git",
+        helper: "Worktrees, branches and Source control need the Git program on this computer.",
+        body: RowBody::GitAvailability,
+    },
+    RowSpec {
         label: "GitHub",
         helper: "Repositories, branches and pull requests.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "GitLab",
-        helper: "Repositories, branches and merge requests.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "Linear",
-        helper: "Lets an agent read and update Linear issues.",
-        body: RowBody::Planned(Planned::Action("Connect")),
-    },
-    RowSpec {
-        label: "Jira",
-        helper: "Lets an agent read and update Jira issues.",
         body: RowBody::Planned(Planned::Action("Connect")),
     },
     RowSpec {
@@ -779,6 +771,19 @@ mod tests {
             rows(SettingsSection::Vault).is_empty(),
             "the vault page draws its own header and no Vault status card"
         );
+    }
+
+    #[test]
+    fn hosted_services_live_in_the_marketplace_only() {
+        for section in SettingsSection::ALL {
+            for row in rows(section) {
+                assert!(
+                    !["Hosted services", "GitLab", "Linear", "Jira"].contains(&row.label),
+                    "{} in {section:?}",
+                    row.label
+                );
+            }
+        }
     }
 
     #[test]

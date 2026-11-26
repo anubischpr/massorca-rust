@@ -294,6 +294,22 @@ The Activity rail shows one ring per agent provider. The ring colour belongs to 
 
 Ring anatomy: `size.usage.ring` (32 px), stroke 2 px, track `usage.ring.track`, arc from 12 o'clock clockwise, provider icon 16 px centred. At 80 percent usage the arc becomes `usage.ring.warn` and a warning dot (`size.indicator.dot`, 6 px) shows at the icon's top right; at 95 percent it becomes `usage.ring.limit` with a limit dot of the same size. The accessible name carries the numbers: "Claude usage 62 percent, resets in 2 days".
 
+### 2.12.1 Banner palette (Ruling R-IB1, 2026-11-25)
+
+The gradient of the Marketplace invocation banner (components/InvocationBanner.md, A99) for an item whose listing declares no colour. The colour carries no meaning: it only tells item pages apart. An item gets slot N = FNV-1a of its extension ID (or its name) modulo 8, plus 1. `banner.end` is the second stop for an item with no colour or with one colour. Do not use `usage.ring.*` for this; those colours mean provider slots. Every value gives `text.primary` at least 4.5:1. The tokens are in tokens.json (banner build, PR #372).
+
+| Token | Dark | Light | Use |
+|---|---|---|---|
+| `banner.palette.1` | `#457255` | `#cfe5d6` | Banner first stop, slot 1 (green, the approved reference). |
+| `banner.palette.2` | `#407071` | `#cde4e4` | Banner first stop, slot 2 (teal). |
+| `banner.palette.3` | `#4c6b97` | `#d3deef` | Banner first stop, slot 3 (blue). |
+| `banner.palette.4` | `#6462a4` | `#dcdbf0` | Banner first stop, slot 4 (indigo). |
+| `banner.palette.5` | `#7d5d95` | `#e5d9ee` | Banner first stop, slot 5 (violet). |
+| `banner.palette.6` | `#935870` | `#efd8e1` | Banner first stop, slot 6 (rose). |
+| `banner.palette.7` | `#7d653d` | `#ecdfc8` | Banner first stop, slot 7 (amber). |
+| `banner.palette.8` | `#666c42` | `#e2e5c9` | Banner first stop, slot 8 (olive). |
+| `banner.end` | `#686a69` | `#e4e5e4` | Banner second stop when the listing gives one colour or none. |
+
 ### 2.13 Other tokens
 
 | Token | Dark | Light | Use |
@@ -507,6 +523,7 @@ Rules: spacing inside a component is at most one step smaller than the gap aroun
 | `size.avatar.lg` | 40 | Agent and team icon, large. |
 | `size.indicator.dot` | 6 | Status, unread, connection and dirty dots; the Badge dot variant |
 | `size.badge.height` | 16 | Badge height on desktop (Android: 20 dp) |
+| `size.tag.height` | 20 | Badge tag variant height on desktop (Android: 24 dp); ruling B9, 2026-11-25 |
 | `size.kbd.height` | 16 | Kbd key cap height |
 | `size.toolbar` | 36 | Toolbar strip in a Work panel tab (Browser chrome, Diff view) |
 | `size.progress.height` | 4 | Progress bar height. |

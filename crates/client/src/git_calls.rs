@@ -7,7 +7,8 @@ use massorca_protocol::methods::git::branch::{
 };
 use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{
-    self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
+    self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams, GitFileContent,
+    GitFileContentParams,
 };
 use massorca_protocol::methods::git::index::{
     self, GitDiscardParams, GitDiscarded, GitPathsParams,
@@ -100,6 +101,14 @@ impl Client {
         params: &GitDiffFileParams,
     ) -> Result<GitDiffFile, ClientError> {
         self.call(diff::DIFF_FILE, params).await
+    }
+
+    /// `git.file_content`: one file's bytes on one side of a comparison, capped in bytes.
+    pub async fn git_file_content(
+        &self,
+        params: &GitFileContentParams,
+    ) -> Result<GitFileContent, ClientError> {
+        self.call(diff::FILE_CONTENT, params).await
     }
 
     /// `git.branches`: the local branches, the current one first.

@@ -1,15 +1,16 @@
-//! `massorca project add|list|show|inspect|rm|set-base|init-git`: registering, unregistering, inspecting, setting the base of, and initialising git in projects through the service.
+//! `massorca project add|list|show|inspect|rm|set-base|update|init-git|trust-scripts`: registering, unregistering, inspecting and setting the base of projects, initialising git in folder projects, and trusting their `orca.yaml` scripts, through the service.
 
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
-    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams, ProjectUpdateParams,
+    ProjectRef, ProjectRemoveParams, ProjectScript, ProjectScripts, ProjectScriptsParams,
+    ProjectSetBaseParams, ProjectTrustScriptParams, ProjectUpdateParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceListParams;
 
 use crate::args::{ProjectAddArgs, ProjectCommand};
 use crate::connect::connect;
 use crate::cwd_path::PathRules;
-use crate::error::CliError;
+use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::project_icon;
 use crate::target::Target;
@@ -123,8 +124,109 @@ pub async fn execute(
                 )],
             );
         }
+        ProjectCommand::Scripts { project, workspace } => {
+            let params = scripts_params(&project, workspace.as_deref(), &paths)?;
+            let shown: ProjectScripts = client.call(projects::SCRIPTS, &params).await?;
+            output.success(
+                &shown,
+                &script_lines(&shown, &project, workspace.as_deref()),
+            );
+        }
+        ProjectCommand::TrustScripts {
+            project,
+            workspace,
+            hashes,
+        } => {
+            let params = scripts_params(&project, workspace.as_deref(), &paths)?;
+            let mut shown: ProjectScripts = client.call(projects::SCRIPTS, &params).await?;
+            if !hashes.is_empty() {
+                for hash in &hashes {
+                    let script = shown_with_hash(&shown, hash)?;
+                    let trust = ProjectTrustScriptParams {
+                        project: params.project.clone(),
+                        kind: script.kind,
+                        hash: script.hash.clone(),
+                        workspace: params.workspace.clone(),
+                    };
+                    let _: ProjectScript = client.call(projects::TRUST_SCRIPT, &trust).await?;
+                }
+                shown = client.call(projects::SCRIPTS, &params).await?;
+            }
+            output.success(
+                &shown,
+                &script_lines(&shown, &project, workspace.as_deref()),
+            );
+        }
     }
     Ok(())
+}
+
+fn scripts_params(
+    project: &str,
+    workspace: Option<&str>,
+    paths: &PathRules,
+) -> Result<ProjectScriptsParams, CliError> {
+    Ok(ProjectScriptsParams {
+        project: paths.selector(project)?,
+        workspace: workspace.map(|text| paths.selector(text)).transpose()?,
+    })
+}
+
+/// The shown script whose hash is `hash`; trusting only what was shown keeps the owner's trust on the content read.
+fn shown_with_hash<'a>(
+    shown: &'a ProjectScripts,
+    hash: &str,
+) -> Result<&'a ProjectScript, CliError> {
+    let wanted = hash.trim().to_ascii_lowercase();
+    shown
+        .scripts
+        .iter()
+        .find(|script| script.hash == wanted)
+        .ok_or_else(|| {
+            CliError::new(
+                "usage.unknown_script_hash",
+                format!(
+                    "no script in {} has hash {hash}; run without --hash to see the scripts and their hashes",
+                    shown.source
+                ),
+                exit::USAGE,
+            )
+        })
+}
+
+/// Each script with its hash and trust, then how to trust the ones that are not.
+fn script_lines(shown: &ProjectScripts, project: &str, workspace: Option<&str>) -> Vec<String> {
+    if shown.scripts.is_empty() {
+        return vec![format!(
+            "{} defines no setup or archive script",
+            shown.source
+        )];
+    }
+    let mut lines = vec![format!("scripts in {}", shown.source)];
+    let from = workspace.map_or_else(String::new, |workspace| format!(" --workspace {workspace}"));
+    for script in &shown.scripts {
+        let state = if script.trusted {
+            "trusted"
+        } else if script.changed {
+            "changed since it was trusted"
+        } else {
+            "not trusted"
+        };
+        lines.push(String::new());
+        lines.push(format!(
+            "{} script ({state}), sha256 {}:",
+            script.kind.as_str(),
+            script.hash
+        ));
+        lines.extend(script.script.lines().map(|line| format!("    {line}")));
+        if !script.trusted {
+            lines.push(format!(
+                "trust it: massorca project trust-scripts {project}{from} --hash {}",
+                script.hash
+            ));
+        }
+    }
+    lines
 }
 
 /// The protocol params for `project add`, with every path made absolute against the working directory.

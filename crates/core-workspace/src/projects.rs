@@ -99,7 +99,7 @@ impl Workspaces {
                 ),
                 other => other.into(),
             })?;
-        Ok(views::project(&row))
+        Ok(self.project_view(&row))
     }
 
     /// What `add_project` without a kind would register for `path`, and the project already registered there.
@@ -119,13 +119,25 @@ impl Workspaces {
             .store
             .list_projects()?
             .iter()
-            .map(views::project)
+            .map(|row| self.project_view(row))
             .collect())
     }
 
     /// The project `selector` names: id, then exact name, then path.
     pub fn show_project(&self, selector: &str) -> Result<Project, DomainError> {
-        Ok(views::project(&self.resolve_project(selector)?))
+        Ok(self.project_view(&self.resolve_project(selector)?))
+    }
+
+    /// A project's view with its remote's owner read from git now, so a changed remote shows on the next read.
+    fn project_view(&self, row: &ProjectRow) -> Project {
+        let remote_owner = match row.kind {
+            StoreKind::Git => self.git.primary_remote_owner(Path::new(&row.path)),
+            StoreKind::Folder => None,
+        };
+        Project {
+            remote_owner,
+            ..views::project(row)
+        }
     }
 
     /// Unregisters a project. Refused while it has workspaces, unless `forget_workspaces` drops their
@@ -140,7 +152,7 @@ impl Workspaces {
         if forget_workspaces {
             return match self.store.forget_project(&row.id)? {
                 Some(workspaces) => Ok(RemovedProject {
-                    project: views::project(&row),
+                    project: self.project_view(&row),
                     workspaces,
                 }),
                 None => Err(not_found(&row.name)),
@@ -151,7 +163,7 @@ impl Workspaces {
         }
         match self.store.delete_project(&row.id) {
             Ok(true) => Ok(RemovedProject {
-                project: views::project(&row),
+                project: self.project_view(&row),
                 workspaces: Vec::new(),
             }),
             Ok(false) => Err(not_found(&row.name)),
@@ -246,7 +258,7 @@ impl Workspaces {
                 format!("no project named {:?}", row.name),
             ));
         }
-        Ok(views::project(&ProjectRow {
+        Ok(self.project_view(&ProjectRow {
             base_ref: params.base,
             ..row
         }))
@@ -257,7 +269,7 @@ impl Workspaces {
         let _guard = self.lock_mutations();
         let row = self.resolve_project(&params.project)?;
         let Some(icon) = params.icon else {
-            return Ok(views::project(&row));
+            return Ok(self.project_view(&row));
         };
         let icon = icon
             .map(|icon| icon.normalized().map_err(invalid_icon))
@@ -266,7 +278,7 @@ impl Workspaces {
         if !self.store.set_project_icon(&row.id, stored.as_deref())? {
             return Err(not_found(&row.name));
         }
-        Ok(views::project(&ProjectRow {
+        Ok(self.project_view(&ProjectRow {
             icon: stored,
             ..row
         }))

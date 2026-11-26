@@ -19,6 +19,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
     vec![StoreUpdate::Resync {
         projects: vec![Project {
             icon: None,
+            remote_owner: None,
             id: SAMPLE_PROJECT.into(),
             kind: ProjectKind::Git,
             path: "/repos/sample".into(),
@@ -44,6 +45,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             base_refresh: None,
             comment: None,
             setup: None,
+            name_generated: false,
         }],
     }]
 }

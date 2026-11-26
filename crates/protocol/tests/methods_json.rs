@@ -26,6 +26,7 @@ fn sample_project() -> projects::Project {
         added_at_ms: 1_767_225_600_000_i64,
         base_ref: None,
         icon: None,
+        remote_owner: None,
     }
 }
 
@@ -58,6 +59,7 @@ fn sample_workspace() -> workspaces::Workspace {
         base_refresh: None,
         comment: None,
         setup: None,
+        name_generated: false,
     }
 }
 
@@ -111,6 +113,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::REMOVE, "workspace.remove");
     assert_eq!(workspaces::UPDATE, "workspace.update");
     assert_eq!(workspaces::CHECK, "workspace.check");
+    assert_eq!(workspaces::RENAME, "workspace.rename");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");
     assert_eq!(config::SET, "config.set");
@@ -358,6 +361,8 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
@@ -383,6 +388,8 @@ fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         },
         &json!({
             "project": "app",
@@ -428,6 +435,8 @@ fn workspace_remove_params_default_force_to_false() {
             force: false,
             discard_ignored: false,
             forget_orphan: false,
+            with_children: false,
+            allow_failed_archive: false,
         }
     );
     assert_wire(&params, &json!({ "workspace": "feat-x", "force": false }));
@@ -441,12 +450,15 @@ fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
             force: true,
             discard_ignored: true,
             forget_orphan: true,
+            with_children: true,
+            allow_failed_archive: false,
         },
         &json!({
             "workspace": "feat-x",
             "force": true,
             "discard_ignored": true,
-            "forget_orphan": true
+            "forget_orphan": true,
+            "with_children": true
         }),
     );
 }
@@ -654,8 +666,37 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             branch_deleted: true,
             branch_kept_reason: None,
             directory_kept: false,
+            removed_children: Vec::new(),
+            archive: None,
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
+    );
+}
+
+#[test]
+fn workspace_removed_lists_the_child_workspaces_removed_first() {
+    let child = workspaces::WorkspaceRemoved {
+        workspace: sample_workspace(),
+        branch_deleted: true,
+        branch_kept_reason: None,
+        directory_kept: false,
+        removed_children: Vec::new(),
+        archive: None,
+    };
+    assert_wire(
+        &workspaces::WorkspaceRemoved {
+            workspace: sample_workspace(),
+            branch_deleted: true,
+            branch_kept_reason: None,
+            directory_kept: false,
+            removed_children: vec![child],
+            archive: None,
+        },
+        &json!({
+            "workspace": sample_workspace_json(),
+            "branch_deleted": true,
+            "removed_children": [{ "workspace": sample_workspace_json(), "branch_deleted": true }]
+        }),
     );
 }
 
@@ -667,6 +708,8 @@ fn workspace_removed_says_when_a_directory_was_kept() {
             branch_deleted: false,
             branch_kept_reason: None,
             directory_kept: true,
+            removed_children: Vec::new(),
+            archive: None,
         },
         &json!({
             "workspace": sample_workspace_json(),
@@ -684,6 +727,8 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
             directory_kept: false,
+            removed_children: Vec::new(),
+            archive: None,
         },
         &json!({
             "workspace": sample_workspace_json(),
@@ -824,6 +869,27 @@ fn workspace_create_params_write_no_setup_only_when_it_is_set() {
 }
 
 #[test]
+fn workspace_create_params_write_unique_name_only_when_it_is_set() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
+    assert!(!params.unique_name);
+    assert!(
+        serde_json::to_value(&params)
+            .expect("encodes")
+            .get("unique_name")
+            .is_none()
+    );
+    let unique = workspaces::WorkspaceCreateParams {
+        unique_name: true,
+        ..params
+    };
+    assert_eq!(
+        serde_json::to_value(&unique).expect("encodes")["unique_name"],
+        json!(true)
+    );
+}
+
+#[test]
 fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
     assert!(
         serde_json::to_value(sample_workspace())
@@ -851,4 +917,81 @@ fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
     let newer: workspaces::WorkspaceSetup =
         serde_json::from_value(json!({ "outcome": "queued" })).expect("decodes");
     assert_eq!(newer, workspaces::WorkspaceSetup::Unknown);
+}
+
+#[test]
+fn workspace_carries_name_generated_only_when_it_holds() {
+    let mut workspace = sample_workspace();
+    assert!(
+        serde_json::to_value(&workspace)
+            .unwrap()
+            .get("name_generated")
+            .is_none()
+    );
+    workspace.name_generated = true;
+    assert_eq!(
+        serde_json::to_value(&workspace).unwrap()["name_generated"],
+        true
+    );
+}
+
+#[test]
+fn workspace_rename_params_have_the_documented_shape() {
+    assert_wire(
+        &workspaces::WorkspaceRenameParams {
+            workspace: "otter".to_owned(),
+            name: "fix-login".to_owned(),
+            from_generated: true,
+            expected_branch: Some("otter".to_owned()),
+        },
+        &json!({
+            "workspace": "otter",
+            "name": "fix-login",
+            "from_generated": true,
+            "expected_branch": "otter"
+        }),
+    );
+    let create: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).unwrap();
+    assert!(!create.name_generated);
+    assert!(
+        serde_json::to_value(&create)
+            .unwrap()
+            .get("name_generated")
+            .is_none()
+    );
+    let decoded: workspaces::WorkspaceRenameParams =
+        serde_json::from_value(json!({ "workspace": "otter", "name": "x" })).unwrap();
+    assert!(!decoded.from_generated);
+    assert_eq!(decoded.expected_branch, None);
+}
+
+#[test]
+fn script_trust_shapes_are_optional_on_the_wire_and_unknown_outcomes_decode() {
+    let untrusted = workspaces::WorkspaceSetup::Untrusted {
+        reason: "not trusted".to_owned(),
+        hash: "ab".to_owned(),
+    };
+    assert_wire(
+        &untrusted,
+        &json!({ "outcome": "untrusted", "reason": "not trusted", "hash": "ab" }),
+    );
+    assert_wire(
+        &workspaces::WorkspaceArchive::Succeeded {
+            terminal: "t1".to_owned(),
+        },
+        &json!({ "outcome": "succeeded", "terminal": "t1" }),
+    );
+    let newer: workspaces::WorkspaceArchive =
+        serde_json::from_value(json!({ "outcome": "queued", "at": 1 })).expect("decodes");
+    assert_eq!(newer, workspaces::WorkspaceArchive::Unknown);
+    let kind: projects::ScriptKind = serde_json::from_value(json!("teardown")).expect("decodes");
+    assert_eq!(kind, projects::ScriptKind::Unknown);
+    let old_reply: workspaces::WorkspaceRemoved = serde_json::from_value(json!({
+        "workspace": sample_workspace_json(),
+        "branch_deleted": true
+    }))
+    .expect("an older reply decodes");
+    assert_eq!(old_reply.archive, None);
+    assert_eq!(capabilities::SCRIPT_TRUST, "script-trust/1");
 }

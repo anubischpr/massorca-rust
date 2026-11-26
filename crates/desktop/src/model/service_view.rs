@@ -2,6 +2,7 @@
 //! item and the notice above the Canvas. Plain functions over `StoreState`, so tests call them
 //! without GPUI (decision 0028).
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::agent_sessions::{agent_of_kind, session_state, top_session_rows, workspace_title};
@@ -14,7 +15,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::{Project, ProjectIcon};
+use massorca_protocol::methods::projects::{Project, ProjectIcon, ProjectKind};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -32,34 +33,44 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             .iter()
             .any(|project| project.id == workspace.project_id)
     };
-    let mut projects: Vec<ProjectGroup> = state
-        .projects
-        .iter()
-        .map(|project| ProjectGroup {
-            id: project.id.clone(),
-            name: project.name.clone(),
-            emoji: project.icon.as_ref().and_then(emoji_of),
-            owner: remote_owner_of(project),
-            hosts: vec![HostGroup {
-                name: LOCAL_HOST.to_owned(),
-                reach,
-                workspaces: workspace_rows(
-                    state
+    let shown = |workspace: &Workspace| !hidden_team_folder(state, workspace);
+    let shown_id = |id: &str| state.workspace(id).is_none_or(&shown);
+    let mut projects: Vec<ProjectGroup> =
+        state
+            .projects
+            .iter()
+            // The Bot teams folder project shows only while one of its team folders does.
+            .filter(|project| {
+                !is_teams_folder(&project.path)
+                    || state
                         .workspaces
                         .iter()
-                        .filter(|workspace| workspace.project_id == project.id),
-                ),
-                sessions: top_session_rows(state, |id| {
-                    state
-                        .workspace(id)
-                        .is_some_and(|workspace| workspace.project_id == project.id)
-                }),
-                placeholders: placeholder_rows(state, |workspace| {
-                    workspace.project_id == project.id
-                }),
-            }],
-        })
-        .collect();
+                        .any(|workspace| workspace.project_id == project.id && shown(workspace))
+            })
+            .map(|project| ProjectGroup {
+                id: project.id.clone(),
+                name: project.name.clone(),
+                emoji: project.icon.as_ref().and_then(emoji_of),
+                owner: remote_owner_of(project),
+                plain_folder: project.kind == ProjectKind::Folder,
+                hosts: vec![HostGroup {
+                    name: LOCAL_HOST.to_owned(),
+                    reach,
+                    workspaces: workspace_rows(state.workspaces.iter().filter(|workspace| {
+                        workspace.project_id == project.id && shown(workspace)
+                    })),
+                    sessions: top_session_rows(state, |id| {
+                        shown_id(id)
+                            && state
+                                .workspace(id)
+                                .is_some_and(|workspace| workspace.project_id == project.id)
+                    }),
+                    placeholders: placeholder_rows(state, |workspace| {
+                        workspace.project_id == project.id && shown(workspace)
+                    }),
+                }],
+            })
+            .collect();
     // A conversation's folder belongs to the hidden project of the conversations folder, which the service never
     // lists (decision 0092). Any workspace whose project is not listed is one of those: it goes under No project, last.
     let conversations = top_session_rows(state, |id| {
@@ -73,6 +84,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
@@ -101,6 +113,33 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
     }
+}
+
+/// The folder under the workspaces root that holds every team's folder (`bot-teams`, as the service names it).
+const TEAMS_FOLDER: &str = "bot-teams";
+
+/// Whether `path` is the Bot teams folder project, which holds the teams' folders.
+fn is_teams_folder(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .is_some_and(|name| name == TEAMS_FOLDER)
+}
+
+/// A team's own folder shows in Workspaces only while that team's Workspaces option is on (AUTO-12, pv96). The
+/// folder is the workspace the service makes for the team in the Bot teams folder, named with the team's id. While the
+/// teams are not read, the option reads as off, its default. A bot task's worktree in a linked project stays shown.
+fn hidden_team_folder(state: &StoreState, workspace: &Workspace) -> bool {
+    let in_teams_folder = Path::new(&workspace.path)
+        .parent()
+        .is_some_and(|parent| is_teams_folder(&parent.to_string_lossy()));
+    if !in_teams_folder {
+        return false;
+    }
+    !state
+        .teams
+        .iter()
+        .flatten()
+        .any(|record| record.team.id == workspace.name && record.team.workspaces)
 }
 
 /// The rows of `workspaces` for the palette; usage colours cycle over them in order.
@@ -397,13 +436,19 @@ mod tests {
     fn the_first_session_takes_the_placeholders_place_in_the_tree() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s0", "w1", 1)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s0", "w1", 1))),
+            now,
+        );
         let placeholder = tree_rows(&state, now)
             .iter()
             .position(|row| matches!(row, TreeRow::Placeholder { .. }))
             .expect("the placeholder is listed");
 
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         let rows = tree_rows(&state, now);
         assert!(
             !rows
@@ -420,7 +465,10 @@ mod tests {
     fn a_workspace_with_no_session_left_has_no_row_and_no_placeholder_comes_back() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         state.apply(StoreUpdate::AgentGone("s4".into()), now);
         assert!(placeholders_of(&state, now).is_empty());
         assert!(!state.awaiting_session.contains_key("w4"));
@@ -527,6 +575,92 @@ mod tests {
         };
         state.apply(crate::service::StoreUpdate::Connection(lost), now);
         assert!(!teams_view(&state).is_connected());
+    }
+
+    /// A service with project alpha and the Bot teams folder project holding team t1's folder, and team t1 read with
+    /// its Workspaces option set to `workspaces`.
+    fn with_team_folder(workspaces: Option<bool>) -> StoreState {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::Connection(connected()), now);
+        let mut teams = project("pt", "Bot teams");
+        teams.path = "/ws/bot-teams".into();
+        let mut folder = workspace("wt", "pt", "t1", 2);
+        folder.path = "/ws/bot-teams/t1".into();
+        state.apply(
+            StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha"), teams],
+                workspaces: vec![workspace("w1", "p1", "one", 1), folder],
+            },
+            now,
+        );
+        if let Some(on) = workspaces {
+            let mut record = crate::service::fixtures::team("t1", "Desarrollo");
+            record.team.workspaces = on;
+            state.apply(
+                StoreUpdate::Teams(crate::service::TeamsRead {
+                    number: 1,
+                    teams: Ok(vec![record]),
+                }),
+                now,
+            );
+        }
+        state
+    }
+
+    fn project_names(state: &StoreState) -> Vec<String> {
+        service_snapshot(state, Instant::now())
+            .projects
+            .into_iter()
+            .map(|project| project.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_teams_folder_shows_in_workspaces_only_while_its_workspaces_option_is_on() {
+        assert_eq!(
+            project_names(&with_team_folder(Some(false))),
+            ["alpha"],
+            "off: the team folder and its empty Bot teams project are hidden"
+        );
+        let on = with_team_folder(Some(true));
+        assert_eq!(project_names(&on), ["Bot teams", "alpha"]);
+        let snapshot = service_snapshot(&on, Instant::now());
+        let folders: Vec<&str> = snapshot.projects[0].hosts[0]
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(folders, ["t1"]);
+        assert_eq!(
+            project_names(&with_team_folder(None)),
+            ["alpha"],
+            "unread teams: the option reads as off, its default"
+        );
+    }
+
+    #[test]
+    fn a_workspace_named_like_a_team_outside_the_teams_folder_stays_shown() {
+        let mut state = with_team_folder(Some(false));
+        let mut task = workspace("wx", "p1", "t1", 3);
+        task.path = "/repos/alpha-worktrees/t1".into();
+        state.apply(StoreUpdate::WorkspaceChanged(task), Instant::now());
+        let snapshot = service_snapshot(&state, Instant::now());
+        let alpha = snapshot
+            .projects
+            .iter()
+            .find(|project| project.name == "alpha")
+            .expect("alpha is listed");
+        let names: Vec<&str> = alpha.hosts[0]
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["one", "t1"],
+            "a bot task's worktree stays with its project"
+        );
     }
 
     #[test]

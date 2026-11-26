@@ -174,6 +174,16 @@ directory that does not exist has no kinds.
   start another mode in without failing. `default_permission_mode` names the mode the vendor
   CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
   as a session's mode. The built-in modes and their sources are in decision 0083.
+- `launch_values` (decision 0164), optional: the vendor's spellings of the mode's launch value, in preference order.
+  `args` then holds `{value}` exactly once, right after its flag. At launch the first spelling the CLI's `--help` lists
+  for that flag is passed, and the first spelling when the help lists none or cannot be read. The help is the
+  instruction channel's cached `--help` probe, so one run serves both.
+- A mode's presentation (decision 0163), each optional: `description` (one line), `icon` (a
+  lucide icon name: lowercase letters and digits in `-`-joined words, at most 64 characters),
+  `tone` (`normal` | `warning`; a bypass mode never has `normal`) and `selectable` (default
+  true). Declared order is picker order. A mode with `selectable: false` is not offered in
+  pickers but stays declared, so a session reporting it shows its name, and a caller naming it
+  is still served (the built-in `claude` `dontAsk`). Problems name a bad `tone` or `icon`.
 - `model` and `effort` (decisions 0094, 0096): optional. Each is `{ "flag": "--model" }` (the
   value follows the flag) or `{ "args": ["-m", "{value}"] }` (`{value}` is replaced by the value
   and appears exactly once in the arguments): exactly one of the two. A flag starts with `-` and
@@ -189,6 +199,44 @@ directory that does not exist has no kinds.
   lists efforts, it must be one of those (`request.invalid_params`, naming the allowed ids).
   Without levels, any value that passes the format rule is passed on. Ids are unique, at most one
   choice is the default, and no label is empty.
+- `fast` (decision 0165): optional, `{ "settings": {...}, "settings_flag"?: "--settings", "live"?:
+  "/fast", "toggle"?: true }`. `settings` is a non-empty object that may not set `hooks`;
+  `settings_flag` (default `--settings`) is a flag. A start with fast mode passes `settings` on that
+  flag as one JSON argument. A `claude-settings` run whose hook settings file already goes on
+  `--settings` gets the keys merged into that file instead. `live` and `toggle` are declared for the
+  live switch of a later change; nothing sends them. A `model.choices` entry takes `"fast": true`
+  only when the kind declares `fast`. A start with fast mode is refused with
+  `agent.option_unsupported`, naming the kind and model, unless the kind declares `fast` and, when
+  the kind lists model choices, the named model (the default choice when none is named) is marked
+  `fast: true`. A kind with no model choices passes fast mode on for any model.
+
+## Model catalog (decision 0166)
+
+`agent.models { kind, account?, refresh? }` (capability `agent-models/1`) lists the models a kind's picker offers for an
+account. It merges the kind's declared `model.choices` (`source: declared`, first, in declared order, never dropped)
+with the models the kind's vendor CLI lists for the account (`source: discovered`, after them, never the default). It
+returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `not_signed_in`, `timed_out`, `failed` or
+`no_models`) when the latest listing failed. The declared models come back either way.
+
+- Declaration: `model.discover` holds `args` (after the kind's program), an optional `stdin` written then closed, and a
+  `format`. `lines` reads `id<TAB>label` per line (`agy models`); `claude-control` reads the stream-json
+  `control_response` to the `list_models` request that a `-p` run takes on stdin. Built-in discovery is declared by
+  `antigravity` and `claude`. Codex (an app-server JSON-RPC session) and Gentle Shell (no model option) do not list.
+- Run: the program resolves as a start resolves it. The account home is set in `credentials.home_env`, the names a
+  check strips and the run identity names are removed, and the process is started with `massorca_process::command`.
+  It runs under a 15 second limit (`MASSORCA_MODEL_LISTING_TIMEOUT_MS` for tests), its stdout is read to 8 MiB, and its
+  process tree is stopped before the call returns. A listing succeeds only at exit status 0 with at least one model.
+- Ids are option values: a listed id is kept only when a start would accept it as `--model` (decision 0094), so Claude's
+  bracketed ids, such as `opus[1m]`, are not offered.
+- Cache: in memory, per (kind, account id), with its own entry for the vendor's usual home. A fetched listing is served
+  for 10 minutes and a failure for 30 seconds, beside the last answer; `refresh` asks again; 256 entries at most. An
+  account's answer goes when it is signed in, imported, removed or discarded, and when the kind's active account
+  changes, which also drops the usual home's; a kind whose package is removed loses all its answers. Concurrent requests
+  for one listing share the running one, and waiters block on a condition variable rather than a thread each. A restart
+  empties the cache, and nothing is persisted yet.
+- Refusals: a kind that is not enabled is refused with `agent.kind_not_enabled`, as a start refuses it. An account of
+  another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
+  `agent.credentials_invalid`.
 
 ## Session record (`AgentSession`)
 
@@ -198,7 +246,8 @@ directory that does not exist has no kinds.
 | `kind`, `workspace_id`, `title?`, `read_only` | as started |
 | `parent_id?`, `brought_back_at_ms?` | delegation (0055) |
 | `agent_ref?` | the agent's own conversation id |
-| `terminal_id?` | the current or last run's terminal |
+| `terminal_id?` | the current or last run's terminal; a chat session has none |
+| `run?` | `chat` for a session whose run is a chat run (decision 0101); absent means `terminal` |
 | `created_at_ms` | |
 | `execution` | `{ state: live|unverifiable|exited, exit?: { code?, signal?, reason, at_ms } }` |
 | `activity?` | `{ state: working|waiting|idle|done, outcome?, source: hook|process|output, at_ms }` |
@@ -207,8 +256,10 @@ directory that does not exist has no kinds.
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
-| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
 
 ## Wire
 
@@ -217,12 +268,15 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts? }] }, effort?: { levels?: [{ id, label }], default? } }] }` |
-| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`. The client refuses either before sending when the service does not offer it. |
-| `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back, icon?, tone?, selectable? }], default_permission_mode?, model?: { choices?: [{ id, label, default?, efforts?, fast? }] }, effort?: { levels?: [{ id, label }], default? }, fast?: { supported, reason? } }] }` |
+| `agent.start` | workspace, or none for a session with no project | `workspace?`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?`, `model?`, `effort?`, `fast?` | `AgentSession`. An absent `workspace` needs capability `agent-no-project/1`; `model` and `effort` need `agent-options/1`; `fast` needs `agent-fast/1` (decision 0165). The client refuses each before sending when the service does not offer it. |
+| `agent.list` | read | `workspace?`, `include_archived?` | `{ sessions }`, newest first; archived sessions only with `include_archived` (capability `agent-archive/1`) |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
-| `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
+| `agent.forget` | workspace | `session`, `remove_workspace?`, `force?`, `discard_ignored?`, `expect_dirty?` | `AgentSession` (must be exited) with `workspace_removed?` (a `workspace.remove` result) or `workspace_error?` (`{ code, message }`); the two options need capability `agent-archive/1` (decision 0163) |
+| `agent.forget_preview` | read | `session` | `{ session, can_forget, forget_blocker?, workspace: { id, kind, path?, branch?, removable, blocker?, blocker_code?, dirty, untracked, ignored_files?, other_sessions, other_teams?, other_tasks?, running_terminals? } }`; `path` and blocker messages only for `workspace` scope (others get `blocker_code` and a fixed message) (capability `agent-archive/1`) |
+| `agent.rename` | workspace | `session`, `title` | `AgentSession` with its new title: trimmed, 1 to 120 characters without control characters, else `request.invalid_params`; live or exited (capability `agent-archive/1`) |
+| `agent.archive_session` | workspace | `session`, `archived` | `AgentSession` with its `archived` flag (a live run is refused with `agent.busy`; capability `agent-archive/1`) |
 | `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
 | `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
@@ -231,7 +285,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `same_workspace?` (a writing child in the parent's own worktree; not with `name`, decision 0170), `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -245,6 +299,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
+| `agent.generate_title` | workspace | `kind`, `prompt`, `reply?`, `model?`, `account?` | `{ slug }`, capability `agent-title/1` (decision 0167) |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -412,7 +467,7 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_found` when the
 session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
-workspace.
+worktree; a folder workspace takes several writers (decision 0169).
 
 ### Resume state (decision 0160)
 
@@ -496,6 +551,20 @@ pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `age
 mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
 `agent.queue.resume {session}` returns the queue as it is after the lift.
 
+Delegated children (decision 0170). A child's live run is finished from its first `done` report until its next typed
+prompt or `working` report (a later `waiting` keeps it finished); a kind that never reports `done` finishes when its run
+ends. When a delegated child becomes finished, or its run ends while it was not,
+the service queues a one-line notice on the parent's queue under the same status lock that records the end, with the
+request id `delegation-notice:<child>:<end>`, so each end is queued once. The notice names the child's id and the
+outcome (`done`, `failed`, `cancelled`, `interrupted`, `stopped`, `exited`), and how to read the result, never the
+result text. It is queued as host-admin, so a parent run that holds secrets still takes it. A parent with no live run
+gets it paused (`paused_stopped`); a parent kind with no queue, or a full queue, gets none (logged). While a writing
+child (not read-only, run live, not finished) works in its parent's own workspace, the parent's queue holds
+(reason `child_writing`), and `agent.prompt` without force is refused with `agent.busy` and `data.child`;
+`agent.queue.send_now` still types. A second writing `same_workspace` child, and a resume of a writing child into
+a shared workspace, are refused with `agent.workspace_busy` while another writing session of the tree works unfinished
+there, or an ancestor of its parent has a live run there.
+
 ## Release and retain (decision 0090)
 
 `agent release` archives the newest 256 KiB of a run's terminal text (scrollback and visible rows, without escape codes),
@@ -510,6 +579,137 @@ later run's terminal is pinned when it starts. It does not block a release.
 `agent forget` deletes the record, its terminal, its files and its archive. `agent resume` of a released session starts a
 new run and drops the archive of the run before. The reference and deviations are in `docs/decisions/0090-agent-release-and-retain.md`.
 
+## Chat runs and the journal (decision 0101)
+
+A chat session's run has no terminal: its CLI starts with piped standard input, output and error, as the root of its own
+process tree (`process_tree`: a kill-on-close job on Windows, a process group on Unix). The start is `agent.start`'s, with
+two differences: the launch plan gets no prompt argument, and the adapter (`core-agents::chat::ChatAdapter`) adds its
+dialect's arguments. The row records `run_type = 'chat'` and a `run_id`, which plays the part a terminal id plays for a
+terminal run (decision 0058): an end is recorded only while the row still names that run. Its environment is the
+service's, without the plan's removed variables, with the plan's variables and `MASSORCA_WORKSPACE_ID`.
+
+- Output: a reader thread hands each line (LF-terminated, a trailing CR dropped, at most 16 MiB; a longer line is skipped
+  and noted) to the adapter, whose `JournalOp`s are applied as one journal batch. Lines are held until the session row
+  and journal exist, so none is lost to a start in progress.
+- Input: writes are serialized, so two messages never interleave. A first prompt opens a turn in the journal (a running
+  `turn` item, then its `user_message`) and is then written to standard input.
+- Standard error: the newest 16 KiB are kept, as the exit's evidence for the resume state (decision 0160).
+- End: a waiter reaps the program, waits for the last line, and records the end through the same exit path as a
+  terminal run (exit code or signal, reason, the interrupted rule, one announcement). A turn left open ends
+  `interrupted` when the run was stopped and `unverifiable` otherwise.
+- Stop: `agent.stop` closes standard input and gives the run the terminal's 5 s grace, then kills its whole tree (at once
+  with `force`); the end says `killed`. The service's shutdown kills every chat run; the end says `service_stopped`.
+
+The journal is per session in the store: `agent_chat_journals` (the epoch, the newest `seq`, and `pruned_seq`) and
+`agent_chat_items` (a stable id, its position, the `seq` of its last change, its turn and parent, its type and JSON
+body). The text of an `assistant_message` or `thinking` is kept in its own column, so an append writes only the text and
+the stream sends an `append` with the byte offset it starts at; a replay sends the whole item.
+
+- Cap: a journal keeps at most 10 000 items. Past it, adding an item drops the oldest, and `pruned_seq` rises to the
+  newest change among the dropped. History pages back only to the oldest kept item. A resubscription whose cursor is
+  older than `pruned_seq`, or that would replay more than 1 000 items, is answered with `reset { too_old }` and a
+  snapshot.
+- `agent.chat.subscribe` takes the stream's change subscription before it reads its first event under the journal lock,
+  so the cursor of that event says which later batches it already covers. A stream that falls behind the chat channel
+  (4 096 changes) gets `reset { overflow }` and a snapshot. A forgotten session's streams end with `end { forgotten }`;
+  a shutdown ends them as every stream, with `service.shutting_down`.
+- `agent.chat.subscribe`, `agent.chat.history`, `agent.chat.approval.answer` and `agent.chat.interrupt` refuse a
+  session that is not a chat with `agent.not_chat`, and a run that holds vault secrets below host-admin scope, as its
+  terminal (decision 0071). Every chat method is registered under `agent-chat/1`, which the service offers. A test
+  build also starts the kinds `MASSORCA_TEST_CHAT_KINDS` names as chat runs of the fake agent's own dialect
+  (`massorca-fake-agent chat`), through `agent.start` or `agent.chat.start`.
+
+### Starting, prompting and the activity of a chat
+
+- `agent.chat.start` (CLI: `massorca agent start KIND --chat`) takes the `agent.start` params; `cols`, `rows` and `args`
+  are `request.invalid_params`. The kind needs a `chat` block (`{ "adapter", "min_version", "max_major" }`) whose
+  adapter MassOrca speaks (`claude-stream-json`), and its CLI's probed version in range; otherwise
+  `agent.chat_unsupported`, with the kind's `KindChat` as `data`.
+- `agent.prompt` on a chat session writes the adapter's user message and answers `sent_to_chat`. While a turn runs or a
+  request waits it is `agent.busy`; with `force` the message is written anyway and opens its own running turn at once
+  (a held turn). The next `result` closes the running turn and every held turn (the CLI may fold held messages into its
+  turn), an interrupt ends them all `interrupted`, and the run's end ends them. A service restart reads every running
+  turn back, so the next end closes them.
+- The service records a chat session's activity from its journal (source `output`): `working` while a turn runs,
+  `waiting` while a permission request is pending, `done` with the CLI's outcome when a turn completed, `idle` after an
+  interrupted or unverifiable turn. A change is announced as for a hook report, travels as the batch's `activity`, and
+  an `idle` or `done` drains the prompt queue (decision 0084). A queued prompt reaches a chat run as a message, through
+  the same gates; `agent.queue.send_now` sends it forced. A delivery that finds the chat busy (a prompt won the race)
+  waits again. A chat session has a queue whatever its kind's status mechanism.
+- `agent.chat.approval.answer` settles the approval item under the journal lock, so the first answer wins and a later
+  one is `agent.approval_settled` (with the item as `data`). A request the adapter no longer holds (withdrawn by the
+  CLI, cancelled by an interrupt) is settled too and nothing is written; so is a request id the current run never
+  sent. With `seq`, an item that changed since (the CLI sent the request again) is `agent.approval_changed`. `always`
+  needs `allow` and an item that says `can_always`. The answer is recorded first and the adapter forgets the request
+  only then; a write to the run that fails afterwards adds an error notice.
+- `agent.chat.interrupt` writes the adapter's interrupt and ends the open turn `interrupted` (open tool calls and
+  sub-agents `interrupted`, pending approvals `cancelled`) under the journal lock. Any turn end cancels the approvals
+  still pending; a service restart finds them in the store and cancels them with the run's end.
+- `agent.resume` of an exited chat session starts the kind's resume form with the adapter's arguments, after the same
+  version check as a start (`agent.chat_unsupported` outside the range). The row names the new `run_id`; the journal and
+  its epoch carry on.
+
+### The Claude adapter
+
+`chat/claude.rs` speaks Claude Code's stream-json dialect, written against the frame vocabulary of Claude Code 2.1.258
+(pv96's `claude-stream-json-frame-schema.ts`). A run starts with `-p --input-format stream-json --output-format
+stream-json --verbose --include-partial-messages --permission-prompt-tool stdio`, then the kind's arguments (its
+session id or resume form, permission mode, model, effort and instructions). A prompt is
+`{"type":"user","message":{"role":"user","content":[{"type":"text","text":...}]},"parent_tool_use_id":null,"session_id":""}`.
+
+| Frame | Journal |
+|---|---|
+| `stream_event` `message_start` | remembers the message id |
+| `stream_event` `content_block_start` (text, thinking) | adds a running `assistant_message` or `thinking` |
+| `stream_event` `content_block_delta` (`text_delta`, `thinking_delta`) | `append` |
+| `assistant` text or thinking block | replaces the streamed text when it differs; adds the block when nothing streamed it |
+| `assistant` `tool_use` | `tool_use` `started`; `Task`/`Agent`: `subagent` `running`; `TodoWrite`: `plan`; `ExitPlanMode` with a plan file: also a `plan` whose `document` is that path |
+| `tool_progress` | the call `updated` |
+| `user` `tool_result` | the call `completed` or `failed` with its output (16 KiB); a sub-agent `completed` or `failed`; an `Edit`, `MultiEdit` or `Write` success adds a `diff` (`added` for a created file, else `modified`), from the result's `structuredPatch` or else built from the input |
+| any frame with `parent_tool_use_id` | its items name the sub-agent's item as `parent` |
+| `control_request` `can_use_tool` | a pending `approval` listing as `suggestions` the offered `addRules` that allow, to `session` or `localSettings` (`can_always` when there is one); everything else offered is dropped; no tool or an input that is not an object: denied, with a notice |
+| `control_request` of another subtype | refused with an error response, with a notice |
+| `control_cancel_request` | the approval `cancelled`; nothing answers it |
+| `result` | the turn `completed`, outcome `failure` when `is_error` or not `success` (with an error notice); the result answering an interrupt is skipped |
+| `system` `api_retry`, `compact_boundary`, model refusals, `permission_denied`; `auth_status` with an error | notices |
+| the rest of the vocabulary (`init`, hooks, status, tasks, `control_response`, `rate_limit_event`, ...) | nothing |
+| an unknown type or an unreadable line | a warning notice naming the type, never the content |
+
+An allow answers `{"behavior":"allow","updatedInput":<the request's input>}` with `updatedPermissions` (only the listed
+suggestions) for `always`; a deny answers `{"behavior":"deny","message":...}`; both carry `toolUseID` when the request
+named one. The interrupt is `{"type":"control_request","request_id":"massorca-interrupt-N","request":{"subtype":"interrupt","cancel_queued":true}}`.
+A `result` and an interrupt both make the adapter forget the turn's partial messages and unfinished calls. Names the
+CLI sends (tools, frame types, subtypes) are cut to 128 characters, paths and plan entries to 16 KiB, a plan to 200
+entries.
+
+### Version probing
+
+`agent.kinds` fills `AgentKind.chat` for a kind with a `chat` block: the kind's resolved program is run with `--version`
+(no account home, the account-stripped variables removed, 5 s), the first `MAJOR.MINOR.PATCH` of its output is read,
+and the result is kept per program path and modified time in the probe cache the instruction probe shares
+(`probe.rs`); a failed probe is run again after 60 s. A chat resume probes before it takes the start gates. `not_detected` when no program resolves, `version_unknown` when the probe fails or prints no version,
+`version_outside_range` below `min_version` or above `max_major`; `range` reads `>=MIN, <MAX+1.0.0`. The built-in
+`claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
+`MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
+
+## Archive and delete (decision 0163)
+
+`agent.archive_session` hides an exited session (`archived`, a durable `archived_at`): `agent.list` leaves it out unless
+`include_archived`, and nothing else changes. Its record, its workspace and its terminal stay; the terminal is pinned as a
+retained one is, so `max_exited` eviction keeps its output, and clearing a retain leaves an archived session's terminal
+pinned. A live run is refused with `agent.busy`. A resume clears the archive. `agent.watch` and `agent.show` still carry
+archived sessions, with the flag.
+
+`agent.forget` with `remove_workspace` deletes the session and its workspace. Every check runs before anything changes: the
+forget's own (`agent.busy` for a live run); that no other session (live, exited or archived) uses the workspace
+(`agent.busy` naming them); that no team, task or running terminal does (`workspace.busy`); with `expect_dirty: false`,
+that the worktree is still clean; then `workspace.remove`'s refusals with `force` and `discard_ignored` as its waivers.
+The session is then forgotten; the removal begins under the start gate and the workspace's mutation lock, re-checking the
+other users before the workspace is marked `removing` (after which starts, resumes and terminals in it are refused), and
+finishes through `workspace.remove`'s own steps (its events, its branch rule). Nothing running is stopped on this path; a
+folder workspace is forgotten and its files stay. A refusal or failure after the forget is returned in `workspace_error`.
+`agent.forget_preview` reports the same checks without waivers, changing nothing.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
@@ -519,9 +719,9 @@ new run and drops the archive of the run before. The reference and deviations ar
   parent's uncommitted changes were not carried over.
 - Folder children (decision 0161): a writing child of a plain folder workspace runs in the parent's folder, with no
   copy, and its `note` and `notes` say "This workspace has no Git, so the child works in this folder." The
-  sessions under the same delegation root count as one writer there: `agent.workspace_busy` does not refuse a writing
-  start or resume of one of them because another writes in the folder, while any other writing start is refused as
-  before. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
+  folder takes several writers (decision 0169), so no writing start or resume there is refused because another session
+  writes in it. `agent.workspace_busy` remains for a worktree workspace (decision 0072), where a second writing start
+  is refused. `agent.delegate_needs_git` remains for a worktree workspace with no branch.
 - The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
   workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
   `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
@@ -598,11 +798,13 @@ it was noticed.
 
 ```
 massorca agent kinds
-massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
-massorca agent list [--workspace <ws>]
+massorca agent start <kind> [--workspace <ws>] [--model <m>] [--effort <e>] [--fast] [--prompt <text>] [--read-only] [--title <t>] [-- <args>...]
+massorca agent list [--workspace <ws>] [--archived]
 massorca agent status [<session>] [--watch] [--until <working|waiting|idle|done|exited>] [--timeout <secs>]
 massorca agent stop <session> [--force]
-massorca agent forget <session>
+massorca agent forget <session> [--remove-workspace [--force] [--discard-ignored] | --preview]
+massorca agent hide <session> [--off]
+massorca agent rename <session> <title>
 massorca agent release <session>
 massorca agent retain <session> [--off]
 massorca agent archive <session>
@@ -957,6 +1159,47 @@ first 100000 characters, and the rest was searched for the variables above, not 
 Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
 may still see a set but empty variable; and the list covers the variables named in the documents read,
 not every variable a future Claude release may read.
+
+## Chat titles by a one-shot run (decision 0167)
+
+A kind may declare a non-interactive form that names a chat from its first prompt and reply:
+
+```json
+"oneshot": {
+  "args": ["-p", "{prompt}", "--output-format", "text"],
+  "model_flag_reuse": true,
+  "optional_args": [{ "flag": "--max-turns", "values": ["1"] }, { "flag": "--strict-mcp-config" }]
+}
+```
+
+- `args` holds `{prompt}` exactly once; the prompt is one argument of the run, never a shell line. `model_flag_reuse`
+  passes the kind's `model` arguments to the run when a model is named; without it the model is ignored. Only Claude
+  declares it: the other built-in kinds have no non-interactive form that was confirmed.
+- `optional_args` are passed after `args` only when the program's `--help` lists their flag as a whole word. The listing
+  is the instruction channel's cached probe output (`instructions::probe_run`), so `--help` runs once per program; without
+  a listing none is passed. Claude lists the restrictions that stop tool use in its print mode: one turn, the permission
+  mode `default`, no MCP servers beyond an empty `--mcp-config`, the built-in tools denied through one comma-separated
+  `--disallowedTools` argument, `--tools ""` and `--no-session-persistence`. Hooks in the account's settings still load.
+- The request asks for an English ASCII title of two to four words, whatever the language of the chat, and is one line:
+  every line break and run of whitespace becomes one space (a Windows `.cmd` launcher refuses an argument with a line
+  break). A leading label such as `Title:` or `Título:` is removed before the slug is made (`title.rs`).
+- Below host-admin a caller may name only the kind's active account; another account is refused with
+  `permission.denied`. The method takes no project, so a project's own choice is not reachable through it.
+- `agent.generate_title` (capability `agent-title/1`, `massorca agent title`) runs the kind's startable program once.
+  The account is the one named, else the kind's active one; no usable account is `agent.credentials_invalid`. Its home
+  is read under the same gate as an account check, with the state file repaired first (decision 0099).
+- The run's environment removes the kind's `strip_inherited_env`, its credential and account `strip_env` lists, and the
+  three run identity variables (`MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`). It installs no
+  status hooks and writes no session row, terminal or transcript of MassOrca's. Its working folder is a fresh folder
+  under the profile's `tmp` folder, outside every workspace, removed when the run ends.
+- The run has 30 seconds (`MASSORCA_TITLE_TIMEOUT_MS` shortens it for tests, down to 100 ms). Past that its process tree
+  is stopped and the call fails with `agent.oneshot_timeout`.
+- The reply's first line that holds a usable word becomes the slug: accents folded (`canción` is `cancion`), every other
+  character a separator, at most four words joined by `-`, at most 48 characters. A reply with no usable word, a
+  non-zero exit or a missing program fails with `agent.oneshot_failed`; a kind with no one-shot form fails with
+  `agent.oneshot_unsupported`. A reply is never logged; the error names the kind and the cause only.
+- Open: Claude's print mode may keep its own transcript under the account home. `--no-session-persistence` would stop
+  that, but it is not declared because it cannot be checked here without running the real CLI.
 
 ## Follow-ups
 
