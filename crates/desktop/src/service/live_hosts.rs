@@ -164,3 +164,6 @@ pub(super) fn host_link(state: &LiveState, now: Instant) -> HostLink {
     }
 }
 
+#[cfg(test)]
+#[path = "live_hosts_tests.rs"]
+mod tests;
