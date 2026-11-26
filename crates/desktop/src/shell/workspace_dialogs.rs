@@ -646,6 +646,7 @@ impl Shell {
             ProjectIconChoice::Lucide(name) => self.set_add_project_icon(
                 Some(massorca_protocol::methods::projects::ProjectIcon::Lucide {
                     name: name.to_owned(),
+                    color: None,
                 }),
                 cx,
             ),

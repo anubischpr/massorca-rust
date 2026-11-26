@@ -303,6 +303,7 @@ fn main_worktree_row(store: &Store, project_id: &str, repo: &Path) -> Workspace 
         created_at: now_ms(),
         comment: None,
         name_generated: false,
+        in_place: false,
     };
     store
         .insert_workspace(&row)
@@ -324,6 +325,7 @@ fn main_worktree_row(store: &Store, project_id: &str, repo: &Path) -> Workspace 
         base_refresh: None,
         comment: None,
         name_generated: false,
+        in_place: false,
         setup: None,
     }
 }

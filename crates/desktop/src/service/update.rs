@@ -1210,6 +1210,7 @@ pub(crate) mod fixtures {
             added_at_ms: 1,
             base_ref: None,
             icon: None,
+            remote_owner: None,
         }
     }
 

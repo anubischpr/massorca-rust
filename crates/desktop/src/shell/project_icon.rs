@@ -35,6 +35,7 @@ impl Shell {
             ProjectIconChoice::Lucide(name) => {
                 let icon = ProjectIcon::Lucide {
                     name: name.to_owned(),
+                    color: None,
                 };
                 self.send_project_icon(project, Some(icon), cx);
             }

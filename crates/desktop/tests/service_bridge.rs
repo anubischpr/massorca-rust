@@ -553,6 +553,7 @@ fn base_workspace_remove_params() -> massorca_protocol::methods::workspaces::Wor
         force: false,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
         allow_failed_archive: false,
     }
 }

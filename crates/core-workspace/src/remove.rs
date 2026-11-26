@@ -13,6 +13,7 @@ use massorca_core_git::GitError;
 
 use crate::error::DomainError;
 use crate::paths;
+use crate::views;
 use crate::workspaces::Workspaces;
 
 /// What the caller waives when removing a workspace. Each waiver covers one kind of change that
