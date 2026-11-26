@@ -16,6 +16,7 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
+use massorca_protocol::methods::service::GitStatus as ServiceGitStatus;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -107,6 +108,8 @@ pub enum StoreUpdate {
     Devices(Result<Vec<DeviceInfo>, Refusal>),
     /// The listeners and counts of this computer's service, after a read.
     Network(Result<NetworkStatus, Refusal>),
+    /// This computer's service's Git, read on each connect; `Ok(None)` from a service that predates the report.
+    ServiceGit(Result<Option<ServiceGitStatus>, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
     /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
@@ -250,6 +253,8 @@ pub struct StoreState {
     pub devices: Option<Result<Vec<DeviceInfo>, Refusal>>,
     /// This computer's listeners and counts, once read.
     pub network: Option<Result<NetworkStatus, Refusal>>,
+    /// What this computer's service said about Git on the last connect; `None` until that read answered.
+    pub service_git: Option<Result<Option<ServiceGitStatus>, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
     /// The number of the newest extension read applied; an older late answer changes nothing.
@@ -311,6 +316,7 @@ impl Default for StoreState {
             hosts: Vec::new(),
             devices: None,
             network: None,
+            service_git: None,
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
@@ -475,6 +481,7 @@ impl StoreState {
             }
             StoreUpdate::Devices(result) => self.devices = Some(result),
             StoreUpdate::Network(result) => self.network = Some(result),
+            StoreUpdate::ServiceGit(result) => self.service_git = Some(result),
             StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
                 self.secrets.status = Some(result);
             }
@@ -1265,6 +1272,25 @@ mod tests {
         );
         assert_eq!(state.devices, Some(Err(Refusal::unavailable("gone"))));
         assert_eq!(state.network, None);
+    }
+
+    #[test]
+    fn this_computers_git_answer_replaces_the_one_held() {
+        let mut state = StoreState::default();
+        assert_eq!(state.service_git, None);
+        let present = ServiceGitStatus::Present {
+            version: "2.49.0".to_owned(),
+        };
+        state.apply(
+            StoreUpdate::ServiceGit(Ok(Some(present.clone()))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Ok(Some(present))));
+        state.apply(
+            StoreUpdate::ServiceGit(Err(Refusal::unavailable("gone"))),
+            Instant::now(),
+        );
+        assert_eq!(state.service_git, Some(Err(Refusal::unavailable("gone"))));
     }
 
     #[test]

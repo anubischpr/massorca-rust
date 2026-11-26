@@ -848,6 +848,14 @@ impl Link {
             Err(ClientError::Remote(_) | ClientError::Protocol(_)) => {}
             Err(error) => return Err(error),
         }
+        // Settings shows a refused read as unknown; only a lost link ends the connection.
+        match client.service_info().await {
+            Ok(info) => self.emit(StoreUpdate::ServiceGit(Ok(info.git))),
+            Err(error @ (ClientError::Remote(_) | ClientError::Protocol(_))) => {
+                self.emit(StoreUpdate::ServiceGit(Err(Refusal::from(&error))));
+            }
+            Err(error) => return Err(error),
+        }
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }

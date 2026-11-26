@@ -25,6 +25,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use super::Shell;
 use super::path_field::{PickKind, path_field};
 use crate::model::app_theme::ThemeChoice;
+use crate::model::git_availability::GitRow;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
@@ -62,6 +63,8 @@ pub(super) struct SettingsFrame<'a> {
     pub connection: ConnectionState,
     /// Each paired remote host by name, with the state its last check left (D-HO-07).
     pub hosts: Vec<(String, HostState)>,
+    /// This computer's Git as its service reported it on connect, for the Git row of Sources (GIT-01).
+    pub git: GitRow,
     pub shell: WeakEntity<Shell>,
     pub folder: &'a FolderSetting,
     pub folder_field: &'a Entity<TextField>,
@@ -354,6 +357,14 @@ fn row(
             )),
         ),
         RowBody::AddHost => (row, Some(add_host_button(id.clone(), frame))),
+        RowBody::GitAvailability => {
+            let key = frame.git.state.key();
+            let control = div()
+                .debug_selector(move || format!("settings-git-{key}"))
+                .child(value_box(frame.git.word.clone(), &theme))
+                .into_any_element();
+            (row.helper(frame.git.detail.clone()), Some(control))
+        }
         RowBody::PairingLink => (
             row,
             Some(page_link(
