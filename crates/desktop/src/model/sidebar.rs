@@ -687,7 +687,7 @@ mod tests {
         let folder = ProjectGroup {
             id: "notes".into(),
             name: "notes".into(),
-            emoji: None,
+            icon: ProjectGlyph::Folder,
             owner: None,
             plain_folder: true,
             hosts: Vec::new(),
