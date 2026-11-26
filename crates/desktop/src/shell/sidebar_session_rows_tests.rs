@@ -346,3 +346,46 @@ fn stop_on_a_paired_hosts_session_reaches_that_host_and_never_this_pcs_service(
         "This PC's service is never asked to stop a paired host's session"
     );
 }
+
+#[gpui::test]
+fn the_show_archived_toggle_is_offered_only_once_the_service_offers_archive(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    assert!(
+        cx.debug_bounds("sidebar-show-archived").is_none(),
+        "no toggle without agent-archive/1"
+    );
+    rig.updates
+        .send(StoreUpdate::AgentArchiveOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-show-archived").is_some());
+}
+
+#[gpui::test]
+fn an_archived_session_is_hidden_until_show_archived_is_clicked(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::AgentArchiveOffered(true))
+        .expect("the store listens");
+    let mut archived = agent("a1", "w1", 3);
+    archived.archived = true;
+    rig.updates
+        .send(StoreUpdate::AgentChanged(Box::new(archived)))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-session-a1").is_none(),
+        "an archived session is hidden by default"
+    );
+    click(cx, "sidebar-show-archived");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("sidebar-session-a1").is_some(),
+        "Show archived lists it under its workspace"
+    );
+}

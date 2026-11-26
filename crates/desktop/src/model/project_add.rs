@@ -2,7 +2,7 @@
 //! where a refusal shows, and the warning for a folder that is not a Git repository (WS-31). The service
 //! picks the project's name.
 
-use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
+use massorca_protocol::methods::projects::{ProjectAddParams, ProjectIcon, ProjectKind};
 
 use crate::model::workspace_flow::{DialogCopy, DialogKind};
 use crate::service::Refusal;
@@ -39,6 +39,12 @@ pub struct AddProjectForm {
     pub error: Option<String>,
     /// A folder that is not a Git repository, held until the person continues without Git or cancels.
     pub plain_folder: Option<String>,
+    /// The icon the project is added with; `None` leaves it to the service, which detects one from the folder's files.
+    pub icon: Option<ProjectIcon>,
+    /// Whether the icon grid is open.
+    pub icon_open: bool,
+    /// Why the last uploaded icon was refused, shown under the grid until the next choice.
+    pub icon_refusal: Option<String>,
 }
 
 impl AddProjectForm {
@@ -46,10 +52,10 @@ impl AddProjectForm {
         !self.busy && !self.path.trim().is_empty()
     }
 
-    /// The `project.add` params for the typed path. The name and the kind are left to the service.
+    /// The `project.add` params for the typed path and the chosen icon. The name and the kind are left to the service.
     pub fn params(&self) -> Option<ProjectAddParams> {
         self.can_submit().then(|| ProjectAddParams {
-            icon: None,
+            icon: self.icon.clone(),
             path: self.path.trim().to_owned(),
             name: None,
             kind: None,
@@ -84,12 +90,29 @@ impl AddProjectForm {
         self.plain_folder = None;
     }
 
+    /// Chooses the icon the project is added with, or `None` to leave it to the service, and closes the grid.
+    pub fn choose_icon(&mut self, icon: Option<ProjectIcon>) {
+        self.icon = icon;
+        self.icon_open = false;
+        self.icon_refusal = None;
+    }
+
+    /// Opens or closes the icon grid.
+    pub fn set_icon_open(&mut self, open: bool) {
+        self.icon_open = open;
+    }
+
+    /// An uploaded icon was refused: the grid stays open with the reason under it.
+    pub fn refuse_icon(&mut self, reason: String) {
+        self.icon_refusal = Some(reason);
+    }
+
     /// Continue without Git: the `project.add` params that register the held folder as a plain folder.
     pub fn continue_without_git(&mut self) -> Option<ProjectAddParams> {
         let path = self.plain_folder.take()?;
         self.begin();
         Some(ProjectAddParams {
-            icon: None,
+            icon: self.icon.clone(),
             path,
             name: None,
             kind: Some(ProjectKind::Folder),
@@ -199,5 +222,70 @@ mod tests {
         assert_eq!(copy.title, "This folder is not a Git repository");
         assert_eq!(copy.action, "Continue without Git");
         assert_eq!(copy.loss.len(), 2, "two losses are named");
+    }
+
+    fn lucide(name: &str) -> ProjectIcon {
+        ProjectIcon::Lucide {
+            name: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_params_send_the_icon_the_owner_chose_and_none_until_then() {
+        let mut form = AddProjectForm {
+            path: "/repo".into(),
+            ..AddProjectForm::default()
+        };
+        let params = form.params().expect("the form can be sent");
+        assert_eq!(params.icon, None, "the service detects an icon");
+        form.choose_icon(Some(lucide("rocket")));
+        let params = form.params().expect("the form can be sent");
+        assert_eq!(params.icon, Some(lucide("rocket")));
+    }
+
+    #[test]
+    fn choosing_an_icon_closes_the_grid_and_reset_leaves_the_icon_to_the_service() {
+        let mut form = AddProjectForm {
+            path: "/repo".into(),
+            icon_open: true,
+            icon_refusal: Some("The icon was not set.".into()),
+            ..AddProjectForm::default()
+        };
+        form.choose_icon(Some(lucide("rocket")));
+        assert!(!form.icon_open);
+        assert_eq!(form.icon_refusal, None);
+        form.choose_icon(None);
+        assert_eq!(form.icon, None);
+    }
+
+    #[test]
+    fn a_refused_upload_keeps_the_grid_open_with_its_reason() {
+        let mut form = AddProjectForm {
+            icon_open: true,
+            ..AddProjectForm::default()
+        };
+        form.refuse_icon("The icon was not set: the file is not a PNG.".into());
+        assert!(form.icon_open);
+        assert_eq!(form.icon, None);
+        assert_eq!(
+            form.icon_refusal.as_deref(),
+            Some("The icon was not set: the file is not a PNG.")
+        );
+    }
+
+    #[test]
+    fn a_plain_folder_is_added_with_the_icon_chosen_before_the_warning() {
+        let mut form = AddProjectForm {
+            path: "/notes".into(),
+            ..AddProjectForm::default()
+        };
+        form.choose_icon(Some(lucide("notebook")));
+        form.begin();
+        form.hold_plain_folder("/notes".into());
+        let params = form
+            .continue_without_git()
+            .expect("the held folder is added");
+        assert_eq!(params.icon, Some(lucide("notebook")));
+        assert_eq!(params.kind, Some(ProjectKind::Folder));
     }
 }
