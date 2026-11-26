@@ -298,8 +298,8 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
     let imported = handle
         .accounts_import(AccountsImportParams {
             kind: KIND.to_owned(),
-            from: None,
             label: Some("work".to_owned()),
+            ..base_accounts_import_params()
         })
         .await
         .expect("the import answers");
@@ -405,5 +405,14 @@ fn base_extension_install_params() -> massorca_protocol::methods::extensions::Ex
         run_installer: false,
         sha256: None,
         agent_token: None,
+    }
+}
+
+/// Every `AccountsImportParams` field at its usual value; tests override the fields they vary.
+fn base_accounts_import_params() -> massorca_protocol::methods::agents::AccountsImportParams {
+    massorca_protocol::methods::agents::AccountsImportParams {
+        kind: String::new(),
+        from: None,
+        label: None,
     }
 }

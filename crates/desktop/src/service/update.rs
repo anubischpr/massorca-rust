@@ -1687,6 +1687,38 @@ pub(crate) mod fixtures {
             skipped_reason: None,
         }
     }
+
+    /// Every `AccountsImported` field at its usual value; tests override the fields they vary.
+    pub fn base_accounts_imported() -> massorca_protocol::methods::agents::AccountsImported {
+        massorca_protocol::methods::agents::AccountsImported {
+            result: massorca_protocol::methods::agents::ImportResult::NotFound,
+            account: None,
+            reason: None,
+            updated: None,
+        }
+    }
+
+    /// Every `CandidateFile` field at its usual value; tests override the fields they vary.
+    pub fn base_candidate_file() -> massorca_protocol::methods::agents::CandidateFile {
+        massorca_protocol::methods::agents::CandidateFile {
+            name: ".credentials.json".to_owned(),
+            required: true,
+            found: true,
+            path: None,
+            env: None,
+            reason: None,
+        }
+    }
+
+    /// Every `ImportCandidate` field at its usual value; tests override the fields they vary.
+    pub fn base_import_candidate() -> massorca_protocol::methods::agents::ImportCandidate {
+        massorca_protocol::methods::agents::ImportCandidate {
+            kind: "claude".to_owned(),
+            ready: true,
+            folder: None,
+            files: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
