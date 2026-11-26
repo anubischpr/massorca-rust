@@ -159,6 +159,34 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.scripts",
+            "Show a project's orca.yaml scripts with their hashes and trust",
+            "project.scripts",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": { "project": { "type": "string" }, "workspace": { "type": "string" } }
+            }),
+        ),
+        command(
+            "project.trust-scripts",
+            "Show a project's orca.yaml scripts and trust one by its hash",
+            "project.trust_script",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "hash": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Hashes of shown scripts to trust; each is sent to project.trust_script"
+                    }
+                }
+            }),
+        ),
+        command(
             "workspace.create",
             "Create a workspace",
             "workspace.create",
@@ -254,7 +282,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             json!({
                 "type": "object",
                 "required": ["workspace"],
-                "properties": { "workspace": { "type": "string" }, "force": { "type": "boolean" } }
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "force": { "type": "boolean" },
+                    "allow_failed_archive": { "type": "boolean" }
+                }
             }),
         ),
         command(
@@ -651,6 +683,48 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "limit": { "type": "integer" }
                 }
             }),
+        ),
+        command(
+            "agent.chat.start",
+            "Start an agent session whose run is a structured chat",
+            "agent.chat.start",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "title": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "permission_mode": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.approval.answer",
+            "Answer a chat session's permission request",
+            "agent.chat.approval.answer",
+            json!({
+                "type": "object",
+                "required": ["session", "request_id", "decision"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "request_id": { "type": "string" },
+                    "decision": { "type": "string", "enum": ["allow", "deny"] },
+                    "scope": { "type": "string", "enum": ["once", "always"] },
+                    "message": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.interrupt",
+            "Interrupt a chat session's running turn and keep the session",
+            "agent.chat.interrupt",
+            selector("session"),
         ),
         command(
             "agent.chat.history",

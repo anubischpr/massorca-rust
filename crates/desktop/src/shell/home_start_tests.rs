@@ -147,7 +147,7 @@ fn a_new_workspace_shows_a_placeholder_row_until_its_session_replaces_it(cx: &mu
         .send(Ok(session.clone()))
         .expect("the shell waits for the start");
     rig.updates
-        .send(StoreUpdate::AgentChanged(session))
+        .send(StoreUpdate::AgentChanged(Box::new(session)))
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
@@ -260,7 +260,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
         .send(Ok(session.clone()))
         .expect("the shell waits for the start");
     rig.updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     let active = rig
@@ -805,7 +805,7 @@ fn no_project_once_offered_starts_the_agent_with_no_workspace_and_opens_it(
         .send(Ok(session.clone()))
         .expect("the shell waits for the start");
     rig.updates
-        .send(StoreUpdate::AgentChanged(session.clone()))
+        .send(StoreUpdate::AgentChanged(Box::new(session.clone())))
         .expect("the store listens");
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, cx| {

@@ -3,6 +3,7 @@
 //! No protocol and no async runtime: the service maps requests onto this crate.
 
 pub mod attach;
+pub mod credential_guard;
 pub mod manager;
 pub mod process_tree;
 pub mod pty;
