@@ -585,6 +585,13 @@ CREATE TABLE script_trust (
 "#,
         foreign_keys_off: false,
     },
+    // Whether the service chose a workspace's name (decision 0111): only such a name may be renamed for the person.
+    Migration {
+        sql: r#"
+ALTER TABLE workspaces ADD COLUMN name_generated INTEGER NOT NULL DEFAULT 0 CHECK(name_generated IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
     // A room line about the one-time routine it scheduled (decision 0121); the routine's removal keeps the line.
     Migration {
         sql: r#"

@@ -41,6 +41,12 @@ pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// `workspace.rename` refused a name a person typed; only a name the service chose is renamed (decision 0111).
+pub const WORKSPACE_NAME_NOT_GENERATED: &str = "workspace.name_not_generated";
+/// The worktree is no longer on the branch the workspace records, or the one the caller expected.
+pub const WORKSPACE_BRANCH_CHANGED: &str = "workspace.branch_changed";
+/// The workspace's branch has an upstream or a remote copy, so renaming it would split it from what others see.
+pub const WORKSPACE_BRANCH_PUBLISHED: &str = "workspace.branch_published";
 /// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
 pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
 /// The project's `orca.yaml` defines no script of the kind asked for.

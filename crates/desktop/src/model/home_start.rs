@@ -198,9 +198,12 @@ pub fn create_params(
     prompt: &str,
     details: &WorkspaceDetails,
 ) -> WorkspaceCreateParams {
+    let typed = non_empty(&details.name);
     WorkspaceCreateParams {
         project: project.to_owned(),
-        name: non_empty(&details.name).unwrap_or_else(|| workspace_name_seed(prompt)),
+        // A name derived from the prompt is the service's to rename later (decision 0111).
+        name_generated: typed.is_none(),
+        name: typed.unwrap_or_else(|| workspace_name_seed(prompt)),
         branch: None,
         base: non_empty(&details.base),
         existing_branch: false,
@@ -208,6 +211,7 @@ pub fn create_params(
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
     }
 }
 
@@ -368,6 +372,10 @@ mod tests {
         let params = create_params("p1", "fix the login", &WorkspaceDetails::default());
         assert_eq!(params.project, "p1");
         assert_eq!(params.name, "fix-the-login");
+        assert!(
+            params.name_generated,
+            "a name derived from the prompt is the service's to rename"
+        );
         assert_eq!(params.branch, None);
         assert_eq!(
             params.base, None,
@@ -385,6 +393,7 @@ mod tests {
         let params = create_params("p1", "fix the login", &details);
         assert_eq!(params.base.as_deref(), Some("release"));
         assert_eq!(params.branch, None);
+        assert!(params.name_generated);
         assert!(!params.existing_branch);
     }
 
