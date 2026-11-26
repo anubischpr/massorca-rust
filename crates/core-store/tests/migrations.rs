@@ -317,3 +317,34 @@ fn a_team_made_before_access_ran_bypass_modes_becomes_default_access() {
     assert_eq!(user_version(&path), latest());
     assert_eq!(store.get_team("t1").unwrap().unwrap().access, "default");
 }
+
+#[test]
+fn a_workspace_from_before_the_generated_name_step_is_not_marked_generated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = store_path(&dir);
+    // Found by content: later steps are appended after it.
+    let before = MIGRATIONS
+        .iter()
+        .position(|step| step.sql.contains("ADD COLUMN name_generated"))
+        .expect("the generated name step");
+    {
+        let connection = Connection::open(&path).unwrap();
+        for step in &MIGRATIONS[..before] {
+            connection.execute_batch(step.sql).unwrap();
+        }
+        connection
+            .execute_batch(&format!(
+                "PRAGMA user_version = {before};
+                 INSERT INTO projects (id, kind, path, path_key, name, workspaces_root, added_at)
+                 VALUES ('p1', 'git', '/repos/app', '/repos/app', 'app', '/ws', 1);
+                 INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at)
+                 VALUES ('w1', 'p1', 'worktree', 'otter', '/ws/otter', '/ws/otter', 'otter', 'main', 1, 'ready', NULL, 1);"
+            ))
+            .unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+
+    assert_eq!(user_version(&path), latest());
+    assert!(!store.get_workspace("w1").unwrap().unwrap().name_generated);
+}

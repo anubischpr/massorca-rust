@@ -165,6 +165,14 @@ pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
     let mut lines = vec![
         format!("id: {}", workspace.id),
         format!("name: {}", workspace.name),
+        format!(
+            "name generated: {}",
+            if workspace.name_generated {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
         format!("project: {}", workspace.project_id),
         format!("kind: {}", workspace_kind(workspace.kind)),
     ];

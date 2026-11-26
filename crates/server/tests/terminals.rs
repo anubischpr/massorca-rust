@@ -139,6 +139,8 @@ async fn workspace(client: &Client, home: &Path) -> Workspace {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created")
