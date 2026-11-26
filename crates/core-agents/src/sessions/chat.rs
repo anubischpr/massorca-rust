@@ -396,13 +396,14 @@ impl Agents {
         &self,
         session: &str,
         text: &str,
+        files: &[Attachment],
         force: bool,
     ) -> Result<(), AgentError> {
         let run = self
             .chat_run(session)
             .filter(|run| !run.pipe.has_exited())
             .ok_or_else(|| not_live(session))?;
-        self.send_chat_prompt(session, &run, text, &[], force)
+        self.send_chat_prompt(session, &run, text, files, force)
             .map(drop)
     }
 

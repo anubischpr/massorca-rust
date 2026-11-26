@@ -19,6 +19,7 @@ use massorca_protocol::methods::agents::{
 use massorca_protocol::methods::chat::RunType;
 
 use super::{AgentError, Agents, Change, LiveRun, LiveRuns, input_refusal, lock, not_live};
+use crate::attachments::{self, Attachment};
 use crate::catalog::Catalog;
 use crate::kind::StatusMechanism;
 use crate::launch;
@@ -36,10 +37,25 @@ impl Agents {
         request_id: Option<&str>,
         host_admin: bool,
     ) -> Result<QueuedPrompt, AgentError> {
+        self.queue_add_with_attachments(selector, text, request_id, host_admin, &[])
+    }
+
+    /// [`Agents::queue_add`] with the files of the session's workspace that the prompt sends (decision 0172). The files
+    /// are checked now, and a file the run cannot take or that does not check is refused; they are checked again when
+    /// the prompt is typed.
+    pub fn queue_add_with_attachments(
+        &self,
+        selector: &str,
+        text: &str,
+        request_id: Option<&str>,
+        host_admin: bool,
+        attachments: &[String],
+    ) -> Result<QueuedPrompt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
         // A chat session reports its activity through its journal, whatever its kind declares (decision 0101).
-        if self.run_type_of(&row.id)? != RunType::Chat {
+        let chat = self.run_type_of(&row.id)? == RunType::Chat;
+        if !chat {
             self.require_queue_kind(&row.kind)?;
         }
         let mut live = lock(&self.inner.status);
@@ -74,6 +90,9 @@ impl Agents {
                 ),
             ));
         }
+        // The files are checked now and again when the prompt is typed (decision 0172).
+        self.attachments_in(&row.workspace_id, attachments, chat)?;
+        let attachments_json = attachments_json(attachments)?;
         let stored = self.store().insert_queued_prompt(&NewQueuedPrompt {
             id: new_id(),
             session_id: row.id.clone(),
@@ -81,7 +100,7 @@ impl Agents {
             request_id: request_id.map(str::to_owned),
             at: now_ms(),
             host_admin,
-            attachments_json: "[]".to_owned(),
+            attachments_json,
         })?;
         self.notify(Change::Queue(row.id.clone()));
         let shown = self.queued_item(&mut live, &row.id, &stored.id)?;
@@ -260,8 +279,13 @@ struct Delivery {
 enum Target {
     /// The bytes of the text, typed into the run's terminal.
     Terminal { terminal: String, bytes: Vec<u8> },
-    /// The text, sent to a chat run as a message (decision 0101, D7); `force` for a person's send-now.
-    Chat { text: String, force: bool },
+    /// The text and the files it names, sent to a chat run as a message (decision 0101, D7, and decision 0172); `force` for
+    /// a person's send-now.
+    Chat {
+        text: String,
+        files: Vec<Attachment>,
+        force: bool,
+    },
 }
 
 impl Agents {
@@ -353,14 +377,29 @@ impl Agents {
             if state == Some(ActivityState::Working) {
                 return None;
             }
-            return self.start_chat_sending(&chat, head, false).ok();
+            let files = match self.queued_files(head, &view.workspace_id, true) {
+                Ok(files) => files,
+                Err(error) => {
+                    self.fail_queued(head, session, &error);
+                    return None;
+                }
+            };
+            return self.start_chat_sending(&chat, head, files, false).ok();
         }
         let terminal = view.terminal_id.clone()?;
         let run = live.get_mut(session)?;
         if run.delivering || input_refusal(run, session, state, false).is_some() {
             return None;
         }
-        self.start_sending(run, head, terminal).ok()
+        let typed = match self.queued_typed(head, &view.workspace_id, run.prompt.mention.as_deref())
+        {
+            Ok(typed) => typed,
+            Err(error) => {
+                self.fail_queued(head, session, &error);
+                return None;
+            }
+        };
+        self.start_sending(run, head, terminal, &typed).ok()
     }
 
     /// Records that `item` is being typed into `run` (decision 0084): the store marks it sending first, then the run is
@@ -371,6 +410,7 @@ impl Agents {
         run: &mut LiveRun,
         item: &QueuedPromptRow,
         terminal: String,
+        typed: &str,
     ) -> Result<Delivery, StoreError> {
         self.store()
             .set_queued_prompt_state(&item.id, QueuedState::Sending, None, now_ms())?;
@@ -383,7 +423,7 @@ impl Agents {
             item: item.id.clone(),
             target: Target::Terminal {
                 terminal,
-                bytes: prompt::input_bytes(&item.text, run.prompt.paste, &run.prompt.submit),
+                bytes: prompt::input_bytes(typed, run.prompt.paste, &run.prompt.submit),
             },
         })
     }
@@ -394,6 +434,7 @@ impl Agents {
         &self,
         run: &super::chat::ChatRun,
         item: &QueuedPromptRow,
+        files: Vec<Attachment>,
         force: bool,
     ) -> Result<Delivery, AgentError> {
         if run.delivering.swap(true, Ordering::SeqCst) {
@@ -412,9 +453,58 @@ impl Agents {
             item: item.id.clone(),
             target: Target::Chat {
                 text: item.text.clone(),
+                files,
                 force,
             },
         })
+    }
+
+    /// The files a queued prompt sends, checked again now that it may be typed (decision 0172). The attachments were
+    /// checked when the prompt was queued; the workspace may have changed since.
+    fn queued_files(
+        &self,
+        item: &QueuedPromptRow,
+        workspace_id: &str,
+        chat: bool,
+    ) -> Result<Vec<Attachment>, AgentError> {
+        let names: Vec<String> = serde_json::from_str(&item.attachments_json).map_err(|_| {
+            AgentError::new(
+                codes::AGENT_ATTACHMENT_INVALID,
+                "the attachments of the queued prompt cannot be read",
+            )
+        })?;
+        self.attachments_in(workspace_id, &names, chat)
+    }
+
+    /// The text a terminal run types for a queued prompt: its text, with the files it names mentioned (decision 0172).
+    /// The result must still fit the prompt limit.
+    fn queued_typed(
+        &self,
+        item: &QueuedPromptRow,
+        workspace_id: &str,
+        mention: Option<&str>,
+    ) -> Result<String, AgentError> {
+        let files = self.queued_files(item, workspace_id, false)?;
+        let typed = attachments::with_mentions(&item.text, mention, &files);
+        launch::check_prompt(&typed)?;
+        Ok(typed)
+    }
+
+    /// Holds a queued prompt that cannot be typed as it is: it is failed with `error` as its reason, and nothing is
+    /// typed, so the prompts behind it wait too (decision 0084, D4; decision 0172).
+    fn fail_queued(&self, item: &QueuedPromptRow, session: &str, error: &AgentError) {
+        if self
+            .store()
+            .set_queued_prompt_state(
+                &item.id,
+                QueuedState::Failed,
+                Some(&error.message),
+                now_ms(),
+            )
+            .is_ok()
+        {
+            self.notify(Change::Queue(session.to_owned()));
+        }
     }
 
     /// Types a delivery's bytes outside the status lock, as a prompt is typed, then records how it ended.
@@ -431,7 +521,9 @@ impl Agents {
                     TerminalError::Exited | TerminalError::NotFound => not_live(&delivery.session),
                     other => AgentError::from(other),
                 }),
-            Target::Chat { text, force } => self.deliver_chat_text(&delivery.session, text, *force),
+            Target::Chat { text, files, force } => {
+                self.deliver_chat_text(&delivery.session, text, files, *force)
+            }
         };
         self.finish_delivery(&delivery.session, &delivery.item, written.clone(), true);
         written
@@ -519,7 +611,8 @@ impl Agents {
             let shown = self.queued_item(&mut live, &session, id)?;
             // A chat run takes it as a forced message: the CLI holds it for its next turn (decision 0101, D7).
             if let Some(chat) = self.chat_run(&session) {
-                let delivery = self.start_chat_sending(&chat, &item, true)?;
+                let files = self.queued_files(&item, &view.workspace_id, true)?;
+                let delivery = self.start_chat_sending(&chat, &item, files, true)?;
                 drop(live);
                 let outcome = self.send_delivery(delivery, &AtomicBool::new(false));
                 if outcome.is_ok() {
@@ -532,7 +625,9 @@ impl Agents {
             if let Some(refusal) = input_refusal(run, &session, state, true) {
                 return Err(refusal);
             }
-            let delivery = self.start_sending(run, &item, terminal)?;
+            let typed =
+                self.queued_typed(&item, &view.workspace_id, run.prompt.mention.as_deref())?;
+            let delivery = self.start_sending(run, &item, terminal, &typed)?;
             (delivery, shown)
         };
         let outcome = self.send_delivery(delivery, &AtomicBool::new(false));
@@ -596,6 +691,16 @@ fn keep_delivered_request_ids() -> u32 {
 /// Names no secret.
 const SECRETS_HELD_REFUSAL: &str =
     "queued by a caller without host-admin; the run now holds secrets";
+
+/// The JSON array of the files a queued prompt names, as the store keeps it (decision 0172).
+fn attachments_json(names: &[String]) -> Result<String, AgentError> {
+    serde_json::to_string(names).map_err(|_| {
+        AgentError::new(
+            codes::INTERNAL,
+            "the attachments of the prompt cannot be stored",
+        )
+    })
+}
 
 /// The refusal for a change to a prompt that is being typed into its run.
 fn sending_refusal(id: &str) -> AgentError {
@@ -1287,5 +1392,59 @@ mod tests {
             agents.live_runs()[&session].typed_since_report,
             "a write that may have partly gone out waits for a report, as agent.prompt does"
         );
+    }
+
+    /// A workspace of the fixture's project, in `folder`, so a test can name real files in it.
+    fn workspace_at(agents: &Agents, base: &str, folder: &std::path::Path) -> String {
+        let base_row = agents
+            .store()
+            .get_workspace(base)
+            .unwrap()
+            .expect("the fixture workspace");
+        let path = folder.to_str().expect("a UTF-8 path").to_owned();
+        let row = massorca_core_store::WorkspaceRow {
+            id: new_id(),
+            name: "files".to_owned(),
+            path: path.clone(),
+            path_key: path,
+            ..base_row
+        };
+        agents.store().insert_workspace(&row).unwrap();
+        row.id
+    }
+
+    #[test]
+    fn an_attachment_that_does_not_check_is_refused_when_queued_and_nothing_is_stored() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let error = agents
+            .queue_add_with_attachments(&session, "look", None, false, &["missing.txt".to_owned()])
+            .unwrap_err();
+        assert_eq!(error.code, codes::AGENT_ATTACHMENT_INVALID);
+        assert!(agents.queue_list(&session).unwrap().items.is_empty());
+        let many = vec!["missing.txt".to_owned(); 11];
+        let error = agents
+            .queue_add_with_attachments(&session, "look", None, false, &many)
+            .unwrap_err();
+        assert_eq!(error.code, codes::AGENT_ATTACHMENT_INVALID);
+    }
+
+    #[test]
+    fn a_queued_prompt_keeps_the_files_it_names() {
+        let (agents, workspace, _profile) = service();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("notes.txt"), "x").unwrap();
+        let files = workspace_at(&agents, &workspace, folder.path());
+        let session = claude_session(&agents, &files);
+        let queued = agents
+            .queue_add_with_attachments(&session, "look", None, false, &["notes.txt".to_owned()])
+            .unwrap();
+        let stored = agents
+            .store()
+            .get_queued_prompt(&queued.id)
+            .unwrap()
+            .expect("the prompt is stored");
+        assert_eq!(stored.attachments_json, r#"["notes.txt"]"#);
+        assert_eq!(queued.text, "look");
     }
 }
