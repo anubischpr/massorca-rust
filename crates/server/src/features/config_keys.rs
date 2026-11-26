@@ -63,6 +63,12 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Keep the computer awake while agents work.",
         ),
         (
+            "usage.enabled",
+            Bool,
+            json!(false),
+            "Record and show agent usage and limits for this computer and its hosts.",
+        ),
+        (
             "sessions.search",
             Bool,
             json!(true),
