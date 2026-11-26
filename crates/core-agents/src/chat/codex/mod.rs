@@ -182,12 +182,21 @@ impl CodexAdapter {
 
     /// Whether a message belongs to another thread (a sub-agent's) or to a turn MassOrca interrupted.
     fn foreign(&self, params: &Value) -> bool {
-        let other_thread = match (&self.thread, text_of(&params["threadId"])) {
+        self.other_thread(params) || self.interrupted_turn(params)
+    }
+
+    /// Whether a message names a thread other than the run's (a sub-agent's).
+    fn other_thread(&self, params: &Value) -> bool {
+        match (&self.thread, text_of(&params["threadId"])) {
             (Thread::Open(ours), Some(theirs)) => ours != theirs,
             _ => false,
-        };
+        }
+    }
+
+    /// Whether a message names a turn MassOrca interrupted.
+    fn interrupted_turn(&self, params: &Value) -> bool {
         let turn = text_of(&params["turnId"]).or_else(|| text_of(&params["turn"]["id"]));
-        other_thread || turn.is_some_and(|turn| self.interrupted.contains(turn))
+        turn.is_some_and(|turn| self.interrupted.contains(turn))
     }
 }
 
@@ -308,6 +317,10 @@ impl CodexAdapter {
         if method == "turn/completed" {
             return self.turn_completed(params);
         }
+        // A request we hold is settled by its notice, whatever thread or turn the notice names.
+        if method == "serverRequest/resolved" {
+            return self.request_resolved(params);
+        }
         if self.foreign(params) {
             return Vec::new();
         }
@@ -320,7 +333,6 @@ impl CodexAdapter {
             "item/reasoning/summaryTextDelta" => self.text_delta(params, true),
             "item/commandExecution/outputDelta" => self.output_delta(params),
             "turn/plan/updated" => self.plan_updated(params),
-            "serverRequest/resolved" => self.request_resolved(params),
             "thread/tokenUsage/updated" => self.usage(params),
             "error" => self.error(params),
             "configWarning" | "deprecationNotice" => self.warning(params),

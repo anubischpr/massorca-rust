@@ -3,7 +3,7 @@ use massorca_protocol::methods::chat::{
 };
 use serde_json::json;
 
-use super::{feed, lines, notify, opened, sent};
+use super::{approval_added, feed, lines, notify, opened, sent};
 use crate::chat::adapter::{ApprovalAnswer, ChatAdapter, JournalOp};
 
 #[test]
@@ -141,4 +141,66 @@ fn a_request_massorca_does_not_serve_is_refused_and_another_threads_items_are_sk
         ),
     );
     assert!(other.is_empty());
+}
+
+#[test]
+fn an_approval_of_another_thread_is_declined_at_once_and_never_pending() {
+    let (mut adapter, _) = opened(&[]);
+    let ops = feed(
+        &mut adapter,
+        json!({ "id": 50, "method": "item/commandExecution/requestApproval",
+                "params": { "threadId": "thr-sub", "turnId": "t9", "itemId": "c9", "command": "rm x" } }),
+    );
+    assert_eq!(
+        sent(&ops),
+        [json!({ "id": 50, "result": { "decision": "decline" } })]
+    );
+    assert!(approval_added(&ops).is_none(), "{ops:?}");
+}
+
+#[test]
+fn an_approval_of_an_interrupted_turn_is_cancelled_at_once_and_never_pending() {
+    let (mut adapter, _) = opened(&[]);
+    adapter.encode_prompt("go");
+    feed(
+        &mut adapter,
+        notify(
+            "turn/started",
+            json!({ "threadId": "thr-1", "turn": { "id": "t1" } }),
+        ),
+    );
+    assert!(adapter.encode_interrupt().is_some());
+    let ops = feed(
+        &mut adapter,
+        json!({ "id": 51, "method": "item/commandExecution/requestApproval",
+                "params": { "threadId": "thr-1", "turnId": "t1", "itemId": "c1", "command": "touch x" } }),
+    );
+    assert_eq!(
+        sent(&ops),
+        [json!({ "id": 51, "result": { "decision": "cancel" } })]
+    );
+    assert!(approval_added(&ops).is_none(), "{ops:?}");
+}
+
+#[test]
+fn a_withdrawn_request_is_cancelled_whatever_thread_its_notice_names() {
+    let (mut adapter, _) = opened(&[]);
+    let ops = feed(
+        &mut adapter,
+        json!({ "id": 52, "method": "item/commandExecution/requestApproval",
+                "params": { "threadId": "thr-1", "turnId": "t1", "itemId": "c2", "command": "touch y" } }),
+    );
+    assert!(approval_added(&ops).is_some(), "{ops:?}");
+    let withdrawn = feed(
+        &mut adapter,
+        notify(
+            "serverRequest/resolved",
+            json!({ "threadId": "thr-sub", "requestId": 52 }),
+        ),
+    );
+    assert!(
+        matches!(&withdrawn[..], [JournalOp::Replace { body: ChatItemBody::Approval(approval), .. }]
+        if approval.state == ApprovalState::Cancelled),
+        "{withdrawn:?}"
+    );
 }
