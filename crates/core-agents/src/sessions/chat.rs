@@ -28,8 +28,8 @@ use super::{
 use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
-    ApprovalAnswer, ChatAdapter, ChatChanged, ClaudeAdapter, JournalOp, KILL_GRACE, approval_key,
-    claude, version,
+    ApprovalAnswer, ChatAdapter, ChatChanged, ClaudeAdapter, CodexAdapter, JournalOp, KILL_GRACE,
+    approval_key, claude, codex, version,
 };
 use crate::kind::KindDecl;
 use crate::launch::LaunchPlan;
@@ -879,6 +879,7 @@ fn chat_adapter_for(decl: &KindDecl, program: &Path) -> Result<Box<dyn ChatAdapt
     }
     match decl.chat.as_ref().map(|chat| chat.adapter.as_str()) {
         Some(claude::ADAPTER_NAME) => Ok(Box::new(ClaudeAdapter::new())),
+        Some(codex::ADAPTER_NAME) => Ok(Box::new(CodexAdapter::new())),
         _ => Err(chat_unsupported(decl, Some(&chat))),
     }
 }
