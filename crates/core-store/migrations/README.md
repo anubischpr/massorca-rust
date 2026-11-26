@@ -22,4 +22,17 @@ Every schema change for the store is one file here, or one of the frozen steps i
 - A step must not depend on another session's step that is not on `main` yet.
 - Steps apply in id order on a new database. On an existing database, a step with a lower id than one already
   applied still runs: applied steps are recorded by id in `store_migrations`.
-- A database that has an applied id this build does not know is opened, with a warning, not refused.
+- A database that has an applied id this build does not know is opened, with a warning, not refused. So an older
+  build opens a database a newer build migrated with file steps; only a `user_version` above the frozen list is
+  refused.
+
+## Rejected at build time
+
+The build fails, naming the file, when:
+
+- a file other than this `README.md` does not end exactly in lowercase `.sql` (for example `.SQL` or `.sql.txt`);
+- a file mentions `foreign_keys` but its first line is not exactly `-- foreign_keys_off` (a `PRAGMA foreign_keys` does
+  nothing inside the step's transaction);
+- a file contains `DROP TABLE` (any case) without that first line;
+- a statement outside comments starts with `BEGIN`, `COMMIT`, `END`, `ROLLBACK`, `SAVEPOINT` or `RELEASE` (any case).
+  The runner owns each step's transaction. A trigger body's `BEGIN ... END` is fine.

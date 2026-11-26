@@ -77,7 +77,7 @@ fn is_slug(slug: &str) -> bool {
         && !slug.contains("__")
 }
 
-/// Every `.sql` file in `dir`, validated and sorted by id. Other files, such as the README, are ignored.
+/// Every step file in `dir`, validated and sorted by id. Only `README.md` may sit beside them.
 pub fn scan(dir: &Path) -> Result<Vec<FileStep>, String> {
     let entries =
         fs::read_dir(dir).map_err(|error| format!("cannot read {}: {error}", dir.display()))?;
@@ -88,16 +88,22 @@ pub fn scan(dir: &Path) -> Result<Vec<FileStep>, String> {
             .file_name()
             .into_string()
             .map_err(|name| format!("migration file name {name:?} is not UTF-8"))?;
-        if !file_name.ends_with(".sql") {
+        if file_name == "README.md" {
             continue;
+        }
+        if !file_name.ends_with(".sql") {
+            return Err(format!(
+                "{file_name} does not belong in the migrations folder: only README.md and step files ending in .sql"
+            ));
         }
         let id = parse_file_name(&file_name)?;
         let sql = fs::read_to_string(entry.path())
             .map_err(|error| format!("cannot read migration file {file_name}: {error}"))?;
+        let foreign_keys_off = check_sql(&file_name, &sql)?;
         steps.push(FileStep {
             id,
             file_name,
-            foreign_keys_off: first_line_is_foreign_keys_off(&sql),
+            foreign_keys_off,
         });
     }
     steps.sort_by(|left, right| left.id.cmp(&right.id));
@@ -110,11 +116,103 @@ pub fn scan(dir: &Path) -> Result<Vec<FileStep>, String> {
     Ok(steps)
 }
 
-/// Whether the first line of `sql` is the `-- foreign_keys_off` marker; a later line does not count.
+/// Whether the first line of `sql` is exactly the `-- foreign_keys_off` marker; a later line does not count.
 pub fn first_line_is_foreign_keys_off(sql: &str) -> bool {
     sql.lines()
         .next()
-        .is_some_and(|line| line.trim() == FOREIGN_KEYS_OFF_LINE)
+        .is_some_and(|line| line.trim_end() == FOREIGN_KEYS_OFF_LINE)
+}
+
+/// Rejects SQL the runner cannot apply safely, and returns whether the step runs with foreign keys off.
+/// A step runs inside the runner's transaction, where `PRAGMA foreign_keys` is a no-op and transaction control breaks
+/// the runner's own transaction; a table drop or a misspelled marker would silently break rows that reference it.
+pub fn check_sql(file_name: &str, sql: &str) -> Result<bool, String> {
+    let foreign_keys_off = first_line_is_foreign_keys_off(sql);
+    if !foreign_keys_off && sql.to_ascii_lowercase().contains("foreign_keys") {
+        return Err(format!(
+            "migration file {file_name} mentions foreign_keys but its first line is not exactly {FOREIGN_KEYS_OFF_LINE}"
+        ));
+    }
+    let mut in_trigger = false;
+    for statement in sanitize(sql).split(';') {
+        let words: Vec<String> = statement
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_uppercase)
+            .collect();
+        let first = words.first().map_or("", String::as_str);
+        // A trigger body holds statements ended by `;` up to its closing `END`.
+        if in_trigger {
+            in_trigger = !(words.len() == 1 && first == "END");
+            continue;
+        }
+        if matches!(
+            first,
+            "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "SAVEPOINT" | "RELEASE"
+        ) {
+            return Err(format!(
+                "migration file {file_name} contains the transaction control statement {first}; the runner owns the transaction"
+            ));
+        }
+        if first == "DROP" && words.get(1).is_some_and(|word| word == "TABLE") && !foreign_keys_off
+        {
+            return Err(format!(
+                "migration file {file_name} drops a table without the first line {FOREIGN_KEYS_OFF_LINE}"
+            ));
+        }
+        let create_trigger =
+            first == "CREATE" && words.iter().skip(1).take(2).any(|word| word == "TRIGGER");
+        in_trigger = create_trigger && words.iter().any(|word| word == "BEGIN");
+    }
+    Ok(foreign_keys_off)
+}
+
+/// `sql` with comments and quoted text replaced by spaces, so only statement keywords remain.
+fn sanitize(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '-' if chars.peek() == Some(&'-') => {
+                for skipped in chars.by_ref() {
+                    if skipped == '\n' {
+                        break;
+                    }
+                }
+                out.push('\n');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = ' ';
+                for skipped in chars.by_ref() {
+                    if previous == '*' && skipped == '/' {
+                        break;
+                    }
+                    previous = skipped;
+                }
+                out.push(' ');
+            }
+            '\'' | '"' | '`' => {
+                // A doubled quote inside the text closes and reopens it, which this loop handles as two runs.
+                for skipped in chars.by_ref() {
+                    if skipped == character {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            '[' => {
+                for skipped in chars.by_ref() {
+                    if skipped == ']' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            _ => out.push(character),
+        }
+    }
+    out
 }
 
 /// The Rust source of `FILE_MIGRATIONS`, included by `migration_files.rs`. Each SQL file is embedded at compile time.
@@ -139,7 +237,9 @@ pub fn render(steps: &[FileStep]) -> String {
 mod tests {
     use std::fs;
 
-    use super::{FileStep, first_line_is_foreign_keys_off, parse_file_name, render, scan};
+    use super::{
+        FileStep, check_sql, first_line_is_foreign_keys_off, parse_file_name, render, scan,
+    };
 
     const EXAMPLE: &str = "0110-202611261430_example.sql";
 
@@ -184,7 +284,10 @@ mod tests {
             "-- foreign_keys_off\nALTER TABLE t ADD c;"
         ));
         assert!(first_line_is_foreign_keys_off(
-            "  -- foreign_keys_off  \nALTER TABLE t ADD c;"
+            "-- foreign_keys_off  \r\nALTER TABLE t ADD c;"
+        ));
+        assert!(!first_line_is_foreign_keys_off(
+            "  -- foreign_keys_off\nALTER TABLE t ADD c;"
         ));
         assert!(!first_line_is_foreign_keys_off(
             "ALTER TABLE t ADD c;\n-- foreign_keys_off"
@@ -239,6 +342,114 @@ mod tests {
         let error = scan(dir.path()).unwrap_err();
 
         assert!(error.contains("oops.sql"), "{error}");
+    }
+
+    #[test]
+    fn a_foreign_keys_mention_without_the_exact_marker_is_rejected() {
+        let bad = [
+            "-- foreign_keys off\nALTER TABLE t ADD c;",
+            "--foreign_keys_off\nALTER TABLE t ADD c;",
+            "  -- foreign_keys_off\nALTER TABLE t ADD c;",
+            "-- rebuild t\n-- foreign_keys_off\nALTER TABLE t ADD c;",
+            "PRAGMA FOREIGN_KEYS = OFF;\nALTER TABLE t ADD c;",
+        ];
+        for sql in bad {
+            let error = check_sql(EXAMPLE, sql).unwrap_err();
+            assert!(error.contains(EXAMPLE), "{error}");
+            assert!(error.contains("-- foreign_keys_off"), "{error}");
+        }
+        assert_eq!(
+            check_sql(EXAMPLE, "-- foreign_keys_off\nALTER TABLE t ADD c;"),
+            Ok(true)
+        );
+        assert_eq!(check_sql(EXAMPLE, "ALTER TABLE t ADD c;"), Ok(false));
+    }
+
+    #[test]
+    fn a_table_drop_without_the_marker_is_rejected() {
+        for sql in [
+            "DROP TABLE t;",
+            "drop  table IF EXISTS t;",
+            "SELECT 1;\n  Drop\nTable t;",
+        ] {
+            let error = check_sql(EXAMPLE, sql).unwrap_err();
+            assert!(error.contains(EXAMPLE), "{error}");
+            assert!(error.contains("drops a table"), "{error}");
+        }
+        assert_eq!(
+            check_sql(EXAMPLE, "-- foreign_keys_off\nDROP TABLE t;"),
+            Ok(true)
+        );
+        assert_eq!(
+            check_sql(
+                EXAMPLE,
+                "-- DROP TABLE t;\nDROP INDEX i; SELECT 'drop table';"
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn transaction_control_is_rejected() {
+        let bad = [
+            "BEGIN;\nSELECT 1;",
+            "begin immediate; SELECT 1;",
+            "SELECT 1; COMMIT;",
+            "SELECT 1; end transaction;",
+            "SELECT 1; End;",
+            "SELECT 1;\nROLLBACK;",
+            "SAVEPOINT s; SELECT 1;",
+            "SELECT 1; /* done */ RELEASE s;",
+        ];
+        for sql in bad {
+            let error = check_sql(EXAMPLE, sql).unwrap_err();
+            assert!(error.contains(EXAMPLE), "{error}");
+            assert!(error.contains("transaction control"), "{error}");
+        }
+    }
+
+    #[test]
+    fn transaction_words_outside_statement_starts_are_allowed() {
+        let sql = "-- BEGIN; COMMIT;\n\
+            /* ROLLBACK; */\n\
+            CREATE TABLE t (id INTEGER PRIMARY KEY ON CONFLICT ROLLBACK, \"end\" TEXT, note TEXT DEFAULT 'commit;');\n\
+            CREATE TRIGGER t_check BEFORE INSERT ON t\n\
+            WHEN NEW.note = 'x'\n\
+            BEGIN\n\
+              SELECT RAISE(ROLLBACK, 'no x');\n\
+              UPDATE t SET note = CASE WHEN note IS NULL THEN 'a' ELSE note END;\n\
+            END;\n\
+            INSERT OR ROLLBACK INTO t (note) VALUES ('begin');";
+
+        assert_eq!(check_sql(EXAMPLE, sql), Ok(false));
+    }
+
+    #[test]
+    fn scan_rejects_a_file_that_is_not_a_step_or_the_readme() {
+        for name in [
+            "0110-202611261430_example.SQL",
+            "0110-202611261430_example.sql.txt",
+            "notes.md",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join("README.md"), "not a step").unwrap();
+            fs::write(dir.path().join(name), "SELECT 1;").unwrap();
+
+            let error = scan(dir.path()).unwrap_err();
+
+            assert!(error.contains(name), "{error}");
+            assert!(error.contains("only README.md"), "{error}");
+        }
+    }
+
+    #[test]
+    fn scan_names_a_file_whose_sql_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(EXAMPLE), "DROP TABLE t;").unwrap();
+
+        let error = scan(dir.path()).unwrap_err();
+
+        assert!(error.contains(EXAMPLE), "{error}");
     }
 
     #[test]
