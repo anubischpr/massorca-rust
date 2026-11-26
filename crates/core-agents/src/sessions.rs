@@ -27,8 +27,9 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
-    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
-    PromptReceipt, ReceiptKind, ResumeState, SessionFast,
+    AgentOptionsSet, AgentSession, AgentSetOptionsParams, AgentStartParams, Execution,
+    MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource, OptionsApplied, PromptReceipt, ReceiptKind,
+    ResumeState, SessionFast,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -51,6 +52,7 @@ use crate::provided_env::{
 };
 use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
+use crate::session_options::{self, ChosenOptions};
 use crate::status::{self, HookRules};
 
 mod archive;
@@ -302,6 +304,9 @@ struct Inner {
     found_transcripts: resume_state::FoundTranscripts,
     /// The model listings the service keeps (decision 0166), held in memory.
     models: crate::model_catalog::ModelCache,
+    /// The options `agent.set_options` chose for each session, which its next run launches with (decision 0171). Held in
+    /// memory: the service forgets them when it stops, as it forgets the other state it holds in memory.
+    chosen: Mutex<HashMap<String, ChosenOptions>>,
     /// How long a model listing may run before it is stopped (decision 0166).
     listing_timeout: Duration,
     /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
@@ -410,6 +415,7 @@ impl Agents {
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
                 models: crate::model_catalog::ModelCache::default(),
+                chosen: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
                     std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
                         .ok()
@@ -999,6 +1005,14 @@ impl Agents {
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
         let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
+        // The options `agent.set_options` chose for the session launch the resumed run too (decision 0171).
+        let chosen = self.chosen_of(&row.id);
+        let mode_args = [
+            mode.args.clone(),
+            decl.option_args(chosen.model.as_deref(), chosen.effort.as_deref())?,
+        ]
+        .concat();
+        let fast = decl.fast_for(chosen.model.as_deref(), chosen.fast.unwrap_or(false))?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -1013,21 +1027,21 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
-            mode_args: &mode.args,
+            mode_args: &mode_args,
             caller_args: &[],
             provided_env: &provided,
             holds_secrets,
             caller_env: &no_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
-            // A resume takes no fast mode: the start's choice is not kept with the session (decision 0165).
-            fast: None,
+            // A resume takes the fast mode `agent.set_options` chose for the session, if any (decisions 0165, 0171).
+            fast,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
         // As in `start`: recorded before the program starts, settled once the row names the new terminal.
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
-        fast_mode::record(&run_dir, false);
+        fast_mode::record(&run_dir, fast.is_some());
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1513,6 +1527,90 @@ impl Agents {
         })
     }
 
+    /// Changes a session's model, effort or fast mode (decision 0171). A model or fast mode the kind declares a live command
+    /// for is typed into a live run once the agent is ready; every other change, and every change to a session whose run is
+    /// not live, waits for the session's next resume. The values are checked before anything is typed or stored.
+    pub fn set_options(
+        &self,
+        request: &AgentSetOptionsParams,
+    ) -> Result<AgentOptionsSet, AgentError> {
+        let row = self.resolve(&request.session)?;
+        let decl = self.declared_kind(&row.kind)?;
+        let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        let chosen = self.chosen_of(&row.id);
+        let recorded_fast = fast_mode::of_run(&run_dir).is_some();
+        // Planned under the status lock, where the run's liveness is read; the text is typed outside it, as a prompt is,
+        // because the write can wait for the agent to read.
+        let mut live = lock(&self.inner.status);
+        let row = self.reload(&row.id)?;
+        let session = self.view_with(&mut live, row)?;
+        let running = live.contains_key(&session.id) && session.terminal_id.is_some();
+        let plan =
+            session_options::plan(&decl, &session.id, request, &chosen, running, recorded_fast)?;
+        let typing = if plan.typed.is_empty() {
+            None
+        } else {
+            let terminal = session.terminal_id.clone().unwrap_or_default();
+            let Some(run) = live.get_mut(&session.id) else {
+                return Err(not_live(&session.id));
+            };
+            let state = session.activity.as_ref().map(|activity| activity.state);
+            if let Some(refusal) = input_refusal(run, &session.id, state, false) {
+                return Err(refusal);
+            }
+            run.switching = true;
+            let bytes: Vec<Vec<u8>> = plan
+                .typed
+                .iter()
+                .map(|text| prompt::input_bytes(text, PasteMode::Plain, &run.prompt.submit))
+                .collect();
+            Some((terminal, bytes))
+        };
+        drop(live);
+        if let Some((terminal, bytes)) = typing {
+            // The commands are typed in turn. The run stays marked as switching until the writes are done, whatever their
+            // outcome, and the queue may go on after them (decision 0084, D3).
+            let written: Result<(), TerminalError> = bytes
+                .iter()
+                .try_for_each(|bytes| self.inner.config.terminals.input(&terminal, bytes));
+            self.end_switching(&session.id);
+            self.drain_queue(&session.id);
+            if let Err(error) = written {
+                return Err(match error {
+                    TerminalError::Exited | TerminalError::NotFound => not_live(&session.id),
+                    other => AgentError::from(other),
+                });
+            }
+        }
+        if let Some(on) = plan.fast_typed {
+            fast_mode::record(&run_dir, on);
+        }
+        let changed = plan.applied != OptionsApplied::default();
+        {
+            // One read and one write under the lock, so the options another call stored meanwhile survive (decision 0171).
+            let mut chosen = lock(&self.inner.chosen);
+            let entry = chosen.entry(session.id.clone()).or_default();
+            *entry = session_options::merged(std::mem::take(entry), request, &plan.chosen);
+        }
+        let mut live = lock(&self.inner.status);
+        let session = self.view_with(&mut live, self.reload(&session.id)?)?;
+        if changed {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        Ok(AgentOptionsSet {
+            applied: plan.applied,
+            session,
+        })
+    }
+
+    /// The options `agent.set_options` chose for session `id`, which its next run launches with (decision 0171).
+    fn chosen_of(&self, id: &str) -> ChosenOptions {
+        lock(&self.inner.chosen)
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
     /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
     pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
@@ -1710,6 +1808,7 @@ impl Agents {
         }
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
+        lock(&self.inner.chosen).remove(&session.id);
         self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -2423,7 +2522,7 @@ fn withheld(grant: SecretGrant) -> Option<String> {
 }
 
 /// The refusal for a resume the session cannot make (0054).
-fn resume_unavailable(session: &str, reason: &str) -> AgentError {
+pub(crate) fn resume_unavailable(session: &str, reason: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_RESUME_UNAVAILABLE,
         format!("session {session} cannot resume: {reason}"),

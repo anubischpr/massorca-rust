@@ -236,6 +236,15 @@ pub enum ListingFormat {
     ClaudeControl,
 }
 
+impl ModelDecl {
+    /// The live command that switches a running session to `value`, when the kind declares one (decision 0171).
+    pub(crate) fn live_text(&self, value: &str) -> Option<String> {
+        self.live
+            .as_deref()
+            .map(|live| live.replace(VALUE_PLACEHOLDER, value))
+    }
+}
+
 /// One model a kind's picker offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
