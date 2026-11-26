@@ -52,6 +52,14 @@ version leaves out.
   weekday or cron expression, and zone. Cron sits in the same form in this version, not behind an advanced toggle.
   The form checks what it can before sending; the service checks the rest.
 
+## CLI
+
+- D8 Command. `massorca automations create|edit|show|list|remove|enable|disable`, with text output and `--json` like
+  the other commands. Each command sends its `automation.*` method through the client; an older host that does not
+  know the methods says so. `create` takes `--project` (an id, a name or a path), `--prompt`, `--agent` (default
+  `claude`), `--cadence` (`hourly`, `daily`, `weekdays`, `weekly` or `cron`), `--time`, `--weekday`, `--cron`, `--zone`,
+  `--grace` and `--creation-key`. `edit` takes the same options, each optional, and changes only those given.
+
 ## Not in this version
 
 - Runs and run history (AUTO-03, AUTO-04), the precheck (AUTO-05), the agent launch and its arguments (AUTO-06),

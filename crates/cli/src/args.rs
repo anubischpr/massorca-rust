@@ -143,6 +143,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Creates, edits, lists, shows, removes, enables and disables scheduled automations (decision 0123).
+    Automations {
+        #[command(subcommand)]
+        command: crate::automations::AutomationsCommand,
+    },
     /// Installs, lists, enables, disables and removes extensions, such as the agent packages.
     #[command(visible_alias = "ext")]
     Extension {

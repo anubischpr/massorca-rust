@@ -368,6 +368,24 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 With `--json` it prints the start document on stdout, and the service log goes to the
 profile's log files only unless `--log-stderr` is given.
 
+### Automations
+
+Scheduled automation definitions (decision 0123). An automation is stored, listed and changed here; this version
+does not start its runs.
+
+| Command | What it does |
+|---|---|
+| `automations create <NAME> --project <PROJECT> --prompt <TEXT> [--agent <KIND>] [--cadence hourly\|daily\|weekdays\|weekly\|cron] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>] [--creation-key <KEY>]` | Creates an automation in a project, enabled, with its next run from its schedule. `--project` takes an id, a name or a path. Defaults: agent `claude`, daily at `09:00`. `--cadence hourly` runs every hour at the minute of `--time`; `weekly` needs `--weekday` (`mon` to `sun`); `cron` needs `--cron` with five fields, such as `0 9 * * 1-5`, and ignores `--time`. Without `--zone` the host's zone is used; the create is refused when the host's zone cannot be read. `--grace` is 0 to 10080 minutes, 720 when unset. A retry with the same `--creation-key` returns the automation the first create made. |
+| `automations edit <AUTOMATION> [--name <NAME>] [--project <PROJECT>] [--prompt <TEXT>] [--agent <KIND>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>]` | Changes the options given and no others. A schedule change recomputes the next run. `--zone ""` returns the automation to the host's zone. |
+| `automations show <AUTOMATION>` | Shows one automation, by id or by exact name. |
+| `automations list` | Lists the automations, in creation order. |
+| `automations remove <AUTOMATION>` | Removes an automation. It cannot be restored. |
+| `automations enable <AUTOMATION>` | Enables an automation and schedules its next run from now. |
+| `automations disable <AUTOMATION>` | Disables an automation; it has no next run until it is enabled. |
+
+An automation whose project was removed stays listed with no project and does not start. A name two automations
+share is refused until the one meant is named by its id.
+
 ### Hosts and pairing
 
 A server is `massorca service run --listen <ADDR>` on another machine. `--listen` takes
