@@ -734,7 +734,6 @@ fn keep_delivered_request_ids() -> u32 {
 const SECRETS_HELD_REFUSAL: &str =
     "queued by a caller without host-admin; the run now holds secrets";
 
-/// The JSON array of the files a queued prompt names, as the store keeps it (decision 0172).
 /// The files of a queued prompt as they were checked outside the status lock (decision 0172), with what they were
 /// checked for: the prompt, its stored names and the session's workspace.
 struct ResolvedFiles {
@@ -767,6 +766,7 @@ fn queued_typed(
     Ok(typed)
 }
 
+/// The JSON array of the files a queued prompt names, as the store keeps it (decision 0172).
 fn attachments_json(names: &[String]) -> Result<String, AgentError> {
     serde_json::to_string(names).map_err(|_| {
         AgentError::new(

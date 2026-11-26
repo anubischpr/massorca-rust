@@ -247,20 +247,79 @@ fn open_no_follow(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-/// Whether the open `file` is the file at the canonical `path`: the final path the handle reports is `path`. A folder
-/// of the path swapped for a junction after the check gives the handle another final path.
+/// Whether the open `file` is the file at the canonical `path`: the final path the handle reports is `path`, both read
+/// without their `\\?\` spelling. A folder of the path swapped for a junction after the check gives the handle another
+/// final path.
 #[cfg(windows)]
 fn handle_is_at(file: &File, _meta: &std::fs::Metadata, path: &Path) -> bool {
-    final_path(file).is_some_and(|reached| reached == path)
+    match (final_path(file), path.to_str()) {
+        (Some(reached), Some(path)) => {
+            Path::new(&plain_spelling(&reached)) == Path::new(&plain_spelling(path))
+        }
+        _ => false,
+    }
 }
 
-/// Whether the open `file` is the file at the canonical `path`: the path still resolves to itself, so no link was put
-/// in it, and it names the device and inode of the handle.
+/// A Windows path without its verbatim prefix: `\\?\UNC\server\share` as `\\server\share`, `\\?\C:\x` as `C:\x`, so a
+/// canonical path and a handle's final path compare equal whichever spelling each one has.
+#[cfg(windows)]
+fn plain_spelling(path: &str) -> String {
+    if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    }
+}
+
+/// Whether the open `file` is the file at the canonical `path`. On Linux and macOS the handle itself reports its path
+/// (`/proc/self/fd`, `F_GETPATH`), so a folder of the path swapped for a link after the check cannot pass, and a handle
+/// whose path cannot be read is refused. Elsewhere the path must still resolve to itself and name the handle's device
+/// and inode.
 #[cfg(unix)]
-fn handle_is_at(_file: &File, meta: &std::fs::Metadata, path: &Path) -> bool {
+fn handle_is_at(file: &File, meta: &std::fs::Metadata, path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
+    if cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos"
+    )) {
+        return handle_path(file).is_some_and(|reached| reached == path);
+    }
     std::fs::canonicalize(path).is_ok_and(|resolved| resolved == path)
         && std::fs::metadata(path).is_ok_and(|at| at.dev() == meta.dev() && at.ino() == meta.ino())
+}
+
+/// The path the open handle names, as the kernel reports it.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn handle_path(file: &File) -> Option<PathBuf> {
+    use std::os::unix::io::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+/// The path the open handle names, as the kernel reports it.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn handle_path(file: &File) -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let mut buffer = vec![0u8; usize::try_from(libc::PATH_MAX).ok()?];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes, its terminating null included, into the buffer, which holds
+    // PATH_MAX bytes; the descriptor is the open file's own.
+    let done = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
+    if done == -1 {
+        return None;
+    }
+    let text = CStr::from_bytes_until_nul(&buffer).ok()?;
+    Some(PathBuf::from(OsStr::from_bytes(text.to_bytes())))
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
+))]
+fn handle_path(_file: &File) -> Option<PathBuf> {
+    None
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -268,12 +327,10 @@ fn handle_is_at(_file: &File, _meta: &std::fs::Metadata, _path: &Path) -> bool {
     false
 }
 
-/// The final path of an open file, from `GetFinalPathNameByHandleW`, in the spelling `dunce::canonicalize` gives: the
-/// `\\?\` prefix is dropped from a drive path. None when it cannot be read, or when it is not a drive path (a UNC or a
-/// device path), which no canonical workspace file path is.
+/// The final path of an open file, from `GetFinalPathNameByHandleW`, as Windows spells it (with its verbatim prefix).
 #[cfg(windows)]
 #[allow(unsafe_code)]
-fn final_path(file: &File) -> Option<PathBuf> {
+fn final_path(file: &File) -> Option<String> {
     use std::ffi::{OsString, c_void};
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
@@ -308,11 +365,7 @@ fn final_path(file: &File) -> Option<PathBuf> {
         // The buffer was too small: the length is the size needed, its terminating null included.
         buffer.resize(length, 0);
     }
-    let text = OsString::from_wide(&buffer).into_string().ok()?;
-    let drive = text.strip_prefix(r"\\?\")?;
-    let bytes = drive.as_bytes();
-    (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\')
-        .then(|| PathBuf::from(drive))
+    OsString::from_wide(&buffer).into_string().ok()
 }
 
 /// Standard base64 with padding (RFC 4648), the encoding of an image block.
@@ -352,6 +405,21 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_drive_or_share_spelling_compares_as_the_plain_one() {
+        assert_eq!(plain_spelling(r"\\?\C:\work\a.png"), r"C:\work\a.png");
+        assert_eq!(plain_spelling(r"C:\work\a.png"), r"C:\work\a.png");
+        assert_eq!(
+            plain_spelling(r"\\?\UNC\server\share\a.png"),
+            r"\\server\share\a.png"
+        );
+        assert_eq!(
+            plain_spelling(r"\\server\share\a.png"),
+            r"\\server\share\a.png"
+        );
+    }
 
     /// A workspace folder with each `(name, size)` file written into it, its folders made as needed.
     fn workspace(files: &[(&str, usize)]) -> tempfile::TempDir {
