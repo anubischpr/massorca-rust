@@ -45,6 +45,7 @@ mod secrets_hardening;
 mod skills;
 mod tasks;
 mod team_delegate;
+mod team_messages;
 mod team_room;
 mod teams;
 mod terminal_secrets;

@@ -441,3 +441,7 @@ fn already_settled(task: &str, current: Option<TaskOutcome>) -> ErrorBody {
     error.data = Some(serde_json::json!({ "task": task, "outcome": shown }));
     error
 }
+
+#[cfg(test)]
+#[path = "team_message_tests.rs"]
+mod tests;
