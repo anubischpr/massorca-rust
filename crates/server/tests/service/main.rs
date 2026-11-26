@@ -40,6 +40,7 @@ mod reconnect;
 mod registries;
 mod secrets;
 mod secrets_hardening;
+mod self_update;
 mod skill_placement;
 mod skills;
 mod tasks;
