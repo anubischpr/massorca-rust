@@ -33,6 +33,8 @@ pub struct ShellModel {
     remote_sessions: Vec<(String, RemoteSessions)>,
     /// The remote session the Canvas shows, as (host, session id); None while a session of This PC or none is open.
     open_remote: Option<(String, String)>,
+    /// Whether the Sidebar lists archived sessions too (Show archived, decision 0163); off until the person asks.
+    show_archived: bool,
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
@@ -73,6 +75,7 @@ impl ShellModel {
             remote_hosts: Vec::new(),
             remote_sessions: Vec::new(),
             open_remote: None,
+            show_archived: false,
             teams: TeamsState::unavailable(),
             marketplace: MarketplaceSnapshot::default(),
             marketplace_query: String::new(),
@@ -257,7 +260,10 @@ impl ShellModel {
 
     /// What the Sidebar lists in the current mode.
     pub fn sidebar(&self) -> SidebarContent {
-        let mut content = sidebar_content(&self.snapshot, self.navigation.mode);
+        let visible =
+            (!self.show_archived).then(|| crate::model::sidebar::without_archived(&self.snapshot));
+        let snapshot = visible.as_ref().unwrap_or(&self.snapshot);
+        let mut content = sidebar_content(snapshot, self.navigation.mode);
         if let SidebarContent::Workspaces { tree, .. } = &mut content {
             let active = self.snapshot.active_session.as_deref();
             for (name, state) in &self.remote_hosts {
@@ -276,6 +282,16 @@ impl ShellModel {
             }
         }
         content
+    }
+
+    /// Whether the Sidebar lists archived sessions too (decision 0163).
+    pub fn show_archived(&self) -> bool {
+        self.show_archived
+    }
+
+    /// Shows or hides archived sessions in the Sidebar.
+    pub fn set_show_archived(&mut self, show: bool) {
+        self.show_archived = show;
     }
 
     /// The Sidebar toggle: shows or hides the Sidebar, inline or as the overlay.

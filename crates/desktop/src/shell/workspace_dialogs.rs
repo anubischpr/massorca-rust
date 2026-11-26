@@ -175,6 +175,9 @@ fn session_item(id: SessionMenuId) -> MenuItem {
         SessionMenuId::CopyPath => ("Copy path", IconName::Copy),
         SessionMenuId::OpenFolder => ("Open folder", IconName::Folder),
         SessionMenuId::RevealInWorkPanel => ("Reveal in Work panel", IconName::PanelRight),
+        SessionMenuId::Rename => ("Rename", IconName::Pencil),
+        SessionMenuId::Archive => ("Archive", IconName::EyeOff),
+        SessionMenuId::Unarchive => ("Unarchive", IconName::Eye),
         SessionMenuId::Delete => ("Delete session…", IconName::Trash2),
     };
     let item = MenuItem::new(label).icon(icon);
@@ -259,6 +262,7 @@ impl Shell {
                     Some(SessionFacts {
                         running: agent.execution.state != TerminalState::Exited,
                         has_terminal: agent.terminal_id.is_some(),
+                        archived: agent.archived,
                     })
                 }
                 None => None,
@@ -267,6 +271,7 @@ impl Shell {
                 session: facts,
                 local,
                 delete_offered: state.agent_archive,
+                archive_offered: state.agent_archive,
             })
         };
         self.open_menu(
@@ -306,6 +311,7 @@ impl Shell {
             let facts = SessionFacts {
                 running: held.reached && agent.execution.state != TerminalState::Exited,
                 has_terminal: false,
+                archived: false,
             };
             let path = held
                 .workspaces
@@ -316,6 +322,7 @@ impl Shell {
                 session: Some(facts),
                 local: false,
                 delete_offered: false,
+                archive_offered: false,
             });
             (rows, path)
         };
@@ -363,6 +370,9 @@ impl Shell {
             }
             SessionMenuId::OpenFolder
             | SessionMenuId::RevealInWorkPanel
+            | SessionMenuId::Rename
+            | SessionMenuId::Archive
+            | SessionMenuId::Unarchive
             | SessionMenuId::Delete => {}
         }
     }
@@ -450,6 +460,22 @@ impl Shell {
                 if let Some(session) = session {
                     self.open_delete_session(session, cx);
                 }
+            }
+            SessionMenuId::Rename => {
+                if let Some(session) = session {
+                    self.start_session_rename(session, cx);
+                }
+            }
+            SessionMenuId::Archive | SessionMenuId::Unarchive => {
+                let (Some(session), Some(service)) = (session, self.service.clone()) else {
+                    return;
+                };
+                let (session, archived) = (session.to_owned(), action == SessionMenuId::Archive);
+                cx.spawn(async move |_, _| {
+                    // The store follows the service's own answer; a refusal leaves the session as it was.
+                    let _ = service.agent_archive(&session, archived).await;
+                })
+                .detach();
             }
         }
     }
