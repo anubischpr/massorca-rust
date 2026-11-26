@@ -42,6 +42,8 @@ version leaves out.
   id, then by exact name, and a name two automations share is refused until the id is given. A schedule change
   recomputes the next run; a name or prompt change keeps it. Enabling schedules the next run from now and checks the
   definition still holds; disabling clears the next run. A create with no project is refused.
+  Reads show the next run from the clock at the time of the read, since no run advances the stored one yet; the stored
+  next run is kept for AUTO-03.
 
 ## Desktop
 
