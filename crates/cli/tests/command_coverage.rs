@@ -102,6 +102,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.resume",
             "agent.retain",
             "agent.seen",
+            "agent.set-options",
             "agent.start",
             "agent.status",
             "agent.stop",

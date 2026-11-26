@@ -281,9 +281,8 @@ mod tests {
     fn imported(result: ImportResult, reason: Option<&str>) -> AccountsImported {
         AccountsImported {
             result,
-            account: None,
             reason: reason.map(str::to_owned),
-            updated: None,
+            ..crate::service::fixtures::base_accounts_imported()
         }
     }
 

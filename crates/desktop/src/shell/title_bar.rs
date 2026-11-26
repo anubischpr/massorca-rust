@@ -6,11 +6,11 @@ use super::{Shell, change};
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
 use crate::model::title_bar::{
-    BackControl, RegionToggle, TitleBarModel, title_bar as title_bar_model,
+    BackControl, RegionToggle, SessionTerminal, TitleBarModel, title_bar as title_bar_model,
 };
 use gpui::{
-    App, Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window,
-    WindowControlArea, div, prelude::*, px, svg,
+    AnyElement, App, Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity,
+    Window, WindowControlArea, div, prelude::*, px, svg,
 };
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::icon_button::IconButton;
@@ -52,11 +52,7 @@ pub(super) fn title_bar(
         )
         .child(history(&bar, shell))
         .child(title(&bar, theme))
-        .children(
-            bar.region_toggles
-                .iter()
-                .map(|toggle| region_toggle(*toggle, shell.clone())),
-        );
+        .children(right_group(&bar, shell));
     if show_controls && !cfg!(target_os = "macos") {
         row = row.child(window_controls(maximized, shell, theme));
     }
@@ -177,6 +173,83 @@ fn region_toggle(toggle: RegionToggle, shell: WeakEntity<Shell>) -> impl IntoEle
             change(&shell, cx, move |shell| shell.model.toggle_region(region));
         });
     with_tooltip(button, name)
+}
+
+/// The right group in the order the artboards draw it: New chat, Terminal, the region toggles, and Open in Work panel
+/// before the Project sidebar toggle (RegionToggle).
+fn right_group(bar: &TitleBarModel, shell: &WeakEntity<Shell>) -> Vec<AnyElement> {
+    let mut items: Vec<AnyElement> = Vec::new();
+    if bar.new_chat {
+        items.push(new_chat_button(shell).into_any_element());
+    }
+    if let Some(workspace) = &bar.new_terminal_in {
+        items.push(terminal_button(workspace, shell).into_any_element());
+    }
+    let mut open_session = bar
+        .session_terminal
+        .as_ref()
+        .map(|session| open_in_work_panel_button(session, shell).into_any_element());
+    for toggle in &bar.region_toggles {
+        if toggle.region == Region::ProjectSidebar {
+            items.extend(open_session.take());
+        }
+        items.push(region_toggle(*toggle, shell.clone()).into_any_element());
+    }
+    items.extend(open_session);
+    items
+}
+
+/// New chat: the start page of the current workspace, or of none, with its composer focused.
+fn new_chat_button(shell: &WeakEntity<Shell>) -> impl IntoElement {
+    let shell = shell.clone();
+    let button = IconButton::new("title-new-chat", IconName::MessageSquarePlus, "New chat")
+        .size(ButtonSize::Default)
+        .on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_new_chat(window, cx));
+        });
+    div()
+        .flex_none()
+        .debug_selector(|| "title-new-chat".to_owned())
+        .child(with_tooltip(button, "New chat"))
+}
+
+/// Terminal: a new terminal in the workspace's Work panel, through the create the start page's Open terminal uses.
+fn terminal_button(workspace: &str, shell: &WeakEntity<Shell>) -> impl IntoElement {
+    let (shell, workspace) = (shell.clone(), workspace.to_owned());
+    let button = IconButton::new("title-terminal", IconName::Terminal, "Terminal")
+        .size(ButtonSize::Default)
+        .on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_terminal(workspace.clone(), window, cx)
+            });
+        });
+    div()
+        .flex_none()
+        .debug_selector(|| "title-terminal".to_owned())
+        .child(with_tooltip(button, "Terminal"))
+}
+
+/// Open in Work panel: shows the Work panel with the open session's terminal selected.
+fn open_in_work_panel_button(
+    session: &SessionTerminal,
+    shell: &WeakEntity<Shell>,
+) -> impl IntoElement {
+    let (shell, session) = (shell.clone(), session.clone());
+    let button = IconButton::new(
+        "title-open-in-work-panel",
+        IconName::ExternalLink,
+        "Open in Work panel",
+    )
+    .size(ButtonSize::Default)
+    .on_click(move |_, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_session_terminal(&session.workspace, &session.terminal, cx)
+        });
+    });
+    div()
+        .flex_none()
+        .debug_selector(|| "title-open-in-work-panel".to_owned())
+        .child(with_tooltip(button, "Open in Work panel"))
 }
 
 fn toggle_icon(region: Region) -> (&'static str, IconName) {

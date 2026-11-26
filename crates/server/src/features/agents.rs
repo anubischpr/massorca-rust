@@ -15,12 +15,12 @@ use massorca_protocol::methods::agents::{
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
     AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
     AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
-    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
-    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
-    GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
+    AgentOptionsSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentSetOptionsParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
     ImportCandidatesParams, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
@@ -32,7 +32,7 @@ use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
 use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::{NoParams, sees_account_details};
+use crate::features::{NoParams, first_prompt_rename, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
 use crate::permission::{Permission, Principal, authorize};
@@ -66,6 +66,11 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // `agent.set_options`: a session's model, effort and fast mode changed while it runs, or at its next resume
+        // (decision 0171).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_OPTIONS_LIVE, Owner::Core)?,
         // Fast mode on a start, a kind, a model and a session (decision 0165).
         registries
             .capabilities
@@ -180,6 +185,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::AGENT_MODES,
             Permission::Workspace,
             set_mode,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::SET_OPTIONS,
+            capabilities::AGENT_OPTIONS_LIVE,
+            Permission::Workspace,
+            set_options,
         )?,
         methods.register(
             Owner::Core,
@@ -399,7 +411,9 @@ async fn models(ctx: RequestCtx, params: AgentModelsParams) -> Result<AgentModel
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
     let grant = secret_grant(&ctx);
+    let (model, prompt) = (params.model.clone(), params.prompt.clone());
     let session = on_agents(&ctx, move |agents| agents.start(params, grant)).await?;
+    first_prompt_rename::note_started(&ctx.state, &session, model, prompt.as_deref());
     Ok(for_caller(&ctx, session))
 }
 
@@ -619,6 +633,19 @@ async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentMo
         agents.set_mode(&params.session, &params.permission_mode, params.force)
     })
     .await?;
+    set.session = for_caller(&ctx, set.session);
+    Ok(set)
+}
+
+/// Changes a session's model, effort or fast mode (decision 0171): typed into a live run where the kind declares a live
+/// command for it, otherwise at the session's next resume. A live change types into the run's terminal, so a run holding
+/// vault secrets needs host-admin scope, as a mode switch does.
+async fn set_options(
+    ctx: RequestCtx,
+    params: AgentSetOptionsParams,
+) -> Result<AgentOptionsSet, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let mut set = on_agents(&ctx, move |agents| agents.set_options(&params)).await?;
     set.session = for_caller(&ctx, set.session);
     Ok(set)
 }

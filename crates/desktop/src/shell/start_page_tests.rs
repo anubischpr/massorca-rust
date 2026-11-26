@@ -20,7 +20,7 @@ use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams, TerminalState};
+use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams};
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::tokens::{
@@ -509,10 +509,9 @@ fn report_kind_chats(rig: &Rig, cx: &mut VisualTestContext, chats: Vec<(&str, Ki
 
 fn supported_chat() -> KindChat {
     KindChat {
-        supported: true,
-        reason: None,
         version: Some("2.2.0".to_owned()),
         range: Some(">=2.1.0, <2.3.0".to_owned()),
+        ..crate::service::fixtures::base_kind_chat()
     }
 }
 
@@ -520,8 +519,7 @@ fn unsupported_chat(reason: Option<ChatUnsupportedReason>) -> KindChat {
     KindChat {
         supported: false,
         reason,
-        version: None,
-        range: None,
+        ..crate::service::fixtures::base_kind_chat()
     }
 }
 
@@ -631,18 +629,9 @@ fn a_new_session_opens_its_terminal_at_the_grid_the_session_view_applies(cx: &mu
     rig._updates
         .send(StoreUpdate::TerminalChanged(Terminal {
             id: terminal.to_owned(),
-            workspace_id: "w1".to_owned(),
-            state: TerminalState::Live,
-            title: None,
             cols,
             rows,
-            pid: None,
-            shell: "/bin/zsh".to_owned(),
-            cwd: "/repos/fix-login".to_owned(),
-            created_at_ms: 1,
-            exit: None,
-            holds_secrets: false,
-            git_credential_guard: false,
+            ..crate::service::fixtures::base_terminal()
         }))
         .expect("the store listens");
     reply
@@ -1225,11 +1214,7 @@ fn claude_with_modes() -> AgentKind {
         label: label.into(),
         description: Some(format!("{label} description")),
         bypass,
-        live_switch: false,
-        may_fall_back: false,
-        icon: None,
-        tone: None,
-        selectable: true,
+        ..crate::service::fixtures::base_permission_mode()
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.permission_modes = vec![
@@ -1581,7 +1566,7 @@ fn claude_with_models() -> AgentKind {
         label: label.into(),
         default,
         efforts: efforts.map(|list| list.iter().map(|id| (*id).to_owned()).collect()),
-        fast: false,
+        ..crate::service::fixtures::base_kind_model_choice()
     };
     let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
     kind.model = Some(KindModel {

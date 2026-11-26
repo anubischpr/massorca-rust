@@ -25,10 +25,11 @@ use massorca_protocol::methods::devices::{
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
-    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
-    TOPIC_WORKSPACE_REMOVING,
+    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_CHANGED,
+    TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED,
+    TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
+    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_WORKSPACE_UPDATED,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -56,7 +57,6 @@ use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
-use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::host_sessions::{self, Followed};
@@ -75,8 +75,6 @@ use super::update::StoreUpdate;
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
 /// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
 const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
-/// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
-const WORKSPACE_UNIQUE_NAME_CAPABILITY: &str = "workspace-unique-name/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -89,7 +87,6 @@ pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
-        unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
     },
     /// `git.branches` for one workspace: the local branch names, the current one first.
@@ -103,6 +100,10 @@ pub(crate) enum Command {
     },
     AddProject {
         params: ProjectAddParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    UpdateProject {
+        params: massorca_protocol::methods::projects::ProjectUpdateParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     /// `project.inspect`, answered on its oneshot: what a path would register as.
@@ -368,26 +369,13 @@ impl ServiceHandle {
         let _ = self.commands.send(Command::RetryNow);
     }
 
-    /// `workspace.create`. The store changes through the resulting event, not from this answer.
+    /// `workspace.create`. The store changes through the resulting event, not from this answer. The caller sets
+    /// `unique_name` and `name_generated` (`workspace-unique-name/1`, `workspace-rename/1`).
     pub async fn create_workspace(
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        self.create_workspace_with(params, false).await
-    }
-
-    /// `workspace.create` with the collision-free option when `unique_name` is set (capability `workspace-unique-name/1`).
-    pub async fn create_workspace_with(
-        &self,
-        params: WorkspaceCreateParams,
-        unique_name: bool,
-    ) -> Result<Workspace, Refusal> {
-        self.ask(|reply| Command::Create {
-            params,
-            unique_name,
-            reply,
-        })
-        .await
+        self.ask(|reply| Command::Create { params, reply }).await
     }
 
     /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
@@ -395,6 +383,20 @@ impl ServiceHandle {
     pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
         self.ask(|reply| Command::GitBranches { workspace, reply })
             .await
+    }
+
+    /// `project.update`. The icon changes through the `project.changed` event, not from this answer.
+    pub async fn update_project(
+        &self,
+        params: massorca_protocol::methods::projects::ProjectUpdateParams,
+    ) -> Result<Project, Refusal> {
+        let (reply, answer) = oneshot::channel();
+        self.commands
+            .send(Command::UpdateProject { params, reply })
+            .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
+        answer
+            .await
+            .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -933,8 +935,11 @@ impl Link {
             client.has_capability(AGENT_FAST_CAPABILITY),
         ));
         self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
-            client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::WORKSPACE_UNIQUE_NAME),
         ));
+        self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
+            massorca_protocol::capabilities::WORKSPACE_RENAME,
+        )));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
@@ -1125,7 +1130,8 @@ impl Link {
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
                 return Outcome::Continue;
             }
-            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
+            // A rename or comment change is read again too: the event names the workspace, not its name.
+            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
                 })
@@ -1136,7 +1142,7 @@ impl Link {
                         StoreUpdate::WorkspaceGone(id.clone())
                     })
                 }),
-            TOPIC_PROJECT_ADDED => client
+            TOPIC_PROJECT_ADDED | TOPIC_PROJECT_CHANGED => client
                 .project_show(&ProjectRef {
                     project: id.clone(),
                 })
@@ -1270,18 +1276,10 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
-        Command::Create {
-            params,
-            unique_name,
-            reply,
-        } => {
+        Command::Create { params, reply } => {
             tokio::spawn(async move {
-                let request = WorkspaceCreateRequest {
-                    create: &params,
-                    unique_name,
-                };
                 let result = client
-                    .call::<_, Workspace>(massorca_protocol::methods::workspaces::CREATE, &request)
+                    .workspace_create(&params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1291,6 +1289,15 @@ fn spawn_call(
             tokio::spawn(async move {
                 let result = client
                     .workspace_remove(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::UpdateProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<_, Project>(massorca_protocol::methods::projects::UPDATE, &params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1476,6 +1483,9 @@ fn refuse_while_down(command: Command) {
         Command::AddProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::UpdateProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1557,16 +1567,7 @@ mod tests {
     #[test]
     fn a_delegate_call_while_the_service_is_down_is_refused_at_once() {
         let params = AgentDelegateParams {
-            parent: "p".to_owned(),
-            prompt: "look".to_owned(),
-            kind: None,
-            name: None,
-            title: None,
-            read_only: true,
-            same_workspace: false,
-            token: None,
-            request_id: None,
-            permission_mode: None,
+            ..crate::service::fixtures::base_agent_delegate_params()
         };
         let (reply, mut answer) = oneshot::channel();
         refuse_while_down(Command::Delegate { params, reply });

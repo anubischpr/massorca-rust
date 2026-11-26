@@ -192,13 +192,8 @@ index 1111111..2222222 100644
     #[test]
     fn a_binary_change_shows_its_sizes_and_an_unchanged_one_is_empty() {
         let binary = GitDiffFile {
-            path: "logo.png".into(),
-            patch: None,
-            binary: true,
-            truncated: false,
             old_size: Some(2 * 1024 * 1024 + 1024 * 1024 / 10),
-            new_size: None,
-            submodule: None,
+            ..crate::service::fixtures::base_git_diff_file()
         };
         assert_eq!(
             diff_status(&binary),
