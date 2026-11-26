@@ -98,5 +98,7 @@ pub const SKILLS_PLACE: &str = "skills-place/1";
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
+/// Self-update over the paired link: `host.update_*` (decision 0132). A host with no supervisor refuses `update.unsupported`.
+pub const SELF_UPDATE: &str = "self-update/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
