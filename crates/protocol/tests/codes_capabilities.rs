@@ -204,4 +204,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
     assert_eq!(capabilities::EXTENSION_POINTS, "extension-points/1");
+    assert_eq!(capabilities::USAGE, "usage/1");
 }

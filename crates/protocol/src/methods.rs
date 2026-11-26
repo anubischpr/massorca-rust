@@ -23,6 +23,7 @@ pub mod tasks;
 pub mod team_room;
 pub mod teams;
 pub mod terminals;
+pub mod usage;
 pub mod workspaces;
 
 /// Core never defines methods under this prefix; extensions use it for their own.
