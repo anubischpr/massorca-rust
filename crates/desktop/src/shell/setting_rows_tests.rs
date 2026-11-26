@@ -139,6 +139,66 @@ fn a_row_sends_nothing_until_the_service_has_listed_its_setting(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn a_stepper_moves_by_its_step_and_stops_at_the_end_of_the_range(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    start_with(
+        &rig,
+        cx,
+        vec![setting(
+            "editor.tab_width",
+            json!(4),
+            json!(4),
+            Some((1, 16)),
+        )],
+    );
+    open_section(cx, "settings-nav-Input");
+
+    click(cx, "icon-button:settings-Input-0-increase");
+    assert_eq!(
+        answer_set(&mut rig, cx, json!(4)),
+        ("editor.tab_width".to_owned(), json!(5))
+    );
+
+    changed(
+        &rig,
+        cx,
+        setting("editor.tab_width", json!(16), json!(4), Some((1, 16))),
+    );
+    click(cx, "icon-button:settings-Input-0-increase");
+    cx.run_until_parked();
+    assert!(next_write(&mut rig).is_none(), "16 is the top of the range");
+    click(cx, "icon-button:settings-Input-0-decrease");
+    assert_eq!(answer_set(&mut rig, cx, json!(4)).1, json!(15));
+}
+
+#[gpui::test]
+fn a_status_bar_checkbox_writes_the_whole_set_without_its_item(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    let all = json!(["agent_status", "memory", "terminals", "ports", "hosts"]);
+    start_with(
+        &rig,
+        cx,
+        vec![setting(
+            "appearance.status_bar",
+            all.clone(),
+            all.clone(),
+            None,
+        )],
+    );
+    open_section(cx, "settings-nav-Appearance");
+
+    click_edge(cx, "settings-Appearance-9-1", false);
+
+    assert_eq!(
+        answer_set(&mut rig, cx, all),
+        (
+            "appearance.status_bar".to_owned(),
+            json!(["agent_status", "terminals", "ports", "hosts"])
+        )
+    );
+}
+
+#[gpui::test]
 fn a_changed_setting_offers_a_reset_that_asks_the_service_for_the_default(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
     start_with(

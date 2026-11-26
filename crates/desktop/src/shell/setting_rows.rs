@@ -5,16 +5,21 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, WeakEntity, div, px};
 use massorca_protocol::methods::config::{ConfigKey, ConfigSet, ConfigValue, DEFAULT_OWNER};
-use massorca_ui::Theme;
 use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::checkbox::Checkbox;
+use massorca_ui::components::icon_button::{IconButton, IconButtonVariant};
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{self, RowStatus, SettingsRow};
 use massorca_ui::components::switch::Switch;
-use massorca_ui::tokens::{SPACE_2, SPACE_3};
+use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_3, TYPE_CAPTION};
+use massorca_ui::{IconName, TextStyled, Theme};
 use serde_json::Value;
 
 use super::Shell;
-use crate::model::setting_rows::{Live, choice_index, switch_on};
+use super::settings::value_box;
+use crate::model::setting_rows::{
+    Live, checked, choice_index, number, stepped, switch_on, with_option,
+};
 use crate::model::settings::{LOADING, NOT_CONNECTED};
 
 /// The width of a sound dropdown beside a notification switch.
@@ -103,6 +108,19 @@ pub(super) fn live_row(
                 None => choice,
             }
         }
+        Live::Number { unit, step, .. } => Stepper {
+            id,
+            label,
+            key,
+            step,
+            unit,
+            enabled,
+        }
+        .element(held, frame.shell, theme),
+        Live::Checkboxes { options, .. } => {
+            row = row.stacked(true);
+            checkboxes(id, key, options, held, enabled, frame.shell)
+        }
     };
     (row, Some(control))
 }
@@ -166,6 +184,116 @@ fn choice(
         }
     })
     .into_any_element()
+}
+
+/// One checkbox per option; a press writes the whole set with that option turned on or off.
+fn checkboxes(
+    id: &SharedString,
+    key: &'static str,
+    options: &'static [(&'static str, &'static str)],
+    held: Option<&ConfigValue>,
+    enabled: bool,
+    shell: &WeakEntity<Shell>,
+) -> AnyElement {
+    let marks = held
+        .map(|value| checked(options, value))
+        .unwrap_or_default();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .w_full()
+        .children(options.iter().enumerate().map(|(index, (_, text))| {
+            let shell = shell.clone();
+            let value = held.cloned();
+            let mark = SharedString::from(format!("{id}-{index}"));
+            let checkbox = Checkbox::new(mark.clone(), marks.get(index).copied().unwrap_or(false))
+                .label(*text)
+                .disabled(!enabled)
+                .on_change(move |on, _, cx| {
+                    if let Some(value) = &value {
+                        let next = with_option(options, value, index, on);
+                        let _ = shell.update(cx, |shell, cx| shell.write_setting(key, next, cx));
+                    }
+                });
+            found(mark.to_string(), checkbox)
+        }))
+        .into_any_element()
+}
+
+/// A number setting: its value with a decrease and an increase button, and its unit.
+struct Stepper<'a> {
+    id: &'a SharedString,
+    label: &'static str,
+    key: &'static str,
+    step: i64,
+    unit: &'static str,
+    enabled: bool,
+}
+
+impl Stepper<'_> {
+    /// A button is off at its end of the range, and both are off while the row is.
+    fn element(
+        self,
+        held: Option<&ConfigValue>,
+        shell: &WeakEntity<Shell>,
+        theme: &Theme,
+    ) -> AnyElement {
+        let Self {
+            id,
+            label,
+            key,
+            step,
+            unit,
+            enabled,
+        } = self;
+        let button = |up: bool| {
+            let next = held.and_then(|value| stepped(value, step, up));
+            let shell = shell.clone();
+            let (icon, direction, word) = if up {
+                (IconName::Plus, "Increase", "increase")
+            } else {
+                (IconName::Minus, "Decrease", "decrease")
+            };
+            IconButton::new(
+                SharedString::from(format!("{id}-{word}")),
+                icon,
+                format!("{direction} {label}"),
+            )
+            .variant(IconButtonVariant::Ghost)
+            .disabled(!enabled || next.is_none())
+            .on_click(move |_, cx| {
+                if let Some(next) = next {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.write_setting(key, Value::from(next), cx);
+                    });
+                }
+            })
+        };
+        let text = held
+            .and_then(number)
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let selector = format!("{id}-value");
+        div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .child(button(false))
+            .child(
+                div()
+                    .debug_selector(move || selector)
+                    .child(value_box(text, theme)),
+            )
+            .child(button(true))
+            .child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.tertiary)
+                    .child(unit),
+            )
+            .into_any_element()
+    }
 }
 
 impl Shell {

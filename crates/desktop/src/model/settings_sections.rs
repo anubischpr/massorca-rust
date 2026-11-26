@@ -223,9 +223,10 @@ const AGENTS: &[RowSpec] = &[
     RowSpec {
         label: "Delegation depth limit",
         helper: "How many levels of child sessions an agent may start, from 1 to 5.",
-        body: RowBody::Planned(Planned::Number {
-            value: Some("3"),
+        body: RowBody::Setting(Live::Number {
+            key: "agents.delegation_depth",
             unit: "levels",
+            step: 1,
         }),
     },
 ];
@@ -267,9 +268,10 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Text size",
         helper: "Scales the interface text from 90% to 130%.",
-        body: RowBody::Planned(Planned::Slider {
-            value: "100%",
-            percent: 25,
+        body: RowBody::Setting(Live::Number {
+            key: "appearance.text_size",
+            unit: "%",
+            step: 5,
         }),
     },
     RowSpec {
@@ -290,13 +292,16 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Status bar items",
         helper: "What the status bar shows.",
-        body: RowBody::Planned(Planned::Checkboxes(&[
-            "Agent status",
-            "Memory",
-            "Terminals",
-            "Ports",
-            "Hosts",
-        ])),
+        body: RowBody::Setting(Live::Checkboxes {
+            key: "appearance.status_bar",
+            options: &[
+                ("agent_status", "Agent status"),
+                ("memory", "Memory"),
+                ("terminals", "Terminals"),
+                ("ports", "Ports"),
+                ("hosts", "Hosts"),
+            ],
+        }),
     },
 ];
 
@@ -304,9 +309,10 @@ const INPUT: &[RowSpec] = &[
     RowSpec {
         label: "Tab width",
         helper: "Spaces inserted for a tab in the code editor.",
-        body: RowBody::Planned(Planned::Number {
-            value: Some("4"),
+        body: RowBody::Setting(Live::Number {
+            key: "editor.tab_width",
             unit: "spaces",
+            step: 1,
         }),
     },
     RowSpec {
@@ -350,10 +356,10 @@ const TERMINAL: &[RowSpec] = &[
     RowSpec {
         label: "Scrollback lines",
         helper: "How many lines a terminal keeps.",
-        // The terminal keeps SCROLLBACK_ROWS rows by default (crates/core-terminal).
-        body: RowBody::Planned(Planned::Number {
-            value: Some("1000"),
+        body: RowBody::Setting(Live::Number {
+            key: "terminal.scrollback",
             unit: "lines",
+            step: 500,
         }),
     },
     RowSpec {
@@ -730,13 +736,11 @@ mod tests {
             None,
             "Save as preset"
         ))));
-        assert!(appearance.contains(&RowBody::Planned(Planned::Checkboxes(&[
-            "Agent status",
-            "Memory",
-            "Terminals",
-            "Ports",
-            "Hosts",
-        ]))));
+        assert!(appearance.iter().any(|body| matches!(
+            body,
+            RowBody::Setting(Live::Checkboxes { key: "appearance.status_bar", options })
+                if options.len() == 5
+        )));
     }
 
     /// The keys of every row backed by a core setting.
@@ -760,8 +764,13 @@ mod tests {
             "agents.browser_access",
             "agents.keep_awake",
             "sessions.search",
+            "agents.delegation_depth",
             "appearance.density",
+            "appearance.text_size",
             "appearance.session_summary",
+            "appearance.status_bar",
+            "editor.tab_width",
+            "terminal.scrollback",
             "git.fetch_on_focus",
             "notifications.agent_finished",
             "notifications.waiting",

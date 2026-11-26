@@ -17,6 +17,17 @@ pub enum Live {
         options: &'static [(&'static str, &'static str)],
         action: Option<&'static str>,
     },
+    /// A stepper over a ranged `integer` setting; each press moves the value by `step`, within the range.
+    Number {
+        key: &'static str,
+        unit: &'static str,
+        step: i64,
+    },
+    /// One checkbox per option of a `set` setting.
+    Checkboxes {
+        key: &'static str,
+        options: &'static [(&'static str, &'static str)],
+    },
 }
 
 impl Live {
@@ -24,7 +35,9 @@ impl Live {
     pub fn key(self) -> &'static str {
         match self {
             Self::Switch(key) | Self::SwitchSound(key) => key,
-            Self::Choice { key, .. } => key,
+            Self::Choice { key, .. } | Self::Number { key, .. } | Self::Checkboxes { key, .. } => {
+                key
+            }
         }
     }
 }
@@ -154,5 +167,14 @@ mod tests {
     #[test]
     fn every_control_names_its_key() {
         assert_eq!(Live::Switch("a.b").key(), "a.b");
+        assert_eq!(
+            Live::Number {
+                key: "c.d",
+                unit: "",
+                step: 1
+            }
+            .key(),
+            "c.d"
+        );
     }
 }
