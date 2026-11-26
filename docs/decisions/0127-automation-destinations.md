@@ -27,7 +27,9 @@ unavailable rows for this version.
   does not know decodes as `Unknown`. An older peer that omits the field keeps the project's own place.
 - D4 Checks at create and update. An existing workspace must exist, belong to the automation's project, be ready and
   have its folder present; its id is stored, so an id, a name or a path given in the request resolves to the id.
-  A per-run worktree needs a git project. A blank base branch is refused. Changing the project of an automation whose
+  A per-run worktree needs a git project. A base branch, when set, must name a commit of that repository (its ref is
+  resolved as `git` does for a base, and then checked); an unknown one is refused with
+  `automation.base_branch_unknown`, and a blank one with `automation.destination_invalid`. Changing the project of an automation whose
   destination is not `project_default` needs its destination given again, since the old one names the old project.
   Refusals are `automation.destination_invalid`, or the workspace's own `workspace.not_found`.
 - D5 Refusals. A run is refused before its row is written, both for a timer occurrence and for `automation.run_now`:
@@ -42,8 +44,9 @@ unavailable rows for this version.
   A refused run is recorded as `skipped_unavailable` with its code and sentence, and the schedule still moves on.
   A workspace the service cannot reach for another reason (a lost connection, an unknown error) is not a refusal: the run
   starts and reports its own error, so loss of contact is never read as the workspace being gone.
-- D6 Folding. A refusal that repeats the newest run's refusal of the same automation, with the same code, folds into
-  that row: its count grows, its time becomes the latest occurrence, and no new number is given, so no number is reused.
+- D6 Folding. A refusal that repeats the newest run's refusal of the same automation, with the same code and from the
+  same trigger (a timer occurrence or a manual run), folds into that row: its count grows, its time becomes the latest
+  occurrence, and no new number is given, so no number is reused. A refusal from the other trigger keeps its own row.
   The same rule folds the repeated `automation.no_project` rows that decision 0125 left as one row each. A run in between,
   or a different code, starts a new row.
 - D7 Launch. An existing workspace is used as it is and is not announced as made. A per-run worktree is created through
@@ -68,15 +71,24 @@ unavailable rows for this version.
   and `--project`, when given, must match it (the service refuses another). When no workspace resolves and no
   destination flag is given, the create keeps the project's own place when `--project` is given, and otherwise fails
   with `usage.missing_project`.
+- D11a Capability gate. The enclosing-workspace default is looked up only when the host offers
+  `automation-destinations/1` and the paths are local (`default_allowed`). An older host keeps the old behaviour: create
+  needs `--project`, and no destination is sent.
 - D12 Output. `show` prints `destination:`; `list` adds a destination column after the id. A workspace that no longer
   exists is shown by its id as "no longer exists".
 
 ## Desktop
 
 - D13 Editor. The editor offers three choices: the project's own place, a new worktree per run (with an optional base
-  branch), and an existing workspace (a text field taking its id, name or path, which the service resolves). An edit
-  always sends the destination, so it can return to the default. Choosing a workspace from a list of the project's
-  workspaces is not done (see the gaps).
+  branch), and an existing workspace, chosen from a select of the workspaces the shell already holds. Each label names
+  its project, because the project field is free text, so the select lists all projects' workspaces rather than only the
+  automation's project; the service refuses a workspace of another project. A stored workspace that no longer exists is
+  shown as "(removed)" in the select.
+- D13a Edits. An edit sends the destination only when the person changed it or the project (the service needs it again
+  then). An untouched destination is omitted, so a stored workspace that is gone does not block a prompt-only edit, and
+  an unknown destination kind from a newer peer survives a rename. A new automation always sends one.
+- D13b Older hosts. Without `automation-destinations/1` the editor hides the picker behind a note and sends no
+  destination, on create and edit alike.
 - D14 Page. Each automation's line names its destination beside the project and the next run.
 
 ## Not in this version
@@ -84,5 +96,6 @@ unavailable rows for this version.
 - Session reuse for existing-workspace automations (AUTO-06) and the `--fresh-session` switch.
 - Remote and SSH destinations, host ownership and fencing (AUTO-08, AUTO-09): the destination check runs on this host only.
 - Removing the worktrees that per-run destinations leave behind; a per-run destination keeps each run's worktree.
-- A workspace select of the project's workspaces in the editor; the workspace is a text field.
+- A select limited to the automation's own project. The project field is free text, so the select cannot follow it
+  without a rebuild on every keystroke; the service enforces the project instead (D13).
 - The check and the launch are not atomic: a race between them is recorded `dispatch_failed`, not as a refusal (D8).
