@@ -20,6 +20,7 @@ use massorca_protocol::methods::terminals::TerminalState;
 use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
+use crate::agent_settings::{self, SettingsCommand};
 use crate::agent_text;
 use crate::agent_title::{self, AgentTitleArgs};
 use crate::connect::connect;
@@ -196,6 +197,12 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: CredentialsCommand,
     },
+    /// A kind's standing launch settings: the program, arguments and variables every run of it starts with (decision
+    /// 0174). Prints variable names, never values.
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
     /// A kind's accounts: sign in, import, activate for the kind or a project, check and remove (decision 0059).
     Accounts {
         #[command(subcommand)]
@@ -355,6 +362,10 @@ pub struct AgentStartArgs {
     /// chat (no chat support, or a CLI version outside its range) is refused with agent.chat_unsupported.
     #[arg(long, conflicts_with = "args")]
     pub chat: bool,
+    /// A variable set in the run, repeatable. It replaces the kind's standing variable of the same name (`agent
+    /// settings`, decision 0174).
+    #[arg(long = "env", value_name = "KEY=VALUE", value_parser = agent_settings::parse_env)]
+    pub env: Vec<(String, String)>,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
@@ -555,7 +566,7 @@ pub async fn execute(
                 kind: args.kind,
                 prompt: args.prompt,
                 args: args.args,
-                env: Default::default(),
+                env: agent_settings::env_map(args.env),
                 read_only: args.read_only,
                 title: args.title,
                 cols: None,
@@ -825,6 +836,9 @@ pub async fn execute(
         }
         AgentCommand::Credentials { command } => {
             agent_credentials::execute(&client, command, output).await?;
+        }
+        AgentCommand::Settings { command } => {
+            agent_settings::execute(&client, command, output).await?;
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),

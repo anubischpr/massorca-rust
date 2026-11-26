@@ -7,6 +7,7 @@ pub mod agent_accounts;
 pub mod agent_context;
 pub mod agent_credentials;
 pub mod agent_hook;
+pub mod agent_settings;
 pub mod agent_text;
 pub mod agent_title;
 pub mod app;
