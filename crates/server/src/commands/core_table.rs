@@ -86,6 +86,48 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        // Palette-only: the later steps of `host update`, which a palette must not run on their own.
+        command(
+            "host.update-chunk",
+            "Send one chunk of a host update's binary",
+            "host.update_chunk",
+            json!({
+                "type": "object",
+                "required": ["upload_id", "offset", "data"],
+                "properties": {
+                    "upload_id": { "type": "string" },
+                    "offset": { "type": "integer" },
+                    "data": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "host.update-finish",
+            "Check, install and restart with a host update's uploaded binary",
+            "host.update_finish",
+            json!({
+                "type": "object",
+                "required": ["upload_id"],
+                "properties": {
+                    "upload_id": { "type": "string" },
+                    "expected_version": { "type": "string" },
+                    "allow_downgrade": { "type": "boolean" },
+                    "force": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "host.update-rollback",
+            "Restore the binary the last host update replaced",
+            "host.update_rollback",
+            json!({
+                "type": "object",
+                "properties": {
+                    "expected_version": { "type": "string" },
+                    "dry_run": { "type": "boolean" }
+                }
+            }),
+        ),
         command(
             "events.subscribe",
             "Stream change events",
