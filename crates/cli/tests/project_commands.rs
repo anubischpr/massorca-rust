@@ -389,6 +389,7 @@ fn init_git_names_the_new_git_project_in_text_output() {
         .stdout(contains("initialized Git for project notes (git)"));
 }
 
+#[test]
 fn the_remote_owner_is_shown_by_list_and_show_and_carried_in_json() {
     let sandbox = Sandbox::new();
     let repo = sandbox.home().join("repo");
