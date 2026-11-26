@@ -998,6 +998,7 @@ pub(crate) mod fixtures {
             resume: None,
             delegation: None,
             notes: Vec::new(),
+            meta: massorca_protocol::methods::agents::SessionMeta::default(),
             fast: None,
             shared_folder_with: Vec::new(),
         }
