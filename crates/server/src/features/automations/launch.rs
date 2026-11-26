@@ -1,12 +1,12 @@
 //! Starts an automation run's agent (decision 0125): the automation's prompt and agent, through the same agent start a
-//! task uses, in its project. A git project runs in one worktree kept for the automation, made on its first run, so runs
-//! never write in the person's own checkout and worktrees do not pile up; a folder project runs in its folder. The run
-//! gets no vault secrets and the agent's default permission mode.
+//! task uses, in the place its destination names (decision 0127). By default a git project runs in one worktree kept for
+//! the automation, made on its first run, and a folder project runs in its folder. The run gets no vault secrets and the
+//! agent's default permission mode.
 
 use std::collections::BTreeMap;
 
 use massorca_core_agents::{Agents, SecretGrant};
-use massorca_core_store::{AutomationRow, AutomationRunRow, Store, now_ms};
+use massorca_core_store::{AutomationRow, AutomationRunRow, Store, destination, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::projects::{Project, ProjectKind};
@@ -86,7 +86,7 @@ fn start(
         )
     })?;
     let project = workspaces.show_project(project_id)?;
-    let (workspace, made) = place(workspaces, automation, &project)?;
+    let (workspace, made) = place(workspaces, automation, &project, run)?;
     let session = agents.start(
         AgentStartParams {
             workspace: Some(workspace.id.clone()),
@@ -111,8 +111,53 @@ fn start(
     Ok((session.id, workspace.id, made))
 }
 
-/// Where the automation's runs work, and whether this call made it.
+/// Where the automation's runs work, and whether this call made it: its destination's workspace, a worktree made for
+/// this run, or the project's own place.
 fn place(
+    workspaces: &Workspaces,
+    automation: &AutomationRow,
+    project: &Project,
+    run: &AutomationRunRow,
+) -> Result<(Workspace, bool), ErrorBody> {
+    match automation.destination.as_str() {
+        destination::EXISTING_WORKSPACE => {
+            let id = automation
+                .destination_workspace_id
+                .as_deref()
+                .unwrap_or_default();
+            Ok((workspaces.show_workspace(id)?, false))
+        }
+        destination::PROJECT_WORKTREE_PER_RUN => run_worktree(workspaces, automation, project, run),
+        _ => project_place(workspaces, automation, project),
+    }
+}
+
+/// A new worktree for one run, titled with the automation's name and started from its base branch when it has one. Its
+/// request id is the run's, so a retry finds the worktree the first try made.
+fn run_worktree(
+    workspaces: &Workspaces,
+    automation: &AutomationRow,
+    project: &Project,
+    run: &AutomationRunRow,
+) -> Result<(Workspace, bool), ErrorBody> {
+    let created = workspaces.create_workspace_once(WorkspaceCreateParams {
+        project: project.id.clone(),
+        name: automation.name.clone(),
+        branch: None,
+        base: automation.base_branch.clone(),
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: Some(format!("automation.run-worktree:{}", run.id)),
+        no_setup: false,
+        unique_name: true,
+        name_generated: false,
+    })?;
+    Ok((created.workspace, !created.repeated))
+}
+
+/// The project's own place (decision 0125): one worktree kept for the automation, or the folder's workspace.
+fn project_place(
     workspaces: &Workspaces,
     automation: &AutomationRow,
     project: &Project,

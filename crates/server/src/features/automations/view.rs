@@ -5,6 +5,7 @@ use massorca_protocol::ErrorBody;
 use massorca_protocol::methods::automations::{self, Automation};
 
 use super::definition::{HostZone, cadence_of, weekday_of};
+use super::destination;
 use crate::features::teams::store_error;
 
 pub(super) fn automation_view(
@@ -36,6 +37,7 @@ pub(super) fn automation_view(
             .grace_minutes
             .unwrap_or(automations::DEFAULT_GRACE_MINUTES),
         enabled: row.enabled,
+        destination: destination::view(store, row),
         next_run_at_ms: row.next_run_at,
         last_run_at_ms: row.last_run_at,
         created_at_ms: row.created_at,

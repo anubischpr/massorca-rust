@@ -61,7 +61,7 @@ pub fn next_run_text(automation: &Automation, now_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use massorca_protocol::methods::automations::AutomationWeekday;
+    use massorca_protocol::methods::automations::{AutomationDestination, AutomationWeekday};
 
     fn automation(cadence: AutomationCadence) -> Automation {
         Automation {
@@ -79,6 +79,7 @@ mod tests {
             zone_used: None,
             grace_minutes: 720,
             enabled: true,
+            destination: AutomationDestination::default(),
             next_run_at_ms: Some(0),
             last_run_at_ms: None,
             created_at_ms: 0,

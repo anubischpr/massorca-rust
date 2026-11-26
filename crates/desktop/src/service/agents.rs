@@ -18,10 +18,15 @@ use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
 
-/// Lists every agent session. A service that predates agents answers with a remote error, which lists
-/// none; a lost link is passed on so the session ends and reconnects.
+/// Lists every agent session, archived ones too when the service offers `agent-archive/1` (the Sidebar hides them until
+/// Show archived). A service that predates agents answers with a remote error, which lists none; a lost link is passed
+/// on so the session ends and reconnects.
 pub(super) async fn list_sessions(client: &Client) -> Result<Vec<AgentSession>, ClientError> {
-    match client.agent_list(None).await {
+    let params = massorca_protocol::methods::agents::AgentListParams {
+        workspace: None,
+        include_archived: client.has_capability(agent_forget::AGENT_ARCHIVE),
+    };
+    match client.agent_list_with(&params).await {
         Ok(list) => Ok(list.sessions),
         Err(ClientError::Remote(_)) => Ok(Vec::new()),
         Err(error) => Err(error),
@@ -94,6 +99,30 @@ impl ServiceHandle {
     pub async fn agent_forget(&self, params: ForgetSessionParams) -> Result<AgentSession, Refusal> {
         self.ask(|reply| Command::AgentForget { params, reply })
             .await
+    }
+
+    /// `agent.rename` (capability `agent-archive/1`): sets a session's title. The store takes the session from the answer.
+    pub async fn agent_rename(&self, session: &str, title: &str) -> Result<AgentSession, Refusal> {
+        self.ask(|reply| Command::AgentRename {
+            session: session.to_owned(),
+            title: title.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// `agent.archive_session` (capability `agent-archive/1`): archives an exited session, or clears its archive.
+    pub async fn agent_archive(
+        &self,
+        session: &str,
+        archived: bool,
+    ) -> Result<AgentSession, Refusal> {
+        self.ask(|reply| Command::AgentArchive {
+            session: session.to_owned(),
+            archived,
+            reply,
+        })
+        .await
     }
 
     /// `agent.set_mode`: switches the session's permission mode now or at its next resume. The store takes the
@@ -223,6 +252,34 @@ pub(super) fn spawn_prompt(
             .await
             .map_err(|error| Refusal::from(&error));
         let _ = reply.send(result);
+    });
+}
+
+/// Renames a session on its own task. The store takes the session from the service's answer.
+pub(super) fn spawn_rename(
+    client: &Client,
+    session: String,
+    title: String,
+    reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    spawn_session_answer(updates, reply, async move {
+        client.agent_rename(&session, &title).await
+    });
+}
+
+/// Archives or unarchives a session on its own task. The store takes the session from the service's answer.
+pub(super) fn spawn_archive(
+    client: &Client,
+    session: String,
+    archived: bool,
+    reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    spawn_session_answer(updates, reply, async move {
+        client.agent_archive_session(&session, archived).await
     });
 }
 

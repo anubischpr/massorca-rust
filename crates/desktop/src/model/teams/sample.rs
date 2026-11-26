@@ -210,6 +210,7 @@ fn desarrollo() -> Team {
                 .into(),
             link: None,
             link_saved: true,
+            code_source: None,
             tasks: vec![task(
                 7,
                 "Draft the first-run checklist",

@@ -52,6 +52,8 @@ impl Shell {
             details_open: false,
             sending: false,
             error: None,
+            program: None,
+            update: None,
         });
         cx.notify();
         let host = self.paired_host_of(item);
@@ -99,6 +101,8 @@ impl Shell {
             details_open: false,
             sending: false,
             error: None,
+            program: None,
+            update: None,
         });
         cx.notify();
         cx.spawn(async move |this, cx| {

@@ -36,6 +36,8 @@ pub const PROJECT_ADD: &str = "team.project_add";
 pub const PROJECT_UPDATE: &str = "team.project_update";
 /// Params: [`TeamProjectRemoveParams`]. Result: [`TeamProject`], the removed project.
 pub const PROJECT_REMOVE: &str = "team.project_rm";
+/// Params: [`TeamProjectShowParams`]. Result: [`TeamProject`], the project named by id or exact name.
+pub const PROJECT_SHOW: &str = "team.project_show";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
 /// Params: [`TeamDelegateParams`]. Result: [`TeamDelegated`]. Called by a bot's agent run (capability `team-delegate/1`).
@@ -271,6 +273,8 @@ pub enum CodeSource {
     ExistingRepository,
     /// A new folder with git.
     NewFolderWithGit,
+    /// No code source. In `team.project_update` it clears the recorded one, which needs no Workspaces.
+    None,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
@@ -282,6 +286,7 @@ impl CodeSource {
         match self {
             Self::ExistingRepository => "Existing repository",
             Self::NewFolderWithGit => "New folder with git",
+            Self::None => "None",
             Self::Unknown => "Unknown",
         }
     }
@@ -328,6 +333,13 @@ pub struct TeamProjectUpdateParams {
 /// Params of `team.project_rm`. The project's tasks stay on the team's Board without a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamProjectRemoveParams {
+    pub team: String,
+    pub project: String,
+}
+
+/// Params of `team.project_show`: one project of a team, named by id, then exact name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamProjectShowParams {
     pub team: String,
     pub project: String,
 }

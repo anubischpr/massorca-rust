@@ -141,6 +141,15 @@ fn cli_lines(plan: &CliPlan) -> Vec<String> {
                 ""
             }
         )),
+        CliPlanState::Manual { commands } => Some(format!(
+            "{}: run this command yourself, MassOrca never runs it: {}",
+            plan.agent,
+            commands
+                .iter()
+                .map(|command| command.join(" "))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        )),
         CliPlanState::Unsupported => Some(format!(
             "{}: no install command for this system; the agent is registered without its CLI.",
             plan.agent

@@ -4,9 +4,10 @@
 use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::tasks::{CardState, Column};
 use massorca_protocol::methods::teams::{
-    Board, BoardCard, BoardColumn, BoardParams, Bot, BotUpdateParams, MemorySource, Team,
-    TeamAccess, TeamCharacter, TeamCreateParams, TeamDelegateParams, TeamMemoryAddParams,
-    TeamMemoryLine, TeamProject, TeamProjectAddParams, TeamProjectUpdateParams,
+    Board, BoardCard, BoardColumn, BoardParams, Bot, BotUpdateParams, CodeSource, MemorySource,
+    Team, TeamAccess, TeamCharacter, TeamCreateParams, TeamDelegateParams, TeamMemoryAddParams,
+    TeamMemoryLine, TeamProject, TeamProjectAddParams, TeamProjectShowParams,
+    TeamProjectUpdateParams,
 };
 use serde_json::{Value, json};
 
@@ -298,6 +299,46 @@ fn unset_source_project_params_are_left_out_and_an_empty_one_is_kept_for_clearin
     )
     .unwrap();
     assert_eq!(cleared.source_project, Some(String::new()));
+}
+
+#[test]
+fn a_cleared_code_source_is_sent_as_none_and_read_back() {
+    let clear = TeamProjectUpdateParams {
+        team: "alpha".to_owned(),
+        project: "parser".to_owned(),
+        name: None,
+        goal: None,
+        brief: None,
+        source_project: None,
+        code_source: Some(CodeSource::None),
+    };
+    assert_eq!(
+        serde_json::to_value(&clear).unwrap(),
+        json!({ "team": "alpha", "project": "parser", "code_source": "none" })
+    );
+
+    let read: TeamProjectUpdateParams = serde_json::from_value(
+        json!({ "team": "alpha", "project": "parser", "code_source": "none" }),
+    )
+    .unwrap();
+    assert_eq!(read.code_source, Some(CodeSource::None));
+    assert_eq!(CodeSource::None.label(), "None");
+}
+
+#[test]
+fn project_show_names_its_team_and_project_under_team_project_show() {
+    assert_eq!(
+        massorca_protocol::methods::teams::PROJECT_SHOW,
+        "team.project_show"
+    );
+    let params = TeamProjectShowParams {
+        team: "alpha".to_owned(),
+        project: "parser".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_value(&params).unwrap(),
+        json!({ "team": "alpha", "project": "parser" })
+    );
 }
 
 #[test]

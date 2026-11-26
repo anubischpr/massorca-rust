@@ -1,7 +1,7 @@
 //! The plain data of Bot Teams: teams and what each one holds, as the pages show it (screens 4).
 
 use crate::model::shell::{Agent, HostReach};
-use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
+use massorca_protocol::methods::teams::{CodeSource, TeamAccess, TeamCharacter};
 
 macro_rules! ids {
     ($($(#[$doc:meta])* $name:ident),* $(,)?) => {
@@ -136,6 +136,8 @@ pub struct Project {
     pub link: Option<String>,
     /// Whether a link can be chosen here. The service keeps no link, so a project it reads has none.
     pub link_saved: bool,
+    /// Where the owner recorded the code (AUTO-33); `None` when no kind is recorded.
+    pub code_source: Option<CodeSource>,
     pub tasks: Vec<Task>,
 }
 

@@ -3,6 +3,16 @@ use rusqlite::{Row, params};
 use crate::error::StoreError;
 use crate::store::Store;
 
+/// The destinations an automation's runs can work in (decision 0127), as stored.
+pub mod destination {
+    /// The project's own place: one worktree kept for the automation, or its folder's workspace (decision 0125).
+    pub const PROJECT_DEFAULT: &str = "project_default";
+    /// A new worktree for each run, in the project's repository.
+    pub const PROJECT_WORKTREE_PER_RUN: &str = "project_worktree_per_run";
+    /// One existing workspace, a worktree or a folder: every run goes there.
+    pub const EXISTING_WORKSPACE: &str = "existing_workspace";
+}
+
 /// One row of `automations` (decision 0123): a scheduled agent run, defined and listed. Its runs are `automation_runs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationRow {
@@ -32,11 +42,19 @@ pub struct AutomationRow {
     pub next_run_at: Option<i64>,
     /// When the last run started; `None` until it first runs.
     pub last_run_at: Option<i64>,
+    /// Where the runs work: one of [`destination`]. Rows stored before decision 0127 are `project_default`.
+    pub destination: String,
+    /// The existing workspace an `existing_workspace` automation runs in.
+    pub destination_workspace_id: Option<String>,
+    /// The workspace's path when the destination was set; a run finds it changed and is refused.
+    pub destination_path: Option<String>,
+    /// The base a per-run worktree starts from; `None` is the project's base.
+    pub base_branch: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-const SELECT_AUTOMATIONS: &str = "SELECT id, project_id, name, prompt, agent_kind, cadence, time, weekday, cron, zone, grace_minutes, enabled, creation_key, next_run_at, last_run_at, created_at, updated_at FROM automations";
+const SELECT_AUTOMATIONS: &str = "SELECT id, project_id, name, prompt, agent_kind, cadence, time, weekday, cron, zone, grace_minutes, enabled, creation_key, next_run_at, last_run_at, destination, destination_workspace_id, destination_path, base_branch, created_at, updated_at FROM automations";
 
 fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<AutomationRow> {
     Ok(AutomationRow {
@@ -55,6 +73,10 @@ fn automation_from_row(row: &Row<'_>) -> rusqlite::Result<AutomationRow> {
         creation_key: row.get("creation_key")?,
         next_run_at: row.get("next_run_at")?,
         last_run_at: row.get("last_run_at")?,
+        destination: row.get("destination")?,
+        destination_workspace_id: row.get("destination_workspace_id")?,
+        destination_path: row.get("destination_path")?,
+        base_branch: row.get("base_branch")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -65,7 +87,7 @@ impl Store {
     /// `StoreError::Constraint`, and a repeated creation key is `StoreError::Conflict`.
     pub fn insert_automation(&self, row: &AutomationRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO automations (id, project_id, name, prompt, agent_kind, cadence, time, weekday, cron, zone, grace_minutes, enabled, creation_key, next_run_at, last_run_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT INTO automations (id, project_id, name, prompt, agent_kind, cadence, time, weekday, cron, zone, grace_minutes, enabled, creation_key, next_run_at, last_run_at, destination, destination_workspace_id, destination_path, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 row.id,
                 row.project_id,
@@ -82,6 +104,10 @@ impl Store {
                 row.creation_key,
                 row.next_run_at,
                 row.last_run_at,
+                row.destination,
+                row.destination_workspace_id,
+                row.destination_path,
+                row.base_branch,
                 row.created_at,
                 row.updated_at
             ],
@@ -122,7 +148,7 @@ impl Store {
     /// exists. The creation key and the creation time never change.
     pub fn update_automation(&self, row: &AutomationRow) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE automations SET project_id = ?2, name = ?3, prompt = ?4, agent_kind = ?5, cadence = ?6, time = ?7, weekday = ?8, cron = ?9, zone = ?10, grace_minutes = ?11, enabled = ?12, next_run_at = ?13, last_run_at = ?14, updated_at = ?15 WHERE id = ?1",
+            "UPDATE automations SET project_id = ?2, name = ?3, prompt = ?4, agent_kind = ?5, cadence = ?6, time = ?7, weekday = ?8, cron = ?9, zone = ?10, grace_minutes = ?11, enabled = ?12, next_run_at = ?13, last_run_at = ?14, destination = ?15, destination_workspace_id = ?16, destination_path = ?17, base_branch = ?18, updated_at = ?19 WHERE id = ?1",
             params![
                 row.id,
                 row.project_id,
@@ -138,6 +164,10 @@ impl Store {
                 i64::from(row.enabled),
                 row.next_run_at,
                 row.last_run_at,
+                row.destination,
+                row.destination_workspace_id,
+                row.destination_path,
+                row.base_branch,
                 row.updated_at
             ],
         )?;
@@ -148,7 +178,7 @@ impl Store {
     /// Returns `false`, and writes nothing, when no such row exists.
     pub fn update_automation_definition(&self, row: &AutomationRow) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE automations SET project_id = ?2, name = ?3, prompt = ?4, agent_kind = ?5, cadence = ?6, time = ?7, weekday = ?8, cron = ?9, zone = ?10, grace_minutes = ?11, enabled = ?12, updated_at = ?13 WHERE id = ?1",
+            "UPDATE automations SET project_id = ?2, name = ?3, prompt = ?4, agent_kind = ?5, cadence = ?6, time = ?7, weekday = ?8, cron = ?9, zone = ?10, grace_minutes = ?11, enabled = ?12, destination = ?13, destination_workspace_id = ?14, destination_path = ?15, base_branch = ?16, updated_at = ?17 WHERE id = ?1",
             params![
                 row.id,
                 row.project_id,
@@ -162,6 +192,10 @@ impl Store {
                 row.zone,
                 row.grace_minutes,
                 i64::from(row.enabled),
+                row.destination,
+                row.destination_workspace_id,
+                row.destination_path,
+                row.base_branch,
                 row.updated_at
             ],
         )?;

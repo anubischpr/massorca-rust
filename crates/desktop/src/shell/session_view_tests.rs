@@ -1094,3 +1094,24 @@ fn a_session_without_a_run_is_a_terminal_session_and_keeps_its_terminal_arm(
     assert!(cx.debug_bounds("composer-primary").is_none());
     assert!(cx.debug_bounds("session-arm").is_some());
 }
+
+#[gpui::test]
+fn a_parent_waits_on_a_child_that_writes_in_its_worktree_and_can_open_it(cx: &mut TestAppContext) {
+    let mut child = agent("c", "w1", 20);
+    child.parent_id = Some("s1".into());
+    child.activity = Some(massorca_protocol::methods::agents::Activity {
+        state: massorca_protocol::methods::agents::ActivityState::Working,
+        ..crate::service::fixtures::base_activity()
+    });
+    let (rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(false, None), child]);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("session-child-wait").is_some(),
+        "the parent says it waits for the child"
+    );
+    click(cx, "button:session-open-child");
+    let open = rig
+        .shell
+        .read_with(cx, |shell, _| shell.model.snapshot().active_session.clone());
+    assert_eq!(open.as_deref(), Some("c"), "Open child opens the child");
+}

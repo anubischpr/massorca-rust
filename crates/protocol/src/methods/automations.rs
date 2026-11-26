@@ -1,5 +1,6 @@
 //! `automation.*`: scheduled agent runs, defined, listed, shown, edited, enabled and removed (decision 0123, capability
-//! `automations/1`), and their runs: run now and run history (decision 0125, capability `automation-runs/1`).
+//! `automations/1`), and their runs: run now and run history (decision 0125, capability `automation-runs/1`). Where a run
+//! works is a destination (decision 0127, capability `automation-destinations/1`).
 
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +72,37 @@ pub enum AutomationWeekday {
     Unknown,
 }
 
+/// Where an automation's runs work (decision 0127). A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationDestinationKind {
+    /// The project's own place: one worktree kept for the automation, or its folder's workspace (decision 0125).
+    #[default]
+    ProjectDefault,
+    /// A new worktree for each run, titled with the automation's name, from its base branch when it has one.
+    ProjectWorktreePerRun,
+    /// One existing workspace, a worktree or a folder: every run goes there.
+    ExistingWorkspace,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where an automation's runs work. `workspace` is set for `existing_workspace`, `base_branch` may be set for
+/// `project_worktree_per_run`; `workspace_name` is only filled in by the service, while the workspace exists.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AutomationDestination {
+    pub kind: AutomationDestinationKind,
+    /// The existing workspace's id, for `existing_workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
+    /// The branch a new worktree per run starts from; absent is the project's base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+}
+
 /// An automation: an agent run on a schedule, in a project. Timestamps are UTC epoch milliseconds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Automation {
@@ -104,6 +136,9 @@ pub struct Automation {
     pub grace_minutes: i64,
     /// A disabled automation has no next run.
     pub enabled: bool,
+    /// Where its runs work; the project's own place when the automation sets none (decision 0127).
+    #[serde(default)]
+    pub destination: AutomationDestination,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run_at_ms: Option<i64>,
     /// When its last run started; absent until runs are recorded.
@@ -135,6 +170,10 @@ pub struct AutomationCreateParams {
     pub grace_minutes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation_key: Option<String>,
+    /// Where the runs work: `project_worktree_per_run` or `existing_workspace` (capability `automation-destinations/1`).
+    /// Absent keeps the project's own place. An existing workspace belongs to `project`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<AutomationDestination>,
 }
 
 /// Params of `automation.update`. Only the fields given change. A blank `zone` returns the automation to the host's
@@ -163,6 +202,9 @@ pub struct AutomationUpdateParams {
     pub zone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grace_minutes: Option<i64>,
+    /// Replaces the destination when given (capability `automation-destinations/1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<AutomationDestination>,
 }
 
 /// Selects one automation by id or exact name: `automation.show`, `automation.rm`, `automation.enable` and

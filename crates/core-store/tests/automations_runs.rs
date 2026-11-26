@@ -24,6 +24,10 @@ fn store_with_automation(next_run_at: Option<i64>) -> (Store, AutomationRow) {
         creation_key: None,
         next_run_at,
         last_run_at: None,
+        destination: "project_default".to_owned(),
+        destination_workspace_id: None,
+        destination_path: None,
+        base_branch: None,
         created_at: 1,
         updated_at: 1,
     };

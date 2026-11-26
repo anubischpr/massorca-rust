@@ -2,15 +2,18 @@
 //! checks before it is sent. Cadence and weekday are choices; the cron and time fields apply to their own cadences.
 
 use super::super::Shell;
-use crate::model::automations::{AutomationForm, Cadence, WEEKDAYS, weekday_label};
+use crate::model::automations::{
+    AutomationForm, Cadence, FormDestination, WEEKDAYS, destination_edited, weekday_label,
+};
 use gpui::{
     App, Context, Entity, Focusable, ParentElement, Styled, WeakEntity, div, prelude::*, px,
 };
 use massorca_protocol::methods::automations::{Automation, AutomationWeekday};
+use massorca_ui::TextStyled;
 use massorca_ui::components::dialog::Dialog;
 use massorca_ui::components::select::SelectView;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::SPACE_3;
+use massorca_ui::tokens::{SPACE_3, TYPE_BODY_SM};
 
 /// The editor's fields while it is open. `editing` is the automation's id; `None` is a new automation.
 #[derive(Debug)]
@@ -20,6 +23,16 @@ pub(in crate::shell) struct AutomationEditor {
     pub error: Option<String>,
     name: Entity<TextField>,
     project: Entity<TextField>,
+    destination: Entity<SelectView>,
+    /// The workspace select's options, as the ids the form sends, in the select's order.
+    workspace_ids: Vec<String>,
+    workspace: Entity<SelectView>,
+    /// Whether the host offers destinations; without it the picker is replaced by a note and none is sent.
+    supported: bool,
+    /// The destination and project the editor opened with: a destination left as it was is not sent on an edit.
+    original_destination: FormDestination,
+    original_project: String,
+    base_branch: Entity<TextField>,
     prompt: Entity<TextField>,
     agent: Entity<TextField>,
     cadence: Entity<SelectView>,
@@ -31,8 +44,29 @@ pub(in crate::shell) struct AutomationEditor {
 
 impl AutomationEditor {
     /// The editor on `automation`'s values, or on a new automation's starting values.
-    pub(in crate::shell) fn new(automation: Option<&Automation>, cx: &mut Context<Shell>) -> Self {
+    /// `workspaces` are the (label, workspace id) choices of the workspace select. A stored workspace missing from them
+    /// is offered as "(removed)", so the editor shows it and an edit leaves it as it is.
+    pub(in crate::shell) fn new(
+        automation: Option<&Automation>,
+        workspaces: &[(String, String)],
+        supported: bool,
+        cx: &mut Context<Shell>,
+    ) -> Self {
         let form = automation.map_or_else(AutomationForm::starting, AutomationForm::of);
+        let mut choices: Vec<(String, String)> = workspaces.to_vec();
+        if let FormDestination::Workspace { workspace } = &form.destination
+            && !workspace.is_empty()
+            && !choices.iter().any(|(_, id)| id == workspace)
+        {
+            choices.insert(0, ("(removed)".to_owned(), workspace.clone()));
+        }
+        let workspace_ids: Vec<String> = choices.iter().map(|(_, id)| id.clone()).collect();
+        let workspace_index = match &form.destination {
+            FormDestination::Workspace { workspace } => {
+                workspace_ids.iter().position(|id| id == workspace)
+            }
+            _ => None,
+        };
         let cadence_index = Cadence::ALL
             .iter()
             .position(|cadence| *cadence == form.cadence);
@@ -42,6 +76,26 @@ impl AutomationEditor {
             error: None,
             name: text_field(cx, "Name", "Morning PRs", &form.name),
             project: text_field(cx, "Project", "Name, id or path", &form.project),
+            destination: cx.new(|cx| {
+                SelectView::new(FormDestination::LABELS, cx).selected(form.destination.index())
+            }),
+            workspace_ids,
+            workspace: cx.new(|cx| {
+                SelectView::new(choices.iter().map(|(label, _)| label.clone()), cx)
+                    .selected(workspace_index)
+            }),
+            supported,
+            original_destination: form.destination.clone(),
+            original_project: form.project.clone(),
+            base_branch: text_field(
+                cx,
+                "Base branch",
+                "Blank for the project's base",
+                match &form.destination {
+                    FormDestination::NewWorktree { base_branch } => base_branch.as_str(),
+                    _ => "",
+                },
+            ),
             prompt: text_field(
                 cx,
                 "Prompt",
@@ -82,6 +136,29 @@ impl AutomationEditor {
             .selected_index()
             .and_then(|index| WEEKDAYS.get(index).copied())
             .unwrap_or(AutomationWeekday::Monday);
+        // A kind the editor does not offer has no choice, so it stays as it was.
+        let destination = match self.destination.read(cx).selected_index() {
+            None => self.original_destination.clone(),
+            Some(_) => {
+                let workspace = self
+                    .workspace
+                    .read(cx)
+                    .selected_index()
+                    .and_then(|index| self.workspace_ids.get(index).cloned())
+                    .or_else(|| match &self.original_destination {
+                        FormDestination::Workspace { workspace } => Some(workspace.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                FormDestination::from_choice(
+                    self.destination.read(cx).selected_index(),
+                    self.base_branch.read(cx).text().to_owned(),
+                    workspace,
+                )
+            }
+        };
+        let project_changed = self.project.read(cx).text().trim() != self.original_project.trim();
+        let edited = destination_edited(&self.original_destination, &destination, project_changed);
         AutomationForm {
             project: self.project.read(cx).text().to_owned(),
             name: self.name.read(cx).text().to_owned(),
@@ -92,6 +169,9 @@ impl AutomationEditor {
             weekday,
             cron: self.cron.read(cx).text().to_owned(),
             zone: self.zone.read(cx).text().to_owned(),
+            destination,
+            destination_supported: self.supported,
+            destination_edited: edited,
         }
     }
 
@@ -116,7 +196,19 @@ pub(in crate::shell) fn editor_dialog(
         .flex_col()
         .gap(px(SPACE_3))
         .child(editor.name.clone())
-        .child(editor.project.clone())
+        .child(editor.project.clone());
+    let body = if editor.supported {
+        body.child(editor.destination.clone())
+            .child(editor.workspace.clone())
+            .child(editor.base_branch.clone())
+    } else {
+        body.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .child("This host predates automation destinations, so runs use the project's own place. Update the host to choose one."),
+        )
+    };
+    let body = body
         .child(editor.prompt.clone())
         .child(editor.agent.clone())
         .child(editor.cadence.clone())
