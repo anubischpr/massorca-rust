@@ -618,6 +618,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.fork",
+            "Start a new agent session from a copy of an exited session's conversation",
+            "agent.fork",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "permission_mode": { "type": "string" },
+                    "title": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "agent.mode",
             "Switch an agent session's permission mode, live or at its next resume",
             "agent.set_mode",

@@ -19,6 +19,8 @@ pub(super) fn for_caller(ctx: &RequestCtx, session: AgentSession) -> AgentSessio
 fn redacted(admin: bool, mut session: AgentSession) -> AgentSession {
     if session.holds_secrets && !admin {
         session.result = None;
+        // A preview is agent-produced text too (decision 0168).
+        session.meta.preview = None;
     }
     session
 }
@@ -41,7 +43,9 @@ pub(super) fn watch_item_for(admin: bool, item: AgentWatchEvent) -> AgentWatchEv
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::agents::{AgentSession, AgentWatchEvent, Execution};
+    use massorca_protocol::methods::agents::{
+        AgentSession, AgentWatchEvent, Execution, SessionMeta,
+    };
     use massorca_protocol::methods::terminals::TerminalState;
 
     use super::watch_item_for;
@@ -51,34 +55,18 @@ mod tests {
             id: "s1".to_owned(),
             kind: "fake".to_owned(),
             workspace_id: "w1".to_owned(),
-            title: None,
-            read_only: false,
-            parent_id: None,
-            brought_back_at_ms: None,
-            agent_ref: None,
-            terminal_id: None,
-            run: Default::default(),
             created_at_ms: 1,
             execution: Execution {
                 state: TerminalState::Exited,
                 exit: None,
             },
-            activity: None,
             result: Some("agent-output-placeholder".to_owned()),
             holds_secrets,
-            secrets_withheld: None,
-            permission_mode: None,
-            mode_confirmed: false,
-            mode_source: None,
-            pending_permission_mode: None,
-            retained: false,
-            released: false,
-            archived: false,
-            resume: None,
-            delegation: None,
-            fast: None,
-            notes: Vec::new(),
-            shared_folder_with: Vec::new(),
+            meta: SessionMeta {
+                preview: Some("agent-output-placeholder".to_owned()),
+                ..SessionMeta::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -95,7 +83,10 @@ mod tests {
             session: Box::new(session(true)),
         };
         let lower = changed(watch_item_for(false, marked()));
-        assert_eq!((lower.result, lower.holds_secrets), (None, true));
+        assert_eq!(
+            (lower.result, lower.meta.preview, lower.holds_secrets),
+            (None, None, true)
+        );
         assert_eq!(changed(watch_item_for(true, marked())), session(true));
         let unmarked = AgentWatchEvent::Changed {
             session: Box::new(session(false)),
