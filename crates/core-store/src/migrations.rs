@@ -585,6 +585,35 @@ CREATE TABLE script_trust (
 "#,
         foreign_keys_off: false,
     },
+    // Scheduled automation definitions (decision 0123): what runs, with which agent and when. `next_run_at` is the next
+    // occurrence to start, NULL while disabled. Removing a project leaves its automations without one.
+    Migration {
+        sql: r#"
+CREATE TABLE automations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    agent_kind TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('hourly','daily','weekdays','weekly','cron')),
+    time TEXT NOT NULL,
+    weekday TEXT CHECK(weekday IN ('monday','tuesday','wednesday','thursday','friday','saturday','sunday')),
+    cron TEXT,
+    zone TEXT,
+    grace_minutes INTEGER CHECK(grace_minutes IS NULL OR grace_minutes BETWEEN 0 AND 10080),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    creation_key TEXT UNIQUE,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((cadence = 'weekly') = (weekday IS NOT NULL)),
+    CHECK ((cadence = 'cron') = (cron IS NOT NULL))
+);
+CREATE INDEX automations_by_created ON automations (created_at, id);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
