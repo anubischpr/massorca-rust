@@ -5,7 +5,9 @@ pub mod discover;
 pub mod memory;
 pub mod ports;
 pub mod records;
+pub mod self_test;
 pub mod status;
+pub mod status_watch;
 
 use massorca_profile::Profile;
 
@@ -29,6 +31,7 @@ pub fn command_path(command: &HostCommand) -> &'static str {
         HostCommand::Show { .. } => "host show",
         HostCommand::Remove(_) => "host remove",
         HostCommand::Status { .. } => "host status",
+        HostCommand::SelfTest { .. } => "host self-test",
         HostCommand::Discover => "host discover",
         HostCommand::AddSsh(_) => "host add-ssh",
         HostCommand::Memory => "host memory",
@@ -47,7 +50,15 @@ pub async fn execute(
         HostCommand::List => records::list(profile, output),
         HostCommand::Show { name } => records::show(profile, &name, output),
         HostCommand::Remove(args) => records::remove(profile, &args, output).await,
-        HostCommand::Status { name } => status::execute(profile, name.as_deref(), output).await,
+        HostCommand::Status { name, watch: false } => {
+            status::execute(profile, name.as_deref(), output).await
+        }
+        HostCommand::Status { name, watch: true } => {
+            status_watch::execute(profile, name.as_deref(), output).await
+        }
+        HostCommand::SelfTest { name } => {
+            self_test::execute(profile, name.as_deref(), output).await
+        }
         HostCommand::Discover => discover::execute(profile, output).await,
         HostCommand::AddSsh(args) => add_ssh::execute(profile, &args, output).await,
         HostCommand::Memory => Err(CliError::new(

@@ -150,6 +150,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "git.watch",
             "host.memory",
             "host.ports",
+            "host.self-test",
             "marketplace.services.connect",
             "marketplace.services.disconnect",
             "marketplace.services.list",
