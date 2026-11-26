@@ -1,10 +1,12 @@
 //! The Conference room as the page draws it (bt-conference-room, screens 4.2, decision 0102): the lines of the team's
-//! room with who wrote them and the task each is about, and the bot that receives a line naming no bot.
+//! room with who wrote them and the task, routine or choice card each is about, and the bot that receives a line naming
+//! no bot.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_protocol::methods::tasks::Column as WireColumn;
-use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, RoomQuote, TeamRoomMessage};
+use massorca_protocol::methods::teams::{Routine, RoutineCadence};
 
 use super::types::{BotId, Team};
 use crate::service::{TeamIds, TeamRoomRead};
@@ -34,6 +36,20 @@ pub struct RoomLine {
     /// The local clock time it was posted, "10:42".
     pub time: String,
     pub task: Option<RoomTask>,
+    /// The one-time routine the line scheduled (decision 0121).
+    pub routine: Option<RoomRoutine>,
+    /// The choice card the line is (decision 0121).
+    pub card: Option<RoomCard>,
+    /// The line it replies to, "Mara: Parsed the headers" (decision 0122).
+    pub quote: Option<String>,
+}
+
+/// The routine a line scheduled, as its "Routine created" card shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomRoutine {
+    pub name: String,
+    /// "Once on 2026-11-30 at 09:00, Europe/Madrid": the zone it runs on, its own or the host's.
+    pub when: String,
 }
 
 /// Who wrote a line.
@@ -45,6 +61,8 @@ pub enum Speaker {
         name: String,
         lead: bool,
     },
+    /// The room itself, which asks on a choice card who takes a request.
+    Room,
     /// A bot that was removed since, or an author this build does not know.
     Gone,
 }
@@ -78,6 +96,7 @@ pub fn room_view(
 fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZone) -> RoomLine {
     let speaker = match message.author {
         RoomAuthor::Person => Speaker::Person,
+        RoomAuthor::Bot if message.card.is_some() => Speaker::Room,
         RoomAuthor::Bot => match (&message.bot_name, message.bot_id.as_deref()) {
             (Some(name), Some(id)) => Speaker::Bot {
                 name: name.clone(),
@@ -96,6 +115,34 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
             title: task.title.clone(),
             column: column_word(task.column),
         }),
+        routine: message.routine.as_ref().map(|routine| RoomRoutine {
+            name: routine.name.clone(),
+            when: routine_when(routine),
+        }),
+        card: message.card.clone(),
+        quote: message.quoted.as_ref().map(quote_text),
+    }
+}
+
+/// A quoted line as a reply shows it: who wrote it, then its text.
+fn quote_text(quote: &RoomQuote) -> String {
+    let who = match (quote.author, quote.bot_name.as_deref()) {
+        (RoomAuthor::Person, _) => "You",
+        (RoomAuthor::Bot, Some(name)) => name,
+        _ => "A removed bot",
+    };
+    format!("{who}: {}", quote.text)
+}
+
+/// When a routine runs, in words, with its zone; the room schedules only one-time routines.
+fn routine_when(routine: &Routine) -> String {
+    let when = match (routine.cadence, routine.run_date.as_deref()) {
+        (RoutineCadence::Once, Some(date)) => format!("Once on {date} at {}", routine.time),
+        _ => format!("At {}", routine.time),
+    };
+    match routine.zone.as_deref().or(routine.zone_used.as_deref()) {
+        Some(zone) => format!("{when}, {zone}"),
+        None => when,
     }
 }
 
@@ -122,12 +169,15 @@ pub fn clock_text(at_ms: i64, zone: &TimeZone) -> String {
 }
 
 /// The bot that receives a line naming no bot: the one picked in the composer while it is still on the team, else
-/// the lead, else the first bot.
+/// the lead, else the only bot. `None` with several bots: the room then asks on a choice card.
 pub fn receiver(team: &Team, picked: Option<BotId>) -> Option<BotId> {
     picked
         .filter(|bot| team.bot(*bot).is_some())
         .or(team.lead)
-        .or_else(|| team.bots.first().map(|bot| bot.id))
+        .or(match team.bots.as_slice() {
+            [only] => Some(only.id),
+            _ => None,
+        })
 }
 
 #[cfg(test)]
@@ -150,8 +200,84 @@ mod tests {
             bot_name: bot.map(|(_, name)| name.to_owned()),
             text: text.to_owned(),
             task: None,
+            routine: None,
+            card: None,
+            reply_to: None,
+            quoted: None,
             created_at_ms: 1_700_000_000_000,
         }
+    }
+
+    #[test]
+    fn a_reply_shows_who_wrote_the_line_it_quotes() {
+        let mut reply = message(RoomAuthor::Person, None, "Why so slow?");
+        reply.reply_to = Some("q".to_owned());
+        reply.quoted = Some(RoomQuote {
+            id: "q".to_owned(),
+            author: RoomAuthor::Bot,
+            bot_name: Some("Mara".to_owned()),
+            text: "Parsed the headers".to_owned(),
+        });
+        let room = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
+            room: Ok(vec![reply, message(RoomAuthor::Person, None, "plain")]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&room), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(lines[0].quote.as_deref(), Some("Mara: Parsed the headers"));
+        assert_eq!(lines[1].quote, None);
+    }
+
+    #[test]
+    fn a_line_that_scheduled_a_routine_carries_its_card() {
+        let routine = Routine {
+            id: "r1".to_owned(),
+            team_id: "t".to_owned(),
+            bot_id: None,
+            name: "Back up the docs".to_owned(),
+            prompt: "Back up the docs tomorrow at 09:00".to_owned(),
+            cadence: RoutineCadence::Once,
+            time: "09:00".to_owned(),
+            weekday: None,
+            month_day: None,
+            run_date: Some("2099-01-02".to_owned()),
+            zone: None,
+            zone_used: Some("Europe/Madrid".to_owned()),
+            paused: false,
+            starts_as_admin: false,
+            next_run_at_ms: Some(1),
+            created_at_ms: 1,
+        };
+        let mut line = message(RoomAuthor::Bot, Some(("b", "Mara")), "Routine created");
+        line.routine = Some(routine);
+        let room = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
+            room: Ok(vec![line]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&room), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(
+            lines[0].routine,
+            Some(RoomRoutine {
+                name: "Back up the docs".to_owned(),
+                when: "Once on 2099-01-02 at 09:00, Europe/Madrid".to_owned(),
+            })
+        );
+        assert_eq!(lines[0].task, None);
     }
 
     #[test]
@@ -165,6 +291,9 @@ mod tests {
         let refused = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Err(Refusal::unavailable("The service is not connected.")),
         };
         assert!(matches!(
@@ -205,6 +334,9 @@ mod tests {
         let read = TeamRoomRead {
             team: "t".to_owned(),
             number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
             room: Ok(vec![
                 message(RoomAuthor::Person, None, "We need sign-in"),
                 answer,
@@ -234,7 +366,38 @@ mod tests {
     }
 
     #[test]
-    fn a_line_naming_no_bot_goes_to_the_pick_else_the_lead_else_the_first_bot() {
+    fn a_card_line_is_the_room_speaking_and_carries_its_options() {
+        use massorca_protocol::methods::team_room::{RoomChoice, RoomChoiceKind};
+        let card = RoomCard {
+            request_id: "m1".to_owned(),
+            options: vec![RoomChoice {
+                choice: "todo".to_owned(),
+                kind: RoomChoiceKind::Todo,
+                label: "Keep in this team's Todo".to_owned(),
+            }],
+            answer: None,
+        };
+        let mut line = message(RoomAuthor::Bot, None, "Who should take this?");
+        line.card = Some(card.clone());
+        let read = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
+            room: Ok(vec![line]),
+        };
+        let RoomView::Lines(lines) =
+            room_view(Some(&read), &team(), &TeamIds::default(), &TimeZone::UTC)
+        else {
+            panic!("the room has lines");
+        };
+        assert_eq!(lines[0].speaker, Speaker::Room);
+        assert_eq!(lines[0].card, Some(card));
+    }
+
+    #[test]
+    fn a_line_naming_no_bot_goes_to_the_pick_else_the_lead_else_the_only_bot() {
         let mut team = team();
         let first = team.bots[0].id;
         let second = team.bots[1].id;
@@ -247,7 +410,10 @@ mod tests {
             "a removed pick"
         );
         team.lead = None;
-        assert_eq!(receiver(&team, None), Some(first), "the first bot");
+        assert_eq!(receiver(&team, None), None, "several bots: a choice card");
+        assert_eq!(receiver(&team, Some(first)), Some(first), "the pick");
+        team.bots.truncate(1);
+        assert_eq!(receiver(&team, None), Some(first), "the only bot");
         team.bots.clear();
         assert_eq!(receiver(&team, None), None);
     }

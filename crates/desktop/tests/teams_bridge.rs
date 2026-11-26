@@ -311,6 +311,7 @@ async fn a_team_and_a_bot_are_written_through_the_bridge_and_read_back() {
             model: None,
             effort: None,
             lead: false,
+            skills: Vec::new(),
         })
         .await
         .expect("the bot is added");
@@ -479,6 +480,7 @@ fn nora(team: &str, lead: bool) -> BotAddParams {
         model: None,
         effort: None,
         lead,
+        skills: Vec::new(),
     }
 }
 
@@ -1218,6 +1220,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
             model: None,
             effort: None,
             lead: None,
+            skills: None,
         })
         .await
         .expect("the bot is renamed");
