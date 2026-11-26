@@ -1458,6 +1458,7 @@ async fn a_code_source_set_through_the_bridge_is_read_back_and_none_clears_it() 
     )
     .await;
     stop_service(service).await;
+}
 
 /// Every `PeerInfo` field at its usual value; tests override the fields they vary.
 fn base_peer_info() -> massorca_protocol::PeerInfo {
