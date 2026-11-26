@@ -1,7 +1,7 @@
 //! What the service reported, and the reducer that folds it into one state (decision 0028).
 //! The store changes only through these updates, never optimistically.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
@@ -161,6 +161,12 @@ pub enum HostLink {
     },
     /// Not reachable; the sentence says why.
     Unreachable(String),
+    /// Out of contact and retried by itself: attempt `attempt` runs at `retry_at`. The host may still be running.
+    Reconnecting {
+        reason: String,
+        attempt: u32,
+        retry_at: Instant,
+    },
     /// The host no longer accepts this computer's device: pair again.
     SignInNeeded(String),
     /// The host speaks another protocol version than this app.
@@ -296,6 +302,8 @@ pub struct StoreState {
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
     /// The agent sessions each paired host last reported, by host name (STAT-16).
     pub host_sessions: BTreeMap<String, HostSessions>,
+    /// Hosts this computer forgot: a late session report for one changes nothing until it is paired again.
+    pub forgotten_hosts: BTreeSet<String>,
     /// The newest skills answer of This computer (None) and of each paired host, by host name.
     pub skills: BTreeMap<Option<String>, SkillsRead>,
     /// The newest placement answer that is not a list: a preview, a placement, a removal, or a refusal.
@@ -371,6 +379,7 @@ impl Default for StoreState {
             extensions: None,
             host_listings: BTreeMap::new(),
             host_sessions: BTreeMap::new(),
+            forgotten_hosts: BTreeSet::new(),
             skills: BTreeMap::new(),
             placement: None,
             managed: None,
@@ -650,8 +659,11 @@ impl StoreState {
     }
 
     /// Keeps the newest check of each host's sessions. A check that did not reach the host keeps the sessions it
-    /// last saw, marked unreached, so they show as unverifiable rather than gone.
+    /// last saw, marked unreached, so they show as unverifiable rather than gone. A forgotten host keeps none.
     fn apply_host_sessions(&mut self, read: HostSessionsRead) {
+        if self.forgotten_hosts.contains(&read.host) {
+            return;
+        }
         let held = self.host_sessions.entry(read.host).or_default();
         if held.request > read.request {
             return;
@@ -696,6 +708,17 @@ impl StoreState {
             })
             .collect();
         hosts.sort_by(|a, b| a.record.name.cmp(&b.record.name));
+        for entry in &self.hosts {
+            if !hosts
+                .iter()
+                .any(|listed| listed.record.name == entry.record.name)
+            {
+                self.forgotten_hosts.insert(entry.record.name.clone());
+            }
+        }
+        for entry in &hosts {
+            self.forgotten_hosts.remove(&entry.record.name);
+        }
         self.host_sessions
             .retain(|name, _| hosts.iter().any(|entry| &entry.record.name == name));
         self.hosts = hosts;
@@ -2323,6 +2346,32 @@ mod tests {
             Some(t0),
             "the last time it answered is kept"
         );
+    }
+
+    #[test]
+    fn a_session_report_for_a_host_this_computer_forgot_brings_no_group_back() {
+        let mut state = StoreState::default();
+        let t0 = Instant::now();
+        state.apply(
+            StoreUpdate::HostsResync(vec![host("vps"), host("gone")]),
+            t0,
+        );
+        state.apply(StoreUpdate::HostsResync(vec![host("vps")]), t0);
+        let report = |name: &str| {
+            StoreUpdate::HostSessions(HostSessionsRead {
+                host: name.to_owned(),
+                request: 1,
+                answer: None,
+            })
+        };
+
+        state.apply(report("gone"), t0);
+        assert!(
+            !state.host_sessions.contains_key("gone"),
+            "a removed host's sessions stay removed"
+        );
+        state.apply(report("vps"), t0);
+        assert!(state.host_sessions.contains_key("vps"));
     }
 
     #[test]

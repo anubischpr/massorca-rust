@@ -227,6 +227,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "team.project.add",
             "team.project.list",
             "team.project.rm",
+            "team.project.show",
             "team.project.update",
             "team.rm",
             "team.room.answer",

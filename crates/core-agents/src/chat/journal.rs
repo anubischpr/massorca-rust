@@ -11,7 +11,7 @@ use massorca_core_store::{ChatItemRow, NewChatItem, Store, StoreError, now_ms};
 use massorca_protocol::methods::agents::Outcome;
 use massorca_protocol::methods::chat::{
     Approval, ApprovalScope, ApprovalState, ChatBatch, ChatCursor, ChatItem, ChatItemBody,
-    ChatUpdate, MessageState, ResetReason, SubagentStatus, ToolStatus, Turn, TurnState,
+    ChatUpdate, MessageState, ResetReason, SubagentStatus, TokenUsage, ToolStatus, Turn, TurnState,
 };
 use serde_json::Value;
 
@@ -280,6 +280,7 @@ impl<'a> JournalWriter<'a> {
             outcome: None,
             user_item: Some(user_id.clone()),
             completed_at_ms: None,
+            usage: None,
         });
         self.add(&turn_id, None, None, &turn)?;
         self.add(
@@ -346,6 +347,24 @@ impl<'a> JournalWriter<'a> {
             }
         }
         self.close_turn(&turn_id, state, outcome)
+    }
+
+    /// The open turn's item takes `usage` (decision 0173). Without an open turn nothing changes.
+    fn set_turn_usage(&mut self, usage: TokenUsage) -> Result<(), StoreError> {
+        let Some(turn_id) = self.state.open_turn.clone() else {
+            return Ok(());
+        };
+        if let Some(row) = self.store.chat_item(self.session, &turn_id)?
+            && let ChatItemBody::Turn(turn) = item_of(row).body
+            && turn.usage != Some(usage)
+        {
+            let changed = ChatItemBody::Turn(Turn {
+                usage: Some(usage),
+                ..turn
+            });
+            self.replace(&turn_id, &changed)?;
+        }
+        Ok(())
     }
 
     /// The turn item `turn_id` takes `state` and `outcome`, when it is still running.
@@ -494,8 +513,9 @@ impl<'a> JournalWriter<'a> {
                 Ok(())
             }
             JournalOp::EndTurn { state, outcome } => self.end_turn(state, outcome),
-            // Bytes for the run, which the service writes; nothing for the journal.
-            JournalOp::Send { .. } => Ok(()),
+            JournalOp::Usage { usage } => self.set_turn_usage(usage),
+            // Bytes for the run and a learned ref, which the service handles; nothing for the journal.
+            JournalOp::Send { .. } | JournalOp::LearnRef { .. } => Ok(()),
         }
     }
 }
@@ -983,5 +1003,35 @@ mod tests {
         assert!(page.has_older);
         assert_eq!(page.latest_turn.map(|item| item.id), turn);
         assert_eq!(page.cursor.seq, 2);
+    }
+
+    #[test]
+    fn usage_lands_on_the_open_turn_and_stays_when_it_ends() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        let usage = TokenUsage {
+            input_tokens: 10,
+            total_tokens: 12,
+            output_tokens: 2,
+            ..TokenUsage::default()
+        };
+        // Without an open turn nothing changes.
+        writer.apply(JournalOp::Usage { usage }).unwrap();
+        let turn = writer.start_turn("go").unwrap();
+        writer.apply(JournalOp::Usage { usage }).unwrap();
+        writer
+            .apply(JournalOp::EndTurn {
+                state: TurnState::Completed,
+                outcome: None,
+            })
+            .unwrap();
+        let ChatItemBody::Turn(ended) =
+            item_of(store.chat_item(&session, &turn).unwrap().unwrap()).body
+        else {
+            panic!("a turn item");
+        };
+        assert_eq!(ended.state, TurnState::Completed);
+        assert_eq!(ended.usage, Some(usage));
     }
 }
