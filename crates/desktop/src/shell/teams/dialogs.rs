@@ -1682,9 +1682,8 @@ mod tests {
         record.projects.push(ProjectRecord {
             project: checkout(),
             board: Board {
-                team_id: "t1".into(),
                 project_id: Some("p1".into()),
-                columns: Vec::new(),
+                ..crate::service::fixtures::base_board()
             },
         });
         record
@@ -1692,16 +1691,7 @@ mod tests {
 
     fn checkout() -> TeamProject {
         TeamProject {
-            id: "p1".into(),
-            team_id: "t1".into(),
-            name: "Checkout".into(),
-            goal: String::new(),
-            brief: "Old".into(),
-            created_at_ms: 1,
-            source_project: None,
-            source_project_name: None,
-            source_kind: None,
-            code_source: None,
+            ..crate::service::fixtures::base_team_project()
         }
     }
 
@@ -2171,7 +2161,7 @@ mod tests {
             }),
             effort: Some(KindEffort {
                 levels: vec![level("low", "Low"), level("high", "High")],
-                default: None,
+                ..crate::service::fixtures::base_kind_effort()
             }),
             ..agent_kind("claude", "Claude", PackageState::Enabled)
         }
@@ -2185,7 +2175,7 @@ mod tests {
             }),
             effort: Some(KindEffort {
                 levels: vec![level("high", "High")],
-                default: None,
+                ..crate::service::fixtures::base_kind_effort()
             }),
             ..agent_kind("codex", "Codex", PackageState::Enabled)
         }
@@ -2195,9 +2185,8 @@ mod tests {
         KindModelChoice {
             id: id.into(),
             label: label.into(),
-            default: false,
             efforts: efforts.map(|ids| ids.into_iter().map(str::to_owned).collect()),
-            fast: false,
+            ..crate::service::fixtures::base_kind_model_choice()
         }
     }
 

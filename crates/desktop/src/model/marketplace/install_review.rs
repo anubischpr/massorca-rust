@@ -83,52 +83,30 @@ pub(super) mod tests {
 
     pub(in crate::model::marketplace) fn review() -> ExtensionReview {
         ExtensionReview {
-            id: "massorca.claude".to_owned(),
-            name: "Claude".to_owned(),
-            version: "1.0.0".to_owned(),
-            publisher: "massorca".to_owned(),
-            description: "Starts Claude sessions.".to_owned(),
             source: SourceRef {
                 kind: SourceKind::Catalogue,
                 reference: "massorca.claude".to_owned(),
             },
-            sha256: "abc123".to_owned(),
             permissions: vec![Permission {
-                kind: "files:read".to_owned(),
                 reason: "Reads the project.".to_owned(),
-                scope: None,
+                ..crate::service::fixtures::base_permission()
             }],
             risk: Risk {
                 level: RiskLevel::High,
-                reasons: Vec::new(),
+                ..crate::service::fixtures::base_risk()
             },
             listing: Listing {
-                logo: None,
-                category: "agents".to_owned(),
-                developer: None,
-                mention: None,
-                banner: None,
-                connections: Vec::new(),
-                website: None,
-                privacy: None,
-                terms: None,
+                ..crate::service::fixtures::base_listing()
             },
             kinds: vec![KindView {
-                id: "claude".to_owned(),
-                readable: true,
                 program: vec!["claude".to_owned()],
                 args: vec!["--json".to_owned()],
                 env: vec!["CLAUDE_HOME".to_owned()],
-                credential_home_env: None,
-                own_credential_home: true,
-                credential_files: Vec::new(),
+                ..crate::service::fixtures::base_kind_view()
             }],
-            mcp_servers: Vec::new(),
             cli: vec![CliPlan {
-                agent: "claude".to_owned(),
                 binary: Some("claude".to_owned()),
                 verify: Some(vec!["claude".to_owned(), "--version".to_owned()]),
-                uninstall: None,
                 state: CliPlanState::WillRun {
                     command: vec![
                         "winget".to_owned(),
@@ -137,9 +115,9 @@ pub(super) mod tests {
                     ],
                     runs_package_scripts: false,
                 },
+                ..crate::service::fixtures::base_cli_plan()
             }],
-            runs_installer: true,
-            consent: "fingerprint-1".to_owned(),
+            ..crate::service::fixtures::base_extension_review()
         }
     }
 
