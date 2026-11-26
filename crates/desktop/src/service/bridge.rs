@@ -923,6 +923,9 @@ impl Link {
         self.emit(StoreUpdate::AgentImportDetectOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
         ));
+        self.emit(StoreUpdate::AutomationDestinationsOffered(
+            client.has_capability(massorca_protocol::capabilities::AUTOMATION_DESTINATIONS),
+        ));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));

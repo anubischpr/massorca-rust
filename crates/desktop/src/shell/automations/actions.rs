@@ -39,7 +39,13 @@ impl Shell {
             .cloned();
         self.automations.open_editor(target);
         let workspaces = self.workspace_choices();
-        self.automation_editor = Some(AutomationEditor::new(automation.as_ref(), &workspaces, cx));
+        let supported = self.store.read(cx).state().automation_destinations;
+        self.automation_editor = Some(AutomationEditor::new(
+            automation.as_ref(),
+            &workspaces,
+            supported,
+            cx,
+        ));
         cx.notify();
     }
 

@@ -113,6 +113,8 @@ pub enum FormDestination {
     NewWorktree { base_branch: String },
     /// One existing workspace; every run goes there.
     Workspace { workspace: String },
+    /// A destination kind this build does not know. It is kept as it is unless the person changes it.
+    Unknown,
 }
 
 impl FormDestination {
@@ -123,12 +125,13 @@ impl FormDestination {
         "An existing workspace",
     ];
 
-    /// The position of this destination's choice in [`Self::LABELS`].
-    pub fn index(&self) -> usize {
+    /// The position of this destination's choice in [`Self::LABELS`]; none for a kind the editor does not offer.
+    pub fn index(&self) -> Option<usize> {
         match self {
-            Self::ProjectDefault => 0,
-            Self::NewWorktree { .. } => 1,
-            Self::Workspace { .. } => 2,
+            Self::ProjectDefault => Some(0),
+            Self::NewWorktree { .. } => Some(1),
+            Self::Workspace { .. } => Some(2),
+            Self::Unknown => None,
         }
     }
 
@@ -150,16 +153,15 @@ impl FormDestination {
             AutomationDestinationKind::ExistingWorkspace => Self::Workspace {
                 workspace: destination.workspace.clone().unwrap_or_default(),
             },
-            AutomationDestinationKind::ProjectDefault | AutomationDestinationKind::Unknown => {
-                Self::ProjectDefault
-            }
+            AutomationDestinationKind::ProjectDefault => Self::ProjectDefault,
+            AutomationDestinationKind::Unknown => Self::Unknown,
         }
     }
 
-    /// The destination the request carries. The editor always sends one, so an edit can return to the default.
+    /// The destination a request carries. An unknown kind is never built here: the form omits it instead.
     fn to_protocol(&self) -> Result<AutomationDestination, FormError> {
         match self {
-            Self::ProjectDefault => Ok(AutomationDestination::default()),
+            Self::ProjectDefault | Self::Unknown => Ok(AutomationDestination::default()),
             Self::NewWorktree { base_branch } => Ok(AutomationDestination {
                 kind: AutomationDestinationKind::ProjectWorktreePerRun,
                 base_branch: non_blank(base_branch),
@@ -198,6 +200,10 @@ pub struct AutomationForm {
     /// An IANA zone name; blank means the host's zone.
     pub zone: String,
     pub destination: FormDestination,
+    /// Whether the service offers destinations (`automation-destinations/1`); without it none is sent.
+    pub destination_supported: bool,
+    /// Whether the person changed the destination or the project: an edit sends the destination only then.
+    pub destination_edited: bool,
 }
 
 impl AutomationForm {
@@ -214,6 +220,8 @@ impl AutomationForm {
             cron: String::new(),
             zone: String::new(),
             destination: FormDestination::default(),
+            destination_supported: true,
+            destination_edited: true,
         }
     }
 
@@ -234,6 +242,8 @@ impl AutomationForm {
             cron: automation.cron.clone().unwrap_or_default(),
             zone: automation.zone.clone().unwrap_or_default(),
             destination: FormDestination::of(&automation.destination),
+            destination_supported: true,
+            destination_edited: false,
         }
     }
 
@@ -255,7 +265,7 @@ impl AutomationForm {
             zone: Some(checked.zone).filter(|zone| !zone.is_empty()),
             grace_minutes: None,
             creation_key,
-            destination: Some(checked.destination),
+            destination: self.destination_payload()?,
         })
     }
 
@@ -275,8 +285,20 @@ impl AutomationForm {
             cron: checked.cron,
             zone: Some(checked.zone),
             grace_minutes: None,
-            destination: Some(checked.destination),
+            destination: if self.destination_edited {
+                self.destination_payload()?
+            } else {
+                None
+            },
         })
+    }
+
+    /// The destination a request sends: none when the host predates destinations or the kind is unknown.
+    fn destination_payload(&self) -> Result<Option<AutomationDestination>, FormError> {
+        if !self.destination_supported || self.destination == FormDestination::Unknown {
+            return Ok(None);
+        }
+        self.destination.to_protocol().map(Some)
     }
 
     /// The weekday the request carries: only a weekly automation has one.
@@ -300,7 +322,6 @@ impl AutomationForm {
         }
         let project_on_edit = project.clone();
         let project = project.unwrap_or_default();
-        let destination = self.destination.to_protocol()?;
         let (time, cron) = match self.cadence {
             Cadence::Cron => {
                 let cron = non_blank(&self.cron).ok_or_else(|| {
@@ -324,9 +345,18 @@ impl AutomationForm {
             time,
             cron,
             zone: self.zone.trim().to_owned(),
-            destination,
         })
     }
+}
+
+/// Whether an editor's destination counts as edited: the choice changed, or the project did, since the destination must
+/// then be sent again.
+pub fn destination_edited(
+    original: &FormDestination,
+    current: &FormDestination,
+    project_changed: bool,
+) -> bool {
+    project_changed || original != current
 }
 
 /// The values after the checks: text trimmed, and the cadence's own field only.
@@ -339,7 +369,6 @@ struct Checked {
     time: String,
     cron: Option<String>,
     zone: String,
-    destination: AutomationDestination,
 }
 
 fn error(field: Field, message: &str) -> FormError {
@@ -371,6 +400,30 @@ fn valid_time(text: &str) -> bool {
 mod tests {
     use super::*;
     use massorca_protocol::methods::automations::AutomationDestinationKind;
+
+    fn sample_automation() -> Automation {
+        Automation {
+            id: "a1".to_owned(),
+            project_id: Some("p1".to_owned()),
+            project_name: Some("app".to_owned()),
+            name: "Morning PRs".to_owned(),
+            prompt: "Summarise".to_owned(),
+            agent: "claude".to_owned(),
+            cadence: AutomationCadence::Daily,
+            time: "09:00".to_owned(),
+            weekday: None,
+            cron: None,
+            zone: None,
+            zone_used: None,
+            grace_minutes: 720,
+            enabled: true,
+            destination: AutomationDestination::default(),
+            next_run_at_ms: None,
+            last_run_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        }
+    }
 
     fn filled() -> AutomationForm {
         AutomationForm {
@@ -559,7 +612,95 @@ mod tests {
                 workspace: String::new()
             }
             .index(),
-            2
+            Some(2)
         );
+        assert_eq!(FormDestination::Unknown.index(), None);
+    }
+
+    #[test]
+    fn a_host_without_destinations_gets_none_and_an_untouched_destination_is_not_sent_on_an_edit() {
+        let unsupported = AutomationForm {
+            destination_supported: false,
+            ..filled()
+        };
+        assert_eq!(unsupported.create_params(None).unwrap().destination, None);
+        assert_eq!(unsupported.update_params("a1").unwrap().destination, None);
+
+        let removed = AutomationForm {
+            destination: FormDestination::Workspace {
+                workspace: "gone".to_owned(),
+            },
+            destination_edited: false,
+            ..filled()
+        };
+        let edit = removed
+            .update_params("a1")
+            .expect("a prompt-only edit is not blocked by a removed workspace");
+        assert_eq!(edit.destination, None);
+        assert_eq!(edit.name.as_deref(), Some("Morning PRs"));
+
+        let changed = AutomationForm {
+            destination_edited: true,
+            ..removed
+        };
+        assert_eq!(
+            changed
+                .update_params("a1")
+                .unwrap()
+                .destination
+                .unwrap()
+                .workspace
+                .as_deref(),
+            Some("gone")
+        );
+    }
+
+    #[test]
+    fn an_unknown_destination_kind_is_kept_on_a_rename_and_only_a_change_replaces_it() {
+        let automation = Automation {
+            destination: AutomationDestination {
+                kind: AutomationDestinationKind::Unknown,
+                ..AutomationDestination::default()
+            },
+            ..sample_automation()
+        };
+        let form = AutomationForm {
+            name: "Renamed".to_owned(),
+            ..AutomationForm::of(&automation)
+        };
+        let rename = form.update_params("a1").expect("valid");
+        assert_eq!(rename.name.as_deref(), Some("Renamed"));
+        assert_eq!(
+            rename.destination, None,
+            "an untouched unknown kind is omitted"
+        );
+
+        let chosen = AutomationForm {
+            destination: FormDestination::ProjectDefault,
+            destination_edited: true,
+            ..form
+        };
+        assert_eq!(
+            chosen
+                .update_params("a1")
+                .unwrap()
+                .destination
+                .map(|d| d.kind),
+            Some(AutomationDestinationKind::ProjectDefault)
+        );
+    }
+
+    #[test]
+    fn a_project_change_sends_the_destination_again() {
+        assert!(destination_edited(
+            &FormDestination::ProjectDefault,
+            &FormDestination::ProjectDefault,
+            true
+        ));
+        assert!(!destination_edited(
+            &FormDestination::ProjectDefault,
+            &FormDestination::ProjectDefault,
+            false
+        ));
     }
 }

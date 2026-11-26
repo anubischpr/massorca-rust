@@ -9,7 +9,8 @@ mod state;
 
 pub use destination::destination_summary;
 pub use form::{
-    AutomationForm, Cadence, Field, FormDestination, FormError, WEEKDAYS, weekday_label,
+    AutomationForm, Cadence, Field, FormDestination, FormError, WEEKDAYS, destination_edited,
+    weekday_label,
 };
 pub use runs::{RunHistory, run_detail_text, run_duration_text, run_started_text, run_status_text};
 pub use schedule::{next_run_text, schedule_summary};
