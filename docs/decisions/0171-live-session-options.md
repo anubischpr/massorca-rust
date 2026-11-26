@@ -1,0 +1,44 @@
+# 0171: Live session options
+
+Status: accepted, 2026-11-26.
+
+## Context
+
+A resumed run does not keep the model or effort of its first start (decision 0094), and a resume takes no fast mode
+(decision 0165). The desktop wants to change a session's model, effort and fast mode while it runs, or else at its next
+resume. Claude Code takes `/fast` as a toggle in a running session (decision 0165). The vendor's slash-command reference
+does not list `/model` or `/effort`, and the public docs do not document a `set_model` control request for headless
+stream-json, so no control request is sent and `/model` is declared as unverified.
+
+## Decision
+
+- Method `agent.set_options { session, model?, effort?, fast? }`, capability `agent-options-live/1`. An option left out
+  keeps its value; at least one is required. It has workspace permission, as `agent.set_mode` does: a live change into a
+  run that holds vault secrets needs host-admin scope.
+- A model with a live command (`model.live` in the kind declaration), and the fast toggle (`fast.live`), are typed into
+  a running terminal run when the agent is ready for input. A busy run refuses the change with `agent.busy`, as a mode
+  switch does, and types nothing. Effort has no live command, so it always waits, and so does every
+  change to a run that is not live. A chat run has no terminal, so its changes always wait.
+- Fast mode is a toggle, so its command is typed only when the run's recorded state differs from the state asked for.
+  `session.fast` stays `confirmed: false`, since nothing confirms the vendor took it.
+- A typed live command starts a settle window of 2 seconds (`TYPED_COMMAND_SETTLE`). Until it ends, non-forced prompts,
+  live changes and the queue wait (`agent.busy`); `force` and `send_now` pass. An accepted hook report ends the window
+  early. Otherwise a timer ends it and drains the queue, so a queued prompt is typed once the window ends, with no report.
+  Reason: a slash command may send no hook report (no `UserPromptSubmit`, no `Stop`), so a hold that only a report
+  clears could keep the session busy forever. A mode switch starts no window, as before.
+- Values are checked as `agent.start` checks them, with the same refusals. A refused value changes nothing.
+- The chosen options are held in memory with the service and dropped on forget. A resume launches with them. The session
+  record has no model or effort columns on main; #412 adds them and replaces this store.
+- The result is `{ applied: { model?, effort?, fast? }, session }`. Each changed option is `live` or `next_resume`; an
+  option already at its value is absent from `applied`, and nothing is typed for it. Its value is still kept for the
+  next resume.
+
+## Consequences
+
+- No existing type changes shape. The params and the result are new types, and the kind declaration gains an optional
+  `model.live`.
+- Unverified: `/model {value}` for the built-in `claude` kind, and `/fast`, which the public slash-command page does not
+  list. `/model` or `/fast` might open a confirmation screen; the settle window then holds prompts and live changes
+  (`agent.busy`) for 2 seconds, or until a report. The timing of typed commands sent one after another is not verified
+  either: each command is written in turn, while the run is marked as switching.
+- A service restart drops the chosen options of stopped sessions until #412 stores them.

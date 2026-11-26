@@ -262,7 +262,7 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
-| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off. A resume takes no fast mode (decision 0165) unless `agent.set_options` chose one for the session (decision 0171). Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
@@ -289,6 +289,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
+| `agent.set_options` | workspace | `session`, `model?`, `effort?`, `fast?` (at least one) | `{ applied: { model?, effort?, fast? }, session: AgentSession }`, each named option `live` or `next_resume` and left out when it already has the value asked for (capability `agent-options-live/1`, decision 0171) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
 | `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `same_workspace?` (a writing child in the parent's own worktree; not with `name`, decision 0170), `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
@@ -359,6 +360,33 @@ that is a bypass mode: a pending bypass is used only by a resume that names it, 
 the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
+
+## Live session options (decision 0171)
+
+`agent.set_options` (capability `agent-options-live/1`) changes a session's `model`, `effort` and `fast`, the options
+`agent.start` takes. The service plans the whole call before it types or stores anything:
+
+- Values are checked as `agent.start` checks them (`option_args`, `fast_for`), against the model the call names, else the
+  model the live run runs with, or the one the next run keeps for a stopped session. A refused value fails with
+  `request.invalid_params` or `agent.option_unsupported`, and nothing changes.
+- A model with a `model.live` command, and the fast toggle (`fast.live`, decision 0165), are typed into the run's
+  terminal, in that order, when the run is ready for input; a busy run refuses the change with `agent.busy` and types
+  nothing. The run is marked as switching while they are typed, as a mode switch
+  is. The fast toggle is typed only when the run's recorded fast mode (`fast-requested` in the run directory) differs
+  from the one asked for. Everything else waits for the next resume: effort always, and a model or fast mode whose kind
+  declares no live command or whose run is not live. A chat run has no terminal, so it always waits. A kind that cannot
+  resume refuses a change that would wait, with `agent.resume_unavailable`.
+- The chosen options are held in memory with the service. `chosen` is what the next resume launches with: the model and
+  effort go into the launch's mode arguments, and fast mode on the settings. `started` is what the live run runs with,
+  moved by its live changes, and is what a live change is checked against. Forgetting a session drops both. A resume
+  still launches without the options of the first start (decision 0094); until the session record stores model and
+  effort (#412), a restart of the service drops the chosen options.
+- The reply's `applied` names each changed option as `live` or `next_resume`. After a live fast toggle the session's
+  `fast` is `{ on, confirmed: false }`; nothing confirms it.
+- A typed live command starts the run's settle window, `TYPED_COMMAND_SETTLE` (2 seconds). Until it ends, non-forced
+  prompts, live changes and the queue wait (`agent.busy`); `force` and `send_now` pass. An accepted hook report ends the
+  window early; otherwise a timer ends it and drains the queue, so no report is needed (decision 0171). A mode switch
+  starts no window.
 
 ## No project (decision 0094)
 
