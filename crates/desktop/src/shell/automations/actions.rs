@@ -171,7 +171,7 @@ impl Shell {
         }
     }
 
-    fn automations_read(
+    pub(super) fn automations_read(
         &mut self,
         answer: Result<AutomationList, Refusal>,
         cx: &mut Context<Self>,
