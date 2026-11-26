@@ -1,9 +1,9 @@
-//! Paints the reasoning track from its own bounds: the brand fill, the top effects, the stops and the
-//! thumb. Layout rounds every child to whole device pixels, so a thumb laid out as a child can land off
-//! the track's axis at 125 or 150 percent; placing each one from the track's bounds keeps them on it.
+//! Paints the reasoning track from its own bounds: the halo, the brand fill, the top effects, the stops
+//! and the thumb. Layout rounds every child to whole device pixels, so a thumb laid out as a child can land
+//! off the track's axis at 125 or 150 percent; placing each one from the track's bounds keeps them on it.
 
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{
     BorderStyle, Bounds, BoxShadow, Corners, Edges, Hsla, Pixels, Point, Window, fill,
@@ -21,12 +21,20 @@ const STOP_DOT: f32 = 4.0;
 thread_local! {
     /// The thumb rectangle the last paint drew, which the tests read back.
     static PAINTED_THUMB: RefCell<Option<Bounds<Pixels>>> = const { RefCell::new(None) };
+    /// How many halo rings the last paint drew: all of them at the top level, none below it.
+    static PAINTED_HALO_RINGS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The thumb rectangle the last paint drew.
 #[cfg(test)]
 pub(in crate::components::model_picker) fn painted_thumb() -> Option<Bounds<Pixels>> {
-    PAINTED_THUMB.with(|cell| cell.borrow().clone())
+    PAINTED_THUMB.with(|cell| *cell.borrow())
+}
+
+/// How many halo rings the last paint drew.
+#[cfg(test)]
+pub(in crate::components::model_picker) fn painted_halo_rings() -> usize {
+    PAINTED_HALO_RINGS.with(Cell::get)
 }
 
 /// Everything the track paints, captured when the slider renders.
@@ -45,6 +53,10 @@ pub(super) struct TrackPaint {
     pub thumb_shadows: Vec<BoxShadow>,
     pub elapsed: f32,
     pub reduced: bool,
+    /// How far the top effects have faded in, 0 to 1.
+    pub effects_fade: f32,
+    /// How far the halo has faded in, 0 to 1.
+    pub halo_fade: f32,
 }
 
 /// The track's frame in logical px, read from its snapped bounds.
@@ -80,12 +92,40 @@ impl Frame {
 /// Paints the track into `bounds`, the rectangle the track itself was laid out in.
 pub(super) fn paint_track(bounds: Bounds<Pixels>, paint: &TrackPaint, window: &mut Window) {
     let frame = Frame::of(bounds);
+    #[cfg(test)]
+    PAINTED_HALO_RINGS.with(|cell| cell.set(if paint.top { effects::HALO_RINGS } else { 0 }));
+    if paint.top {
+        paint_halo(frame, paint, window);
+    }
     paint_fill(frame, paint, window);
     if paint.top {
-        effects::paint_top(bounds, paint.elapsed, paint.reduced, window);
+        effects::paint_top(
+            bounds,
+            paint.elapsed,
+            paint.reduced,
+            paint.effects_fade,
+            window,
+        );
     }
     paint_stops(frame, paint, window);
     paint_thumb(frame, paint, window);
+}
+
+/// The halo: rings of pills 1 to 6 px outside the track, stacked into the artboard's radial falloff from
+/// the bar's edge to nothing 6 px out.
+fn paint_halo(frame: Frame, paint: &TrackPaint, window: &mut Window) {
+    for (reach, alpha) in effects::halo_rings(effects::HALO_PEAK) {
+        let at = Bounds::new(
+            frame.at(-reach, -reach),
+            size(
+                px(frame.width + 2.0 * reach),
+                px(frame.height + 2.0 * reach),
+            ),
+        );
+        let colour = paint.second.alpha(alpha * paint.halo_fade);
+        window
+            .paint_quad(fill(at, colour).corner_radii(Corners::all(px(frame.width / 2.0 + reach))));
+    }
 }
 
 /// The brand fill, from the selected stop plus 14 px down to the bottom of the track.

@@ -10,7 +10,6 @@ mod track_paint;
 use std::rc::Rc;
 
 use gpui::accesskit::Orientation;
-use gpui::prelude::FluentBuilder;
 use gpui::{
     App, BoxShadow, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement,
     KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, RenderOnce,
@@ -23,7 +22,7 @@ use stops::{STOP_INSET, Slide, nearest_stop, stop_fraction, value_text};
 pub use stops::{has_slider, is_top_level};
 use track_paint::TrackPaint;
 #[cfg(test)]
-pub(super) use track_paint::painted_thumb;
+pub(super) use track_paint::{painted_halo_rings, painted_thumb};
 
 use crate::components::popover::TriggerBounds;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
@@ -76,41 +75,26 @@ pub struct ReasoningSlider {
     /// The level the thumb and fill are moving from, and how far the move has got (0 to 1).
     pub moving_from: Option<usize>,
     pub progress: f32,
+    /// How far the top effects have faded in (0 to 1): particles, shimmer, thumb rings and sparkle.
+    pub effects_fade: f32,
+    /// How far the halo has faded in (0 to 1), over a longer fade than the effects.
+    pub halo_fade: f32,
 }
 
-/// The glow around the bar at the top level: 6 px outside it, in the second brand colour at 55 percent, blurred.
-fn halo(colour: Color) -> impl IntoElement {
-    let tint: Hsla = colour.into();
-    div()
-        .debug_selector(|| "reasoning-halo".to_owned())
-        .absolute()
-        .top(px(-6.))
-        .bottom(px(-6.))
-        .left(px(-6.))
-        .right(px(-6.))
-        .rounded(px(RADIUS_FULL))
-        .shadow(vec![BoxShadow {
-            color: tint.alpha(0.55),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(6.),
-            spread_radius: px(0.),
-            inset: false,
-        }])
-}
-
-/// The thumb's rings at the top level: a 4 px ring in the second brand colour at 45 percent, and a 16 px glow in it.
-fn top_rings(colour: Color) -> [BoxShadow; 2] {
+/// The thumb's rings at the top level, faded in with the effects: a 4 px ring in the second brand colour
+/// at 45 percent, and a 16 px glow in it.
+fn top_rings(colour: Color, fade: f32) -> [BoxShadow; 2] {
     let tint: Hsla = colour.into();
     [
         BoxShadow {
-            color: tint.alpha(0.45),
+            color: tint.alpha(0.45 * fade),
             offset: point(px(0.), px(0.)),
             blur_radius: px(0.),
             spread_radius: px(4.),
             inset: false,
         },
         BoxShadow {
-            color: tint,
+            color: tint.alpha(fade),
             offset: point(px(0.), px(0.)),
             blur_radius: px(16.),
             spread_radius: px(2.),
@@ -178,7 +162,7 @@ impl RenderOnce for ReasoningSlider {
 
         let mut thumb_shadows = box_shadows(theme.shadows.e1);
         if top {
-            thumb_shadows.extend(top_rings(self.brand.second));
+            thumb_shadows.extend(top_rings(self.brand.second, self.effects_fade));
         }
         let paint = TrackPaint {
             fraction,
@@ -194,6 +178,8 @@ impl RenderOnce for ReasoningSlider {
             thumb_shadows,
             elapsed: self.elapsed,
             reduced: self.reduced,
+            effects_fade: self.effects_fade,
+            halo_fade: self.halo_fade,
         };
         // The fill, stops and thumb are painted from the track's own bounds, not laid out as children.
         let painted = div()
@@ -224,7 +210,6 @@ impl RenderOnce for ReasoningSlider {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .debug_selector(|| "reasoning-slider".to_owned())
-            .when(top, |track| track.child(halo(self.brand.second)))
             .child(painted)
             .on_action({
                 let pick = pick.clone();

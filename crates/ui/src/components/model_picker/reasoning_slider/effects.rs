@@ -11,7 +11,9 @@ use std::time::Instant;
 
 use gpui::{Bounds, Corners, Pixels, Window, fill, hsla, point, px, size};
 
-use crate::tokens::{DURATION_SLIDER_MOVE, DURATION_SLIDER_SHIMMER};
+use crate::tokens::{
+    DURATION_MODERATE, DURATION_SLIDER_MOVE, DURATION_SLIDER_SHIMMER, DURATION_SLOW,
+};
 
 /// The shimmer band's peak opacity: 55 percent white at its middle.
 const SHIMMER_ALPHA: f32 = 0.55;
@@ -171,6 +173,46 @@ pub fn request_frame(window: &mut Window) {
     window.request_animation_frame();
 }
 
+/// The halo's peak alpha at the bar's edge: the artboard's radial gradient is 30 percent strong there, and
+/// the halo sits at 55 percent opacity.
+pub const HALO_PEAK: f32 = 0.165;
+
+/// The halo's rings: one per px it reaches past the bar.
+pub const HALO_RINGS: usize = 6;
+
+/// The halo's rings as (px past the bar, alpha). Stacked, they fall from `peak` at the bar's edge to
+/// nothing `HALO_RINGS` px out, as the artboard's radial gradient does.
+pub fn halo_rings(peak: f32) -> [(f32, f32); HALO_RINGS] {
+    let target = |distance: f32| peak * (1.0 - distance / HALO_RINGS as f32).max(0.0);
+    let mut rings = [(0.0, 0.0); HALO_RINGS];
+    let mut clear_outside = 1.0;
+    for index in (0..HALO_RINGS).rev() {
+        let clear_inside = 1.0 - target(index as f32 + 0.5);
+        rings[index] = (index as f32 + 1.0, 1.0 - clear_inside / clear_outside);
+        clear_outside = clear_inside;
+    }
+    rings
+}
+
+/// How far an effect that began `since` seconds ago has faded in over `seconds`. Reduced motion shows
+/// it at once.
+pub fn fade_progress(since: f32, seconds: f32, reduced: bool) -> f32 {
+    if reduced {
+        return 1.0;
+    }
+    (since / seconds).clamp(0.0, 1.0)
+}
+
+/// The top effects' fade-in, `duration.moderate`, in seconds.
+pub fn effects_fade_seconds() -> f32 {
+    DURATION_MODERATE.as_secs_f32()
+}
+
+/// The halo's fade-in, `duration.slow`, in seconds.
+pub fn halo_fade_seconds() -> f32 {
+    DURATION_SLOW.as_secs_f32()
+}
+
 /// A track's outline: a rectangle whose two ends are half circles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pill {
@@ -284,7 +326,13 @@ pub fn particle_centre(pill: Pill, particle: &Particle, elapsed: f32) -> (f32, f
 /// Paints the top level's shimmer band and particles inside the rounded track `track`. Every row and
 /// particle stays inside the outline, so no square corner shows at any frame. Under reduced motion the
 /// clock is frozen at 0 and the band rests at the top of the track, so the frame holds still.
-pub fn paint_top(track: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &mut Window) {
+pub fn paint_top(
+    track: Bounds<Pixels>,
+    elapsed: f32,
+    reduced: bool,
+    fade: f32,
+    window: &mut Window,
+) {
     let pill = Pill {
         width: f32::from(track.size.width),
         height: f32::from(track.size.height),
@@ -298,7 +346,7 @@ pub fn paint_top(track: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &mu
                 px(stripe.bottom - stripe.top),
             ),
         );
-        window.paint_quad(fill(at, hsla(0.0, 0.0, 1.0, stripe.alpha)));
+        window.paint_quad(fill(at, hsla(0.0, 0.0, 1.0, stripe.alpha * fade)));
     }
     for particle in particles() {
         let (x, y) = particle_centre(pill, &particle, elapsed);
@@ -307,7 +355,7 @@ pub fn paint_top(track: Bounds<Pixels>, elapsed: f32, reduced: bool, window: &mu
             point(origin.x + px(x - radius), origin.y + px(y - radius)),
             size(px(2.0 * radius), px(2.0 * radius)),
         );
-        let alpha = particle_alpha(&particle, elapsed);
+        let alpha = particle_alpha(&particle, elapsed) * fade;
         window.paint_quad(
             fill(at, hsla(0.0, 0.0, 1.0, alpha)).corner_radii(Corners::all(px(radius))),
         );
@@ -558,5 +606,48 @@ mod tests {
             1.0,
             "reduced motion jumps to the new stop"
         );
+    }
+
+    #[test]
+    fn the_effects_fade_in_over_200_ms_and_the_halo_over_300_ms() {
+        assert!((effects_fade_seconds() - 0.2).abs() < 1e-6);
+        assert!((halo_fade_seconds() - 0.3).abs() < 1e-6);
+        assert_eq!(fade_progress(0.0, effects_fade_seconds(), false), 0.0);
+        assert!((fade_progress(0.1, effects_fade_seconds(), false) - 0.5).abs() < 1e-6);
+        assert!((fade_progress(0.15, halo_fade_seconds(), false) - 0.5).abs() < 1e-6);
+        assert_eq!(
+            fade_progress(1.0, halo_fade_seconds(), false),
+            1.0,
+            "it stays shown once faded in"
+        );
+    }
+
+    #[test]
+    fn reduced_motion_shows_the_top_effects_at_once() {
+        assert_eq!(fade_progress(0.0, effects_fade_seconds(), true), 1.0);
+        assert_eq!(fade_progress(0.0, halo_fade_seconds(), true), 1.0);
+    }
+
+    #[test]
+    fn the_halo_rings_stack_into_the_radial_falloff_from_the_bar_to_nothing() {
+        let rings = halo_rings(HALO_PEAK);
+        for band in 0..HALO_RINGS {
+            let stacked = 1.0
+                - rings[band..]
+                    .iter()
+                    .map(|(_, alpha)| 1.0 - alpha)
+                    .product::<f32>();
+            let falloff = HALO_PEAK * (1.0 - (band as f32 + 0.5) / HALO_RINGS as f32);
+            assert!(
+                (stacked - falloff).abs() < 1e-5,
+                "{band} px out: stacked {stacked} against the falloff {falloff}"
+            );
+        }
+        assert_eq!(
+            rings[HALO_RINGS - 1].0,
+            HALO_RINGS as f32,
+            "the outermost ring reaches 6 px out"
+        );
+        assert!(rings.iter().all(|(_, alpha)| (0.0..=1.0).contains(alpha)));
     }
 }
