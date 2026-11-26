@@ -6,6 +6,7 @@ use std::path::Path;
 use super::{read, sources, supports};
 
 mod claude;
+mod codex;
 
 /// 2026-01-05T12:30:00Z.
 pub(super) const NOW: i64 = 1_767_616_200_000;
@@ -22,9 +23,9 @@ pub(super) fn write_lines(path: &Path, lines: &[serde_json::Value]) {
 
 #[test]
 fn only_kinds_with_a_source_have_a_reader() {
-    assert!(supports("claude"));
+    assert!(supports("claude") && supports("codex"));
     assert!(!supports("gentle-shell"));
-    for kind in ["claude"] {
+    for kind in ["claude", "codex"] {
         let names: Vec<_> = sources(kind).iter().map(|source| source.name()).collect();
         assert_eq!(
             names,
@@ -39,5 +40,6 @@ fn only_kinds_with_a_source_have_a_reader() {
 fn a_missing_folder_has_no_data() {
     let home = tempfile::tempdir().unwrap();
     assert_eq!(read("claude", home.path(), NOW).unwrap(), None);
+    assert_eq!(read("codex", home.path(), NOW).unwrap(), None);
     assert_eq!(read("other", home.path(), NOW).unwrap(), None);
 }

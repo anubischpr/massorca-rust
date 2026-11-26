@@ -4,6 +4,7 @@
 //! network. The walks never follow a link out of the folder and stop at fixed bounds, so a large history stays cheap.
 
 mod claude;
+mod codex;
 
 use std::fs;
 use std::io::{self, BufRead, BufReader};
@@ -52,6 +53,7 @@ pub trait UsageSource: Send + Sync {
 pub fn sources(kind: &str) -> &'static [&'static dyn UsageSource] {
     match kind {
         claude::KIND => &[&claude::ClaudeLogs],
+        codex::KIND => &[&codex::CodexLogs],
         _ => &[],
     }
 }
