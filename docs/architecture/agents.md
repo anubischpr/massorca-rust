@@ -191,6 +191,12 @@ directory that does not exist has no kinds.
   mode's `args` and before the caller's `args`. A kind without the option refuses it with
   `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
   `:` or `/`, never starting with `-`.
+- `model.live` (decision 0171): optional, the slash command that switches a running session to a
+  model, with `{value}` exactly once, such as `"/model {value}"`. It is a slash, a name of letters,
+  digits and dashes, no control character, at most 64 bytes. `agent.set_options` types it into a
+  live terminal run; a kind without it, and every chat run, applies a model at the session's next
+  resume. The built-in `claude` declares `/model {value}`, which the vendor's slash-command
+  reference does not list: that form is unverified.
 - `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
   efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
   absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
