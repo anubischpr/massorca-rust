@@ -482,8 +482,7 @@ fn version_of(stdout: &[u8]) -> String {
 /// Any other failure (no user bus, permissions) keeps the files, since the service may run.
 fn is_not_loaded(stderr: &[u8]) -> bool {
     let text = String::from_utf8_lossy(stderr).to_lowercase();
-    text.contains(UNIT_NAME)
-        && (text.contains("not loaded") || text.contains("does not exist"))
+    text.contains(UNIT_NAME) && (text.contains("not loaded") || text.contains("does not exist"))
 }
 
 /// A non-zero exit becomes a `Remote` error that names the step and shows the error output.
