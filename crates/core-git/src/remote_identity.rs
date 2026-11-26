@@ -23,6 +23,20 @@ impl Git {
         mark_fork(&mut remotes);
         Ok(remotes)
     }
+
+    /// The owner of the repository's primary remote: `origin`, else the first remote in git's order. `None`
+    /// when there is no such remote, git fails or the URL does not parse.
+    pub fn primary_remote_owner(&self, repo: &Path) -> Option<String> {
+        let captured = self.run(Some(repo), ["remote", "-v"]).ok()?;
+        if !captured.succeeded() {
+            return None;
+        }
+        let text = captured.text().ok()?;
+        let (_, url) = fetch_urls(text)
+            .find(|(name, _)| *name == "origin")
+            .or_else(|| fetch_urls(text).next())?;
+        parse_remote(url).map(|parsed| parsed.owner)
+    }
 }
 
 /// The name and fetch URL of each remote in `git remote -v` output; push URLs are not listed.
@@ -247,6 +261,59 @@ mod tests {
             web_url: None,
             primary: false,
             fork_of: None,
+        }
+    }
+
+    #[test]
+    fn owner_of_each_url_shape() {
+        let cases: &[(&str, Option<&str>)] = &[
+            ("https://github.com/acme/widgets.git", Some("acme")),
+            ("https://github.com/acme/widgets", Some("acme")),
+            ("https://github.com/acme/widgets/", Some("acme")),
+            ("https://user@github.com/acme/widgets", Some("acme")),
+            ("https://gitea.example.com/Team/Widgets.git", Some("Team")),
+            ("https://bitbucket.org/acme/widgets.git", Some("acme")),
+            ("git@github.com:acme/widgets.git", Some("acme")),
+            ("git@bitbucket.org:acme/widgets.git", Some("acme")),
+            ("ssh://git@github.com/acme/widgets.git", Some("acme")),
+            (
+                "ssh://git@gitea.example.com:2222/acme/widgets.git",
+                Some("acme"),
+            ),
+            (
+                "https://gitlab.example.com/group/sub/repo.git",
+                Some("group/sub"),
+            ),
+            (
+                "ssh://git@gitlab.example.com/group/sub/repo.git",
+                Some("group/sub"),
+            ),
+            (
+                "git@gitlab.example.com:group/sub/repo.git",
+                Some("group/sub"),
+            ),
+            ("https://dev.azure.com/org/project/_git/repo", Some("org")),
+            (
+                "https://org@dev.azure.com/org/project/_git/repo",
+                Some("org"),
+            ),
+            (
+                "https://org.visualstudio.com/project/_git/repo",
+                Some("org"),
+            ),
+            ("git@ssh.dev.azure.com:v3/org/project/repo", Some("org")),
+            ("/srv/repo.git", None),
+            ("C:\\repos\\x", None),
+            ("../x", None),
+            ("file:///srv/repo.git", None),
+            ("https://github.com/widgets.git", None),
+            ("git@github.com:widgets.git", None),
+            ("", None),
+            ("not a url", None),
+        ];
+        for (url, expected) in cases {
+            let actual = parse_remote(url).map(|parsed| parsed.owner);
+            assert_eq!(actual.as_deref(), *expected, "url {url:?}");
         }
     }
 
