@@ -21,6 +21,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
+use crate::features::forwards::{self, ForwardTable};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -31,7 +32,9 @@ const SAMPLE_TTL: Duration = Duration::from_secs(1);
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let memory_samples = Arc::new(SampleCache::default());
     let port_samples = Arc::new(SampleCache::default());
-    Ok(vec![
+    let forward_table = Arc::new(ForwardTable::default());
+    let mut handles = forwards::register(registries, &forward_table)?;
+    handles.extend([
         registries
             .capabilities
             .register(capabilities::HOST, Owner::Core)?,
@@ -55,7 +58,8 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
                 async move { ports(&samples, &ctx).await }
             },
         )?,
-    ])
+    ]);
+    Ok(handles)
 }
 
 /// Samples on the blocking pool: listing processes and reading each one are system calls, never a spawned program.

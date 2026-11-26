@@ -18,6 +18,18 @@ pub(crate) struct StreamTable {
 struct Open {
     last_id: u64,
     cancels: HashMap<u64, oneshot::Sender<()>>,
+    /// Where the client's bytes for a duplex stream go.
+    inbound: HashMap<u64, mpsc::Sender<Vec<u8>>>,
+}
+
+/// What became of stream bytes a client sent.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    Delivered,
+    /// No open duplex stream has the id, or its handler stopped reading: the bytes are dropped.
+    Dropped,
+    /// The stream's queue is full: the stream has been released and must be told why.
+    Overflow,
 }
 
 /// A table handle a forwarder can release its own stream through, without keeping the table alive.
@@ -37,9 +49,39 @@ impl StreamTable {
         (id, cancelled)
     }
 
+    /// Like `open`, for a stream whose client also sends bytes, which go to `inbound`.
+    pub(crate) fn open_duplex(
+        &self,
+        inbound: mpsc::Sender<Vec<u8>>,
+    ) -> (u64, oneshot::Receiver<()>) {
+        let (id, cancelled) = self.open();
+        lock(&self.inner).inbound.insert(id, inbound);
+        (id, cancelled)
+    }
+
+    /// Hands a client's stream bytes to their duplex stream without waiting, so one slow stream never stalls the
+    /// connection's reader.
+    pub(crate) fn deliver(&self, stream: u64, payload: Vec<u8>) -> Delivery {
+        let mut open = lock(&self.inner);
+        let Some(inbound) = open.inbound.get(&stream) else {
+            return Delivery::Dropped;
+        };
+        match inbound.try_send(payload) {
+            Ok(()) => Delivery::Delivered,
+            Err(mpsc::error::TrySendError::Closed(_)) => Delivery::Dropped,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                open.inbound.remove(&stream);
+                open.cancels.remove(&stream);
+                Delivery::Overflow
+            }
+        }
+    }
+
     /// Ends a stream, if it is still open: a client's cancel, or a stream that has finished.
     pub(crate) fn release(&self, stream: u64) {
-        lock(&self.inner).cancels.remove(&stream);
+        let mut open = lock(&self.inner);
+        open.cancels.remove(&stream);
+        open.inbound.remove(&stream);
     }
 
     pub(crate) fn downgrade(&self) -> WeakStreamTable {
@@ -50,18 +92,18 @@ impl StreamTable {
 
     /// Ends every open stream and returns their ids.
     pub(crate) fn close_all(&self) -> Vec<u64> {
-        lock(&self.inner)
-            .cancels
-            .drain()
-            .map(|(id, _cancel)| id)
-            .collect()
+        let mut open = lock(&self.inner);
+        open.inbound.clear();
+        open.cancels.drain().map(|(id, _cancel)| id).collect()
     }
 }
 
 impl WeakStreamTable {
     pub(crate) fn release(&self, stream: u64) {
         if let Some(inner) = self.inner.upgrade() {
-            lock(&inner).cancels.remove(&stream);
+            let mut open = lock(&inner);
+            open.cancels.remove(&stream);
+            open.inbound.remove(&stream);
         }
     }
 }

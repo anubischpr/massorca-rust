@@ -13,7 +13,7 @@ use crate::handshake;
 use crate::network::{LiveGuard, Pending, revoked_error};
 use crate::session::Session;
 use crate::shutdown::ShutdownSignal;
-use crate::streams::StreamTable;
+use crate::streams::{Delivery, StreamTable};
 use crate::transport::FrameIo;
 use massorca_net::Pin;
 use std::net::SocketAddr;
@@ -156,9 +156,27 @@ async fn end_streams(session: &Session, reason: Option<&ErrorBody>) {
 }
 
 fn route(frame: Frame, session: &Arc<Session>, requests: &mut JoinSet<()>) {
-    // No client sends stream bytes yet, so they are dropped like the other frames nothing acts on.
-    let Frame::Message(message) = frame else {
-        return;
+    let message = match frame {
+        Frame::Message(message) => message,
+        // Only duplex streams take a client's bytes (decision 0131); bytes for any other stream are dropped.
+        Frame::StreamBytes { stream, payload } => {
+            if session.streams.deliver(stream, payload) == Delivery::Overflow {
+                let outbound = session.outbound.clone();
+                tokio::spawn(async move {
+                    let error = ErrorBody::new(
+                        codes::STREAM_INBOUND_OVERFLOW,
+                        "the client sent more bytes than the stream accepts unread",
+                    );
+                    let _ = outbound
+                        .send(Frame::Message(Message::End {
+                            stream,
+                            error: Some(error),
+                        }))
+                        .await;
+                });
+            }
+            return;
+        }
     };
     match message {
         Message::Request { id, method, params } => {
