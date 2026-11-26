@@ -1,5 +1,9 @@
-//! Typed helpers over the `skills/1` and `skills-place/1` methods (SKL-01, SKL-02).
+//! Typed helpers over the `skills/1`, `skills-place/1` and `skills-bundled/1` methods (SKL-01, SKL-02, SKL-04).
 
+use massorca_protocol::methods::skill_bundled::{
+    self as bundled, SkillsBundledInstallParams, SkillsBundledListParams, SkillsBundledListResult,
+    SkillsBundledNameParams,
+};
 use massorca_protocol::methods::skill_placement::{
     self as placement, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
     SkillsManagedParams, SkillsManagedResult,
@@ -48,5 +52,27 @@ impl Client {
         params: &SkillsManagedParams,
     ) -> Result<SkillsManagedResult, ClientError> {
         self.call(placement::MANAGED, params).await
+    }
+
+    /// `skills.bundled.list`: the skills MassOrca ships, and whether each is placed on this host. Changes nothing.
+    pub async fn skills_bundled_list(&self) -> Result<SkillsBundledListResult, ClientError> {
+        self.call(bundled::LIST, &SkillsBundledListParams::default())
+            .await
+    }
+
+    /// `skills.bundled.install`: places a skill MassOrca ships for the chosen agents, or for every agent folder on this host.
+    pub async fn skills_bundled_install(
+        &self,
+        params: &SkillsBundledInstallParams,
+    ) -> Result<SkillPlacementResult, ClientError> {
+        self.call(bundled::INSTALL, params).await
+    }
+
+    /// `skills.bundled.refresh`: brings a placed skill MassOrca ships to this build's text, for the agents it is placed for.
+    pub async fn skills_bundled_refresh(
+        &self,
+        params: &SkillsBundledNameParams,
+    ) -> Result<SkillPlacementResult, ClientError> {
+        self.call(bundled::REFRESH, params).await
     }
 }

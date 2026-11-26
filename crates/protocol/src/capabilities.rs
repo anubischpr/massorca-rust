@@ -89,6 +89,8 @@ pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 pub const SKILLS: &str = "skills/1";
 /// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
 pub const SKILLS_PLACE: &str = "skills-place/1";
+/// The skills MassOrca ships (`skills.bundled.list`, `skills.bundled.install`, `skills.bundled.refresh`, SKL-04).
+pub const SKILLS_BUNDLED: &str = "skills-bundled/1";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
