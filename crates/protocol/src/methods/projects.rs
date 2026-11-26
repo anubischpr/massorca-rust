@@ -17,6 +17,10 @@ pub const INSPECT: &str = "project.inspect";
 pub const SET_BASE: &str = "project.set_base";
 /// Params: [`ProjectUpdateParams`]. Result: [`Project`]. Capability `project-update/1`.
 pub const UPDATE: &str = "project.update";
+/// Params: [`ProjectScriptsParams`]. Result: [`ProjectScripts`]. Capability `script-trust/1` (decision 0095).
+pub const SCRIPTS: &str = "project.scripts";
+/// Params: [`ProjectTrustScriptParams`]. Result: [`ProjectScript`]. Capability `script-trust/1` (decision 0095).
+pub const TRUST_SCRIPT: &str = "project.trust_script";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -300,4 +304,77 @@ fn check_image_src(src: &str, source: ProjectIconSource) -> Result<(), String> {
         return Err("the image icon's data is not the image format its prefix names".to_owned());
     }
     Ok(())
+}
+
+/// An `orca.yaml` script kind that runs only once its owner trusts its content (decision 0095).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptKind {
+    /// `scripts.setup`, run when a worktree workspace is created.
+    Setup,
+    /// `scripts.archive`, run before a worktree workspace is removed.
+    Archive,
+    /// A kind from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+impl ScriptKind {
+    /// The key under `scripts:` in `orca.yaml`, and the wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Archive => "archive",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Params of `project.scripts`. With `workspace`, the scripts are read from that workspace's folder, which holds the
+/// copy a create of its branch runs, instead of the project's; only `setup` is read there, as removal reads `archive`
+/// from the project's copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectScriptsParams {
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+
+/// Result of `project.scripts`: the scripts of the `orca.yaml` at `source`, with their content hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectScripts {
+    /// The project's id.
+    pub project: String,
+    /// The `orca.yaml` file that was read.
+    pub source: String,
+    /// One entry per kind the file defines; empty when it defines none.
+    #[serde(default)]
+    pub scripts: Vec<ProjectScript>,
+}
+
+/// One script and whether its exact content is trusted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectScript {
+    pub kind: ScriptKind,
+    /// The script as it would run.
+    pub script: String,
+    /// Lowercase hex SHA-256 of `script`.
+    pub hash: String,
+    /// The owner trusted this exact content.
+    pub trusted: bool,
+    /// The owner trusted another content of this kind: the script changed since.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed: bool,
+}
+
+/// Params of `project.trust_script`. `hash` must be the hash of the script read now, so the owner trusts exactly the
+/// content they were shown; `workspace` reads it as `project.scripts` does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTrustScriptParams {
+    pub project: String,
+    pub kind: ScriptKind,
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }

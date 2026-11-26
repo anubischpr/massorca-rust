@@ -382,21 +382,22 @@ fn resume_is_refused_for_a_kind_without_a_resume_form() {
 }
 
 #[test]
-fn resume_obeys_the_one_writer_rule() {
+fn resume_runs_beside_another_writer_in_a_folder() {
     let sandbox = sandbox();
     let first = start(&sandbox, "fake", &[]);
     let first_session = session_of(&first);
     until(&sandbox, &first_session, "idle");
     sandbox.json_ok("default", &["agent", "stop", &first_session, "--force"]);
 
-    // Another session takes the workspace's writing slot; the exited one must wait for it.
-    start(&sandbox, "fake", &[]);
+    // A folder takes several writers (decision 0169): the exited session resumes beside another live writer, and lists it.
+    let other = start(&sandbox, "fake", &[]);
+    let resumed = sandbox.json_ok("default", &["agent", "resume", &first_session]);
+    assert_eq!(resumed["execution"]["state"], "live", "{resumed}");
     assert_eq!(
-        error_code(&sandbox, &["agent", "resume", &first_session]),
-        "agent.workspace_busy"
+        resumed["shared_folder_with"],
+        json!([session_of(&other)]),
+        "{resumed}"
     );
-    let shown = sandbox.json_ok("default", &["agent", "status", &first_session]);
-    assert_eq!(shown["execution"]["state"], "exited", "still exited");
 }
 
 /// After a prompt is accepted, the next one waits for a report from the agent (decision 0058): the quiet agent holds the

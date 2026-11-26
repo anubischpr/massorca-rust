@@ -2,19 +2,24 @@
 //! standard output an adapter reads line by line into the session's transcript journal.
 //!
 //! - [`adapter`]: the [`ChatAdapter`] a kind's dialect implements, and the [`JournalOp`]s it produces.
+//! - [`claude`]: the adapter of Claude Code's stream-json dialect.
+//! - [`version`]: the probe of a chat kind's CLI version and its supported range.
 //! - [`test_adapter`]: the adapter of the fake structured agent's tiny dialect, for MassOrca's own tests.
 //! - `journal`: the journal writer and readers over the store (snapshot, replay, history).
 //! - `pipe`: the piped child process, its reader, writer and exit.
 
 pub mod adapter;
+pub mod claude;
 pub(crate) mod journal;
 pub(crate) mod pipe;
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod test_adapter;
+pub mod version;
 
 use std::time::Duration;
 
-pub use adapter::{ApprovalAnswer, ChatAdapter, JournalOp};
+pub use adapter::{ApprovalAnswer, ChatAdapter, JournalOp, approval_key};
+pub use claude::ClaudeAdapter;
 use massorca_protocol::methods::chat::ChatBatch;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use test_adapter::TestAdapter;
@@ -65,17 +70,5 @@ pub(crate) fn injected_failure(point: &str) -> bool {
 /// Whether a test asked the chat start to fail at `point`: never outside test builds.
 #[cfg(not(feature = "test-hooks"))]
 pub(crate) fn injected_failure(_point: &str) -> bool {
-    false
-}
-
-/// Whether this test service starts any kind as a chat run, so it serves the chat methods to its tests.
-#[cfg(feature = "test-hooks")]
-pub fn test_chat_enabled() -> bool {
-    std::env::var(TEST_CHAT_KINDS_ENV).is_ok_and(|kinds| !kinds.trim().is_empty())
-}
-
-/// Whether this service serves the chat methods to tests: never outside test builds.
-#[cfg(not(feature = "test-hooks"))]
-pub fn test_chat_enabled() -> bool {
     false
 }

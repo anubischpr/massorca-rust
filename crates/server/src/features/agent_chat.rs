@@ -1,21 +1,23 @@
-//! The chat methods (decision 0101): `agent.chat.subscribe` streams a chat session's journal, `agent.chat.history`
-//! pages it back. The rules and the journal live in `core-agents`; its journal changes reach the streams through the
-//! service's chat channel, which carries `Change::Chat` and `Change::Forgotten`.
+//! The chat methods (decision 0101): `agent.chat.start` starts a session whose run is a chat, `agent.chat.subscribe`
+//! streams its journal, `agent.chat.history` pages it back, `agent.chat.approval.answer` answers its permission requests
+//! and `agent.chat.interrupt` ends its running turn. The rules and the journal live in `core-agents`; its journal
+//! changes reach the streams through the service's chat channel, which carries `Change::Chat` and `Change::Forgotten`.
 //!
-//! The methods are registered under `agent-chat/1`, which the service does not offer yet: it offers the capability once
-//! it serves every chat method, `agent.chat.start` included (D11). A test service that starts fake kinds as chat runs
-//! offers it, so its tests can reach these methods.
+//! The methods are registered under `agent-chat/1`, which the service offers now that it serves every one of them
+//! (D11).
 
-use massorca_core_agents::chat::test_chat_enabled;
 use massorca_core_agents::{AgentError, Agents, Change, ChatOpened};
+use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AgentSession, AgentSessionRef};
 use massorca_protocol::methods::chat::{
-    self, ChatCursor, ChatEvent, ChatHistoryPage, ChatHistoryParams, ChatSubscribeParams,
-    EndReason, ResetReason,
+    self, AgentChatStartParams, ChatApprovalAnswerParams, ChatCursor, ChatEvent, ChatHistoryPage,
+    ChatHistoryParams, ChatInterrupted, ChatItem, ChatSubscribeParams, EndReason, ResetReason,
 };
 use massorca_protocol::{ErrorBody, capabilities};
 use tokio::sync::{broadcast, mpsc};
 
-use super::agents::{on_agents, require_admin_for_session};
+use super::agent_redaction::for_caller;
+use super::agents::{on_agents, require_admin_for_session, secret_grant};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::method::{StreamSource, encode};
@@ -28,7 +30,28 @@ const CHAT_QUEUE_CAPACITY: usize = 256;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
-    let mut handles = vec![
+    Ok(vec![
+        methods.register(
+            Owner::Core,
+            chat::START,
+            capabilities::AGENT_CHAT,
+            Permission::Workspace,
+            start,
+        )?,
+        methods.register(
+            Owner::Core,
+            chat::APPROVAL_ANSWER,
+            capabilities::AGENT_CHAT,
+            Permission::Workspace,
+            answer,
+        )?,
+        methods.register(
+            Owner::Core,
+            chat::INTERRUPT,
+            capabilities::AGENT_CHAT,
+            Permission::Workspace,
+            interrupt,
+        )?,
         methods.register_stream(
             Owner::Core,
             chat::SUBSCRIBE,
@@ -43,15 +66,44 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             history,
         )?,
-    ];
-    if test_chat_enabled() {
-        handles.push(
-            registries
-                .capabilities
-                .register(capabilities::AGENT_CHAT, Owner::Core)?,
-        );
+        registries
+            .capabilities
+            .register(capabilities::AGENT_CHAT, Owner::Core)?,
+    ])
+}
+
+/// Starts a session whose run is a chat (decision 0101, D1). `cols`, `rows` and `args` do not apply to a chat and are
+/// refused; a kind that cannot run as one is refused with `agent.chat_unsupported`, whose data is its chat support.
+async fn start(ctx: RequestCtx, params: AgentChatStartParams) -> Result<AgentSession, ErrorBody> {
+    let start = params.start;
+    for (name, given) in [
+        ("cols", start.cols.is_some()),
+        ("rows", start.rows.is_some()),
+        ("args", !start.args.is_empty()),
+    ] {
+        if given {
+            return Err(ErrorBody::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("{name} does not apply to a chat session"),
+            ));
+        }
     }
-    Ok(handles)
+    let grant = secret_grant(&ctx);
+    let session = on_agents(&ctx, move |agents| agents.start_chat_session(start, grant)).await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Answers a chat session's permission request (decision 0101, D6). An answer reaches the run, so a run that holds vault
+/// secrets needs host-admin scope, as a prompt does.
+async fn answer(ctx: RequestCtx, params: ChatApprovalAnswerParams) -> Result<ChatItem, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.chat_answer(&params)).await
+}
+
+/// Interrupts a chat session's running turn and keeps the session (decision 0101, D8).
+async fn interrupt(ctx: RequestCtx, params: AgentSessionRef) -> Result<ChatInterrupted, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.chat_interrupt(&params.session)).await
 }
 
 /// The opening events of a stream (or after a reset), read on the blocking pool.

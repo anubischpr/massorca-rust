@@ -105,13 +105,15 @@ impl ChatAdapter for TestAdapter {
         }
     }
 
-    fn encode_approval(&mut self, request_id: &str, answer: &ApprovalAnswer) -> Vec<u8> {
-        line_of(&json!({
+    fn encode_approval(&mut self, request_id: &str, answer: &ApprovalAnswer) -> Option<Vec<u8>> {
+        Some(line_of(&json!({
             "type": "approval",
             "id": request_id,
             "allow": answer.decision == ApprovalDecision::Allow,
-        }))
+        })))
     }
+
+    fn forget_request(&mut self, _request_id: &str) {}
 
     fn encode_interrupt(&mut self) -> Option<Vec<u8>> {
         Some(line_of(&json!({ "type": "interrupt" })))
@@ -189,7 +191,7 @@ mod tests {
             message: None,
         };
         assert_eq!(
-            line(adapter.encode_approval("r1", &answer)),
+            line(adapter.encode_approval("r1", &answer).expect("an answer")),
             json!({ "type": "approval", "id": "r1", "allow": false })
         );
         assert_eq!(
