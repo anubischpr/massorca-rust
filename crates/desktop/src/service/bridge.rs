@@ -29,6 +29,7 @@ use massorca_protocol::methods::events::{
     TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED,
     TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
     TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_WORKSPACE_UPDATED,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -1117,7 +1118,8 @@ impl Link {
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
                 return Outcome::Continue;
             }
-            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
+            // A rename or comment change is read again too: the event names the workspace, not its name.
+            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
                 })
