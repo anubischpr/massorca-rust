@@ -138,3 +138,18 @@ fn a_refusal_with_another_code_starts_a_new_row() {
     assert_eq!(other.number, 2);
     assert_eq!(other.occurrences, 1);
 }
+
+#[test]
+fn a_refusal_from_another_trigger_does_not_fold_into_the_newest_run() {
+    let (store, row) = store_with_automation();
+    let mut scheduled = refusal(&row.id, 100);
+    store.insert_automation_run(&mut scheduled, None).unwrap();
+    let mut manual = refusal(&row.id, 200);
+    manual.trigger = "manual".to_owned();
+    store.insert_automation_run(&mut manual, None).unwrap();
+
+    let runs = store.list_automation_runs(&row.id, 10, None).unwrap();
+    assert_eq!(runs.len(), 2, "a manual refusal keeps its own row");
+    assert_eq!(manual.number, 2);
+    assert_eq!(manual.occurrences, 1);
+}

@@ -114,8 +114,8 @@ fn insert_run(connection: &Connection, row: &mut AutomationRunRow) -> Result<(),
     Ok(())
 }
 
-/// Folds `row`, an unavailable refusal, into the newest run of its automation when that run is the same refusal: its
-/// count grows, and `row` takes its id and number. Numbers are never given twice, as no row is deleted. Returns whether
+/// Folds `row`, an unavailable refusal, into the newest run of its automation when that run is the same refusal from the
+/// same trigger: its count grows, and `row` takes its id and number. Numbers are never given twice, as no row is deleted. Returns whether
 /// it folded.
 fn fold_refusal(connection: &Connection, row: &mut AutomationRunRow) -> Result<bool, StoreError> {
     if row.state != run_state::SKIPPED_UNAVAILABLE || row.reason_code.is_none() {
@@ -132,6 +132,15 @@ fn fold_refusal(connection: &Connection, row: &mut AutomationRunRow) -> Result<b
         return Ok(false);
     };
     if state != run_state::SKIPPED_UNAVAILABLE || code != row.reason_code {
+        return Ok(false);
+    }
+    // Only the same trigger folds: a manual refusal and a scheduled one keep their own history rows.
+    let newest_trigger: String = connection.query_row(
+        "SELECT trigger FROM automation_runs WHERE id = ?1",
+        [&id],
+        |found| found.get(0),
+    )?;
+    if newest_trigger != row.trigger {
         return Ok(false);
     }
     let total = occurrences + row.occurrences;
