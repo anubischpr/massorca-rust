@@ -22,6 +22,8 @@ fn post(text: &str, bot: Option<&str>) -> TeamRoomPostParams {
         session: None,
         agent_token: None,
         start: None,
+        reply_to: None,
+        ask: None,
     }
 }
 

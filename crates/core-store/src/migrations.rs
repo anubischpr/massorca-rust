@@ -586,6 +586,18 @@ ALTER TABLE team_room_messages ADD COLUMN card_answer TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // A room line that replies to another, and a person's conversation line with its bot, reply run and reply state
+    // (decision 0122). A removed line or bot keeps the reply, unlinked.
+    Migration {
+        sql: r#"
+ALTER TABLE team_room_messages ADD COLUMN reply_to TEXT REFERENCES team_room_messages(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL;
+ALTER TABLE team_room_messages ADD COLUMN reply_session TEXT;
+ALTER TABLE team_room_messages ADD COLUMN reply_state TEXT CHECK(reply_state IN ('open','answered','closed'));
+CREATE INDEX team_room_by_reply_session ON team_room_messages(reply_session);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

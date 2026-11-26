@@ -675,6 +675,8 @@ async fn run_room(
                     session,
                     agent_token,
                     start: no_start.then_some(false),
+                    reply_to: None,
+                    ask: None,
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));

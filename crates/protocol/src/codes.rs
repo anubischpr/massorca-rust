@@ -256,6 +256,8 @@ pub const TEAM_ROUTINE_CHANGED: &str = "team.routine_changed";
 pub const TEAM_ROOM_CARD_NOT_FOUND: &str = "team.room_card_not_found";
 /// `team.room_answer` on a choice card that was answered already; a card takes one answer.
 pub const TEAM_ROOM_CARD_ANSWERED: &str = "team.room_card_answered";
+/// `team.room_post`'s `reply_to` names no line of the team's room.
+pub const TEAM_ROOM_LINE_NOT_FOUND: &str = "team.room_line_not_found";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";

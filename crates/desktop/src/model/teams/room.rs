@@ -189,6 +189,8 @@ mod tests {
             task: None,
             routine: None,
             card: None,
+            reply_to: None,
+            quoted: None,
             created_at_ms: 1_700_000_000_000,
         }
     }

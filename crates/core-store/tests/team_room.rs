@@ -1,6 +1,6 @@
 //! A team's Conference room: lines oldest first, the newest kept by a limit, unknown teams and bots refused, a line
 //! about a task found once, the room removed with its team while a removed bot's lines stay, and a removed routine
-//! unlinked from its line, and a choice card answered once.
+//! unlinked from its line, a choice card answered once, and a conversation's reply moved once from state to state.
 
 use massorca_core_store::{BotRow, Store, TeamRoomMessageRow, TeamRoutineRow, TeamRow, new_id};
 
@@ -49,6 +49,10 @@ fn line(team_id: &str, bot_id: Option<&str>, text: &str, created_at: i64) -> Tea
         routine_id: None,
         card: None,
         card_answer: None,
+        reply_to: None,
+        reply_bot_id: None,
+        reply_session: None,
+        reply_state: None,
         created_at,
     }
 }
@@ -184,4 +188,60 @@ fn a_choice_card_is_answered_once_and_a_released_answer_can_be_given_again() {
             .as_deref(),
         Some("bot:x")
     );
+}
+
+#[test]
+fn a_reply_is_found_by_its_run_and_moves_once_from_each_state() {
+    let store = store();
+    let alpha = team(&store, "alpha");
+    let mara = bot(&store, &alpha.id, "Mara");
+    let quoted = line(&alpha.id, Some(&mara.id), "Done: parse", 1);
+    store.insert_team_room_message(&quoted).unwrap();
+    let mut question = line(&alpha.id, None, "Why so slow?", 2);
+    question.reply_to = Some(quoted.id.clone());
+    question.reply_bot_id = Some(mara.id.clone());
+    question.reply_state = Some("open".to_owned());
+    store.insert_team_room_message(&question).unwrap();
+    store
+        .set_team_room_reply_session(&question.id, "session-1")
+        .unwrap();
+
+    let found = store.find_team_room_reply("session-1").unwrap().unwrap();
+    assert_eq!(found.id, question.id);
+    assert_eq!(found.reply_to.as_deref(), Some(quoted.id.as_str()));
+    assert!(store.find_team_room_reply("session-9").unwrap().is_none());
+    assert_eq!(
+        texts(store.open_team_room_replies(&alpha.id).unwrap()),
+        ["Why so slow?"]
+    );
+
+    assert!(
+        store
+            .move_team_room_reply(&question.id, "open", "answered")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .move_team_room_reply(&question.id, "open", "closed")
+            .unwrap(),
+        "a reply answered by its bot is not answered again"
+    );
+    assert!(store.open_team_room_replies(&alpha.id).unwrap().is_empty());
+    assert!(
+        store
+            .move_team_room_reply(&question.id, "answered", "closed")
+            .unwrap()
+    );
+
+    let mut bad = line(&alpha.id, None, "?", 3);
+    bad.reply_state = Some("waiting".to_owned());
+    assert!(
+        store.insert_team_room_message(&bad).is_err(),
+        "an unknown state"
+    );
+
+    store.delete_bot(&mara.id).unwrap();
+    let kept = store.get_team_room_message(&question.id).unwrap().unwrap();
+    assert_eq!(kept.reply_bot_id, None, "a removed bot leaves the line");
+    assert_eq!(kept.reply_to.as_deref(), Some(quoted.id.as_str()));
 }

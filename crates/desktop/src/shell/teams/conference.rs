@@ -252,6 +252,8 @@ impl Shell {
             session: None,
             agent_token: None,
             start: self.room_page.hold.then_some(false),
+            reply_to: None,
+            ask: None,
         };
         cx.spawn(async move |this, cx| {
             let answer = service.post_to_team_room(params).await;
@@ -825,6 +827,8 @@ mod tests {
             task: None,
             routine: None,
             card: None,
+            reply_to: None,
+            quoted: None,
             created_at_ms: 1_700_000_000_000,
         }
     }

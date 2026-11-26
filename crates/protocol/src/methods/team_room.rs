@@ -1,5 +1,5 @@
 //! The Conference room of a team (capability `team-room/1`, decision 0102): the lines a person and the team's bots
-//! post, and the task a person's line becomes.
+//! post, and the task a person's line becomes. `team-room/3` adds conversation replies and the typing line (decision 0122).
 
 use std::fmt;
 
@@ -49,7 +49,31 @@ pub struct TeamRoomMessage {
     /// line's text alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card: Option<RoomCard>,
+    /// The line this one replies to (decision 0122); absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// The line it replies to, as the room shows it; absent once that line was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted: Option<RoomQuote>,
     pub created_at_ms: i64,
+}
+
+/// The line a reply quotes (decision 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomQuote {
+    pub id: String,
+    pub author: RoomAuthor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_name: Option<String>,
+    /// At most 200 characters of its text.
+    pub text: String,
+}
+
+/// A bot of the team that works on a room reply or a room task now (decision 0122).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomTyping {
+    pub bot_id: String,
+    pub bot_name: String,
 }
 
 /// A choice card: the room could not tell who takes a person's request and asks where it goes.
@@ -101,13 +125,18 @@ pub struct TeamRoomListParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamRoomList {
     pub messages: Vec<TeamRoomMessage>,
+    /// The bots working on a reply or a room task now, in team order (decision 0122); empty from older hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typing: Vec<RoomTyping>,
 }
 
 /// Params of `team.room_post`. Without `bot`, a person posts and the line becomes a task for a bot of the team: the bot
 /// named with `@name` at the start of a word, else `to`, else the team's lead, else its only bot. With several bots and
 /// none of those, the room answers with a choice card instead (decision 0121). A line that names one
 /// day and one time becomes a one-time routine of that bot instead (decision 0121). With `bot`, that bot
-/// posts. An agent run sends its `session` and `agent_token`, and then posts only as the bot of its own task.
+/// posts. An agent run sends its `session` and `agent_token`, and then posts only as the bot of its own task or reply.
+/// With `ask`, or `reply_to` a bot's line, the line is a conversation: one bot answers it once and no task is made
+/// (decision 0122).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamRoomPostParams {
     /// Team id or exact name.
@@ -128,6 +157,13 @@ pub struct TeamRoomPostParams {
     /// `false` leaves a person's task in Todo (the Board's Open column) instead of starting it; absent starts it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<bool>,
+    /// The line this one replies to, kept as its context (decision 0122).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// `true` asks a bot without making a task; `false` makes a reply to a bot's line a task. Absent: a reply to a bot's
+    /// line is a conversation and any other line is a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<bool>,
 }
 
 impl fmt::Debug for TeamRoomPostParams {
@@ -138,6 +174,8 @@ impl fmt::Debug for TeamRoomPostParams {
             .field("bot", &self.bot)
             .field("to", &self.to)
             .field("start", &self.start)
+            .field("reply_to", &self.reply_to)
+            .field("ask", &self.ask)
             .field("session", &self.session)
             .field(
                 "agent_token",
@@ -189,6 +227,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(line.card, None);
+        assert_eq!((line.reply_to, line.quoted), (None, None));
+        let list: TeamRoomList =
+            serde_json::from_value(serde_json::json!({"messages": []})).unwrap();
+        assert!(list.typing.is_empty(), "an older host sends no typing line");
         let choice: RoomChoice = serde_json::from_value(
             serde_json::json!({"choice": "new_bot", "kind": "new_bot", "label": "Create a bot"}),
         )
@@ -206,6 +248,8 @@ mod tests {
             session: None,
             agent_token: None,
             start: None,
+            reply_to: None,
+            ask: None,
         };
         let wire = serde_json::to_value(&params).unwrap();
         assert_eq!(

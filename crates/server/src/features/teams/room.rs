@@ -92,6 +92,7 @@ async fn list(ctx: RequestCtx, params: TeamRoomListParams) -> Result<TeamRoomLis
             .map_err(store_error)?;
         Ok(TeamRoomList {
             messages: views(store, agents, &team, &rows)?,
+            typing: Vec::new(),
         })
     })
     .await
@@ -553,6 +554,10 @@ pub(super) fn new_line(
         routine_id: None,
         card: None,
         card_answer: None,
+        reply_to: None,
+        reply_bot_id: None,
+        reply_session: None,
+        reply_state: None,
         created_at: now_ms(),
     }
 }
@@ -600,6 +605,8 @@ pub(super) fn views(
                 task,
                 routine,
                 card: card_view(row),
+                reply_to: None,
+                quoted: None,
                 created_at_ms: row.created_at,
             })
         })

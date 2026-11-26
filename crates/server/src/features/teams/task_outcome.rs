@@ -127,6 +127,10 @@ fn tell_room(
         routine_id: None,
         card: None,
         card_answer: None,
+        reply_to: None,
+        reply_bot_id: None,
+        reply_session: None,
+        reply_state: None,
         created_at: now_ms(),
     })?;
     Ok(Some(task.team_id.clone()))

@@ -19,10 +19,18 @@ pub struct TeamRoomMessageRow {
     pub card: Option<String>,
     /// The choice a card was answered with; set once.
     pub card_answer: Option<String>,
+    /// The line this one replies to (decision 0122).
+    pub reply_to: Option<String>,
+    /// The bot that answers a person's conversation line.
+    pub reply_bot_id: Option<String>,
+    /// The agent session of that bot's reply run.
+    pub reply_session: Option<String>,
+    /// A conversation line's reply: `open`, `answered` (the bot posted, its run still ends) or `closed`.
+    pub reply_state: Option<String>,
     pub created_at: i64,
 }
 
-const SELECT_ROOM: &str = "SELECT id, team_id, author, bot_id, text, task_id, routine_id, card, card_answer, created_at FROM team_room_messages";
+const SELECT_ROOM: &str = "SELECT id, team_id, author, bot_id, text, task_id, routine_id, card, card_answer, reply_to, reply_bot_id, reply_session, reply_state, created_at FROM team_room_messages";
 
 fn room_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoomMessageRow> {
     Ok(TeamRoomMessageRow {
@@ -35,6 +43,10 @@ fn room_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoomMessageRow> {
         routine_id: row.get("routine_id")?,
         card: row.get("card")?,
         card_answer: row.get("card_answer")?,
+        reply_to: row.get("reply_to")?,
+        reply_bot_id: row.get("reply_bot_id")?,
+        reply_session: row.get("reply_session")?,
+        reply_state: row.get("reply_state")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -43,7 +55,7 @@ impl Store {
     /// Inserts a room line. An unknown team or bot is `StoreError::Constraint`.
     pub fn insert_team_room_message(&self, row: &TeamRoomMessageRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO team_room_messages (id, team_id, author, bot_id, text, task_id, routine_id, card, card_answer, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO team_room_messages (id, team_id, author, bot_id, text, task_id, routine_id, card, card_answer, reply_to, reply_bot_id, reply_session, reply_state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 row.id,
                 row.team_id,
@@ -54,6 +66,10 @@ impl Store {
                 row.routine_id,
                 row.card,
                 row.card_answer,
+                row.reply_to,
+                row.reply_bot_id,
+                row.reply_session,
+                row.reply_state,
                 row.created_at
             ],
         )?;
@@ -85,6 +101,51 @@ impl Store {
             [id],
         )?;
         Ok(())
+    }
+
+    /// Names the reply run of the conversation line `id`.
+    pub fn set_team_room_reply_session(&self, id: &str, session: &str) -> Result<(), StoreError> {
+        self.lock().execute(
+            "UPDATE team_room_messages SET reply_session = ?2 WHERE id = ?1",
+            params![id, session],
+        )?;
+        Ok(())
+    }
+
+    /// The conversation line whose reply run is `session`.
+    pub fn find_team_room_reply(
+        &self,
+        session: &str,
+    ) -> Result<Option<TeamRoomMessageRow>, StoreError> {
+        self.query_optional(
+            &format!("{SELECT_ROOM} WHERE reply_session = ?1"),
+            [session],
+            room_from_row,
+        )
+    }
+
+    /// Moves the reply of line `id` from `from` to `to`: `false` when it was not in `from`. One statement, so two
+    /// answers racing move it once.
+    pub fn move_team_room_reply(&self, id: &str, from: &str, to: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE team_room_messages SET reply_state = ?3 WHERE id = ?1 AND reply_state = ?2",
+            params![id, from, to],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// A team's conversation lines whose reply is open, oldest first.
+    pub fn open_team_room_replies(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<TeamRoomMessageRow>, StoreError> {
+        self.query_all(
+            &format!(
+                "{SELECT_ROOM} WHERE team_id = ?1 AND reply_state = 'open' ORDER BY created_at, rowid"
+            ),
+            [team_id],
+            room_from_row,
+        )
     }
 
     /// A team's room, oldest first. `limit` keeps the newest that many.
