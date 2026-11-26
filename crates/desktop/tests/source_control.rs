@@ -20,7 +20,9 @@ use massorca_protocol::methods::git::remote::{
 };
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::git::{ChangeKind, LineCounts};
-use massorca_protocol::methods::projects::{ProjectAddParams, ProjectRemoveParams};
+use massorca_protocol::methods::projects::{
+    ProjectAddParams, ProjectRemoveParams, ProjectSetBaseParams,
+};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
@@ -784,5 +786,43 @@ async fn removing_a_project_with_workspaces_waits_for_the_forget_waiver() {
         .expect("the waiver removes the project");
     assert_eq!(removed.id, project);
     assert!(worktree.exists(), "the worktree stays on disk");
+    session.stop().await;
+}
+
+fn set_base_params(project: &str, base: Option<String>) -> ProjectSetBaseParams {
+    ProjectSetBaseParams {
+        project: project.to_owned(),
+        base,
+    }
+}
+
+/// The base branch is set to a branch the repository has, then cleared, both through the service.
+#[tokio::test]
+async fn the_base_branch_is_set_and_cleared_through_the_service() {
+    let home = temp_home();
+    let (mut session, _worktree) = Session::start(&home).await;
+    let id = session.id().to_owned();
+    session.handle.git_watch(&id);
+    session
+        .until("the status", |s| status(s, &id).is_some())
+        .await;
+    let branch = status(&session.state, &id)
+        .and_then(|st| st.branch.head)
+        .expect("the worktree is on a branch");
+    let project = session.workspace.project_id.clone();
+
+    let set = session
+        .handle
+        .set_project_base(set_base_params(&project, Some(branch.clone())))
+        .await
+        .expect("the base is set");
+    assert_eq!(set.base_ref, Some(branch));
+
+    let cleared = session
+        .handle
+        .set_project_base(set_base_params(&project, None))
+        .await
+        .expect("the base is cleared");
+    assert_eq!(cleared.base_ref, None);
     session.stop().await;
 }

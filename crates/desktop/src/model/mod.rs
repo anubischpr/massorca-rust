@@ -25,6 +25,7 @@ pub mod palette_recent;
 pub mod permission_modes;
 pub mod preflight;
 pub mod project_add;
+pub mod project_base;
 pub mod project_icon;
 pub mod project_remove;
 pub mod rail;

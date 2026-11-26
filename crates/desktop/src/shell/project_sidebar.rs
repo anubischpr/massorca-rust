@@ -41,6 +41,7 @@ pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) 
             .explanation("Not available yet.")
             .into_any_element(),
     };
+    let base = base_branch_control(shell, handle, cx);
     let remove = remove_project_control(shell, handle, cx);
     div()
         .flex()
@@ -49,6 +50,7 @@ pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) 
         .min_h_0()
         .child(tabs)
         .child(content)
+        .children(base)
         .children(remove)
         .into_any_element()
 }
@@ -81,6 +83,47 @@ fn remove_project_control(
                     .on_click(move |_, cx| {
                         let _ =
                             handle.update(cx, |shell, cx| shell.open_project_remove(&project, cx));
+                    }),
+            )
+            .into_any_element(),
+    )
+}
+
+/// The project's base branch, as the new workspaces start from it, with the button that changes it. Absent
+/// without `projects/1` and while no workspace is selected.
+fn base_branch_control(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> Option<AnyElement> {
+    let state = shell.store.read(cx).state();
+    if !state.project_edits {
+        return None;
+    }
+    let project_id = &state
+        .workspace(shell.model.selected_workspace()?)?
+        .project_id;
+    let project = state.project(project_id)?;
+    let (id, text) = (
+        project.id.clone(),
+        match &project.base_ref {
+            Some(branch) => format!("Base branch: {branch}"),
+            None => "Base branch: the detected default".to_owned(),
+        },
+    );
+    let theme = *cx.theme();
+    let handle = handle.clone();
+    Some(
+        div()
+            .flex()
+            .flex_wrap()
+            .justify_between()
+            .items_center()
+            .gap(px(SPACE_2))
+            .p(px(SPACE_2))
+            .child(caption(text, &theme))
+            .child(
+                Button::new("project-base", "Change base branch")
+                    .variant(ButtonVariant::Secondary)
+                    .size(ButtonSize::Compact)
+                    .on_click(move |_, cx| {
+                        let _ = handle.update(cx, |shell, cx| shell.open_project_base(&id, cx));
                     }),
             )
             .into_any_element(),

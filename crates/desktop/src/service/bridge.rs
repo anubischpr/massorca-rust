@@ -39,7 +39,7 @@ use massorca_protocol::methods::git::remote::{
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
-    ProjectRemoveParams,
+    ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
@@ -116,6 +116,11 @@ pub(crate) enum Command {
     /// `project.remove`, answered on its oneshot with the removed project.
     RemoveProject {
         params: ProjectRemoveParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    /// `project.set_base`, answered on its oneshot with the project as it now stands.
+    SetProjectBase {
+        params: ProjectSetBaseParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     ListConfig {
@@ -423,6 +428,12 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.set_base`. A blank base clears it. The project list changes through the resulting event.
+    pub async fn set_project_base(&self, params: ProjectSetBaseParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::SetProjectBase { params, reply })
+            .await
     }
 
     /// `project.remove`. The project list changes through the resulting event, not from this answer.
@@ -1333,6 +1344,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::SetProjectBase { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectSetBaseParams, Project>(projects::SET_BASE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::RemoveProject { params, reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1518,6 +1538,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::RemoveProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::SetProjectBase { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::ListConfig { reply } => {
