@@ -91,6 +91,7 @@ pub fn delegate_params(
         name: optional(&draft.name).filter(|_| !draft.read_only),
         title: optional(&draft.title),
         read_only: draft.read_only,
+        same_workspace: false,
         token: None,
         request_id: Some(request_id.to_owned()),
         permission_mode: None,

@@ -39,6 +39,7 @@ machine.
 | `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities) and its host's git: `present <version>`, `missing`, `too_old <version> (requires 2.25.0)` or `unknown (<reason>)`. Starts the service when it is not running. A service older than the git field shows `not reported`; update that service. With `--json`, the same state is `git` (`state`, `version`, `required` or `reason`). |
+| `service tools` | Shows the developer tools on the service's host, one line each: `git`, `gh`, `glab` and the shells (`pwsh`, `powershell` on Windows; `bash`, `zsh`, `sh` elsewhere). Each line is `<id>: <state> [version] [(path)]`, with state `present`, `missing`, `too_old`, `unknown` or `other`. A forge CLI's version is read with `--version`; a shell is found but never started, so its version is not read. WSL is never probed. Detection runs on the service's host, so `--host` lists that host's tools. The answer is kept for the service run; `--refresh` detects again. With `--json`, the list is `tools`, each with `id`, `kind` (`vcs`, `forge`, `shell`), `state`, `version` and `path` (`null` when not reported). |
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
 | `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
@@ -74,7 +75,8 @@ machine.
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
 | `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
-| `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
+| `pair offer [--ttl <SECS>] [--standard] [--address <HOST[:PORT]>]... [--no-qr]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. `--address` (repeatable or comma-separated, at most 8) lists exactly these addresses in the offer instead of the bound listeners, for a device behind NAT, in a container or an emulator; see Hosts and pairing. Text output ends with the offer as a QR code for a phone to scan (light modules drawn as blocks, for a dark terminal); `--no-qr` leaves it out. A service that predates it is refused with `service.capability_missing`; an address no device can dial with `pairing.invalid_address`. |
+| `pair cancel <OFFER-ID>\|--all` | Retires a pending offer before it expires, so a code that leaked no longer pairs. `pair offer` prints the offer id after the offer (`offer_id` in `--json`); `--all` retires every pending offer and reports how many. An offer that is used, expired or unknown is `pairing.offer_not_found`. A service that predates it is refused with `service.capability_missing`. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
 | `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
@@ -114,7 +116,7 @@ machine.
 | `agent archive <SESSION>` | Prints the archived output of a released session. Withheld for a run that holds vault secrets, unless the caller is host-admin. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
-| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`, or in the parent's folder when that is a plain folder workspace. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--same-workspace] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only` or `--same-workspace`, or in the parent's folder when that is a plain folder workspace. While a writing child works in the parent's own workspace, the parent waits. When the child's turn or run ends, the parent's queue gets a one-line notice. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
@@ -317,7 +319,23 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `notes` say "This workspace has no Git, so the child works in this folder."; the
   folder takes several writers, so the child's writing start is not refused there (decisions 0161, 0169). A parent in a worktree with
   no branch fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
-  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  runs in the parent's workspace and does not hold its writing slot. `--same-workspace` (not with
+  `--name`) runs a writing child in the parent's own worktree, the person's manual pick; its `note`
+  and `notes` say "The child works in its parent's worktree, and the parent waits until it
+  finishes." (decision 0170). A second writing `--same-workspace` child, while another writing
+  session of the tree (a sibling or a grandchild) works unfinished in that worktree, or an ancestor
+  of the delegating session has a live run there, fails with `agent.workspace_busy` naming it in
+  `data.session`; `agent resume` of such a child is refused the same way. While a writing child works unfinished in the
+  parent's own workspace (that pick, or a plain folder), the parent waits: its queued prompts hold with reason `child_writing`, and
+  `agent prompt` to it fails with `agent.busy` naming the child in `data.child`, unless `--force`.
+  A child is finished from its first `done` report until its next prompt; a later `waiting` does
+  not reopen it, and a kind that never reports `done` (Antigravity, Gentle Shell, a chat run)
+  finishes only when its run ends. When a child becomes finished, or its run ends unfinished, the
+  parent's queue gets a one-line notice:
+  "MassOrca: child session ID finished: OUTCOME. Read its result with massorca agent status
+  ID --json, or bring it back with massorca agent bring-back ID." OUTCOME is `done`, `failed`,
+  `cancelled`, `interrupted`, `stopped` or `exited`; neither the child's title nor its result text is in it. A
+  parent with no live run gets the notice paused (`paused_stopped`). A delegated session
   delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
   delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
   Each session's `--json` record carries `delegation`: `writing_child` (`own_worktree`,
@@ -384,6 +402,15 @@ massorca pair offer
 # on the other computer, reading the offer from stdin
 massorca pair accept - --name vps
 ```
+
+The offer lists the addresses the service is bound to. When the other device reaches this computer at a
+different address (a NAT, a container, or an Android emulator, which reaches its computer at `10.0.2.2`), give it
+with `--address`: `massorca pair offer --address 10.0.2.2`. It takes a host name, `host:port`, an IPv4 or IPv6
+literal (`[fd7a::1]:7347`) or a `wss://` or `https://` URL; a value without a port takes the listener's port.
+Wildcard addresses (`0.0.0.0`, `::`), port 0, paths, queries and user names are refused.
+
+An offer is a credential until it is used or expires. If one leaks, retire it with
+`massorca pair cancel <OFFER-ID>`, or every pending one with `massorca pair cancel --all`.
 
 The accepted host is stored in this profile. `--host vps` then addresses it, and `host list`,
 `host status` and `host remove` manage it. A host that does not answer is reported as

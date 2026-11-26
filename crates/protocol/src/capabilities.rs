@@ -1,6 +1,8 @@
 //! Named, versioned feature groups. The server offers them in `welcome`; a client calls only the methods of offered groups.
 
 pub const SERVICE: &str = "service/1";
+/// Developer tools on the service's host: `service.tools` (PLAT-08, decision 0116).
+pub const SERVICE_TOOLS: &str = "service-tools/1";
 pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
@@ -19,6 +21,10 @@ pub const CONFIG: &str = "config/1";
 pub const DEVICES: &str = "devices/1";
 /// The network listener's state (decision 0040).
 pub const NETWORK: &str = "network/1";
+/// `addresses` on `pairing.create`: the offer lists the addresses the caller gives instead of the bound listeners.
+pub const PAIRING_ADDRESS: &str = "pairing-address/1";
+/// `pairing.cancel` and `offer_id` on a created offer: retiring a pending offer before it expires.
+pub const PAIRING_CANCEL: &str = "pairing-cancel/1";
 /// Terminal methods (`terminal.*`) and the attach stream.
 pub const TERMINALS: &str = "terminals/1";
 /// `terminal.wait`: a bounded wait for a terminal's exit (decision 0087).

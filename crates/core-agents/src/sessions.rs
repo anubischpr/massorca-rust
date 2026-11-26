@@ -335,6 +335,10 @@ pub(crate) struct LiveRun {
     switching: bool,
     /// A queued prompt is being typed into the run (decision 0084): no other input waits for it, `force` or not.
     delivering: bool,
+    /// The run reported `done` since the last prompt typed into it or reported (decision 0170): its turn is over, and a
+    /// later `waiting` (an idle notification) does not reopen it. Set by a `done` report; cleared by a `working` report
+    /// and by every prompt typed. A kind that never reports `done` never sets it.
+    finished: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -651,10 +655,16 @@ impl Agents {
                 (workspace, Some(made))
             }
         };
-        // Only a worktree keeps one writing session at a time; a folder takes several (decision 0169).
+        // Only a worktree keeps one writing session at a time; a folder takes several (decision 0169). In a worktree, a
+        // delegated child picked into its parent's worktree writes beside its delegation tree, which counts as one writer
+        // there; the parent waits, and the tree's own refusals keep two of its sessions from writing at once (0170).
+        let group = match parent {
+            Some(parent) => Some(self.tree_root_of(parent)?),
+            None => None,
+        };
         if !params.read_only
             && keeps_one_writer(workspace.kind)
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -729,6 +739,7 @@ impl Agents {
                     typed_since_report: false,
                     switching: false,
                     delivering: false,
+                    finished: false,
                     account: access.account.clone(),
                 },
             );
@@ -937,10 +948,29 @@ impl Agents {
                 format!("the workspace directory is missing: {}", workspace.path),
             ));
         }
-        // Only a worktree keeps one writing session at a time; a folder takes several (decision 0169).
+        // A resumed child never writes beside another writer of its tree in a shared worktree, as a new child would not
+        // (decision 0170); a folder takes several writers (decision 0169).
         if !row.read_only
             && keeps_one_writer(workspace.kind)
-            && let Some(holder) = self.live_writer(&workspace.id)?
+            && let Some(parent) = &row.parent_id
+            && let Some(parent) = self.store().get_agent_session(parent)?
+        {
+            let holder = self.tree_writer(&lock(&self.inner.status), &parent, &workspace.id)?;
+            if let Some(holder) = holder {
+                let mut error = AgentError::new(
+                    codes::AGENT_WORKSPACE_BUSY,
+                    format!("session {holder} already writes in this workspace"),
+                );
+                error.data = Some(json!({ "session": holder }));
+                return Err(error);
+            }
+        }
+        // Only a worktree keeps one writing session at a time, where the session's delegation tree counts as one writer
+        // (decisions 0169, 0170).
+        let group = Some(self.tree_root_of(&row)?);
+        if !row.read_only
+            && keeps_one_writer(workspace.kind)
+            && let Some(holder) = self.live_writer(&workspace.id, group.as_deref())?
         {
             let mut error = AgentError::new(
                 codes::AGENT_WORKSPACE_BUSY,
@@ -1019,6 +1049,7 @@ impl Agents {
                     typed_since_report: false,
                     switching: false,
                     delivering: false,
+                    finished: false,
                     account: access.account.clone(),
                 },
             );
@@ -1228,9 +1259,32 @@ impl Agents {
             row.agent_ref = learned;
         }
         // The report answers whatever was typed before it, so the run's typed-since-report flag clears (decision 0058).
+        // A `done` finishes the turn and a `working` opens one; only the first `done` of a turn is new (decision 0170).
+        let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            match row
+                .activity
+                .as_ref()
+                .map(|activity| activity.state.as_str())
+            {
+                Some("done") => {
+                    newly_finished = !run.finished;
+                    run.finished = true;
+                }
+                Some("working") => run.finished = false,
+                _ => {}
+            }
         }
+        // A delegated child's ended turn is told to its parent, through the parent's queue, once (decision 0170).
+        let parent = match row.activity.as_ref() {
+            Some(activity) if newly_finished && row.parent_id.is_some() => {
+                let outcome = delegation::turn_outcome(activity.outcome.as_deref());
+                let key = format!("done:{}", activity.at);
+                self.queue_child_notice(&live, &row, &outcome, &key)
+            }
+            _ => None,
+        };
         let session = self.view_with(&mut live, row)?;
         // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
         // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
@@ -1252,6 +1306,7 @@ impl Agents {
                 // Only a prompt counts as typed (decision 0058): a mode switch starts no turn for a report to answer.
                 if text.is_some() {
                     run.typed_since_report = true;
+                    run.finished = false;
                 }
                 let chunks: Vec<Vec<u8>> = switch.into_iter().chain(text).collect();
                 (!chunks.is_empty()).then_some((chunks, switching))
@@ -1267,6 +1322,10 @@ impl Agents {
         }
         if ready {
             self.drain_queue(&params.session);
+        }
+        // The notice, and any prompt the child's work held (decision 0170), may go now.
+        if let Some(parent) = parent {
+            self.drain_queue(&parent);
         }
         Ok(())
     }
@@ -1294,8 +1353,12 @@ impl Agents {
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
-        // A chat session takes a stream-json message instead of typing (decision 0101, D7).
+        // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
+        // writing child as a terminal one does (decision 0170).
         if self.run_type_of(&row.id)? == RunType::Chat {
+            if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), &row) {
+                return Err(child_writing(&row.id, &child));
+            }
             return self.chat_prompt(&row, text, force, lift_queue_pauses);
         }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
@@ -1307,6 +1370,10 @@ impl Agents {
             // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
             // this, because a prompt could make the agent write into the worktree while git merges into it.
             self.refuse_while_merging(&session.workspace_id)?;
+            // A parent waits while its writing child works in its workspace (decision 0170); force types anyway.
+            if !force && let Some(child) = self.writing_child(&live, &self.reload(&session.id)?) {
+                return Err(child_writing(&session.id, &child));
+            }
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
@@ -1321,6 +1388,7 @@ impl Agents {
             // Accepted under the lock, so a second prompt on the same idle sees the flag. A kind with no status mechanism
             // never hears back, so it never sets the flag: it stays always ready (0054).
             run.typed_since_report = run.prompt.has_status;
+            run.finished = false;
             (session.id.clone(), terminal, bytes)
         };
         self.inner
@@ -1918,10 +1986,20 @@ impl Agents {
         })
     }
 
-    /// A session whose run writes in the workspace now.
-    fn live_writer(&self, workspace_id: &str) -> Result<Option<String>, AgentError> {
+    /// A session whose run writes in the workspace now, outside the delegation tree rooted at `group` when one is given
+    /// (decision 0170).
+    fn live_writer(
+        &self,
+        workspace_id: &str,
+        group: Option<&str>,
+    ) -> Result<Option<String>, AgentError> {
         for row in self.store().list_agent_sessions(Some(workspace_id))? {
             if row.read_only {
+                continue;
+            }
+            if let Some(root) = group
+                && self.tree_root_of(&row)? == root
+            {
                 continue;
             }
             let session = self.view(row)?;
@@ -2152,6 +2230,8 @@ impl Agents {
                 .set_agent_session_chat_exit(&row.id, run_id, &exit)?,
         };
         let catalog = changed.then(|| Catalog::load(self.kind_packages(), self.profile_dir()));
+        // A turn that ended before the exit was told to the parent then (decision 0170).
+        let told = live.get(&row.id).is_some_and(|run| run.finished);
         if let Some(catalog) = &catalog {
             live.remove(&row.id);
             self.inner.found_transcripts.clear();
@@ -2174,14 +2254,23 @@ impl Agents {
                     RunRef::Chat(_) => self.chat_output(&row.id),
                 },
             );
-            if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+            let cut = status::on_exit(row.activity.as_ref(), exit.at);
+            if let Some(activity) = &cut {
                 self.store().set_agent_session_status(
                     &row.id,
-                    Some(&activity),
+                    Some(activity),
                     row.result.as_deref(),
                     None,
                 )?;
-                row.activity = Some(activity);
+                row.activity = cut.clone();
+            }
+            if !told && row.parent_id.is_some() {
+                let outcome = delegation::exit_outcome(&exit, cut.is_some());
+                let key = format!("exit:{}", exit.at);
+                // The caller holds the status lock, so the parent's queue is drained on a thread of its own.
+                if let Some(parent) = self.queue_child_notice(live, row, &outcome, &key) {
+                    self.drain_parent_later(parent);
+                }
             }
         }
         let execution = exited(&exit);
@@ -2301,6 +2390,19 @@ fn input_refusal(
         ));
     }
     None
+}
+
+/// The refusal of a prompt to a parent whose writing child works in its workspace (decision 0170), naming the child in
+/// `data.child`.
+fn child_writing(session: &str, child: &str) -> AgentError {
+    let mut error = AgentError::new(
+        codes::AGENT_BUSY,
+        format!(
+            "session {session} waits while its child session {child} writes in the same workspace; queue the prompt, or use force"
+        ),
+    );
+    error.data = Some(json!({ "child": child }));
+    error
 }
 
 /// A stored mode source in wire form; a value a newer build wrote reads as `unknown`.
@@ -2717,6 +2819,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching,
             delivering: false,
+            finished: false,
             account: None,
         };
         let idle = Some(ActivityState::Idle);
@@ -2756,6 +2859,7 @@ pub(crate) mod tests {
             typed_since_report: false,
             switching: false,
             delivering: false,
+            finished: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -2847,6 +2951,7 @@ pub(crate) mod tests {
                 typed_since_report: false,
                 switching: false,
                 delivering: false,
+                finished: false,
                 account: None,
             },
         );

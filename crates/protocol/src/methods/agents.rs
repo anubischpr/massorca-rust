@@ -117,6 +117,9 @@ pub const QUEUE_REASON_PAUSED_STOPPED: &str = "paused_stopped";
 pub const QUEUE_REASON_PAUSED_RESTARTED: &str = "paused_restarted";
 /// `reason` of a waiting prompt held behind a failed delivery.
 pub const QUEUE_REASON_BEHIND_FAILED: &str = "behind_failed";
+/// `reason` of a waiting prompt held because a writing child of the session works in the session's own workspace: the
+/// parent waits until that child finishes (decision 0170).
+pub const QUEUE_REASON_CHILD_WRITING: &str = "child_writing";
 
 /// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -695,6 +698,10 @@ pub struct AgentDelegateParams {
     pub title: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    /// Run a writing child in the parent's own workspace instead of a new worktree (decision 0170): the person's manual
+    /// pick. The parent then waits until the child finishes. Absent means false; a peer older than 0170 ignores it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub same_workspace: bool,
     /// The parent run's token, required when called from inside that run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -725,6 +732,10 @@ pub struct AgentTree {
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Params of `agent.bring_back`.

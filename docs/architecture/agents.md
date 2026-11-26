@@ -258,7 +258,7 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 | `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
-| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
 
 ## Wire
@@ -285,7 +285,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `same_workspace?` (a writing child in the parent's own worktree; not with `name`, decision 0170), `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -550,6 +550,20 @@ pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `age
 `agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
 mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
 `agent.queue.resume {session}` returns the queue as it is after the lift.
+
+Delegated children (decision 0170). A child's live run is finished from its first `done` report until its next typed
+prompt or `working` report (a later `waiting` keeps it finished); a kind that never reports `done` finishes when its run
+ends. When a delegated child becomes finished, or its run ends while it was not,
+the service queues a one-line notice on the parent's queue under the same status lock that records the end, with the
+request id `delegation-notice:<child>:<end>`, so each end is queued once. The notice names the child's id and the
+outcome (`done`, `failed`, `cancelled`, `interrupted`, `stopped`, `exited`), and how to read the result, never the
+result text. It is queued as host-admin, so a parent run that holds secrets still takes it. A parent with no live run
+gets it paused (`paused_stopped`); a parent kind with no queue, or a full queue, gets none (logged). While a writing
+child (not read-only, run live, not finished) works in its parent's own workspace, the parent's queue holds
+(reason `child_writing`), and `agent.prompt` without force is refused with `agent.busy` and `data.child`;
+`agent.queue.send_now` still types. A second writing `same_workspace` child, and a resume of a writing child into
+a shared workspace, are refused with `agent.workspace_busy` while another writing session of the tree works unfinished
+there, or an ancestor of its parent has a live run there.
 
 ## Release and retain (decision 0090)
 
