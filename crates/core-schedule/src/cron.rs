@@ -7,11 +7,15 @@
 use jiff::civil::{Date, Time};
 use serde::{Deserialize, Serialize};
 
-use crate::occurrence::CompiledSchedule;
+use crate::occurrence::{CompiledSchedule, MAX_CRON_SEARCH_DAYS};
 use crate::schedule::{Rule, ScheduleError, resolve_zone};
 
 /// Longest cron expression accepted, in bytes.
 pub const MAX_CRON_EXPRESSION_LEN: usize = 256;
+
+/// Longest gap, in days, between two named days that every search bridges: `next_after` checks the day before an
+/// instant and then `MAX_CRON_SEARCH_DAYS - 2` days after it.
+const LONGEST_BRIDGED_GAP: i64 = MAX_CRON_SEARCH_DAYS as i64 - 2;
 
 /// A cron expression and the zone it runs in. No zone means the host's zone, as for [`crate::Schedule`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,7 +28,7 @@ pub struct CronSchedule {
 }
 
 impl CronSchedule {
-    /// Checks the expression, refusing one that can never occur, and resolves the zone.
+    /// Checks the expression, refusing one that never occurs or has runs too far apart to search, and resolves the zone.
     pub fn compile(&self) -> Result<CompiledSchedule, ScheduleError> {
         let fields = parse_expression(&self.expression)?;
         let (zone, source) = resolve_zone(self.zone.as_deref())?;
@@ -172,6 +176,9 @@ fn parse_expression(expression: &str) -> Result<Fields, ScheduleError> {
     if !occurs(fields.days) {
         return Err(ScheduleError::CronNeverOccurs);
     }
+    if longest_gap(fields.days).is_some_and(|gap| gap > LONGEST_BRIDGED_GAP) {
+        return Err(ScheduleError::CronGapTooLong);
+    }
     Ok(fields)
 }
 
@@ -185,6 +192,81 @@ fn occurs(days: CronDays) -> bool {
         contains(days.months, month)
             && (1..=longest_day(month)).any(|day| contains(days.days_of_month, day))
     })
+}
+
+/// Days in the 400-year Gregorian cycle, which repeats its weekdays and leap years exactly.
+const CYCLE_DAYS: i64 = 146_097;
+
+/// The weekday of 1 January 2000, where `longest_gap` starts its cycle (Sunday is 0).
+const CYCLE_START_WEEKDAY: usize = 6;
+
+/// The longest gap, in days, from one named day to the next across the cycle. Gaps inside a month are shorter than a
+/// month and are not measured. `None` when the expression names no day.
+fn longest_gap(days: CronDays) -> Option<i64> {
+    // The days a weekday names in a month, by the weekday its first day falls on.
+    let mut by_first_weekday = [0_u64; 7];
+    for (first_weekday, named) in by_first_weekday.iter_mut().enumerate() {
+        for day in 1..=31_usize {
+            if has_bit(days.days_of_week, (first_weekday + day - 1) % 7) {
+                *named |= 1_u64 << day;
+            }
+        }
+    }
+    let mut first_named = None;
+    let mut last_named: Option<i64> = None;
+    let mut longest = 0;
+    let mut month_start = 0_i64;
+    let mut first_weekday = CYCLE_START_WEEKDAY;
+    for year in 2000..2400 {
+        for month in 1..=12_usize {
+            let length = days_in_month(year, month);
+            let named = named_days(days, month, length, by_first_weekday[first_weekday]);
+            if named != 0 {
+                let first = month_start + i64::from(named.trailing_zeros()) - 1;
+                let last = month_start + i64::from(63 - named.leading_zeros()) - 1;
+                match last_named {
+                    Some(previous) => longest = longest.max(first - previous),
+                    None => first_named = Some(first),
+                }
+                last_named = Some(last);
+            }
+            month_start += i64::from(length);
+            first_weekday = (first_weekday + usize::from(length)) % 7;
+        }
+    }
+    let (first, last) = (first_named?, last_named?);
+    Some(longest.max(first + CYCLE_DAYS - last))
+}
+
+/// The days of one month the expression names, as `CronDays::matches` reads them. `by_weekday` holds the days the
+/// weekdays name in that month.
+fn named_days(days: CronDays, month: usize, length: u8, by_weekday: u64) -> u64 {
+    if !has_bit(days.months, month) {
+        return 0;
+    }
+    let in_month = (1_u64 << (length + 1)) - 2;
+    let named_by_day = days.days_of_month & in_month;
+    let named_by_weekday = by_weekday & in_month;
+    if days.days_of_month_restricted && days.days_of_week_restricted {
+        named_by_day | named_by_weekday
+    } else {
+        named_by_day & named_by_weekday
+    }
+}
+
+/// Days in a month of a Gregorian year.
+fn days_in_month(year: i32, month: usize) -> u8 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Whether bit `bit` is on in `set`, where a bit is a month, a day of the month or a weekday.
+fn has_bit(set: u64, bit: usize) -> bool {
+    set & (1_u64 << bit) != 0
 }
 
 /// The set one field names, checked against its range.
@@ -269,4 +351,26 @@ fn fold_sunday(set: u64) -> u64 {
 fn contains(set: u64, value: i8) -> bool {
     let bit = u32::from(value.unsigned_abs());
     value >= 0 && bit < 64 && set & (1 << bit) != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::civil::{Date, Weekday};
+
+    use super::{CYCLE_START_WEEKDAY, longest_gap, parse_expression};
+
+    #[test]
+    fn the_cycle_starts_on_the_weekday_it_names() {
+        let first = Date::new(2000, 1, 1).expect("a valid date").weekday();
+        assert_eq!(first, Weekday::Saturday);
+        assert_eq!(CYCLE_START_WEEKDAY, 6);
+    }
+
+    #[test]
+    fn the_longest_gap_between_leap_days_is_2921_days() {
+        let days = parse_expression("0 0 29 2 *")
+            .expect("a valid expression")
+            .days;
+        assert_eq!(longest_gap(days), Some(2_921));
+    }
 }

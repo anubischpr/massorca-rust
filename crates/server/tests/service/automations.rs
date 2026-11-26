@@ -212,6 +212,24 @@ async fn a_cron_that_can_never_occur_and_an_unknown_zone_are_refused() {
 }
 
 #[tokio::test]
+async fn a_cron_whose_runs_are_decades_apart_is_refused_with_its_code() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    folder_project(&client, home.path(), "app").await;
+
+    let mut sparse = create_params("app", "Leap Sundays");
+    sparse.cadence = AutomationCadence::Cron;
+    sparse.cron = Some("0 0 29 2 */7".to_owned());
+    let error = client
+        .automation_create(&sparse)
+        .await
+        .expect_err("29 February on a Sunday is too far apart to search");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_SCHEDULE_INVALID);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_weekly_without_a_weekday_and_a_grace_over_one_week_are_refused() {
     let home = temp_home();
     let running = start(home.path(), "default").await;

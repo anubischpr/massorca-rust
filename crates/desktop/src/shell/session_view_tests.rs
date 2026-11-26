@@ -55,7 +55,7 @@ pub(super) fn session_rig(
 }
 
 /// As `session_rig`, on a service that keeps these queues, or none when `queues` is `None`.
-fn queue_rig(
+pub(super) fn queue_rig(
     cx: &mut TestAppContext,
     kinds: Vec<AgentKind>,
     sessions: Vec<AgentSession>,
@@ -109,14 +109,14 @@ fn queue_rig(
 }
 
 /// An agent kind of the service's, able or unable to resume.
-fn kind(resumable: bool) -> AgentKind {
+pub(super) fn kind(resumable: bool) -> AgentKind {
     let mut kind = agent_kind("claude", "Claude Code", PackageState::Enabled);
     kind.resumable = resumable;
     kind
 }
 
 /// Session s1 of kind `claude` in w1: live or ended, and reporting `state` when given.
-fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
+pub(super) fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
     let mut session = agent("s1", "w1", 10);
     if ended {
         session.execution.state = TerminalState::Exited;
@@ -1084,4 +1084,35 @@ fn a_chat_arm_session_draws_its_transcript_and_composer_and_no_terminal(cx: &mut
     assert!(cx.debug_bounds("transcript-row-ask").is_some());
     assert!(cx.debug_bounds("composer-primary").is_some());
     assert!(cx.debug_bounds("session-terminal").is_none());
+}
+
+/// A session whose service record says it runs as a chat.
+pub(super) fn chat_s1(ended: bool) -> AgentSession {
+    let mut session = s1(ended, None);
+    session.run = massorca_protocol::methods::chat::RunType::Chat;
+    session.terminal_id = None;
+    session
+}
+
+#[gpui::test]
+fn a_session_the_service_runs_as_a_chat_opens_the_transcript_view_with_no_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = session_rig(cx, vec![kind(false)], vec![chat_s1(false)]);
+
+    assert!(cx.debug_bounds("transcript-list").is_some());
+    assert!(cx.debug_bounds("composer-primary").is_some());
+    assert!(cx.debug_bounds("session-terminal").is_none());
+    assert!(cx.debug_bounds("session-arm").is_none());
+}
+
+#[gpui::test]
+fn a_session_without_a_run_is_a_terminal_session_and_keeps_its_terminal_arm(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = session_rig(cx, vec![kind(false)], vec![s1(false, None)]);
+
+    assert!(cx.debug_bounds("transcript-list").is_none());
+    assert!(cx.debug_bounds("composer-primary").is_none());
+    assert!(cx.debug_bounds("session-arm").is_some());
 }

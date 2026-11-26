@@ -97,6 +97,10 @@ pub enum ScheduleError {
     CronStepTooLarge { field: &'static str, step: u8 },
     #[error("this cron expression can never occur, such as 30 February")]
     CronNeverOccurs,
+    #[error(
+        "this cron expression can go more than nine years without a run, such as 29 February on a Sunday"
+    )]
+    CronGapTooLong,
     #[error("cron expression is {0} characters, more than the limit of 256")]
     CronTooLong(usize),
 }

@@ -22,6 +22,10 @@ version leaves out.
   - An expression that can never occur is refused, such as 30 February or 31 April. 29 February is accepted and
     searched for over nine years, since the longest gap between leap days is eight years.
   - Day-of-month and day-of-week both restricted match a day when either matches, as standard cron reads them.
+  - An expression with more than nine years between two of its days, such as `0 0 29 2 */7` (29 February that is a
+    Sunday), is refused. The check walks the 400-year calendar cycle from every start, so it does not depend on the clock.
+  - Hourly fires at the minute of its time in every hour. When clocks go back, the repeated hour fires once, at its
+    earlier instant, so its second copy is not a run. Accepted for the first version.
 - D3 Store. Migration step `automations`: name, prompt, agent kind, cadence with its time, weekday or cron expression,
   an optional zone, an optional grace window, the enabled flag, an optional creation key, the next and last run times,
   and timestamps. CHECK constraints tie the weekday to the weekly cadence and the expression to the cron cadence.
@@ -42,6 +46,8 @@ version leaves out.
   id, then by exact name, and a name two automations share is refused until the id is given. A schedule change
   recomputes the next run; a name or prompt change keeps it. Enabling schedules the next run from now and checks the
   definition still holds; disabling clears the next run. A create with no project is refused.
+  Reads show the next run from the clock at the time of the read, since no run advances the stored one yet; the stored
+  next run is kept for AUTO-03.
 
 ## Desktop
 

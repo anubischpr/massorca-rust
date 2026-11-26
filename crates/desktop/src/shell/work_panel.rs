@@ -607,7 +607,7 @@ async fn read_attach(
     Flow::Done
 }
 
-/// Feeds one attach update to the pane, then forwards the replies it owes the program.
+/// Feeds one attach update to the pane, then forwards the replies it owes the program to the terminal.
 pub(super) fn apply_update(
     surface: &Entity<TerminalSurface>,
     service: &ServiceHandle,
@@ -615,9 +615,22 @@ pub(super) fn apply_update(
     update: &AttachUpdate,
     cx: &mut AsyncApp,
 ) -> Step {
+    apply_update_with(surface, update, cx, |replies| {
+        service.send_terminal_input(terminal, replies);
+    })
+}
+
+/// Feeds one attach update to the pane, then hands the replies it owes the program to `input`: the service's terminal
+/// for a local attach, a paired host's for a remote one.
+pub(super) fn apply_update_with(
+    surface: &Entity<TerminalSurface>,
+    update: &AttachUpdate,
+    cx: &mut AsyncApp,
+    input: impl FnOnce(Vec<u8>),
+) -> Step {
     surface.update(cx, |view, cx| {
         let step = feed_update(view, update, cx);
-        forward_replies(view, service, terminal);
+        forward_replies(view, input);
         step
     })
 }
@@ -639,10 +652,10 @@ fn feed_update(
 /// Sends the replies the emulator owes the program to the terminal as input (decision 0034). Every
 /// attach passes its replies through here, so the declaration that this client answers the
 /// program's queries goes in one place once the service asks for it.
-fn forward_replies(view: &mut TerminalSurface, service: &ServiceHandle, terminal: &str) {
+fn forward_replies(view: &mut TerminalSurface, input: impl FnOnce(Vec<u8>)) {
     let replies = view.take_replies();
     if !replies.is_empty() {
-        service.send_terminal_input(terminal, replies);
+        input(replies);
     }
 }
 

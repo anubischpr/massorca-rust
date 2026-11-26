@@ -1,8 +1,8 @@
-//! The desktop's remembered UI state (SET-02): the theme last applied, the regions left open and the Calendar's Show
-//! done switch. It is saved in
+//! The desktop's remembered UI state (SET-02): the theme last applied, the regions left open, the rail mode, the
+//! projects the Sidebar keeps collapsed and the Calendar's Show done switch. It is saved in
 //! `desktop/state/ui-state.json` of the profile, so the first frame of a start already uses the saved theme.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
@@ -13,6 +13,7 @@ use massorca_ui::{ActiveTheme as _, Appearance, Theme};
 use serde::{Deserialize, Serialize};
 
 use crate::model::marketplace::HostTarget;
+use crate::model::navigation::Mode;
 use crate::model::regions::{Region, RegionState};
 
 /// The format version this build reads and writes; any other version gives the defaults.
@@ -29,6 +30,10 @@ pub struct UiState {
     pub marketplace_host: Option<HostTarget>,
     /// The explicit permission mode last picked on a start page, by agent kind id; picking the CLI's default clears it.
     pub start_permission_modes: BTreeMap<String, String>,
+    /// The Activity rail's mode: Bot Teams when the person left the app there, Workspaces otherwise.
+    pub mode: Mode,
+    /// The projects the Sidebar keeps collapsed, by project id.
+    pub collapsed_projects: BTreeSet<String>,
     /// The Calendar's Show done switch as the viewer last left it; off until it is switched on.
     pub calendar_show_done: bool,
 }
@@ -40,6 +45,8 @@ impl Default for UiState {
             open_regions: RegionState::default().open().to_vec(),
             marketplace_host: None,
             start_permission_modes: BTreeMap::new(),
+            mode: Mode::default(),
+            collapsed_projects: BTreeSet::new(),
             calendar_show_done: false,
         }
     }
@@ -110,6 +117,28 @@ pub fn saved_start_mode(cx: &App, kind: &str) -> Option<String> {
         .flatten()
 }
 
+/// Hook for the Sidebar's project collapse state, which is not wired yet: remembers whether the project `project`
+/// (its id) stays collapsed. Does nothing when no profile is kept.
+pub fn remember_project_collapsed(cx: &mut App, project: &str, collapsed: bool) {
+    let project = project.to_owned();
+    remember(cx, move |state| {
+        if collapsed {
+            state.collapsed_projects.insert(project);
+        } else {
+            state.collapsed_projects.remove(&project);
+        }
+    });
+}
+
+/// The projects the Sidebar kept collapsed at the last save, by id.
+pub fn saved_collapsed_projects(cx: &App) -> BTreeSet<String> {
+    if cx.has_global::<UiStateStore>() {
+        cx.global::<UiStateStore>().saved.collapsed_projects.clone()
+    } else {
+        BTreeSet::new()
+    }
+}
+
 /// Remembers `mode` as the explicit pick of agent kind `kind` on a start page; `None` clears it. Does nothing when no
 /// profile is kept.
 pub fn remember_start_mode(cx: &mut App, kind: &str, mode: Option<&str>) {
@@ -172,6 +201,20 @@ struct Stored {
         skip_serializing_if = "Option::is_none"
     )]
     start_permission_modes: Option<BTreeMap<String, String>>,
+    /// The Activity rail's mode, `workspaces` or `bot_teams`; absent or unknown keeps Workspaces.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    mode: Option<String>,
+    /// The projects the Sidebar keeps collapsed, by id; absent while none is collapsed.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    collapsed_projects: Option<Vec<String>>,
     /// The Calendar's Show done switch, written only while it is on.
     #[serde(
         default,
@@ -205,6 +248,9 @@ fn encode(state: &UiState) -> String {
         marketplace_host: state.marketplace_host.as_ref().map(HostTarget::key),
         start_permission_modes: (!state.start_permission_modes.is_empty())
             .then(|| state.start_permission_modes.clone()),
+        mode: Some(mode_key(state.mode).to_owned()),
+        collapsed_projects: (!state.collapsed_projects.is_empty())
+            .then(|| state.collapsed_projects.iter().cloned().collect()),
         calendar_show_done: state.calendar_show_done.then_some(true),
     };
     let mut text = serde_json::to_string_pretty(&stored).unwrap_or_default();
@@ -245,11 +291,22 @@ fn decode(text: &str) -> Option<UiState> {
         .marketplace_host
         .as_deref()
         .and_then(HostTarget::from_key);
+    let mode = stored
+        .mode
+        .as_deref()
+        .and_then(mode_from_key)
+        .unwrap_or(defaults.mode);
     Some(UiState {
         theme,
         open_regions,
         marketplace_host,
         start_permission_modes: stored.start_permission_modes.unwrap_or_default(),
+        mode,
+        collapsed_projects: stored
+            .collapsed_projects
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         calendar_show_done: stored.calendar_show_done.unwrap_or(false),
     })
 }
@@ -265,6 +322,19 @@ fn appearance_from_key(key: &str) -> Option<Appearance> {
     [Appearance::Dark, Appearance::Light]
         .into_iter()
         .find(|appearance| appearance_key(*appearance) == key)
+}
+
+fn mode_key(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Workspaces => "workspaces",
+        Mode::BotTeams => "bot_teams",
+    }
+}
+
+fn mode_from_key(key: &str) -> Option<Mode> {
+    [Mode::Workspaces, Mode::BotTeams]
+        .into_iter()
+        .find(|mode| mode_key(*mode) == key)
 }
 
 fn region_key(region: Region) -> &'static str {
@@ -309,6 +379,8 @@ mod tests {
             theme: Appearance::Light,
             open_regions: vec![Region::WorkPanel, Region::Sidebar],
             start_permission_modes: BTreeMap::from([("claude".to_owned(), "plan".to_owned())]),
+            mode: Mode::BotTeams,
+            collapsed_projects: BTreeSet::from(["p1".to_owned()]),
             calendar_show_done: true,
             ..UiState::default()
         };
@@ -512,6 +584,72 @@ mod tests {
             load(&profile).start_permission_modes,
             BTreeMap::from([("codex".to_owned(), "read-only".to_owned())])
         );
+    }
+
+    #[test]
+    fn an_old_file_without_the_layout_members_loads_with_their_defaults() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        write_raw(
+            &profile,
+            r#"{"version": 1, "theme": "light", "open_regions": ["work_panel"]}"#,
+        );
+
+        let loaded = load(&profile);
+
+        assert_eq!(loaded.theme, Appearance::Light);
+        assert_eq!(loaded.open_regions, vec![Region::WorkPanel]);
+        assert_eq!(loaded.mode, Mode::Workspaces);
+        assert!(loaded.collapsed_projects.is_empty());
+    }
+
+    #[test]
+    fn a_damaged_mode_or_project_list_keeps_its_default_and_the_others_still_apply() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "theme": "light", "mode": "nope", "collapsed_projects": [1]}"#,
+        );
+        assert_eq!(
+            load(&profile),
+            UiState {
+                theme: Appearance::Light,
+                ..UiState::default()
+            }
+        );
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "mode": 7, "collapsed_projects": ["p1"]}"#,
+        );
+        let loaded = load(&profile);
+        assert_eq!(loaded.mode, Mode::Workspaces);
+        assert_eq!(loaded.collapsed_projects, BTreeSet::from(["p1".to_owned()]));
+    }
+
+    #[gpui::test]
+    fn a_project_collapse_is_remembered_until_the_project_opens_again(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            install(cx, profile.clone(), UiState::default());
+            remember_project_collapsed(cx, "p1", true);
+            assert_eq!(
+                saved_collapsed_projects(cx),
+                BTreeSet::from(["p1".to_owned()])
+            );
+        });
+        assert_eq!(
+            load(&profile).collapsed_projects,
+            BTreeSet::from(["p1".to_owned()])
+        );
+
+        cx.update(|cx| remember_project_collapsed(cx, "p1", false));
+
+        assert!(load(&profile).collapsed_projects.is_empty());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The run-time theme: a palette and shadows per appearance, read by every
 //! component through [`ActiveTheme::theme`] (decision 0022).
 
-use crate::assets::{FONT_MONO, FONT_SANS};
+use crate::text_preferences;
 use crate::tokens::{Appearance, Color, Palette, ShadowToken, Shadows, TextStyleToken};
 use crate::tokens::{FontFamily, TYPE_BODY};
 use gpui::{App, BoxShadow, FontFeatures, FontWeight, Global, Hsla, Rgba, Styled, point, px};
@@ -113,12 +113,12 @@ pub fn box_shadows(layers: &[ShadowToken]) -> Vec<BoxShadow> {
 pub trait TextStyled: Styled + Sized {
     fn text_style(self, token: TextStyleToken) -> Self {
         let family = match token.family {
-            FontFamily::Sans => FONT_SANS,
-            FontFamily::Mono => FONT_MONO,
+            FontFamily::Sans => text_preferences::interface_family(),
+            FontFamily::Mono => text_preferences::monospace_family(),
         };
         self.font_family(family)
-            .text_size(px(token.size))
-            .line_height(px(token.line_height))
+            .text_size(px(text_preferences::scale_size(token.size)))
+            .line_height(px(text_preferences::scale_line_height(token.line_height)))
             .font_weight(FontWeight(f32::from(token.weight)))
     }
 

@@ -5,6 +5,7 @@ mod options;
 mod text;
 
 use clap::Subcommand;
+use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
     AutomationCadence, AutomationCreateParams, AutomationRef, AutomationUpdateParams,
@@ -14,7 +15,7 @@ use massorca_protocol::methods::automations::{
 pub use options::{CadenceArg, CreateArgs, EditArgs, WeekdayArg};
 
 use crate::connect::connect;
-use crate::error::CliError;
+use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::target::Target;
 
@@ -65,6 +66,7 @@ pub async fn execute(
             output.success(&created, &[text::automation_line(&created, "created")]);
         }
         AutomationsCommand::Edit(args) => {
+            check_time_given(&client, &args).await?;
             let edited = client
                 .automation_update(&update_params(args))
                 .await
@@ -124,6 +126,41 @@ fn too_old(error: CliError) -> CliError {
         };
     }
     error
+}
+
+/// A daily, hourly, weekdays or weekly schedule needs a time, and a cron automation keeps none. An edit that makes one
+/// of those without `--time` is refused here, so the message can name the option to add.
+async fn check_time_given(client: &Client, args: &EditArgs) -> Result<(), CliError> {
+    let Some(cadence) = args.cadence else {
+        return Ok(());
+    };
+    if args.time.is_some() || matches!(cadence, CadenceArg::Cron) {
+        return Ok(());
+    }
+    let current = client
+        .automation_show(&AutomationRef {
+            automation: args.automation.clone(),
+        })
+        .await
+        .map_err(|error| too_old(error.into()))?;
+    if current.cadence == AutomationCadence::Cron {
+        return Err(CliError::new(
+            "usage.missing_time",
+            format!("{} needs --time HH:MM", schedule_phrase(cadence)),
+            exit::USAGE,
+        ));
+    }
+    Ok(())
+}
+
+fn schedule_phrase(cadence: CadenceArg) -> &'static str {
+    match cadence {
+        CadenceArg::Hourly => "an hourly schedule",
+        CadenceArg::Daily => "a daily schedule",
+        CadenceArg::Weekdays => "a weekdays schedule",
+        CadenceArg::Weekly => "a weekly schedule",
+        CadenceArg::Cron => "a cron schedule",
+    }
 }
 
 fn create_params(args: CreateArgs) -> AutomationCreateParams {

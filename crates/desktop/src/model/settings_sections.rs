@@ -135,6 +135,8 @@ pub enum RowBody {
     PairingLink,
     /// Opens the Add host dialog, its SSH path (D-HO-02).
     AddHost,
+    /// This computer's Git, as its service reported it on connect (GIT-01).
+    GitAvailability,
     Planned(Planned),
 }
 
@@ -382,6 +384,11 @@ const TERMINAL: &[RowSpec] = &[
 ];
 
 const SOURCES: &[RowSpec] = &[
+    RowSpec {
+        label: "Git",
+        helper: "Worktrees, branches and Source control need the Git program on this computer.",
+        body: RowBody::GitAvailability,
+    },
     RowSpec {
         label: "GitHub",
         helper: "Repositories, branches and pull requests.",

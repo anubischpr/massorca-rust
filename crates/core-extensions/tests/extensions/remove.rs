@@ -201,16 +201,19 @@ fn npm_uninstall(package: &str) -> Vec<String> {
 }
 
 #[test]
-fn codex_and_gentle_shell_uninstall_only_the_npm_package_they_installed() {
-    for (id, binary, package) in [
-        ("massorca.codex", "codex", "@openai/codex"),
-        ("massorca.gentle-shell", "gentle-shell", "gentle-pi"),
+fn codex_and_gentle_shell_uninstall_only_what_they_installed() {
+    // Gentle Shell removes itself through its own CLI (decision 0164); Codex through the npm package it installed.
+    let self_uninstall = ["gentle-shell", "self-uninstall", "--yes"]
+        .map(str::to_owned)
+        .to_vec();
+    for (id, binary, command) in [
+        ("massorca.codex", "codex", npm_uninstall("@openai/codex")),
+        ("massorca.gentle-shell", "gentle-shell", self_uninstall),
     ] {
         let s = setup(FakeHost::new());
         s.install(&Source::Catalogue(id.to_owned()), true)
             .expect("installs");
         assert!(s.host.resolve(binary).is_some(), "{id} installed its CLI");
-        let command = npm_uninstall(package);
         let fingerprint =
             massorca_core_extensions::review::uninstall_fingerprint(std::slice::from_ref(&command));
         let ran = s

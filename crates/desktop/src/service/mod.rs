@@ -10,9 +10,12 @@ mod agents;
 mod automations;
 mod bridge;
 mod calendar;
+mod chat;
 mod connection;
 mod extensions;
 mod git;
+mod host_sessions;
+mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
@@ -21,11 +24,16 @@ mod refusal;
 mod secrets;
 mod skills;
 mod team_room;
+mod team_routines;
 mod teams;
 mod terminals;
 mod update;
 mod workspace_create;
 
+#[cfg(test)]
+mod chat_calls_tests;
+#[cfg(test)]
+mod chat_tests;
 #[cfg(test)]
 mod git_tests;
 #[cfg(test)]
@@ -41,16 +49,25 @@ pub(crate) use agent_queue::QueueCommand;
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{LinkCloser, ServiceBridge, ServiceHandle, connect_options};
 pub use calendar::CAPABILITY_MISSING;
+#[cfg(test)]
+pub(crate) use chat::ChatCommand;
+pub use chat::StartedSession;
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
 #[cfg(test)]
 pub(crate) use extensions::ExtensionCommand;
-pub use extensions::{ExtensionsRead, HostListing, HostLists, HostMarketplaceRead};
+pub use extensions::{
+    ExtensionHistory, ExtensionsRead, HostListing, HostLists, HostMarketplaceRead, RollbackAnswer,
+};
+pub use host_sessions::{HostAgents, HostSessions, HostSessionsRead};
+#[cfg(test)]
+pub(crate) use host_terminal::{HostAttach, HostWrite};
+pub use host_terminal::{HostTerminal, HostTerminalItem, HostWriter};
 #[cfg(test)]
 pub(crate) use hosted_services::ServicesCommand;
-pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
+pub use hosts::{HostLoss, HostRemoval, SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
@@ -61,6 +78,8 @@ pub use skills::{SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
 pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};
+#[cfg(test)]
+pub(crate) use team_routines::RoutineCommand;
 #[cfg(test)]
 pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
