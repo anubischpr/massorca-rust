@@ -46,6 +46,7 @@ mod skill_placement;
 mod skills;
 mod stalled_reader;
 mod tasks;
+mod team_project_code;
 mod team_room;
 mod teams;
 mod terminal_secrets;

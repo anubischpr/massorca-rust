@@ -12,9 +12,9 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef, TaskStopParams};
 use massorca_protocol::methods::team_room::{TeamRoomPostParams, TeamRoomPosted};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Routine, RoutineList,
-    Team, TeamAccess, TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
-    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, CodeSource, Routine,
+    RoutineList, Team, TeamAccess, TeamCreateParams, TeamProject, TeamProjectAddParams,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -164,6 +164,12 @@ pub(crate) enum TeamCommand {
         project: String,
         reply: oneshot::Sender<Result<TeamProject, Refusal>>,
     },
+    SetCodeSource {
+        team: String,
+        project: String,
+        code_source: CodeSource,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
+    },
     SetAccess {
         team: String,
         access: TeamAccess,
@@ -239,6 +245,26 @@ pub(super) fn spawn_call(
                         brief: Some(brief),
                         source_project: None,
                         code_source: None,
+                    })
+                    .await
+            });
+        }
+        TeamCommand::SetCodeSource {
+            team,
+            project,
+            code_source,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_project_update(&TeamProjectUpdateParams {
+                        team,
+                        project,
+                        name: None,
+                        goal: None,
+                        brief: None,
+                        source_project: None,
+                        code_source: Some(code_source),
                     })
                     .await
             });
@@ -337,7 +363,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
         | TeamCommand::TaskStop { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        TeamCommand::SaveBrief { reply, .. } | TeamCommand::DeleteProject { reply, .. } => {
+        TeamCommand::SaveBrief { reply, .. }
+        | TeamCommand::DeleteProject { reply, .. }
+        | TeamCommand::SetCodeSource { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::AddProject { reply, .. } => {
@@ -453,6 +481,25 @@ impl ServiceHandle {
     ) -> Result<TeamProject, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::AddProject { params, reply }))
             .await
+    }
+
+    /// `team.project_update` with a new code source; `none` clears it. The source shows when the read that follows the
+    /// answer lands.
+    pub async fn set_project_code_source(
+        &self,
+        team: String,
+        project: String,
+        code_source: CodeSource,
+    ) -> Result<TeamProject, Refusal> {
+        self.ask(|reply| {
+            Command::Team(TeamCommand::SetCodeSource {
+                team,
+                project,
+                code_source,
+                reply,
+            })
+        })
+        .await
     }
 
     /// `team.bot_update`. The bot shows its change when the read that follows the answer lands.
