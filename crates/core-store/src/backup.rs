@@ -33,7 +33,10 @@ pub(crate) enum BackupLabel<'a> {
 /// `VACUUM INTO` gives a consistent snapshot even in WAL mode, where a plain file copy could miss frames.
 /// The caller holds the migration's write lock, so no other migration can race this copy. It runs on its own
 /// connection because `VACUUM INTO` cannot run inside the caller's transaction.
-pub(crate) fn create_before_migration(file: &Path, label: BackupLabel<'_>) -> Result<(), StoreError> {
+pub(crate) fn create_before_migration(
+    file: &Path,
+    label: BackupLabel<'_>,
+) -> Result<(), StoreError> {
     let backup = unused_backup_path(file, label)?;
     let target = backup.to_str().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "store path is not valid UTF-8")
@@ -67,20 +70,24 @@ fn is_backup_label(label: &str) -> bool {
         Some((base, copy)) => (base, Some(copy)),
         None => (label, None),
     };
-    let copy_ok = copy.is_none_or(|copy| !copy.is_empty() && copy.bytes().all(|byte| byte.is_ascii_digit()));
-    let version_ok = base
-        .strip_prefix('v')
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+    let copy_ok =
+        copy.is_none_or(|copy| !copy.is_empty() && copy.bytes().all(|byte| byte.is_ascii_digit()));
+    let version_ok = base.strip_prefix('v').is_some_and(|digits| {
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    });
     copy_ok && (version_ok || is_step_id(base))
 }
 
 /// `<block>-<yyyymmddhhmm>`: four digits, a dash, then twelve digits.
 fn is_step_id(base: &str) -> bool {
     base.len() == 17
-        && base
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| if index == 4 { byte == b'-' } else { byte.is_ascii_digit() })
+        && base.bytes().enumerate().all(|(index, byte)| {
+            if index == 4 {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
 }
 
 fn file_name(file: &Path) -> io::Result<&str> {
