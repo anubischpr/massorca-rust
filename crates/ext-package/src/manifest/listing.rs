@@ -44,6 +44,7 @@ pub enum Category {
     Skills,
     Services,
     Themes,
+    Tools,
 }
 
 /// Who publishes the item as shown to the user. The url, when given, must be https.
@@ -122,6 +123,8 @@ pub fn category(manifest: &Manifest) -> Category {
 fn derive_category(contributes: &Contributes) -> Category {
     if !contributes.agent_adapters.is_empty() {
         Category::Agents
+    } else if !contributes.host_programs.is_empty() {
+        Category::Tools
     } else if !contributes.skills.is_empty() {
         Category::Skills
     } else if (!contributes.themes.is_empty() || !contributes.icon_themes.is_empty())
@@ -203,6 +206,9 @@ fn validate_category(category: Category, contributes: &Contributes, problems: &m
             "needs an agentAdapters contribution"
         }
         Category::Skills if contributes.skills.is_empty() => "needs a skills contribution",
+        Category::Tools if contributes.host_programs.is_empty() => {
+            "needs a hostPrograms contribution"
+        }
         Category::Themes if contributes.themes.is_empty() && contributes.icon_themes.is_empty() => {
             "needs a themes or iconThemes contribution"
         }
@@ -221,6 +227,7 @@ fn category_name(category: Category) -> &'static str {
         Category::Skills => "skills",
         Category::Services => "services",
         Category::Themes => "themes",
+        Category::Tools => "tools",
     }
 }
 

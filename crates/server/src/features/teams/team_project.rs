@@ -6,7 +6,7 @@ use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED}
 use massorca_protocol::methods::projects::Project as WorkspaceProject;
 use massorca_protocol::methods::teams::{
     self, CodeSource, TeamProject, TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams,
-    TeamProjectUpdateParams, TeamRef,
+    TeamProjectShowParams, TeamProjectUpdateParams, TeamRef,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -50,6 +50,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             remove,
         )?,
+        methods.register(
+            Owner::Core,
+            teams::PROJECT_SHOW,
+            capabilities::TEAMS,
+            Permission::Read,
+            show,
+        )?,
     ])
 }
 
@@ -62,6 +69,17 @@ async fn list(ctx: RequestCtx, params: TeamRef) -> Result<TeamProjectList, Error
         Ok(TeamProjectList {
             projects: rows.iter().map(|row| project_view(row, &linked)).collect(),
         })
+    })
+    .await
+}
+
+/// `team.project_show`: one project of a team, by id or exact name. Reads need no Workspaces.
+async fn show(ctx: RequestCtx, params: TeamProjectShowParams) -> Result<TeamProject, ErrorBody> {
+    let workspaces = shared(&ctx);
+    blocking(&ctx, move |store, _agents| {
+        let team = selectors::team(store, &params.team)?;
+        let row = selectors::team_project(store, &team, &params.project)?;
+        Ok(project_view(&row, &workspace_projects(&workspaces)?))
     })
     .await
 }
@@ -113,6 +131,8 @@ fn add_project(
 ) -> Result<TeamProject, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let code_source = code_source_name(&team, params.code_source)?;
+    let source_project_id = source_project_id(workspaces, &team, params.source_project)?;
+    one_code_source(source_project_id.as_deref(), code_source.as_deref())?;
     let row = TeamProjectRow {
         id: new_id(),
         team_id: team.id.clone(),
@@ -120,7 +140,7 @@ fn add_project(
         goal: params.goal.unwrap_or_default().trim().to_owned(),
         brief: params.brief.unwrap_or_default(),
         created_at: now_ms(),
-        source_project_id: source_project_id(workspaces, &team, params.source_project)?,
+        source_project_id,
         code_source,
     };
     store.insert_team_project(&row).map_err(store_error)?;
@@ -143,11 +163,15 @@ fn update_project(
     if let Some(brief) = params.brief {
         row.brief = brief;
     }
+    let code_given = params.source_project.is_some() || params.code_source.is_some();
     if let Some(source) = params.source_project {
         row.source_project_id = source_project_id(workspaces, &team, Some(source))?;
     }
     if params.code_source.is_some() {
         row.code_source = code_source_name(&team, params.code_source)?;
+    }
+    if code_given {
+        one_code_source(row.source_project_id.as_deref(), row.code_source.as_deref())?;
     }
     if !store.update_team_project(&row).map_err(store_error)? {
         return Err(ErrorBody::new(
@@ -177,13 +201,13 @@ fn remove_project(
     Ok((project_view(&row, &linked_projects), tasks))
 }
 
-/// The store name of a recorded code source. As in pv96, only a team with Workspaces on records one.
+/// The stored name of a recorded code source. Only a team with Workspaces on records one; clearing needs none.
 fn code_source_name(
     team: &TeamRow,
     source: Option<CodeSource>,
 ) -> Result<Option<String>, ErrorBody> {
     let name = match source {
-        None => return Ok(None),
+        None | Some(CodeSource::None) => return Ok(None),
         Some(CodeSource::ExistingRepository) => CODE_SOURCE_EXISTING,
         Some(CodeSource::NewFolderWithGit) => CODE_SOURCE_NEW_FOLDER,
         Some(CodeSource::Unknown) => return Err(invalid("the code source is not a known kind")),
@@ -231,6 +255,16 @@ fn source_project_id(
         }
         None => Ok(None),
     }
+}
+
+/// A project has one code source: a linked Workspaces project or a new folder with git, never both (decision 0126).
+fn one_code_source(linked: Option<&str>, code_source: Option<&str>) -> Result<(), ErrorBody> {
+    if linked.is_some() && code_source == Some(CODE_SOURCE_NEW_FOLDER) {
+        return Err(invalid(
+            "a project has one code source: link a Workspaces project or record a new folder with git, not both",
+        ));
+    }
+    Ok(())
 }
 
 fn workspace_projects(workspaces: &Workspaces) -> Result<Vec<WorkspaceProject>, ErrorBody> {

@@ -21,7 +21,7 @@ use massorca_protocol::methods::extensions::{
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
     ExtensionList, ExtensionLog, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved,
     ExtensionReview, ExtensionRollbackParams, ExtensionRun, ExtensionSetEnabledParams,
-    ExtensionUpdateParams,
+    ExtensionUpdateParams, ProgramUpdateParams, ProgramUpdateReview, ProgramUpdated,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -94,6 +94,24 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::EXTENSIONS_ROLLBACK,
             Permission::HostAdmin,
             rollback,
+        )?,
+        // Its own capability: an update of a host program runs the vendor's command, so only the run needs administration.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_PROGRAMS, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::PROGRAM_UPDATE_REVIEW,
+            capabilities::EXTENSIONS_PROGRAMS,
+            Permission::Read,
+            program_update_review,
+        )?,
+        methods.register(
+            Owner::Core,
+            extensions::PROGRAM_UPDATE,
+            capabilities::EXTENSIONS_PROGRAMS,
+            Permission::HostAdmin,
+            program_update,
         )?,
         methods.register(
             Owner::Core,
@@ -253,6 +271,32 @@ async fn rollback(
     wire(&entry)
 }
 
+async fn program_update_review(
+    ctx: RequestCtx,
+    params: ProgramUpdateParams,
+) -> Result<ProgramUpdateReview, ErrorBody> {
+    let review = on_extensions(&ctx, move |extensions| {
+        extensions.review_program_update(&params.id, &params.program)
+    })
+    .await?;
+    wire(&review)
+}
+
+async fn program_update(
+    ctx: RequestCtx,
+    params: ProgramUpdateParams,
+) -> Result<ProgramUpdated, ErrorBody> {
+    refuse_agent_run(
+        params.agent_token.as_deref(),
+        "an agent cannot update a program; ask the person to run the command",
+    )?;
+    let updated = on_extensions(&ctx, move |extensions| {
+        extensions.update_program(&params.id, &params.program, params.consent.as_deref())
+    })
+    .await?;
+    wire(&updated)
+}
+
 async fn set_enabled(
     ctx: RequestCtx,
     params: ExtensionSetEnabledParams,
@@ -316,7 +360,7 @@ fn hide_item_path(ctx: &RequestCtx, item: &mut Item) {
 }
 
 fn strip_program_paths(item: &mut Item) {
-    for agent in &mut item.agents {
+    for agent in item.agents.iter_mut().chain(&mut item.programs) {
         agent.program_path = None;
     }
 }

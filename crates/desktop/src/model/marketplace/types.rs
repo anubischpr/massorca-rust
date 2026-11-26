@@ -19,6 +19,7 @@ pub struct AccountId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemKind {
     Extension,
+    Tool,
     Agent,
     Skill,
     Service,
@@ -26,8 +27,9 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 5] = [
+    pub const ALL: [ItemKind; 6] = [
         ItemKind::Extension,
+        ItemKind::Tool,
         ItemKind::Agent,
         ItemKind::Skill,
         ItemKind::Service,
@@ -37,6 +39,7 @@ impl ItemKind {
     pub fn singular(self) -> &'static str {
         match self {
             ItemKind::Extension => "Extension",
+            ItemKind::Tool => "Tool",
             ItemKind::Agent => "Agent",
             ItemKind::Skill => "Skill",
             ItemKind::Service => "Service",
@@ -47,6 +50,7 @@ impl ItemKind {
     pub fn plural(self) -> &'static str {
         match self {
             ItemKind::Extension => "Extensions",
+            ItemKind::Tool => "Tools",
             ItemKind::Agent => "Agents",
             ItemKind::Skill => "Skills",
             ItemKind::Service => "Services",
@@ -293,7 +297,14 @@ mod tests {
     fn the_kind_and_host_labels_use_the_spec_words() {
         assert_eq!(
             ItemKind::ALL.map(ItemKind::plural),
-            ["Extensions", "Agents", "Skills", "Services", "Themes"]
+            [
+                "Extensions",
+                "Tools",
+                "Agents",
+                "Skills",
+                "Services",
+                "Themes"
+            ]
         );
         assert_eq!(ItemKind::Theme.singular(), "Theme");
         assert_eq!(

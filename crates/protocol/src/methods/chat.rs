@@ -1,5 +1,5 @@
 //! Structured chat sessions: an agent session whose run speaks a structured protocol with the service instead of drawing
-//! a terminal (capability `agent-chat/1`, decision 0101). The first slice supports Claude Code only.
+//! a terminal (capability `agent-chat/1`, decision 0101): Claude Code (decision 0101) and Codex (decision 0173).
 //!
 //! A chat session is an ordinary agent session ([`AgentSession`](crate::methods::agents::AgentSession)): `agent.show`,
 //! `agent.list`, `agent.watch`, `agent.stop`, `agent.resume`, `agent.prompt`, `agent.queue*`, `agent.set_mode` and
@@ -496,6 +496,28 @@ pub struct Turn {
     pub user_item: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_ms: Option<i64>,
+    /// The conversation's token totals as the CLI last reported them during the turn (decision 0173). Absent when the
+    /// CLI reports none, as Claude's dialect does here, and from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
+}
+
+/// Token counts a CLI reports (decision 0173). Every count is a running total for the conversation, not the turn's own
+/// share; a count the CLI leaves out is 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// The part of `input_tokens` read from the vendor's cache.
+    #[serde(default)]
+    pub cached_input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// The part of `output_tokens` spent on reasoning.
+    #[serde(default)]
+    pub reasoning_output_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
 }
 
 /// Where a turn is.

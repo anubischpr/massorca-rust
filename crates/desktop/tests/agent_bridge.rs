@@ -31,6 +31,7 @@ use massorca_protocol::methods::workspaces::{
 use massorca_server::{RunningService, Service, ServiceConfig};
 use massorca_ui::components::terminal_surface::feed::TerminalFeed;
 use tempfile::TempDir;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
@@ -379,6 +380,53 @@ fn declare_fake_kind(home: &Path) {
     let program = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
     let kind = format!(r#"{{"id":"fake","name":"Fake agent","program":["{program}"]}}"#);
     std::fs::write(dir.join("fake.json"), kind).expect("the kind file");
+}
+
+/// Declares kind `fast-fake`: the shell again, with a default model that takes fast mode and one that does not. Fast mode
+/// is passed as the `--settings` object a Claude-style kind declares.
+fn declare_fast_kind(home: &Path) {
+    let dir = profile(home).dir().join("agents").join("kinds");
+    std::fs::create_dir_all(&dir).expect("the kinds folder");
+    let program = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let kind = format!(
+        r#"{{"id":"fast-fake","name":"Fast fake agent","program":["{program}"],"model":{{"flag":"--model","choices":[{{"id":"fast-model","label":"Fast model","default":true,"fast":true}},{{"id":"plain-model","label":"Plain model"}}]}},"fast":{{"settings":{{"fastMode":true}}}}}}"#
+    );
+    std::fs::write(dir.join("fast-fake.json"), kind).expect("the kind file");
+}
+
+/// Folds the bridge's updates into `state`, as the store does, until `done` holds.
+async fn fold_until(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    done: impl Fn(&StoreState) -> bool,
+) {
+    let folded = timeout(WAIT, async {
+        while !done(state) {
+            let update = updates.recv().await.expect("the bridge is alive");
+            state.apply(update, Instant::now());
+        }
+    })
+    .await;
+    assert!(folded.is_ok(), "timed out waiting for {what}: {state:?}");
+}
+
+/// A bridge on `home`'s profile, with its updates folded into a store state until kind `kind` is detected.
+async fn bridge_with_detected_kind(
+    home: &Path,
+    kind: &str,
+) -> (ServiceBridge, UnboundedReceiver<StoreUpdate>, StoreState) {
+    let mut bridge =
+        ServiceBridge::start(profile(home), connect_options(None)).expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    let mut state = StoreState::default();
+    fold_until(&mut updates, &mut state, "the declared kind", |s| {
+        s.agent_kinds
+            .iter()
+            .any(|declared| declared.id == kind && declared.detected)
+    })
+    .await;
+    (bridge, updates, state)
 }
 
 #[tokio::test]
@@ -788,6 +836,165 @@ async fn a_forget_with_the_archive_options_reaches_the_service_that_offers_the_c
 }
 
 #[tokio::test]
+async fn a_rename_of_a_session_reaches_the_store_through_the_bridge() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) = bridge_with_detected_kind(home.path(), "fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = start_fake(&handle, &workspace.id).await;
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    fold_until(&mut updates, &mut state, "the started session", |s| {
+        s.agents.iter().any(|agent| agent.id == session.id)
+    })
+    .await;
+
+    let renamed = handle
+        .agent_rename(&session.id, "Parser cleanup")
+        .await
+        .expect("the session is renamed");
+    assert_eq!(renamed.title.as_deref(), Some("Parser cleanup"));
+    fold_until(&mut updates, &mut state, "the new title", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.title.as_deref() == Some("Parser cleanup"))
+    })
+    .await;
+
+    handle
+        .close_terminal(&terminal)
+        .await
+        .expect("the session's terminal closes");
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn an_exited_session_archives_and_unarchives_through_the_bridge() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) = bridge_with_detected_kind(home.path(), "fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = start_fake(&handle, &workspace.id).await;
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    handle.send_terminal_input(&terminal, b"exit\r\n".to_vec());
+    fold_until(&mut updates, &mut state, "the exit of the run", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.execution.state == TerminalState::Exited)
+    })
+    .await;
+
+    let archived = handle
+        .agent_archive(&session.id, true)
+        .await
+        .expect("the exited session is archived");
+    assert!(archived.archived);
+    fold_until(&mut updates, &mut state, "the archive", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.archived)
+    })
+    .await;
+
+    let restored = handle
+        .agent_archive(&session.id, false)
+        .await
+        .expect("the archive is cleared");
+    assert!(!restored.archived);
+    fold_until(&mut updates, &mut state, "the cleared archive", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && !agent.archived)
+    })
+    .await;
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_fast_start_carries_fast_to_the_session_only_when_the_kind_and_model_take_it() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    declare_fast_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) =
+        bridge_with_detected_kind(home.path(), "fast-fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+
+    // The kind's default model takes fast mode, so the start carries it to the session.
+    let fast = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect("the fast start is accepted");
+    assert!(fast.fast.as_ref().is_some_and(|speed| speed.on));
+    fold_until(&mut updates, &mut state, "the fast session", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == fast.id && agent.fast.as_ref().is_some_and(|speed| speed.on))
+    })
+    .await;
+
+    // A start that does not ask for fast mode carries none.
+    let plain = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            read_only: true,
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect("the plain start is accepted");
+    assert!(plain.fast.is_none());
+
+    // A model that does not take fast mode refuses it, and so does a kind with no fast mode.
+    let refused = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            model: Some("plain-model".to_owned()),
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect_err("a model without fast mode refuses it");
+    assert_eq!(refused.code(), Some(codes::AGENT_OPTION_UNSUPPORTED));
+    let refused = handle
+        .agent_start(AgentStartParams {
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect_err("a kind with no fast mode refuses it");
+    assert_eq!(refused.code(), Some(codes::AGENT_OPTION_UNSUPPORTED));
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
 async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     let home = temp_home();
     let folder = home.path().with_file_name("notes");
@@ -982,4 +1189,71 @@ fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAdd
         workspaces_root: None,
         icon: None,
     }
+}
+
+#[tokio::test]
+async fn a_writing_child_in_the_parent_worktree_reaches_the_store_with_its_parent_link() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the declared kind is listed once the bridge connects");
+
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let parent = start_fake(&handle, &workspace.id).await;
+    let delegated = handle
+        .agent_delegate(massorca_protocol::methods::agents::AgentDelegateParams {
+            parent: parent.id.clone(),
+            kind: Some("fake".to_owned()),
+            read_only: false,
+            same_workspace: true,
+            ..base_agent_delegate_params()
+        })
+        .await
+        .expect("the writing child starts in the parent's worktree");
+    let child = delegated.session;
+    assert_eq!(child.workspace_id, parent.workspace_id);
+    assert_eq!(child.parent_id.as_deref(), Some(parent.id.as_str()));
+    assert!(!child.read_only, "a writing child holds the parent");
+
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentChanged(changed) =
+                updates.recv().await.expect("the bridge is alive")
+                && changed.id == child.id
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the child reaches the store with its parent link");
+
+    for terminal in [child.terminal_id.clone(), parent.terminal_id.clone()]
+        .into_iter()
+        .flatten()
+    {
+        handle
+            .close_terminal(&terminal)
+            .await
+            .expect("the session's terminal closes");
+    }
+    drop(bridge);
+    stop_service(service).await;
 }

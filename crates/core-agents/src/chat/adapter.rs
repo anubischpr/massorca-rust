@@ -2,7 +2,9 @@
 //! rule about items; an adapter only turns the dialect's lines into [`JournalOp`]s and the service's intents into bytes.
 
 use massorca_protocol::methods::agents::Outcome;
-use massorca_protocol::methods::chat::{ApprovalDecision, ApprovalScope, ChatItemBody, TurnState};
+use massorca_protocol::methods::chat::{
+    ApprovalDecision, ApprovalScope, ChatItemBody, TokenUsage, TurnState,
+};
 
 /// A change an adapter asks of the journal for one line of output. Items are named by `key`s the adapter chooses (a
 /// vendor's message or tool call id); the journal maps each to a stable item id for the rest of the run.
@@ -26,6 +28,11 @@ pub enum JournalOp {
         state: TurnState,
         outcome: Option<Outcome>,
     },
+    /// The open turn's token usage as the CLI reports it (decision 0173). Ignored without an open turn.
+    Usage { usage: TokenUsage },
+    /// The CLI named its own conversation id (decision 0173): the session keeps it as its agent ref when it has none, so
+    /// a resume finds the conversation. Written after the line's other ops.
+    LearnRef { agent_ref: String },
     /// Bytes for the run's standard input, written after the line's other ops: the answer to a request the dialect
     /// requires one for and the adapter answers itself (a refusal of a permission request it cannot read). Never an
     /// authorization.
@@ -51,9 +58,16 @@ pub struct ApprovalAnswer {
 pub trait ChatAdapter: Send {
     /// The arguments the run starts with, from the arguments the kind's launch plan built (its declared arguments and the
     /// permission mode's, without a prompt: a chat's prompts go to standard input).
-    fn launch_args(&self, planned: Vec<String>) -> Vec<String>;
+    fn launch_args(&mut self, planned: Vec<String>) -> Vec<String>;
 
-    /// The bytes that send `text` as the person's next message, with their line ending.
+    /// The bytes the run's standard input gets first, before any prompt: a dialect's handshake. None by default.
+    fn opening(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// The bytes that send `text` as the person's next message, with their line ending. A dialect that cannot send it
+    /// yet (its conversation is still opening) may hold it and return no bytes, then send it later with a
+    /// [`JournalOp::Send`].
     fn encode_prompt(&mut self, text: &str) -> Vec<u8>;
 
     /// What one line of standard output (without its line ending) means for the journal. A line the adapter cannot read

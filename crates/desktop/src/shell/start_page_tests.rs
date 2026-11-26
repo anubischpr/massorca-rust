@@ -18,7 +18,9 @@ use crate::service::{
 };
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_profile::Profile;
-use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
+use massorca_protocol::methods::agents::{
+    AgentKind, AgentSession, AgentStartParams, KindFast, PackageState,
+};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams};
 use massorca_protocol::methods::workspaces::Workspace;
@@ -1604,7 +1606,7 @@ fn picker_of(
     use massorca_ui::components::model_picker::{Choice, PickerState};
     let installed = session_kind_choices(kinds);
     PickerState::new(
-        picker_agents(kinds, &installed, &std::collections::BTreeMap::new()),
+        picker_agents(kinds, &installed, &std::collections::BTreeMap::new(), false),
         Choice {
             model: model.to_owned().into(),
             effort,
@@ -1723,6 +1725,69 @@ fn fast_is_off_with_its_reason_until_the_service_offers_it_and_standard_stays_ch
     );
 }
 
+/// Claude as `claude_with_models`, with `sonnet` taking fast mode and the kind declaring it (decision 0165).
+fn claude_with_fast_model() -> AgentKind {
+    let mut kind = claude_with_models();
+    kind.fast = Some(KindFast {
+        supported: true,
+        reason: None,
+    });
+    if let Some(model) = kind.model.as_mut() {
+        for choice in &mut model.choices {
+            choice.fast = choice.id == "sonnet";
+        }
+    }
+    kind
+}
+
+#[gpui::test]
+fn a_fast_model_starts_fast_once_the_service_offers_agent_fast(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_fast_model()]);
+    rig._updates
+        .send(StoreUpdate::AgentFastOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    let picker = composer.read_with(cx, |composer, _| composer.picker().clone());
+    picker.update(cx, |picker, cx| picker.set_speed(true, cx));
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(
+        params.fast,
+        Some(true),
+        "the Fast speed of the chosen model goes out with the start"
+    );
+}
+
+#[gpui::test]
+fn a_kind_without_fast_mode_says_why_on_its_speed_segment(cx: &mut TestAppContext) {
+    let mut kind = claude_with_models();
+    kind.fast = Some(KindFast {
+        supported: false,
+        reason: Some("Claude's CLI takes no fast mode yet.".to_owned()),
+    });
+    let (rig, cx) = start_page_rig(cx, vec![kind]);
+    rig._updates
+        .send(StoreUpdate::AgentFastOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let composer = composer_of(&rig, cx);
+    let reason = composer.read_with(cx, |composer, cx| {
+        composer
+            .picker()
+            .read(cx)
+            .state()
+            .current_model()
+            .and_then(|model| model.fast_reason.as_ref().map(|reason| reason.to_string()))
+    });
+    assert_eq!(
+        reason.as_deref(),
+        Some("Claude's CLI takes no fast mode yet."),
+        "the kind's own reason names why its models take no Fast"
+    );
+}
+
 #[gpui::test]
 fn without_the_capability_the_start_sends_neither_model_nor_effort(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page_rig(
@@ -1760,6 +1825,7 @@ fn the_picked_model_and_level_send_their_declared_ids_only_when_offered() {
         StartOptions {
             model: Some("opus".to_owned()),
             effort: Some("max".to_owned()),
+            fast: None,
         }
     );
     assert_eq!(
@@ -1776,6 +1842,7 @@ fn a_model_without_levels_sends_the_model_alone_and_a_level_past_its_list_sends_
         StartOptions {
             model: Some("haiku".to_owned()),
             effort: None,
+            fast: None,
         }
     );
     assert_eq!(
@@ -1817,7 +1884,7 @@ fn the_picker_gets_each_kinds_declared_levels_and_its_listed_brand_colours() {
     };
     let brands = std::collections::BTreeMap::from([("claude".to_owned(), brand)]);
 
-    let agents = picker_agents(&kinds, &installed, &brands);
+    let agents = picker_agents(&kinds, &installed, &brands, false);
     let row = &agents[0].models[0];
     assert_eq!(
         row.efforts
@@ -1853,7 +1920,12 @@ fn a_kind_with_levels_but_no_model_sends_only_the_chosen_level() {
     });
     let kinds = [codex];
     let installed = crate::model::agent_kinds::session_kind_choices(&kinds);
-    let agents = picker_agents(&kinds, &installed, &std::collections::BTreeMap::new());
+    let agents = picker_agents(
+        &kinds,
+        &installed,
+        &std::collections::BTreeMap::new(),
+        false,
+    );
     let picker = PickerState::new(
         agents,
         Choice {
@@ -1868,6 +1940,7 @@ fn a_kind_with_levels_but_no_model_sends_only_the_chosen_level() {
         crate::model::start_page::StartOptions {
             model: None,
             effort: Some("high".to_owned()),
+            fast: None,
         }
     );
 }

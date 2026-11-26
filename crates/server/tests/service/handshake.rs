@@ -52,6 +52,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::DEVICES,
             capabilities::EVENTS,
             capabilities::EXTENSIONS_LOG,
+            capabilities::EXTENSIONS_PROGRAMS,
             capabilities::EXTENSIONS_ROLLBACK,
             capabilities::EXTENSIONS,
             capabilities::GIT,
@@ -66,6 +67,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::SERVICE_TOOLS,
             capabilities::SERVICE,
             capabilities::SERVICES,
+            capabilities::SKILLS_PLACE,
             capabilities::SKILLS,
             capabilities::TEAM_ROOM,
             capabilities::TEAM_ROOM_CARDS,
@@ -136,6 +138,31 @@ async fn a_first_frame_other_than_hello_is_refused() {
         "the connection closes after the refusal"
     );
     stop(running).await;
+}
+
+/// A refusal the client reads only after the service has stopped, its end of the pipe closed, still arrives.
+#[tokio::test]
+async fn a_refusal_read_after_the_service_closed_still_arrives() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let mut raw = Raw::open(home.path(), "default").await;
+    raw.send(&request(1, service::INFO, Value::Null)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // A stopped service has dropped every connection, so the refusal is read from a pipe the service closed.
+    stop(running).await;
+
+    let refusal = raw
+        .recv_step("the refusal")
+        .await
+        .expect("the refusal survives the close");
+    assert_eq!(
+        refusal_code(&refusal).as_deref(),
+        Some(codes::PROTOCOL_HANDSHAKE)
+    );
+    assert!(
+        raw.recv_step("the close after the refusal").await.is_none(),
+        "the connection closes after the refusal"
+    );
 }
 
 // The exact window is measured on a paused clock in `handshake.rs`; this checks a real connection honours it.

@@ -1,0 +1,44 @@
+{
+  "id": "massorca.node",
+  "name": "Node.js",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "The JavaScript runtime that npm-based agents need.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["node"] }, "reason": "Runs Node.js on this host." }
+  ],
+  "contributes": {
+    "hostPrograms": [{
+      "id": "node",
+      "cli": {
+        "binary": "node",
+        "verify": ["node", "--version"],
+        "source": "https://nodejs.org/en/download",
+        "sourceChecked": "2026-11-25",
+        "install": [
+          { "os": "windows", "command": ["winget", "install", "--id", "OpenJS.NodeJS.LTS", "-e"] },
+          { "os": "macos", "command": ["brew", "install", "node"] },
+          { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "nodejs"], "manual": true },
+          { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "nodejs"], "manual": true }
+        ],
+        "update": [
+          { "os": "windows", "command": ["winget", "upgrade", "--id", "OpenJS.NodeJS.LTS", "-e"] },
+          { "os": "macos", "command": ["brew", "upgrade", "node"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["winget", "uninstall", "--id", "OpenJS.NodeJS.LTS", "-e"] },
+          { "os": "macos", "command": ["brew", "uninstall", "node"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "tools",
+    "developer": { "name": "OpenJS Foundation" },
+    "website": "https://nodejs.org/en/download"
+  }
+}

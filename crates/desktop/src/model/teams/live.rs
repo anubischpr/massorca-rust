@@ -143,6 +143,7 @@ fn live_project(ids: &TeamIds, record: &ProjectRecord) -> Option<Project> {
         brief: record.project.brief.clone(),
         link: None,
         link_saved: false,
+        code_source: record.project.code_source,
         tasks: live_tasks(ids, &record.board),
     })
 }

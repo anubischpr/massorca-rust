@@ -38,6 +38,18 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// Skill placement (SKL-02): a folder for the skill already holds one MassOrca did not place.
+pub const SKILL_NAME_TAKEN: &str = "skill.name_taken";
+/// Skill placement (SKL-02): the skill changed since MassOrca placed it; remove the placed copies first.
+pub const SKILL_CONTENT_CHANGED: &str = "skill.content_changed";
+/// Skill placement (SKL-02): `skills.unplace` names a skill MassOrca did not place.
+pub const SKILL_NOT_PLACED: &str = "skill.not_placed";
+/// Skill placement (SKL-02): no skill with that id is found on this host.
+pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+/// Skill placement (SKL-02): the skill cannot be copied (a link inside it, a bundled or plugin skill, or too large).
+pub const SKILL_NOT_PLACEABLE: &str = "skill.not_placeable";
+/// Skill placement (SKL-02): the placement record on this host cannot be read, so nothing is removed.
+pub const SKILL_RECORD_INVALID: &str = "skill.record_invalid";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";

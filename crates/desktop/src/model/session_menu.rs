@@ -8,6 +8,9 @@ pub enum SessionMenuId {
     CopyPath,
     OpenFolder,
     RevealInWorkPanel,
+    Rename,
+    Archive,
+    Unarchive,
     Delete,
 }
 
@@ -25,6 +28,8 @@ pub struct SessionFacts {
     pub running: bool,
     /// The session has a terminal the Work panel can show.
     pub has_terminal: bool,
+    /// The session is archived (decision 0163), so its menu offers Unarchive.
+    pub archived: bool,
 }
 
 /// What the menu is decided from: the session, when the row has one, and where its folder is.
@@ -36,6 +41,8 @@ pub struct SessionMenuFacts {
     pub local: bool,
     /// Whether the service offers `agent-archive/1`, which forgets a session.
     pub delete_offered: bool,
+    /// Whether the service offers `agent-archive/1`, which renames a session and archives it (decision 0163).
+    pub archive_offered: bool,
 }
 
 /// The rows of a session's menu for `facts`, top to bottom.
@@ -52,6 +59,15 @@ pub fn session_menu(facts: SessionMenuFacts) -> Vec<SessionMenuRow> {
     if session.is_some_and(|session| session.has_terminal) {
         rows.push(SessionMenuRow::Item(SessionMenuId::RevealInWorkPanel));
     }
+    if let Some(session) = session.filter(|_| facts.archive_offered) {
+        rows.push(SessionMenuRow::Item(SessionMenuId::Rename));
+        // The service refuses to archive a live run, so Archive waits for the run to end.
+        if session.archived {
+            rows.push(SessionMenuRow::Item(SessionMenuId::Unarchive));
+        } else if !session.running {
+            rows.push(SessionMenuRow::Item(SessionMenuId::Archive));
+        }
+    }
     // The service forgets only a session whose run has ended, so Delete waits for that.
     if facts.delete_offered && session.is_some_and(|session| !session.running) {
         rows.push(SessionMenuRow::Divider);
@@ -62,16 +78,25 @@ pub fn session_menu(facts: SessionMenuFacts) -> Vec<SessionMenuRow> {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionMenuId::{CopyPath, Delete, OpenFolder, RevealInWorkPanel, Stop};
+    use super::SessionMenuId::{
+        Archive, CopyPath, Delete, OpenFolder, Rename, RevealInWorkPanel, Stop, Unarchive,
+    };
     use super::*;
 
     const RUNNING: Option<SessionFacts> = Some(SessionFacts {
         running: true,
         has_terminal: true,
+        archived: false,
     });
     const ENDED: Option<SessionFacts> = Some(SessionFacts {
         running: false,
         has_terminal: false,
+        archived: false,
+    });
+    const ARCHIVED: Option<SessionFacts> = Some(SessionFacts {
+        running: false,
+        has_terminal: false,
+        archived: true,
     });
 
     fn facts(session: Option<SessionFacts>, local: bool, delete_offered: bool) -> SessionMenuFacts {
@@ -79,6 +104,17 @@ mod tests {
             session,
             local,
             delete_offered,
+            archive_offered: false,
+        }
+    }
+
+    /// The facts of a service that offers `agent-archive/1`.
+    fn offered(session: Option<SessionFacts>) -> SessionMenuFacts {
+        SessionMenuFacts {
+            session,
+            local: true,
+            delete_offered: true,
+            archive_offered: true,
         }
     }
 
@@ -149,24 +185,80 @@ mod tests {
     }
 
     #[test]
+    fn an_ended_session_offers_rename_and_archive_before_the_delete_divider() {
+        assert_eq!(
+            session_menu(offered(ENDED)),
+            [
+                item(CopyPath),
+                item(OpenFolder),
+                item(Rename),
+                item(Archive),
+                SessionMenuRow::Divider,
+                item(Delete),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_running_session_renames_but_does_not_archive_until_its_run_ends() {
+        assert_eq!(
+            session_menu(offered(RUNNING)),
+            [
+                item(Stop),
+                item(CopyPath),
+                item(OpenFolder),
+                item(RevealInWorkPanel),
+                item(Rename),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_archived_session_offers_unarchive_in_place_of_archive() {
+        assert_eq!(
+            session_menu(offered(ARCHIVED)),
+            [
+                item(CopyPath),
+                item(OpenFolder),
+                item(Rename),
+                item(Unarchive),
+                SessionMenuRow::Divider,
+                item(Delete),
+            ]
+        );
+    }
+
+    #[test]
+    fn rename_and_archive_need_the_capability_and_a_session() {
+        let without = facts(ENDED, true, true);
+        assert!(!session_menu(without).contains(&item(Rename)));
+        assert!(!session_menu(without).contains(&item(Archive)));
+        assert!(!session_menu(offered(None)).contains(&item(Rename)));
+    }
+
+    #[test]
     fn a_session_on_a_paired_host_offers_stop_and_copy_path_only() {
         // A remote row's facts: never This PC's folder or terminal, and no Delete while the run may still be live.
         let running = SessionMenuFacts {
             session: Some(SessionFacts {
                 running: true,
                 has_terminal: false,
+                archived: false,
             }),
             local: false,
             delete_offered: false,
+            archive_offered: false,
         };
         assert_eq!(session_menu(running), vec![item(Stop), item(CopyPath)]);
         let ended = SessionMenuFacts {
             session: Some(SessionFacts {
                 running: false,
                 has_terminal: false,
+                archived: false,
             }),
             local: false,
             delete_offered: false,
+            archive_offered: false,
         };
         assert_eq!(session_menu(ended), vec![item(CopyPath)]);
     }
