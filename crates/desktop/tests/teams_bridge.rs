@@ -1425,3 +1425,71 @@ async fn a_card_with_no_run_is_not_stopped_and_the_service_says_so() {
     );
     stop_service(service).await;
 }
+
+fn code_source_of(state: &StoreState, name: &str) -> Option<CodeSource> {
+    teams_view(state)
+        .teams()
+        .iter()
+        .flat_map(|team| team.projects.iter())
+        .find(|project| project.name == name)
+        .and_then(|project| project.code_source)
+}
+
+#[tokio::test]
+async fn a_code_source_set_through_the_bridge_is_read_back_and_none_clears_it() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates, mut state) = team_with_checkout(home.path()).await;
+    let (team_key, project_key) = keys_of(&state, "Checkout");
+
+    let refused = handle
+        .set_project_code_source(
+            team_key.clone(),
+            project_key.clone(),
+            CodeSource::ExistingRepository,
+        )
+        .await
+        .expect_err("a code source needs Workspaces");
+    assert!(refused.message().contains("Workspaces"));
+
+    client_of(home.path())
+        .await
+        .team_update(&TeamUpdateParams {
+            team: team_key.clone(),
+            name: None,
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: Some(true),
+        })
+        .await
+        .expect("Workspaces on");
+    handle
+        .set_project_code_source(
+            team_key.clone(),
+            project_key.clone(),
+            CodeSource::ExistingRepository,
+        )
+        .await
+        .expect("the code source is recorded");
+    until(
+        &mut updates,
+        &mut state,
+        "the code source to be read",
+        |state| code_source_of(state, "Checkout") == Some(CodeSource::ExistingRepository),
+    )
+    .await;
+
+    handle
+        .set_project_code_source(team_key, project_key, CodeSource::None)
+        .await
+        .expect("the code source is cleared");
+    until(
+        &mut updates,
+        &mut state,
+        "the code source to be cleared",
+        |state| code_source_of(state, "Checkout").is_none(),
+    )
+    .await;
+    stop_service(service).await;
+}

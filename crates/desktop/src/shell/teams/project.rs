@@ -8,8 +8,10 @@ use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId, TeamPage};
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
+    AnyElement, App, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
+    prelude::*, px,
 };
+use massorca_protocol::methods::teams::CodeSource;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_CAPTION, TYPE_HEADING};
@@ -110,6 +112,17 @@ pub(in crate::shell) fn project_page(
     let link_section = section("Link to a Workspaces project", &theme)
         .child(link_control)
         .child(note(link_note, &theme));
+    let (code_enabled, code_note) = code_state(team_data.workspaces);
+    let code_control = code_control(
+        shell,
+        team,
+        project,
+        code_index(project_data.code_source),
+        code_enabled,
+    );
+    let code_section = section("Code source", &theme)
+        .child(code_control)
+        .child(note(code_note, &theme));
     div()
         .id("project-page")
         .flex()
@@ -122,6 +135,7 @@ pub(in crate::shell) fn project_page(
         .child(brief_section)
         .child(board_section)
         .child(link_section)
+        .child(code_section)
         .child(div().flex().justify_end().child(delete))
         .into_any_element()
 }
@@ -166,6 +180,98 @@ fn link_control(
                 shell.set_project_link(team, project, link, cx)
             });
         })
+}
+
+/// The code source choices, None first, in the order the control and the New project form list them (decision 0126).
+pub(super) const CODE_CHOICES: [CodeSource; 3] = [
+    CodeSource::None,
+    CodeSource::ExistingRepository,
+    CodeSource::NewFolderWithGit,
+];
+
+/// The index of a recorded code source's choice. No code source, and a kind this build does not know, select None.
+pub(super) fn code_index(source: Option<CodeSource>) -> usize {
+    CODE_CHOICES
+        .iter()
+        .position(|choice| Some(*choice) == source)
+        .unwrap_or(0)
+}
+
+/// The code source control, None first. A team with Workspaces off disables it, as the link control is.
+fn code_control(
+    shell: &WeakEntity<Shell>,
+    team: TeamId,
+    project: ProjectId,
+    selected: usize,
+    enabled: bool,
+) -> impl IntoElement {
+    let segments = CODE_CHOICES
+        .map(CodeSource::label)
+        .into_iter()
+        .map(Segment::text)
+        .collect();
+    let shell = shell.clone();
+    SegmentedControl::new("project-code-source", "Code source", segments)
+        .selected(selected)
+        .disabled(!enabled)
+        .on_change(move |index, _, cx| {
+            let Some(source) = CODE_CHOICES.get(index).copied() else {
+                return;
+            };
+            let _ = shell.update(cx, |shell, cx| {
+                shell.set_project_code_source(team, project, source, cx)
+            });
+        })
+}
+
+/// Whether the code source control can be used, and the sentence under it (decision 0126).
+fn code_state(workspaces: bool) -> (bool, &'static str) {
+    if workspaces {
+        (
+            true,
+            "Records where the code is. Nothing is cloned or created.",
+        )
+    } else {
+        (false, WORKSPACES_OFF)
+    }
+}
+
+impl Shell {
+    /// Sends the picked code source as `team.project_update`. The page shows it when the read that follows the answer
+    /// lands; a refusal leaves the recorded source as it was.
+    pub(super) fn set_project_code_source(
+        &mut self,
+        team: TeamId,
+        project: ProjectId,
+        source: CodeSource,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let (Some(team_key), Some(project_key)) =
+            (self.team_key(team, cx), self.project_key(project, cx))
+        else {
+            return;
+        };
+        cx.spawn(async move |_this, _cx| {
+            let _ = service
+                .set_project_code_source(team_key, project_key, source)
+                .await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The service's id for a project, numbered the way the store numbers teams: the key `team_key` gives a team.
+    fn project_key(&self, project: ProjectId, cx: &App) -> Option<String> {
+        self.store
+            .read(cx)
+            .state()
+            .team_ids
+            .key(project.0)
+            .map(str::to_owned)
+    }
 }
 
 /// Why a team with Workspaces off cannot link a project, as the service refuses it (decision 0120).
@@ -324,5 +430,20 @@ mod tests {
             link_state(false, HostReach::Connected, true),
             (false, WORKSPACES_OFF)
         );
+    }
+
+    #[test]
+    fn the_code_source_control_is_off_with_the_reason_when_workspaces_is_off() {
+        assert_eq!(code_state(false), (false, WORKSPACES_OFF));
+        assert!(code_state(true).0);
+    }
+
+    #[test]
+    fn a_recorded_code_source_selects_its_choice_and_none_selects_the_first() {
+        assert_eq!(code_index(None), 0);
+        assert_eq!(code_index(Some(CodeSource::None)), 0);
+        assert_eq!(code_index(Some(CodeSource::ExistingRepository)), 1);
+        assert_eq!(code_index(Some(CodeSource::NewFolderWithGit)), 2);
+        assert_eq!(code_index(Some(CodeSource::Unknown)), 0);
     }
 }
