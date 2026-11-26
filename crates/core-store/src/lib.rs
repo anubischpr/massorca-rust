@@ -9,6 +9,8 @@ mod backup;
 mod bots;
 mod devices;
 mod error;
+#[cfg(test)]
+mod migration_folder;
 mod migrations;
 mod projects;
 mod script_trust;
