@@ -77,6 +77,7 @@ fn live(id: &str) -> Terminal {
         created_at_ms: 1,
         exit: None,
         holds_secrets: false,
+        git_credential_guard: false,
     }
 }
 

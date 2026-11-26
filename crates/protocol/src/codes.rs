@@ -41,6 +41,12 @@ pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
+/// A workspace's archive script failed or timed out; nothing was stopped or removed. `allow_failed_archive` waives it.
+pub const WORKSPACE_ARCHIVE_FAILED: &str = "workspace.archive_failed";
+/// The project's `orca.yaml` defines no script of the kind asked for.
+pub const SCRIPT_NOT_FOUND: &str = "script.not_found";
+/// The script's content no longer has the hash the caller asked to trust.
+pub const SCRIPT_CHANGED: &str = "script.changed";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.
