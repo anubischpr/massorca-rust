@@ -95,27 +95,8 @@ pub fn text(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
 
-/// Writes an executable file. On Unix the test process never holds it open for writing: a test thread forking
-/// meanwhile would hand that descriptor to its child until exec, and running the file would then fail with
-/// "Text file busy". A `cp` child writes it instead, from a sibling the test process wrote.
-pub fn write_executable(path: &Path, contents: &str) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let source = path.with_extension("src");
-        std::fs::write(&source, contents).expect("write the executable's source");
-        let copied = massorca_process::command("cp")
-            .arg(&source)
-            .arg(path)
-            .status()
-            .expect("run cp");
-        assert!(copied.success(), "cp {} failed", source.display());
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .expect("make it executable");
-    }
-    #[cfg(not(unix))]
-    std::fs::write(path, contents).expect("write the executable");
-}
+/// Writes an executable a test then runs; see `massorca_process::test_executable`.
+pub use massorca_process::test_executable::write_executable;
 
 /// Installs a `post-checkout` hook running `body` under `sh`, overriding any global hooks path.
 pub fn install_post_checkout_hook(repo: &Path, body: &str) {
