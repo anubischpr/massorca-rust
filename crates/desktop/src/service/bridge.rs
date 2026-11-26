@@ -774,7 +774,7 @@ impl Link {
                 None
             }
             Command::HostTerminalAttach(attach) => {
-                host_terminal::spawn_attach(self.profile.clone(), attach);
+                host_terminal::spawn_attach(self.live_hosts.clone(), attach);
                 None
             }
             Command::HostedServices {

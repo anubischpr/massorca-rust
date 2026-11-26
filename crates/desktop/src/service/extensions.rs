@@ -6,8 +6,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use massorca_client::{Client, ClientError, Hosts};
-use massorca_profile::Profile;
+use massorca_client::{Client, ClientError};
 use massorca_protocol::capabilities;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AgentKind, AgentKinds};
@@ -132,11 +131,6 @@ async fn host_listing(client: &Client) -> HostListing {
         client.extension_catalogue()
     );
     listing_of(lists_of(kinds, installed, catalogue))
-}
-
-/// Connects to a paired host on its own connection: a call to one host needs no connection to this computer's service.
-pub(super) async fn connect_host(profile: &Profile, host: &str) -> Result<Client, ClientError> {
-    Client::connect_host(&Hosts::of(profile), host, &super::hosts::peer()).await
 }
 
 /// What a host that cannot be connected to says about it: one that speaks another protocol version needs an update.
