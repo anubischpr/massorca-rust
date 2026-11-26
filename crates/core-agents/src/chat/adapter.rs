@@ -26,6 +26,16 @@ pub enum JournalOp {
         state: TurnState,
         outcome: Option<Outcome>,
     },
+    /// Bytes for the run's standard input, written after the line's other ops: the answer to a request the dialect
+    /// requires one for and the adapter answers itself (a refusal of a permission request it cannot read). Never an
+    /// authorization.
+    Send { bytes: Vec<u8> },
+}
+
+/// The key under which an adapter adds the approval item of the permission request `request_id`, so the service finds
+/// the item an `agent.chat.approval.answer` names (decision 0101, D6).
+pub fn approval_key(request_id: &str) -> String {
+    format!("approval:{request_id}")
 }
 
 /// A person's answer to a permission request, as the adapter encodes it.
@@ -50,9 +60,15 @@ pub trait ChatAdapter: Send {
     /// should become a `notice`, never an error.
     fn translate(&mut self, line: &str) -> Vec<JournalOp>;
 
-    /// The bytes that answer the permission request `request_id`.
-    fn encode_approval(&mut self, request_id: &str, answer: &ApprovalAnswer) -> Vec<u8>;
+    /// The bytes that answer the permission request `request_id`, or `None` when the request is not pending with the
+    /// adapter (the CLI withdrew it, an interrupt cancelled it, or it was answered): then nothing may answer it. The
+    /// adapter keeps the request until [`Self::forget_request`], which the service calls once the answer is recorded.
+    fn encode_approval(&mut self, request_id: &str, answer: &ApprovalAnswer) -> Option<Vec<u8>>;
 
-    /// The bytes that interrupt the running turn and keep the run; `None` when the dialect has no interrupt.
+    /// Forgets the permission request `request_id`: it was answered.
+    fn forget_request(&mut self, request_id: &str);
+
+    /// The bytes that interrupt the running turn and keep the run; `None` when the dialect has no interrupt. Every
+    /// request the adapter holds is forgotten: an interrupt cancels it, and nothing answers it afterwards.
     fn encode_interrupt(&mut self) -> Option<Vec<u8>>;
 }

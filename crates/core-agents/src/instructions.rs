@@ -4,28 +4,14 @@
 //! support probe is used only when the installed CLI passes it; otherwise the run starts without the text, and the
 //! session records why.
 
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::path::Path;
 
-use crate::account_check::{account_strip_names, run_probe};
 use crate::kind::KindDecl;
+pub use crate::probe::PROBE_TIMEOUT;
 
-/// How long a support probe may run before it counts as failed.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The file in a session's run directory that holds why its current run got no instructions.
 const WITHHELD_FILE: &str = "instructions-withheld";
-
-/// A probe's identity: the program, its modified time, and what is run and looked for.
-type ProbeKey = (PathBuf, Option<SystemTime>, Vec<String>, String);
-
-/// The probe results of this service, so a probe runs once per installed program, not per launch.
-fn probe_cache() -> &'static Mutex<HashMap<ProbeKey, bool>> {
-    static CACHE: OnceLock<Mutex<HashMap<ProbeKey, bool>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 /// Whether `program`, the kind's resolved program, takes the kind's instruction channel: always without a declared
 /// probe; else when the probe exits 0 within [`PROBE_TIMEOUT`] and its output contains the declared text. The probe runs
@@ -38,34 +24,8 @@ pub(crate) fn channel_supported(decl: &KindDecl, program: &Path) -> bool {
     let Some(probe) = &channel.supported_when else {
         return true;
     };
-    let modified = fs::metadata(program)
-        .and_then(|metadata| metadata.modified())
-        .ok();
-    let key = (
-        program.to_path_buf(),
-        modified,
-        probe.args.clone(),
-        probe.contains.clone(),
-    );
-    if let Some(known) = probe_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&key)
-    {
-        return *known;
-    }
-    let output = run_probe(
-        program,
-        &probe.args,
-        &account_strip_names(decl),
-        PROBE_TIMEOUT,
-    );
-    let supported = output.exit == Some(0) && output.output.contains(&probe.contains);
-    probe_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(key, supported);
-    supported
+    let output = crate::probe::cached_probe(decl, program, &probe.args);
+    output.exit == Some(0) && output.output.contains(&probe.contains)
 }
 
 /// What a session records when its run got no instructions because its CLI failed the channel's probe.
