@@ -25,6 +25,7 @@ use super::{
     AgentError, Agents, Change, LiveRuns, RunRef, activity_of, gone, lock, not_live, running,
     write_files,
 };
+use crate::attachments::{self, Attachment};
 use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
@@ -55,6 +56,8 @@ pub(crate) struct ChatRun {
     adapter: Mutex<Box<dyn ChatAdapter>>,
     /// A queued prompt is being sent (decision 0084).
     pub(crate) delivering: AtomicBool,
+    /// How the run's kind names an attached file, `{path}` for its path (decision 0172).
+    mention: Option<String>,
 }
 
 /// The first events of a chat stream, and the journal position they bring the client to.
@@ -183,6 +186,7 @@ impl Agents {
         workspace_id: &str,
         cwd: &str,
         adapter: Box<dyn ChatAdapter>,
+        mention: Option<String>,
     ) -> Result<Arc<ChatRun>, AgentError> {
         if !plan.files.is_empty() {
             crate::credentials::create_agents_dir(self.profile_dir())?;
@@ -224,6 +228,7 @@ impl Agents {
             pipe,
             adapter: Mutex::new(adapter),
             delivering: AtomicBool::new(false),
+            mention,
         });
         lock(&self.inner.chat_runs).insert(session.to_owned(), Arc::clone(&run));
         Ok(run)
@@ -272,28 +277,32 @@ impl Agents {
 
     /// Opens a turn with the person's `text` in the journal, then writes it to the run.
     fn send_chat_text(&self, session: &str, run: &ChatRun, text: &str) -> Result<(), AgentError> {
-        self.send_chat_prompt(session, run, text, true).map(drop)
+        self.send_chat_prompt(session, run, text, &[], true)
+            .map(drop)
     }
 
-    /// Sends the person's `text` to a chat run (decision 0101, D7): while no turn runs and no request waits, it opens a
-    /// turn and is written; otherwise it is refused with `agent.busy`, unless `force`, which hands it to the CLI to hold
-    /// for its next turn (its turn opens when the running one ends). Returns the bytes written.
+    /// Sends the person's `text` and the `files` it names to a chat run (decision 0101, D7; decision 0172): while no turn
+    /// runs and no request waits, it opens a turn and is written; otherwise it is refused with `agent.busy`, unless
+    /// `force`, which hands it to the CLI to hold for its next turn (its turn opens when the running one ends). The files
+    /// are named in the text by the run's mention. Returns the bytes written.
     fn send_chat_prompt(
         &self,
         session: &str,
         run: &ChatRun,
         text: &str,
+        files: &[Attachment],
         force: bool,
     ) -> Result<usize, AgentError> {
-        let bytes = lock(&run.adapter).encode_prompt(text);
+        let typed = attachments::with_mentions(text, run.mention.as_deref(), files);
+        let bytes = lock(&run.adapter).encode_prompt(&typed);
         let mut refused = false;
         self.change_journal(session, |writer| {
             if !writer.busy() {
-                return writer.start_turn(text).map(drop);
+                return writer.start_turn(&typed).map(drop);
             }
             if force {
                 // Shown at once; its turn ends with the running one (decision 0101, D7).
-                return writer.hold_turn(text).map(drop);
+                return writer.hold_turn(&typed).map(drop);
             }
             refused = true;
             Ok(())
@@ -320,6 +329,7 @@ impl Agents {
         &self,
         row: &massorca_core_store::AgentSessionRow,
         text: &str,
+        files: &[Attachment],
         force: bool,
         lift_queue_pauses: bool,
     ) -> Result<PromptReceipt, AgentError> {
@@ -338,7 +348,7 @@ impl Agents {
                 ),
             ));
         }
-        let bytes = self.send_chat_prompt(&row.id, &run, text, force)?;
+        let bytes = self.send_chat_prompt(&row.id, &run, text, files, force)?;
         if lift_queue_pauses {
             self.lift_pauses(&row.id);
         }
@@ -360,7 +370,8 @@ impl Agents {
             .chat_run(session)
             .filter(|run| !run.pipe.has_exited())
             .ok_or_else(|| not_live(session))?;
-        self.send_chat_prompt(session, &run, text, force).map(drop)
+        self.send_chat_prompt(session, &run, text, &[], force)
+            .map(drop)
     }
 
     /// Applies `change` to the session's journal and announces the batch it made, under the journal lock. While the

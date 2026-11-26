@@ -1225,6 +1225,7 @@ mod tests {
             token: "t".to_owned(),
             rules: crate::status::HookRules::default(),
             prompt: crate::sessions::PromptRules {
+                mention: None,
                 has_status: true,
                 paste: crate::kind::PasteMode::Plain,
                 submit: "\r".to_owned(),

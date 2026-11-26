@@ -373,7 +373,7 @@ impl Agents {
             )
         } else {
             let text = bring_back_prompt(&child, &child_workspace.name, merge_commit.as_deref());
-            match self.send_prompt(&parent.id, &text, false, false) {
+            match self.send_prompt(&parent.id, &text, false, false, &[]) {
                 Ok(_) => (true, None),
                 Err(error) => (
                     false,
@@ -1215,6 +1215,7 @@ then report"
                 token: token.to_owned(),
                 rules: HookRules::default(),
                 prompt: PromptRules {
+                    mention: None,
                     has_status: true,
                     paste: PasteMode::Plain,
                     submit: "\r".to_owned(),
