@@ -22,9 +22,9 @@ use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
 use crate::features::forwards::{self, ForwardTable};
-use crate::features::port_urls::advertised_url;
+use crate::features::port_urls::{advertised_url, guessed_url};
 use crate::owner::Owner;
-use crate::permission::Permission;
+use crate::permission::{Permission, authorize};
 use crate::registry::RegistrationHandle;
 
 /// How long one sample is shared: concurrent and repeated calls within it get the same figures (decision 0081).
@@ -61,12 +61,35 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
                 async move {
                     let mut answer = ports(&samples, &ctx).await?;
                     mark_forwarded(&mut answer, &forwards.forwarded_ports());
+                    hide_unreadable_urls(&mut answer, &ctx);
                     Ok::<_, ErrorBody>(answer)
                 }
             },
         )?,
     ]);
     Ok(handles)
+}
+
+/// Replaces each printed URL whose terminal the caller may not read with the guessed one: a printed URL is terminal
+/// output, which needs `workspace`, and `host-admin` for a terminal that holds vault secrets (decisions 0071, 0131). The
+/// sample is shared by every caller, so this runs per call.
+fn hide_unreadable_urls(answer: &mut HostPorts, ctx: &RequestCtx) {
+    let workspace = authorize(&ctx.principal, Permission::Workspace).is_ok();
+    let admin = authorize(&ctx.principal, Permission::HostAdmin).is_ok();
+    for port in &mut answer.ports {
+        if !port.url_printed {
+            continue;
+        }
+        let holds_secrets = ctx
+            .state
+            .terminals
+            .get(&port.terminal_id)
+            .map_or(true, |info| info.holds_secrets);
+        if !workspace || (holds_secrets && !admin) {
+            port.url = Some(guessed_url(&port.connect_host, port.port));
+            port.url_printed = false;
+        }
+    }
 }
 
 /// Marks the ports an open forward targets. Read at each call, since forwards change between samples.

@@ -22,7 +22,7 @@ use crate::common::{connect, start, stop, temp_home};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// Set in the terminal's environment: the `listener` test then listens and writes its port to the file it names.
-const LISTENER_ENV: &str = "MASSORCA_HOST_PORTS_LISTENER";
+pub(crate) const LISTENER_ENV: &str = "MASSORCA_HOST_PORTS_LISTENER";
 
 /// Not a test of its own: the child a terminal runs. It listens on a free port, prints its URL as a dev server does,
 /// writes the port to the file named in `LISTENER_ENV`, and echoes each connection for two minutes. Returns at once
@@ -37,10 +37,7 @@ fn listener() {
     let mut out = std::io::stdout().lock();
     std::io::Write::write_fmt(
         &mut out,
-        format_args!(
-            "  Local:   http://localhost:{port}/app/
-"
-        ),
+        format_args!("  Local:   http://localhost:{port}/app/?token=sekrit-token#top\n"),
     )
     .expect("the URL is printed");
     std::io::Write::flush(&mut out).expect("stdout flushes");
@@ -65,7 +62,7 @@ fn listener() {
 }
 
 /// The terminal's program: this test binary, running only `listener`, so the listener is the terminal's child.
-fn listener_shell() -> ShellSpec {
+pub(crate) fn listener_shell() -> ShellSpec {
     let exe = std::env::current_exe().expect("the test binary");
     ShellSpec {
         program: exe.to_str().expect("a utf-8 path").to_owned(),
@@ -86,7 +83,7 @@ fn utf8(path: &Path) -> String {
 }
 
 /// The port the listener child wrote, once it is listening.
-async fn written_port(file: &Path) -> u16 {
+pub(crate) async fn written_port(file: &Path) -> u16 {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         if let Some(port) = std::fs::read_to_string(file)
@@ -101,7 +98,7 @@ async fn written_port(file: &Path) -> u16 {
 }
 
 /// `host.ports`, asked until the terminal's listener shows (a sample is shared for about a second).
-async fn listed(client: &Client, terminal: &str, port: u16) -> HostPorts {
+pub(crate) async fn listed(client: &Client, terminal: &str, port: u16) -> HostPorts {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let ports = client.host_ports().await.expect("host.ports");

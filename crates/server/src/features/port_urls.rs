@@ -20,12 +20,18 @@ pub(crate) fn advertised_url(screen: &str, port: u16, connect_host: &str) -> (St
         }
     }
     match local.or(other) {
-        Some(url) => (url.to_owned(), true),
+        Some(url) => (without_query(url).to_owned(), true),
         None => (guessed_url(connect_host, port), false),
     }
 }
 
-fn guessed_url(connect_host: &str, port: u16) -> String {
+/// A printed URL without its query and fragment, where dev servers put access tokens (Jupyter's `?token=`).
+fn without_query(url: &str) -> &str {
+    url.find(['?', '#']).map_or(url, |end| &url[..end])
+}
+
+/// The URL a socket is opened at when nothing printed one, or when the caller may not read what was printed.
+pub(crate) fn guessed_url(connect_host: &str, port: u16) -> String {
     if connect_host.contains(':') {
         format!("http://[{connect_host}]:{port}/")
     } else {
@@ -98,6 +104,16 @@ mod tests {
         assert_eq!(
             advertised_url(screen, 8443, "127.0.0.1"),
             ("https://127.0.0.1:8443/new".to_owned(), true)
+        );
+        let token =
+            "Jupyter at http://127.0.0.1:8888/lab?token=abc#cell and http://localhost:9000#x";
+        assert_eq!(
+            advertised_url(token, 8888, "127.0.0.1"),
+            ("http://127.0.0.1:8888/lab".to_owned(), true)
+        );
+        assert_eq!(
+            advertised_url(token, 9000, "localhost"),
+            ("http://localhost:9000".to_owned(), true)
         );
         let network_only = "Network: http://10.0.0.2:4000";
         assert_eq!(

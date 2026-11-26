@@ -30,6 +30,7 @@ mod git_watch;
 mod handshake;
 mod host_memory;
 mod host_ports;
+mod host_ports_secrets;
 mod host_storage;
 mod hosted_services;
 mod lifecycle;

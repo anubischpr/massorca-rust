@@ -58,7 +58,10 @@ reach it: a database, a dev server, an admin page.
   counts, and a tunnel's protocol or idle end. Payload is never logged.
 - D10 Ports and URLs. Each `host.ports` entry gains `url`: the last `http(s)` URL with that port that its terminal printed
   (a loopback or wildcard host wins over another, so `Local:` wins over `Network:`), else `http://` and `connect_host`;
-  `url_printed` says which. `forwarded` is true while an open forward targets the port. `host forward` prints the local
+  `url_printed` says which. `forwarded` is true while an open forward targets the port. A printed URL is terminal
+  output and may carry a secret (Jupyter prints `?token=`), so its query and fragment are always dropped, and a caller
+  that may not read the terminal gets the guessed URL instead: reading needs `workspace`, plus `host-admin` when the
+  terminal holds vault secrets (0071). The sample is shared between callers, so this is applied per call. `host forward` prints the local
   URL as the printed one with its host and port replaced by the local listener.
 
 ## Alternatives
