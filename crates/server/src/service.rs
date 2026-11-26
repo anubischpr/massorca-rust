@@ -245,6 +245,12 @@ impl Service {
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
+        let theme_store = store.clone();
+        let theme =
+            tokio::task::spawn_blocking(move || features::stored_terminal_theme(&theme_store))
+                .await
+                .map_err(io::Error::other)?;
+        terminals.set_theme(theme);
         let vault = Arc::new(Vault::new(
             store.clone(),
             profile.dir().join("vault"),

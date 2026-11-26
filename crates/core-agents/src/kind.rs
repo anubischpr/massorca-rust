@@ -95,7 +95,10 @@ pub struct KindDecl {
 }
 
 /// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
-pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+pub const CHAT_ADAPTERS: &[&str] = &[
+    crate::chat::claude::ADAPTER_NAME,
+    crate::chat::codex::ADAPTER_NAME,
+];
 
 /// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
 /// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
@@ -1891,7 +1894,7 @@ mod tests {
         for (chat, expected) in [
             (
                 serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
-                "chat.adapter \"acp\" must be one of claude-stream-json",
+                "chat.adapter \"acp\" must be one of claude-stream-json, codex-app-server",
             ),
             (
                 serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),

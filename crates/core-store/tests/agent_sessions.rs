@@ -221,6 +221,29 @@ fn sessions_list_newest_first_and_per_workspace() {
 }
 
 #[test]
+fn an_agent_ref_is_set_only_when_the_session_has_none() {
+    let (store, workspace) = store_with_workspace();
+    let row = AgentSessionRow {
+        agent_ref: None,
+        ..session_row(&workspace, 10)
+    };
+    store.insert_agent_session(&row).unwrap();
+    assert!(
+        store
+            .set_agent_session_ref_if_unset(&row.id, "thread-1")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_agent_session_ref_if_unset(&row.id, "thread-2")
+            .unwrap()
+    );
+    let stored = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(stored.agent_ref.as_deref(), Some("thread-1"));
+    assert_eq!(stored.title, row.title, "nothing else changes");
+}
+
+#[test]
 fn an_exit_is_recorded_once() {
     let (store, workspace) = store_with_workspace();
     let row = session_row(&workspace, 10);

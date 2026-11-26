@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use interprocess::local_socket::tokio::Stream;
+use massorca_profile::LocalStream;
 use massorca_protocol::{
     ErrorBody, Frame, FrameError, MAX_FRAME_LEN_LOCAL, Message, codes, read_frame, write_frame,
 };
@@ -52,7 +53,7 @@ pub(crate) fn spawn_with(
 /// The transport of the local socket: `u32` length-prefixed frames (decision 0002).
 pub(crate) fn spawn_local(stream: Stream) -> FrameIo {
     spawn_with(MAX_FRAME_LEN_LOCAL, |queues| {
-        let stream = Arc::new(stream);
+        let stream = Arc::new(LocalStream::new(stream));
         let reader = tokio::spawn(read_frames(Arc::clone(&stream), queues.inbound));
         let writer = tokio::spawn(write_frames(stream, queues.outbound));
         (reader, writer)
@@ -60,8 +61,8 @@ pub(crate) fn spawn_local(stream: Stream) -> FrameIo {
 }
 
 /// Reads frames until the peer closes or a read fails; the frames go to `inbound`.
-async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
-    let mut recv: &Stream = &stream;
+async fn read_frames(stream: Arc<LocalStream>, inbound: mpsc::Sender<Frame>) {
+    let mut recv: &Stream = stream.get();
     loop {
         match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
             Ok(Some(frame)) => {
@@ -80,8 +81,8 @@ async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
 
 /// Writes queued frames in order until the queue closes or a write fails. A reply too large for one frame is
 /// replaced by a `response.too_large` error for its request; nothing of the oversized frame was written.
-async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Frame>) {
-    let mut send: &Stream = &stream;
+async fn write_frames(stream: Arc<LocalStream>, mut outbound: mpsc::Receiver<Frame>) {
+    let mut send: &Stream = stream.get();
     while let Some(frame) = outbound.recv().await {
         let written = match write_frame(&mut send, &frame, MAX_FRAME_LEN_LOCAL).await {
             Err(FrameError::TooLarge(len)) => {
