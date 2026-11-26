@@ -24,6 +24,7 @@ mod item_images_tests;
 mod log_view;
 mod more_menu;
 mod package;
+mod program_update;
 mod review;
 mod rollback;
 mod services;
@@ -46,13 +47,14 @@ pub(super) use host_pick::{HostPick, host_picker_for};
 pub(super) use log_view::RunLogView;
 pub(super) use rollback::RollbackConfirm;
 pub(super) use services::ServiceDialog;
+pub(super) use skills::PlacementReview;
 use std::collections::BTreeSet;
 
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, WeakEntity,
     Window, div, prelude::*, px,
 };
-use massorca_protocol::methods::extensions::ExtensionReview;
+use massorca_protocol::methods::extensions::{ExtensionReview, ProgramUpdateReview};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::select::SelectView;
@@ -93,6 +95,9 @@ pub(super) struct InstallReview {
     pub details_open: bool,
     pub sending: bool,
     pub error: Option<String>,
+    /// For an update of a host program MassOrca installed: the program, and its review once read (decision 0151).
+    pub program: Option<String>,
+    pub update: Option<ProgramUpdateReview>,
 }
 
 /// What the Marketplace pages draw for one frame, gathered by the shell.
@@ -128,6 +133,8 @@ pub(super) struct MarketplaceFrame {
     service_error: Option<(String, String)>,
     /// The Skills section's host and what it shows for that host (SKL-01).
     skills: skills::SkillsSection,
+    /// Whether the item page shows Update: a host program MassOrca installed, and the service offers updates.
+    updatable: bool,
     shell: WeakEntity<Shell>,
 }
 
@@ -161,6 +168,10 @@ pub(super) fn frame(
         services: shell.marketplace_services.clone(),
         service_error: shell.marketplace_service_error.clone(),
         skills: skills::section_of(shell, cx),
+        updatable: match page {
+            MarketplacePage::Item(id) => shell.updatable_program(id, cx).is_some(),
+            _ => false,
+        },
         shell: weak,
     }
 }

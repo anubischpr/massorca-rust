@@ -71,7 +71,7 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
-pub use skills::{SkillsListing, SkillsRead};
+pub use skills::{PlacementAnswer, PlacementCall, PlacementOutcome, SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
 pub use team_room::{NO_ROOM, TeamRoomRead, TeamRooms};

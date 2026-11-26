@@ -1,0 +1,44 @@
+{
+  "id": "massorca.gh",
+  "name": "GitHub CLI",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "GitHub on the command line, for pull requests and sign-ins.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["gh"] }, "reason": "Runs GitHub CLI on this host." }
+  ],
+  "contributes": {
+    "hostPrograms": [{
+      "id": "gh",
+      "cli": {
+        "binary": "gh",
+        "verify": ["gh", "--version"],
+        "source": "https://cli.github.com/",
+        "sourceChecked": "2026-11-25",
+        "install": [
+          { "os": "windows", "command": ["winget", "install", "--id", "GitHub.cli", "-e"] },
+          { "os": "macos", "command": ["brew", "install", "gh"] },
+          { "os": "linux", "command": ["sudo", "apt-get", "install", "-y", "gh"], "manual": true },
+          { "os": "linux", "command": ["sudo", "dnf", "install", "-y", "gh"], "manual": true }
+        ],
+        "update": [
+          { "os": "windows", "command": ["winget", "upgrade", "--id", "GitHub.cli", "-e"] },
+          { "os": "macos", "command": ["brew", "upgrade", "gh"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["winget", "uninstall", "--id", "GitHub.cli", "-e"] },
+          { "os": "macos", "command": ["brew", "uninstall", "gh"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "tools",
+    "developer": { "name": "GitHub" },
+    "website": "https://cli.github.com/"
+  }
+}

@@ -4,8 +4,9 @@
 use super::{InstallReview, RollbackConfirm, RunLogView, UninstallConfirm};
 use crate::model::marketplace::{
     CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, ReviewOutcome, RunRow, SignInFlow, SignInStep,
-    offers_cli_removal, remove_details, remove_outcome, review_details, review_outcome,
-    rollback_details, rollback_outcome, run_log_text, run_row,
+    offers_cli_removal, program_update_details, program_update_outcome, remove_details,
+    remove_outcome, review_details, review_outcome, rollback_details, rollback_outcome,
+    run_log_text, run_row,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -67,16 +68,28 @@ fn install_review(
     let theme = *cx.theme();
     let p = &theme.palette;
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
-    let outcome = review
-        .review
-        .as_ref()
-        .map(|answer| review_outcome(answer, &name));
+    // An update of a host program reuses this dialog (decision 0151): its review comes from the update call.
+    let updating = review.program.is_some();
+    let outcome = if updating {
+        review
+            .update
+            .as_ref()
+            .map(|_| program_update_outcome(&name))
+    } else {
+        review
+            .review
+            .as_ref()
+            .map(|answer| review_outcome(answer, &name))
+    };
     let runs_installer = review
         .review
         .as_ref()
         .is_some_and(|answer| answer.runs_installer);
-    let may_install =
-        review.review.is_some() && !review.sending && (!runs_installer || review.run_installer);
+    let may_install = if updating {
+        review.update.is_some() && !review.sending
+    } else {
+        review.review.is_some() && !review.sending && (!runs_installer || review.run_installer)
+    };
     let (title, action_label) = outcome.as_ref().map_or_else(
         || (format!("Install {name}"), "Add to MassOrca"),
         |outcome| (outcome.title().to_owned(), outcome.button()),
@@ -96,7 +109,8 @@ fn install_review(
                 .child("Reading what installing this package does."),
         ),
         None => body,
-        Some(ReviewOutcome::Add { body: text, .. }) => body.child(sentence(text)),
+        Some(ReviewOutcome::Add { body: text, .. })
+        | Some(ReviewOutcome::Update { sentence: text, .. }) => body.child(sentence(text)),
         Some(ReviewOutcome::Install {
             sentence: text,
             command,
@@ -107,13 +121,29 @@ fn install_review(
                 .text_color(p.text.primary)
                 .child(command),
         ),
+        Some(ReviewOutcome::Manual {
+            sentence: text,
+            commands,
+            ..
+        }) => {
+            let mut body = body.child(sentence(text));
+            for (index, command) in commands.into_iter().enumerate() {
+                body = body.child(manual_command(index, command, cx));
+            }
+            body
+        }
     };
-    if let Some(answer) = &review.review {
+    let lines = match (&review.update, &review.review) {
+        (Some(update), _) => Some(program_update_details(update)),
+        (None, Some(answer)) => Some(review_details(answer)),
+        (None, None) => None,
+    };
+    if let Some(lines) = lines {
         let (toggle, open) = (weak.clone(), review.details_open);
         body = body.child(details(
             "marketplace-install-details",
             open,
-            review_details(answer),
+            lines,
             move |cx| {
                 let _ = toggle.update(cx, |shell, cx| shell.set_install_details(!open, cx));
             },
@@ -128,7 +158,13 @@ fn install_review(
         .busy(review.sending)
         .action_disabled(!may_install)
         .on_action(move |_, cx| {
-            let _ = ok.update(cx, |shell, cx| shell.confirm_extension_install(cx));
+            let _ = ok.update(cx, |shell, cx| {
+                if updating {
+                    shell.confirm_program_update(cx);
+                } else {
+                    shell.confirm_extension_install(cx);
+                }
+            });
         })
         .on_dismiss(move |_, cx| {
             let _ = dismiss.update(cx, |shell, cx| shell.cancel_extension_review(cx));
@@ -158,6 +194,33 @@ fn install_review(
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
+}
+
+/// A command the person runs themselves, with a Copy button; MassOrca never runs it (decision 0151).
+fn manual_command(index: usize, command: String, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let copied = command.clone();
+    div()
+        .debug_selector(move || format!("marketplace-manual-command-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_style(TYPE_MONO_SM)
+                .text_color(theme.palette.text.primary)
+                .child(command),
+        )
+        .child(
+            Button::new(("marketplace-manual-copy", index), "Copy")
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
+                }),
+        )
+        .into_any_element()
 }
 
 /// Show details: a ghost toggle, collapsed by default, and the technical lines under it when open.
