@@ -9,6 +9,70 @@ use massorca_protocol::methods::automations::{
 };
 use serde_json::{Value, json};
 
+/// The create params the tests start from; a test changes only the fields it checks.
+fn create_params() -> AutomationCreateParams {
+    AutomationCreateParams {
+        project: "app".to_owned(),
+        name: "Morning PRs".to_owned(),
+        prompt: "Summarise the open pull requests".to_owned(),
+        agent: "claude".to_owned(),
+        cadence: AutomationCadence::Daily,
+        time: "09:00".to_owned(),
+        weekday: None,
+        cron: None,
+        zone: None,
+        grace_minutes: None,
+        creation_key: None,
+    }
+}
+
+/// Update params that change nothing until a field is set.
+fn update_params(automation: &str) -> AutomationUpdateParams {
+    AutomationUpdateParams {
+        automation: automation.to_owned(),
+        project: None,
+        name: None,
+        prompt: None,
+        agent: None,
+        cadence: None,
+        time: None,
+        weekday: None,
+        cron: None,
+        zone: None,
+        grace_minutes: None,
+    }
+}
+
+fn reference(automation: &str) -> AutomationRef {
+    AutomationRef {
+        automation: automation.to_owned(),
+    }
+}
+
+/// An automation as the service returns it.
+fn sample_automation() -> Automation {
+    Automation {
+        id: "a1".to_owned(),
+        project_id: None,
+        project_name: None,
+        name: "Morning PRs".to_owned(),
+        prompt: "Summarise the open pull requests".to_owned(),
+        agent: "claude".to_owned(),
+        cadence: AutomationCadence::Weekdays,
+        time: "08:00".to_owned(),
+        weekday: None,
+        cron: None,
+        zone: None,
+        zone_used: Some("Europe/Madrid".to_owned()),
+        grace_minutes: automations::DEFAULT_GRACE_MINUTES,
+        enabled: false,
+        next_run_at_ms: None,
+        last_run_at_ms: None,
+        created_at_ms: 10,
+        updated_at_ms: 20,
+    }
+}
+
 #[test]
 fn automation_method_names_follow_the_contract() {
     assert_eq!(automations::CREATE, "automation.create");
@@ -39,19 +103,7 @@ fn the_refusal_codes_have_their_wire_values() {
 
 #[test]
 fn create_params_use_the_documented_names_and_omit_unset_options() {
-    let params = AutomationCreateParams {
-        project: "app".to_owned(),
-        name: "Morning PRs".to_owned(),
-        prompt: "Summarise the open pull requests".to_owned(),
-        agent: "claude".to_owned(),
-        cadence: AutomationCadence::Daily,
-        time: "09:00".to_owned(),
-        weekday: None,
-        cron: None,
-        zone: None,
-        grace_minutes: None,
-        creation_key: None,
-    };
+    let params = create_params();
     assert_eq!(
         serde_json::to_value(&params).unwrap(),
         json!({
@@ -106,17 +158,9 @@ fn a_cadence_or_weekday_this_build_does_not_know_decodes_as_unknown() {
 #[test]
 fn update_params_carry_only_the_fields_given() {
     let params = AutomationUpdateParams {
-        automation: "nightly".to_owned(),
-        project: None,
         name: Some("Nightly audit".to_owned()),
-        prompt: None,
-        agent: None,
-        cadence: None,
-        time: None,
-        weekday: None,
-        cron: None,
         zone: Some(String::new()),
-        grace_minutes: None,
+        ..update_params("nightly")
     };
     assert_eq!(
         serde_json::to_value(&params).unwrap(),
@@ -126,35 +170,13 @@ fn update_params_carry_only_the_fields_given() {
 
 #[test]
 fn a_selector_is_a_plain_automation_field() {
-    let value: Value = serde_json::to_value(AutomationRef {
-        automation: "nightly".to_owned(),
-    })
-    .unwrap();
+    let value: Value = serde_json::to_value(reference("nightly")).unwrap();
     assert_eq!(value, json!({"automation": "nightly"}));
 }
 
 #[test]
 fn an_automation_uses_the_documented_names_and_omits_absent_options() {
-    let automation = Automation {
-        id: "a1".to_owned(),
-        project_id: None,
-        project_name: None,
-        name: "Morning PRs".to_owned(),
-        prompt: "Summarise the open pull requests".to_owned(),
-        agent: "claude".to_owned(),
-        cadence: AutomationCadence::Weekdays,
-        time: "08:00".to_owned(),
-        weekday: None,
-        cron: None,
-        zone: None,
-        zone_used: Some("Europe/Madrid".to_owned()),
-        grace_minutes: automations::DEFAULT_GRACE_MINUTES,
-        enabled: false,
-        next_run_at_ms: None,
-        last_run_at_ms: None,
-        created_at_ms: 10,
-        updated_at_ms: 20,
-    };
+    let automation = sample_automation();
     assert_eq!(
         serde_json::to_value(&automation).unwrap(),
         json!({
