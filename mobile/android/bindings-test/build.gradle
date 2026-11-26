@@ -26,6 +26,8 @@ android {
             includeAndroidResources = true
             all {
                 it.systemProperty 'jna.library.path', System.getenv('MASSORCA_FFI_LIB_DIR') ?: ''
+                // Robolectric downloads its android-all jar itself while the tests run; take it from the same mirror.
+                it.systemProperty 'robolectric.dependency.repo.url', 'https://maven-central.storage-download.googleapis.com/maven2/'
                 it.testLogging {
                     events 'passed', 'failed', 'skipped'
                     exceptionFormat 'full'
