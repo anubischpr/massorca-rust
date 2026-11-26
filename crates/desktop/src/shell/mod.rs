@@ -10,13 +10,18 @@ mod debug_focus;
 mod debug_page;
 mod delegate;
 mod diff_page;
+mod display_settings;
 mod home_start;
+mod host_remove;
 mod marketplace;
 mod pairing;
+mod pairing_qr;
 mod palette;
 mod path_field;
 mod project_sidebar;
 mod rail;
+mod remote_session_view;
+mod remote_terminal;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
@@ -47,6 +52,7 @@ use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
 use crate::model::close_confirm::CloseRisk;
 use crate::model::devices::RevokeFlow;
+use crate::model::display_settings::DisplaySettings;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
 };
@@ -101,7 +107,11 @@ mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
 #[cfg(test)]
+mod display_settings_tests;
+#[cfg(test)]
 mod home_start_tests;
+#[cfg(test)]
+mod host_remove_tests;
 #[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
@@ -111,13 +121,19 @@ mod path_field_tests;
 #[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
+mod remote_terminal_tests;
+#[cfg(test)]
 mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod session_chat_tests;
+#[cfg(test)]
 mod session_menu_tests;
 #[cfg(test)]
 mod session_view_tests;
+#[cfg(test)]
+mod settings_git_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
@@ -132,6 +148,8 @@ mod status_bar_tests;
 mod tests;
 #[cfg(test)]
 mod title_bar_tests;
+#[cfg(test)]
+mod ui_state_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
@@ -166,6 +184,10 @@ pub struct Shell {
     /// The offer another host shows, typed or pasted, and the optional name for that host.
     pairing_offer: Entity<TextField>,
     pairing_name: Entity<TextField>,
+    /// "Custom address" of the offer this computer makes; empty lists the bound addresses (SRV-07).
+    pairing_address: Entity<TextField>,
+    /// The shown offer's id, its retire under way, and why the service refused to retire it (SRV-06).
+    offer_retire: pairing::OfferRetire,
     _pairing_changes: Subscription,
     /// Whether the paired devices were asked for since the Pairing page was last shown.
     devices_asked: bool,
@@ -173,6 +195,10 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The Remove host confirm on screen, if one is open (D-HO-03).
+    host_remove: Option<host_remove::HostRemoveFlow>,
+    /// What the last host removal left behind, until dismissed.
+    host_remove_notice: Option<String>,
     /// The `.ssh` folder whose key files the Add host dialog lists.
     ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
@@ -217,6 +243,12 @@ pub struct Shell {
     session_notices: HashMap<String, String>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
     chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
+    /// The chat session whose transcript stream the bridge follows for the open view (decision 0101).
+    chat_watched: Option<String>,
+    /// The chat sessions whose older page is being fetched.
+    chat_history_pending: BTreeSet<String>,
+    /// The approval requests whose answer is on its way, so a second click sends nothing.
+    chat_answering: BTreeSet<String>,
     /// The sessions whose saved conversation is gone: a resume was refused for it, or its resumed run printed that.
     session_resume_gone: HashSet<String>,
     dialogs: WorkspaceDialogs,
@@ -232,6 +264,12 @@ pub struct Shell {
     memory_menu: Option<teams::OpenMemoryMenu>,
     /// The team pill's switch menu, while it is open.
     team_switch: Option<teams::OpenTeamSwitch>,
+    /// The New or Edit routine form, while the Canvas shows that page.
+    routine_form: Option<teams::RoutineForm>,
+    /// The menu of a routine card, while it is open.
+    routine_menu: Option<teams::OpenRoutineMenu>,
+    /// The delete confirm of a routine, while it is on screen.
+    routine_confirm: Option<teams::RoutineConfirm>,
     /// The Conference room's composer, receivers and refusals (decision 0102).
     room_page: teams::RoomPage,
     /// The menu of a Board's Filter or of the Sidebar's Filters, if one is open.
@@ -253,6 +291,10 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// The rollback confirm on screen, if any: the version the service would restore, and its consent (decision 0100).
+    marketplace_rollback: Option<marketplace::RollbackConfirm>,
+    /// The run log on screen, if any: the package's runs as the service lists them (decision 0100).
+    marketplace_run_log: Option<marketplace::RunLogView>,
     /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
     /// The Services section's reads of the picked host (SKL-35).
@@ -282,6 +324,8 @@ pub struct Shell {
     marketplace_roots_open: bool,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal of the open remote session, attached over its paired host's own connection (STAT-16).
+    remote_terminal: Option<remote_terminal::RemoteTerminal>,
     /// The Work panel's terminal pane size in pixels as it last painted, for the grid a new terminal opens at.
     work_panel_size: Rc<Cell<Option<(f32, f32)>>>,
     /// The grid a Work panel terminal pane last applied, the fallback for a new terminal's grid.
@@ -298,6 +342,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The started session's terminal that takes the keyboard once its view exists (owner ruling 2026-11-25).
     focus_started_terminal: Option<String>,
+    /// The started chat session whose composer takes the keyboard once its view exists.
+    focus_started_chat: Option<String>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
@@ -306,6 +352,8 @@ pub struct Shell {
     delegate: Option<delegate::DelegateForm>,
     /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
     theme_notice: Option<String>,
+    /// The Status bar items the settings last showed; a change to them resets this window's own choice.
+    applied_status_items: Vec<crate::model::status_items::StatusItem>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
     /// The projects the Sidebar shows collapsed. Kept for the app run only.
@@ -351,6 +399,11 @@ impl Shell {
         self.model.restore_open_regions(open);
     }
 
+    /// Opens the Activity rail mode the last run left (SET-02); called before the first frame.
+    pub fn restore_mode(&mut self, mode: crate::model::navigation::Mode) {
+        self.model.restore_mode(mode);
+    }
+
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
@@ -383,6 +436,14 @@ impl Shell {
             }
             shell.service_connected = connected;
             shell.follow_app_theme(cx);
+            let settings = DisplaySettings::from_lookup(|key| {
+                store
+                    .read(cx)
+                    .state()
+                    .config_value(key)
+                    .map(|config| &config.value)
+            });
+            shell.follow_display_settings(settings, cx);
             shell.follow_service_folder(store.read(cx).state());
             if connected {
                 shell.settings.folder.forget_read_failure();
@@ -392,6 +453,11 @@ impl Shell {
             let hosts =
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
+            shell
+                .model
+                .set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+                    store.read(cx).state(),
+                ));
             if shell.service.is_some() {
                 let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
@@ -409,6 +475,12 @@ impl Shell {
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
                 let (installed, catalogue) = state.extension_lists();
                 shell.marketplace.follow_extensions(installed, catalogue);
+                let history = state
+                    .extensions
+                    .as_ref()
+                    .map(|read| read.history.clone())
+                    .unwrap_or_default();
+                shell.marketplace.follow_history(&history);
                 let checks = state
                     .extensions
                     .as_ref()
@@ -427,10 +499,14 @@ impl Shell {
             }
             cx.notify();
         });
-        // Every change of the shell is checked for a new set of open regions, so the next start opens the same ones.
+        // Every change is checked for the open regions and rail mode, so the next start opens the same ones.
         cx.observe_self(|shell, cx| {
             let open = shell.model.regions().open().to_vec();
-            ui_state::remember(cx, |state| state.open_regions = open);
+            let mode = shell.model.navigation().mode;
+            ui_state::remember(cx, |state| {
+                state.open_regions = open;
+                state.mode = mode;
+            });
         })
         .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -441,6 +517,9 @@ impl Shell {
         model.set_remote_hosts(crate::model::hosts::host_rows(
             &store.read(cx).state().hosts,
             Instant::now(),
+        ));
+        model.set_remote_sessions(crate::model::remote_sessions::remote_sessions(
+            store.read(cx).state(),
         ));
         model.set_marketplace(marketplace.snapshot());
         if service.is_some() {
@@ -479,6 +558,11 @@ impl Shell {
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
         let pairing_name = cx.new(|cx| TextField::new(cx).placeholder("Name"));
+        let pairing_address = cx.new(|cx| {
+            TextField::new(cx)
+                .placeholder("Automatic, for example 192.168.1.20:7347")
+                .mono()
+        });
         // Typing in the offer field redraws the page, which enables Pair once there is an offer.
         let pairing_changes =
             cx.subscribe(&pairing_offer, |_, _, _: &TextFieldEvent, cx| cx.notify());
@@ -534,10 +618,14 @@ impl Shell {
             pairing: PairingState::default(),
             pairing_offer,
             pairing_name,
+            pairing_address,
+            offer_retire: pairing::OfferRetire::default(),
             _pairing_changes: pairing_changes,
             devices_asked: false,
             revoke: None,
             add_host: None,
+            host_remove: None,
+            host_remove_notice: None,
             ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
@@ -562,6 +650,9 @@ impl Shell {
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
             chat_transcripts: HashMap::new(),
+            chat_watched: None,
+            chat_history_pending: BTreeSet::new(),
+            chat_answering: BTreeSet::new(),
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
@@ -570,6 +661,9 @@ impl Shell {
             team_menu: None,
             memory_menu: None,
             team_switch: None,
+            routine_form: None,
+            routine_menu: None,
+            routine_confirm: None,
             room_page: teams::RoomPage::default(),
             filter_menu: None,
             vault_dialog: None,
@@ -581,6 +675,8 @@ impl Shell {
             marketplace_code,
             marketplace_error: None,
             marketplace_uninstall: None,
+            marketplace_rollback: None,
+            marketplace_run_log: None,
             marketplace_review: None,
             marketplace_services: crate::model::marketplace::HostedServicesView::default(),
             marketplace_service_dialog: None,
@@ -598,6 +694,7 @@ impl Shell {
             marketplace_skills_request: 0,
             marketplace_roots_open: false,
             terminal_views: BTreeMap::new(),
+            remote_terminal: None,
             work_panel_size: Rc::default(),
             work_panel_applied: None,
             pane_waits: 0,
@@ -606,10 +703,12 @@ impl Shell {
             stop_prompt: None,
             terminal_notice: None,
             focus_started_terminal: None,
+            focus_started_chat: None,
             bring_back: None,
             close_confirm: None,
             delegate: None,
             theme_notice: None,
+            applied_status_items: crate::model::status_items::StatusItem::ALL.to_vec(),
             _appearance_changes: appearance_changes,
             collapsed_projects: BTreeSet::new(),
         }
@@ -773,6 +872,7 @@ impl Render for Shell {
             .set_window_width(f32::from(window.viewport_size().width));
         self.drive_debug_page(window, cx);
         self.focus_started_terminal(window, cx);
+        self.focus_started_chat(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -821,7 +921,9 @@ impl Render for Shell {
             == crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces))
         .then(|| self.home_frame(cx))
         .flatten();
+        self.sync_chat_watch(cx);
         let session = self.session_frame(cx);
+        let remote_session = self.remote_session_frame(cx);
         let room = self.room_frame(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
@@ -856,12 +958,18 @@ impl Render for Shell {
                 let state = self.store.read(cx).state();
                 crate::model::secret_requests::request_rows(&state.secrets, &state.projects)
             },
+            git: {
+                let state = self.store.read(cx).state();
+                crate::model::git_availability::git_row(state.service_git.as_ref())
+            },
             request_notice: self.request_notice.clone(),
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),
             offer_field: self.pairing_offer.clone(),
             name_field: self.pairing_name.clone(),
+            address_field: self.pairing_address.clone(),
+            retire: self.offer_retire.clone(),
             devices: crate::model::devices::devices_view(
                 self.store.read(cx).state().devices.as_ref(),
                 crate::model::pairing::now_ms(),
@@ -905,7 +1013,9 @@ impl Render for Shell {
                 marketplace,
                 pairing,
                 session,
+                remote_session,
                 room,
+                routine_form: self.routine_form.as_ref(),
             },
             self.conversation_size.clone(),
             window,
@@ -930,6 +1040,10 @@ impl Render for Shell {
             .theme_notice
             .as_deref()
             .map(|notice| app_theme::theme_notice_banner(notice, &shell));
+        let host_remove_banner = self
+            .host_remove_notice
+            .as_deref()
+            .map(|notice| host_remove::removal_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -961,6 +1075,7 @@ impl Render for Shell {
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
                     .when_some(theme_banner, |el, banner| el.child(banner))
+                    .when_some(host_remove_banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),
             )
@@ -1036,6 +1151,14 @@ impl Render for Shell {
             .memory_menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let routine_menu = self
+            .routine_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let routine_confirm = self
+            .routine_confirm
+            .as_ref()
+            .map(|confirm| teams::routine_confirm_view(confirm, &shell, cx));
         let receiver_menu = self
             .room_page
             .receiver_menu
@@ -1053,6 +1176,10 @@ impl Render for Shell {
             .add_host
             .as_ref()
             .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
+        let host_remove = self
+            .host_remove
+            .as_ref()
+            .map(|flow| host_remove::remove_host_dialog(flow, &shell, cx));
         let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
             let connected = self.store.read(cx).state().connection.is_connected();
             settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
@@ -1132,12 +1259,15 @@ impl Render for Shell {
             .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_switch, |el, menu| el.child(menu))
             .when_some(memory_menu, |el, menu| el.child(menu))
+            .when_some(routine_menu, |el, menu| el.child(menu))
             .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(routine_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
+            .when_some(host_remove, |el, dialog| el.child(dialog))
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
@@ -1149,6 +1279,19 @@ impl Render for Shell {
 }
 
 impl Shell {
+    /// Moves the keyboard into a just-started chat session's composer once its view is the one on the Canvas.
+    fn focus_started_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.focus_started_chat.clone() else {
+            return;
+        };
+        if self.model.snapshot().active_session.as_deref() != Some(session.as_str()) {
+            return;
+        }
+        let composer = self.session_composer(&session, cx);
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
+        self.focus_started_chat = None;
+    }
+
     /// Moves the keyboard into a just-started session's terminal once its view is attached, so Enter in the start
     /// composer can never start a second session.
     fn focus_started_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {

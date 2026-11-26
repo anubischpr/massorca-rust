@@ -1,0 +1,34 @@
+# Screens 1, 2 and 4 of the Android app (decision 0080, task A11), run by the android-emulator job in ci.yml against a
+# massorca service on the runner, which the emulator reaches at 10.0.2.2. MASSORCA_PAIRING_OFFER is made by the job and
+# passed with -e; it is never printed.
+# Screen 6 (the terminal) is not in this flow: the app has no way to open it yet (mobile/README.md, "Terminal entry point").
+appId: dev.massorca.app
+---
+- launchApp:
+    clearState: true
+# Screen 1: the connect hint, then the pasted pairing code.
+- extendedWaitUntil:
+    visible: "Connect your desktop"
+    timeout: 240000
+- tapOn: "Paste a code"
+- tapOn:
+    id: "pairing-code"
+- inputText: ${MASSORCA_PAIRING_OFFER}
+- tapOn: "Connect"
+- extendedWaitUntil:
+    visible: ".*Pair with this desktop.*"
+    timeout: 90000
+- tapOn: "Pair"
+# Screen 2: Home lists the paired host as connected. Its name is the runner's machine name (the server's name in the
+# offer), so the card is matched by its state, not by the name.
+- extendedWaitUntil:
+    visible: ".*, Connected"
+    timeout: 150000
+- tapOn: ".*, Connected"
+# Screen 4: the host's projects list the folder workspace the job created, which has no git.
+- extendedWaitUntil:
+    visible: "Projects"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "e2e-folder, No Git"
+    timeout: 60000

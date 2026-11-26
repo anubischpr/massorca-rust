@@ -87,6 +87,7 @@ fn transcript(_: &mut Window, _: &mut App) -> AnyElement {
                 truncated: false,
                 state: ApprovalState::Pending,
                 can_always: true,
+                suggestions: vec!["Bash(cargo test) for this session".into()],
             },
         },
         TranscriptRow::Notice {

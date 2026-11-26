@@ -43,6 +43,7 @@ fn catalogue(rig: &Rig, cx: &mut VisualTestContext, number: u64, packages: Vec<E
             number,
             installed: Ok(Vec::new()),
             catalogue: Ok(packages),
+            history: Default::default(),
         }))
         .expect("the store listens");
     cx.run_until_parked();

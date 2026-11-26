@@ -41,6 +41,16 @@ pub struct StatusItemVisibility {
 }
 
 impl StatusItemVisibility {
+    /// The visibility that shows exactly `shown` and hides the rest.
+    pub fn showing(shown: &[StatusItem]) -> Self {
+        Self {
+            hidden: StatusItem::ALL
+                .into_iter()
+                .filter(|item| !shown.contains(item))
+                .collect(),
+        }
+    }
+
     pub fn is_shown(&self, item: StatusItem) -> bool {
         !self.hidden.contains(&item)
     }
@@ -66,6 +76,15 @@ pub fn visibility_menu_items(_service_linked: bool) -> Vec<StatusItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn showing_hides_exactly_the_items_left_out() {
+        let visibility = StatusItemVisibility::showing(&[StatusItem::Ports, StatusItem::Agents]);
+        assert!(visibility.is_shown(StatusItem::Agents));
+        assert!(visibility.is_shown(StatusItem::Ports));
+        assert!(!visibility.is_shown(StatusItem::Memory));
+        assert!(!visibility.is_shown(StatusItem::Hosts));
+    }
 
     #[test]
     fn every_item_is_shown_until_it_is_hidden() {

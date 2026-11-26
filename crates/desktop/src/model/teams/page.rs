@@ -1,6 +1,6 @@
 //! The pages of one team. Each keeps the Sidebar open, unlike a full page (screens 3, decision 1).
 
-use super::types::{ProjectId, TeamId};
+use super::types::{ProjectId, RoutineId, TeamId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TeamPage {
@@ -18,6 +18,10 @@ pub enum TeamPage {
     Project(TeamId, ProjectId),
     /// The plain-language routine form (D-AG-34).
     NewRoutine(TeamId),
+    /// The routine form, editing one routine.
+    EditRoutine(TeamId, RoutineId),
+    /// A routine's run history.
+    RoutineHistory(TeamId, RoutineId),
 }
 
 impl TeamPage {
@@ -30,7 +34,9 @@ impl TeamPage {
             | TeamPage::Memory(team)
             | TeamPage::Files(team)
             | TeamPage::Project(team, _)
-            | TeamPage::NewRoutine(team) => team,
+            | TeamPage::NewRoutine(team)
+            | TeamPage::EditRoutine(team, _)
+            | TeamPage::RoutineHistory(team, _) => team,
         }
     }
 
@@ -44,6 +50,8 @@ impl TeamPage {
             TeamPage::Files(_) => "Files",
             TeamPage::Project(_, _) => "Project",
             TeamPage::NewRoutine(_) => "New routine",
+            TeamPage::EditRoutine(_, _) => "Edit routine",
+            TeamPage::RoutineHistory(_, _) => "Run history",
         }
     }
 }

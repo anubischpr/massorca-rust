@@ -2,8 +2,8 @@
 //! in the chosen project, named from the prompt, then starts the agent in it. Free of GPUI.
 
 use massorca_protocol::methods::agents::AgentStartParams;
-use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
+use massorca_protocol::methods::projects::{Project, ProjectKind};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 
 use super::start_page::{StartOptions, start_params};
 use super::workspace_flow::ProjectChoice;
@@ -126,6 +126,34 @@ pub fn home_choice(projects: &[Project], chosen: Option<&ProjectChoice>) -> Opti
     home_project(projects, id).map(|project| ProjectChoice::Project(project.id.clone()))
 }
 
+/// Whether two paths name one directory: a trailing separator is ignored, and Windows ignores case.
+pub fn same_directory(left: &str, right: &str) -> bool {
+    directory_key(left) == directory_key(right)
+}
+
+fn directory_key(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    let trimmed = if trimmed.is_empty() { path } else { trimmed };
+    if cfg!(windows) {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// One directory holds at most one workspace, so a folder project starts in its existing folder workspace.
+pub fn folder_start_workspace<'a>(
+    project: &Project,
+    workspaces: &'a [Workspace],
+) -> Option<&'a Workspace> {
+    if project.kind != ProjectKind::Folder {
+        return None;
+    }
+    workspaces.iter().find(|workspace| {
+        workspace.project_id == project.id && same_directory(&workspace.path, &project.path)
+    })
+}
+
 /// The branch popover's choices as Send reads them (D-AG-01). A blank base takes the project's base. The name is
 /// derived from the prompt; a name typed anywhere is never changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -239,7 +267,7 @@ fn start_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::fixtures::project;
+    use crate::service::fixtures::{project, workspace};
 
     #[test]
     fn the_name_is_the_prompts_first_words_slug_safe() {
@@ -465,5 +493,73 @@ mod tests {
                 .prompt,
             None
         );
+    }
+
+    /// A folder project `id` whose folder is `path`.
+    fn folder_project(id: &str, path: &str) -> Project {
+        Project {
+            kind: ProjectKind::Folder,
+            path: path.to_owned(),
+            ..project(id, "notes")
+        }
+    }
+
+    /// A workspace of project `project_id` at `path`.
+    fn workspace_at(id: &str, project_id: &str, path: &str) -> Workspace {
+        Workspace {
+            path: path.to_owned(),
+            ..workspace(id, project_id, "notes", 1)
+        }
+    }
+
+    #[test]
+    fn a_trailing_separator_names_the_same_directory() {
+        assert!(same_directory("/work/notes/", "/work/notes"));
+        assert!(same_directory("D:\\work\\notes\\", "D:\\work\\notes"));
+        assert!(!same_directory("/work/notes", "/work/notes-2"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_compare_without_regard_to_case() {
+        assert!(same_directory("D:\\Work\\Notes", "d:\\work\\notes"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn other_platforms_keep_the_case_of_a_path() {
+        assert!(!same_directory("/work/Notes", "/work/notes"));
+    }
+
+    #[test]
+    fn a_folder_project_starts_in_the_workspace_at_its_folder() {
+        let folder = folder_project("p1", "/work/notes");
+        let workspaces = [
+            workspace_at("w0", "p1", "/work/other"),
+            workspace_at("w1", "p1", "/work/notes/"),
+        ];
+        let found = folder_start_workspace(&folder, &workspaces);
+        assert_eq!(found.map(|workspace| workspace.id.as_str()), Some("w1"));
+    }
+
+    #[test]
+    fn a_folder_start_creates_when_no_workspace_of_the_project_sits_at_the_folder() {
+        let folder = folder_project("p1", "/work/notes");
+        let others = [
+            workspace_at("w0", "p2", "/work/notes"),
+            workspace_at("w1", "p1", "/work/other"),
+        ];
+        assert!(folder_start_workspace(&folder, &others).is_none());
+        assert!(folder_start_workspace(&folder, &[]).is_none());
+    }
+
+    #[test]
+    fn a_git_project_never_starts_in_an_existing_workspace() {
+        let git = Project {
+            kind: ProjectKind::Git,
+            ..folder_project("p1", "/work/notes")
+        };
+        let workspaces = [workspace_at("w1", "p1", "/work/notes")];
+        assert!(folder_start_workspace(&git, &workspaces).is_none());
     }
 }
