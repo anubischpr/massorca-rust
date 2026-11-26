@@ -412,5 +412,23 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command("task.rm", "Remove a task", "task.rm", selector("task")),
+        command(
+            "team.message.send",
+            "Message the parent's or a child's bot from inside a bot's run",
+            "team.message_send",
+            json!({
+                "type": "object",
+                "required": ["to", "type", "subject", "body"],
+                "properties": {
+                    "to": { "type": "string" },
+                    "type": { "enum": ["status", "question", "worker_done", "handoff", "escalation"] },
+                    "priority": { "enum": ["normal", "high", "urgent"] },
+                    "subject": { "type": "string" },
+                    "body": { "type": "string" },
+                    "outcome": { "enum": ["succeeded", "failed"] },
+                    "reply_to": { "type": "string" }
+                }
+            }),
+        ),
     ]
 }
