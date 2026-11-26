@@ -32,7 +32,7 @@ use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
 use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::{NoParams, sees_account_details};
+use crate::features::{NoParams, first_prompt_rename, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
 use crate::permission::{Permission, Principal, authorize};
@@ -388,7 +388,9 @@ async fn models(ctx: RequestCtx, params: AgentModelsParams) -> Result<AgentModel
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
     let grant = secret_grant(&ctx);
+    let (model, prompt) = (params.model.clone(), params.prompt.clone());
     let session = on_agents(&ctx, move |agents| agents.start(params, grant)).await?;
+    first_prompt_rename::note_started(&ctx.state, &session, model, prompt.as_deref());
     Ok(for_caller(&ctx, session))
 }
 
@@ -601,10 +603,13 @@ async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentMo
 /// Types a prompt into a run's terminal (0054). The text is never logged.
 async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
-    on_agents(&ctx, move |agents| {
+    let (selector, text) = (params.session.clone(), params.text.clone());
+    let receipt = on_agents(&ctx, move |agents| {
         agents.prompt(&params.session, &params.text, params.force)
     })
-    .await
+    .await?;
+    first_prompt_rename::note_prompt(&ctx, selector, text).await;
+    Ok(receipt)
 }
 
 /// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a

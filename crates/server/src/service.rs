@@ -338,6 +338,7 @@ impl Service {
             },
             started_at_ms,
             activity: Activity::default(),
+            first_prompt_titles: Default::default(),
         });
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
         let outcome_changes = state.agent_changes.subscribe();
