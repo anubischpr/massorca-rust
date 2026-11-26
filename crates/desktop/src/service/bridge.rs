@@ -33,7 +33,9 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
-use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+};
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
 use massorca_protocol::methods::workspaces::{
@@ -97,6 +99,11 @@ pub(crate) enum Command {
     AddProject {
         params: ProjectAddParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    /// `project.inspect`, answered on its oneshot: what a path would register as.
+    InspectProject {
+        params: ProjectInspectParams,
+        reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
     },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
@@ -380,6 +387,15 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
+    pub async fn inspect_project(&self, path: String) -> Result<ProjectInspection, Refusal> {
+        self.ask(|reply| Command::InspectProject {
+            params: ProjectInspectParams { path },
+            reply,
+        })
+        .await
     }
 
     /// `team.create`. The teams change through the read that follows the answer, not from the answer.
@@ -1198,6 +1214,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::InspectProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectInspectParams, ProjectInspection>(projects::INSPECT, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::ListConfig { reply } => {
             tokio::spawn(async move {
                 let result = client
@@ -1345,6 +1370,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AddProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::ListConfig { reply } => {
