@@ -63,12 +63,15 @@ async fn start_service(home: &Path) -> RunningService {
     .expect("the service starts")
 }
 
-async fn stop_service(running: RunningService) {
+/// Stops the service and says how long the stop took.
+async fn stop_service(running: RunningService) -> Duration {
+    let started = Instant::now();
     running.shutdown_handle().shutdown();
     timeout(WAIT, running.wait())
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+    started.elapsed()
 }
 
 /// A client of the same service, as the CLI would be.
@@ -106,15 +109,24 @@ async fn until(
 async fn until_the_link_stops(
     updates: &mut UnboundedReceiver<StoreUpdate>,
     state: &mut StoreState,
+    stop_took: Duration,
 ) {
     until_within(
         LINK_LOSS_WAIT,
         updates,
         state,
-        "the link to stop",
+        &format!("the link to stop (the service stop returned after {stop_took:?})"),
         |state| !state.connection.is_connected(),
     )
     .await;
+}
+
+/// The variant name of a debug-printed update, so a trace never carries its payload.
+fn update_kind(debug: &str) -> &str {
+    debug
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()
+        .unwrap_or_default()
 }
 
 async fn until_within(
@@ -124,14 +136,26 @@ async fn until_within(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
+    let started = Instant::now();
+    // Each applied update by kind and time, so a stall names the last step the bridge reached.
+    let mut trace: Vec<String> = Vec::new();
     let folded = timeout(budget, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
+            trace.push(format!(
+                "+{:?} {}",
+                started.elapsed(),
+                update_kind(&format!("{update:?}"))
+            ));
             state.apply(update, Instant::now());
         }
     })
     .await;
-    assert!(folded.is_ok(), "timed out waiting for {what}: {state:?}");
+    assert!(
+        folded.is_ok(),
+        "timed out waiting for {what} after {:?}; updates applied while waiting: {trace:#?}; {state:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]
@@ -250,8 +274,8 @@ async fn the_teams_are_not_claimed_once_the_service_is_gone() {
     .await;
     assert!(teams_view(&state).is_connected());
 
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     assert!(!teams_view(&state).is_connected());
 }
 
@@ -377,8 +401,8 @@ async fn a_write_is_refused_while_the_service_is_down() {
         state.teams.is_some()
     })
     .await;
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     let refusal = handle
         .create_team(TeamCreateParams {
             name: "Ops".to_owned(),
