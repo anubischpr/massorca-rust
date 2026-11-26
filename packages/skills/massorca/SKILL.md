@@ -23,7 +23,7 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 
 ### service
 
-- `massorca service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]`: Runs the service in this process until it is stopped.
+- `massorca service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]`: Runs the service in this process until it is stopped. Prints its readiness record once it accepts connections.
 - `massorca service status`: Shows whether the service is running. Never starts it.
 - `massorca service info`: Shows the service's identity. Starts the service when it is not running.
 - `massorca service stop`: Stops the service. Succeeds when it is not running.
@@ -112,7 +112,8 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca host list`: Lists the hosts this client paired with. Makes no connection.
 - `massorca host show <NAME>`: Shows one host: addresses, pin, device and scopes.
 - `massorca host remove <NAME> [--keep-device] [--uninstall] [--ssh <TARGET>]`: Forgets a host. Unless --keep-device, first revokes this device on the server when it answers.
-- `massorca host status [NAME]`: Connects to one host, or to every host, and reports whether it answers.
+- `massorca host status [NAME] [--watch]`: Connects to one host, or to every host, and reports whether it answers.
+- `massorca host self-test [NAME]`: Checks one paired host step by step (address, port, key, protocol, pairing, service, round trip) and names the step that fails and how to fix it. Without a name, checks this computer's own service. Exit code 0 only when every check passes.
 - `massorca host discover`: Lists the online Tailscale peers, and which of them run massorca.
 - `massorca host add-ssh <TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]`: Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
 - `massorca host memory`: Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
@@ -132,7 +133,9 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca agent stop <SESSION> [--force]`: Ends a session's run. The session stays listed as exited until forgotten.
 - `massorca agent prompt <SESSION> <TEXT> [--force]`: Types a prompt into a session's terminal once its agent is idle or done, then submits it.
 - `massorca agent resume <SESSION> [--mode <MODE>] [--cols <COLS>] [--rows <ROWS>]`: Starts a new run of an exited session with the agent's resume arguments; the session keeps its id.
+- `massorca agent fork <SESSION> [--prompt <PROMPT>] [--mode <MODE>] [--title <TITLE>]`: Starts a new session from a copy of an exited session's conversation, with the kind's fork arguments, in the same workspace. The source session keeps its own conversation.
 - `massorca agent mode <SESSION> <MODE> [--force]`: Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
+- `massorca agent set-options <SESSION> [--model <MODEL>] [--effort <EFFORT>] [--fast] [--no-fast]`: Changes a session's model, effort or fast mode: typed into its run where the kind declares a live command for it, otherwise applied at the session's next resume (decision 0171).
 - `massorca agent seen <SESSION>`: Marks a session's Waiting for you or Done state as seen, which clears its marker in every client.
 - `massorca agent queue add <SESSION> <TEXT>`: Queues a prompt at the end of a session's queue; it is typed once the agent is idle or done.
 - `massorca agent queue list <SESSION>`: Lists the queued prompts of a session, head first, with their states and reasons.
@@ -206,8 +209,8 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca team rm <TEAM> [--force]`: Removes a team with its bots, projects and tasks. Refused while a task runs, unless --force.
 - `massorca team update <TEAM> [--name <NAME>] [--purpose <TEXT>] [--character <SHAPE>] [--workspaces <BOOL>] [--access <ACCESS>]`: Changes a team: its name, purpose, shape or workspaces flag. Only the options given change. `--character` takes triangle, square, circle, diamond, hexagon, star. `--workspaces` takes true, false. `--access` takes full, default.
 - `massorca team bot list <TEAM>`: Lists a team's bots, in the order they were added.
-- `massorca team bot update <TEAM> <BOT> [--name <NAME>] [--job <TEXT>] [--agent <KIND>] [--model <MODEL>] [--effort <EFFORT>] [--lead <BOOL>]`: Changes a bot. Only the options given change; an empty model or effort clears it. `--lead` takes true, false.
-- `massorca team bot add <TEAM> <NAME> --agent <KIND> --job <TEXT> [--lead]`: Adds a bot to a team. Its agent kind and job are required.
+- `massorca team bot update <TEAM> <BOT> [--name <NAME>] [--job <TEXT>] [--agent <KIND>] [--model <MODEL>] [--effort <EFFORT>] [--lead <BOOL>] [--skills <SKILLS>]`: Changes a bot. Only the options given change; an empty model or effort clears it. `--lead` takes true, false.
+- `massorca team bot add <TEAM> <NAME> --agent <KIND> --job <TEXT> [--lead] [--skills <SKILLS>]`: Adds a bot to a team. Its agent kind and job are required.
 - `massorca team bot rm <TEAM> <BOT> [--unassign]`: Removes a bot. Refused while it owns open tasks, unless --unassign is given.
 - `massorca team project list <TEAM>`: Lists a team's projects, in the order they were added.
 - `massorca team project update <TEAM> <PROJECT> [--name <NAME>] [--goal <TEXT>] [--brief <TEXT>] [--source <PROJECT>] [--code-source <KIND>]`: Changes a team's project. Only the options given change. `--code-source` takes existing-repository, new-folder-with-git.
@@ -217,7 +220,8 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca team memory add <TEAM> <TEXT> [--bot <BOT>] [--task <TASK>]`: Adds a line of at most 500 characters: to the team's memory, or to one bot's with --bot.
 - `massorca team memory rm <TEAM> <LINE>`: Removes a memory line by its id.
 - `massorca team room list <TEAM> [--limit <N>]`: Lists a team's room, oldest first: who wrote each line, its text, and the task it is about.
-- `massorca team room post <TEAM> <TEXT> [--bot <BOT>] [--to <BOT>]`: Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with @name, else --to, else the lead, else the first bot, and the task starts. With --bot, that bot posts the line. Inside an agent run, the line is posted as the bot of the run's own task, and naming another bot is refused.
+- `massorca team room post <TEAM> <TEXT> [--bot <BOT>] [--to <BOT>] [--no-start] [--reply-to <MESSAGE>] [--ask] [--task]`: Posts a line of at most 4000 characters. As a person, the line becomes a task for the bot it names with @name, else --to, else the lead, else the only bot, and the task starts unless --no-start. With several bots and none of those, the room answers with a choice card instead (see `team room answer`). The task's title is the line's first line without the @name of the team's bots, cut to 80 characters. A person's line that names one day (YYYY-MM-DD, today, tomorrow or a weekday) and asks for one time ("at 09:30", "at 9pm", "a las 17", or any time in a line that says schedule or remind) becomes that bot's one-time routine on the host's clock instead; a routine the host refuses leaves it a task. With --bot, that bot posts the line. Inside an agent run, the line is posted as the bot of the run's own task or reply, and naming another bot is refused. With --ask, or --reply-to a bot's line, the line is a conversation instead: one bot (the one it names, else the one it replies to, else --to, else the lead, else the first) answers it once in the room, in at most 1,200 characters, and no task is made. `team room list` shows who is typing.
+- `massorca team room answer <TEAM> <MESSAGE> <CHOICE>`: Answers a choice card once: `bot:<id>` gives the request to that bot, `team:<id>` puts it in another team's Todo, and `todo` keeps it in this team's Todo with no bot. `team room list` prints each card's choices.
 - `massorca team routine list <TEAM>`: Lists a team's routines, in creation order.
 - `massorca team routine add <TEAM> <NAME> --bot <BOT> --prompt <TEXT> --time <HH:MM> --cadence <CADENCE> [--weekday <DAY>] [--month-day <DAY>] [--date <YYYY-MM-DD>] [--zone <ZONE>]`: Adds a routine: a bot does a task at a time of day, daily, weekly, monthly or once. `--cadence` takes daily, weekly, monthly, once. `--weekday` takes mon, tue, wed, thu, fri, sat, sun.
 - `massorca team routine update <TEAM> <ROUTINE> [--bot <BOT>] [--name <NAME>] [--prompt <TEXT>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--month-day <DAY>] [--date <YYYY-MM-DD>] [--zone <ZONE>]`: Changes a routine. Only the options given change; `--zone ""` returns it to the host's zone. `--cadence` takes daily, weekly, monthly, once. `--weekday` takes mon, tue, wed, thu, fri, sat, sun.
@@ -239,6 +243,20 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca task reopen <TASK>`: Clears a task's outcome and error. Refused while its agent session runs.
 - `massorca task stop <TASK> [--force]`: Stops the agent a task runs in. The task keeps its session and shows Stopped.
 - `massorca task rm <TASK>`: Removes a task. Refused while its agent session runs.
+
+### automations
+
+- `massorca automations create <NAME> --project <PROJECT> --prompt <TEXT> [--agent <KIND>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>] [--creation-key <KEY>]`: Creates a scheduled automation in a project. It starts enabled, with its next run from its schedule. `--cadence` takes hourly, daily, weekdays, weekly, cron. `--weekday` takes mon, tue, wed, thu, fri, sat, sun.
+- `massorca automations edit <AUTOMATION> [--name <NAME>] [--project <PROJECT>] [--prompt <TEXT>] [--agent <KIND>] [--cadence <CADENCE>] [--time <HH:MM>] [--weekday <DAY>] [--cron <EXPRESSION>] [--zone <ZONE>] [--grace <MINUTES>]`: Changes an automation. Only the options given change; `--zone ""` returns it to the host's zone. `--cadence` takes hourly, daily, weekdays, weekly, cron. `--weekday` takes mon, tue, wed, thu, fri, sat, sun.
+- `massorca automations show <AUTOMATION>`: Shows one automation, by id or exact name.
+- `massorca automations list`: Lists the automations, in creation order.
+- `massorca automations remove <AUTOMATION>`: Removes an automation. It cannot be restored.
+- `massorca automations enable <AUTOMATION>`: Enables an automation and schedules its next run from now.
+- `massorca automations disable <AUTOMATION>`: Disables an automation; it has no next run until it is enabled.
+
+### calendar
+
+- `massorca calendar [--from <DATE>] [--days <N>] [--kind <KIND>] [--done]`: Lists the runs of routines and automations in a window of days, on the shared schedule (decision 0124). `--kind` takes routines, automations.
 
 ### extension
 
