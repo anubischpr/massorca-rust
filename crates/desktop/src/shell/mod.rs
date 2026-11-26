@@ -384,7 +384,7 @@ pub struct Shell {
     applied_status_items: Vec<crate::model::status_items::StatusItem>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    /// The projects the Sidebar shows collapsed; saved in the UI state (SET-02).
     collapsed_projects: BTreeSet<String>,
 }
 
@@ -430,6 +430,11 @@ impl Shell {
     /// Opens the Activity rail mode the last run left (SET-02); called before the first frame.
     pub fn restore_mode(&mut self, mode: crate::model::navigation::Mode) {
         self.model.restore_mode(mode);
+    }
+
+    /// Folds the projects the last run left folded in the Sidebar (SET-02); called before the first frame.
+    pub fn restore_collapsed_projects(&mut self, collapsed: BTreeSet<String>) {
+        self.collapsed_projects = collapsed;
     }
 
     fn with_store(
@@ -527,14 +532,20 @@ impl Shell {
             }
             cx.notify();
         });
-        // Every change is checked for the open regions and rail mode, so the next start opens the same ones.
+        // Every change is checked for the open regions, rail mode and folded projects, so the next start opens the same.
         cx.observe_self(|shell, cx| {
             let open = shell.model.regions().open().to_vec();
             let mode = shell.model.navigation().mode;
+            let collapsed = shell.collapsed_projects.clone();
             ui_state::remember(cx, |state| {
                 state.open_regions = open;
                 state.mode = mode;
+                state.collapsed_projects = collapsed;
             });
+        })
+        .detach();
+        cx.observe_window_bounds(window, |_, window, cx| {
+            ui_state::remember_window(cx, ui_state::WindowLayout::of(window.window_bounds()));
         })
         .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
