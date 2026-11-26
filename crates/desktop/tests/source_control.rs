@@ -136,6 +136,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
         .expect("the project is added");
     let workspace = client
         .workspace_create(&WorkspaceCreateParams {
+            in_place: false,
             project: project.id.clone(),
             name: "feature".to_owned(),
             branch: None,

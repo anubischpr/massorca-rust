@@ -258,6 +258,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .expect("the project is added");
     let workspace = handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: "main".to_owned(),
             branch: None,

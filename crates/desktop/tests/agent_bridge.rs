@@ -461,6 +461,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: "main".to_owned(),
             branch: None,
@@ -857,6 +858,7 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
         .await
         .expect("the folder project is added");
     let params = WorkspaceCreateParams {
+        in_place: false,
         project: project.id.clone(),
         name: "notes".to_owned(),
         branch: None,

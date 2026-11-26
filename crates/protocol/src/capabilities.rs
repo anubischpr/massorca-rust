@@ -19,6 +19,8 @@ pub const WORKSPACE_CURRENT: &str = "workspace-current/1";
 pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
 /// `workspace.rename` (decision 0111): replacing a name the service chose, and its branch.
 pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
+/// `in_place` on `workspace.create` (decision 0112): the project's own checkout becomes its workspace, and removal only forgets it.
+pub const WORKSPACE_IN_PLACE: &str = "workspace-in-place/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).

@@ -77,6 +77,7 @@ async fn create(client: &Client, project: &str, name: &str, no_setup: bool) -> W
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.to_owned(),
                 name: name.to_owned(),
                 branch: None,
@@ -273,6 +274,7 @@ async fn a_shebang_script_on_windows_runs_through_git_bash_with_posix_paths() {
 
 fn params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         branch: None,

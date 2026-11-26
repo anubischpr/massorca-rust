@@ -176,6 +176,7 @@ fn shell() -> ShellSpec {
 
 fn workspace_params(project: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: "terminal".to_owned(),
         branch: None,

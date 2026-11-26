@@ -42,6 +42,7 @@ fn sample_project_json() -> Value {
 
 fn sample_workspace() -> workspaces::Workspace {
     workspaces::Workspace {
+        in_place: false,
         id: "w-1".to_owned(),
         project_id: "p-1".to_owned(),
         kind: workspaces::WorkspaceKind::Worktree,
@@ -348,6 +349,7 @@ fn project_ref_uses_the_project_key() {
 fn workspace_create_params_omit_unset_options_but_always_write_existing_branch() {
     assert_wire(
         &workspaces::WorkspaceCreateParams {
+            in_place: false,
             project: "app".to_owned(),
             name: "feat-x".to_owned(),
             branch: None,
@@ -375,6 +377,7 @@ fn workspace_create_params_without_a_name_decode_as_a_blank_name() {
 fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
     assert_wire(
         &workspaces::WorkspaceCreateParams {
+            in_place: false,
             project: "app".to_owned(),
             name: "feat-x".to_owned(),
             branch: None,
@@ -404,6 +407,30 @@ fn workspace_create_params_default_existing_branch_to_false() {
     assert!(!params.refresh_base);
     assert!(params.branch.is_none());
     assert!(params.request_id.is_none());
+}
+
+#[test]
+fn workspace_create_params_write_in_place_only_when_it_is_set() {
+    assert_wire(
+        &workspaces::WorkspaceCreateParams {
+            project: "app".to_owned(),
+            name: String::new(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: false,
+            path: None,
+            request_id: None,
+            no_setup: false,
+            unique_name: false,
+            name_generated: false,
+            in_place: true,
+        },
+        &json!({ "project": "app", "name": "", "existing_branch": false, "in_place": true }),
+    );
+    let plain: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).expect("decodes");
+    assert!(!plain.in_place);
 }
 
 #[test]

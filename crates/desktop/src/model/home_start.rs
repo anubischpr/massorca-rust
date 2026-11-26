@@ -200,6 +200,7 @@ pub fn create_params(
 ) -> WorkspaceCreateParams {
     let typed = non_empty(&details.name);
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         // A name derived from the prompt is the service's to rename later (decision 0111).
         name_generated: typed.is_none(),

@@ -145,6 +145,7 @@ fn create_params(
         .map(|path| paths.path(path))
         .transpose()?;
     Ok(WorkspaceCreateParams {
+        in_place: false,
         project: paths.selector(&args.project)?,
         name: args.name.unwrap_or_default(),
         branch: args.branch,

@@ -316,6 +316,7 @@ fn task_worktree(
     changes: &mut Changes,
 ) -> Result<Workspace, ErrorBody> {
     let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: worktree_name(&task.title, attempt),
         branch: None,
@@ -347,6 +348,7 @@ fn linked_folder(
         Some(workspace) => workspace,
         None => {
             let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+                in_place: false,
                 project: project.to_owned(),
                 name: TEAMS_FOLDER.to_owned(),
                 branch: None,
@@ -619,6 +621,7 @@ fn team_folder(
         }
     };
     let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+        in_place: false,
         project: project.id,
         name: team.id.clone(),
         branch: None,
@@ -887,6 +890,7 @@ mod tests {
         };
         store.insert_project(&project).expect("project");
         let workspace = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id,
             kind: WorkspaceKind::Folder,

@@ -811,6 +811,7 @@ pub(crate) mod fixtures {
 
     pub fn workspace(id: &str, project_id: &str, name: &str, created: i64) -> Workspace {
         Workspace {
+            in_place: false,
             id: id.into(),
             project_id: project_id.into(),
             kind: WorkspaceKind::Worktree,

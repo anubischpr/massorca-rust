@@ -591,6 +591,7 @@ mod tests {
         };
         store.insert_project(&project).unwrap();
         let workspace = massorca_core_store::WorkspaceRow {
+            in_place: false,
             id: massorca_core_store::new_id(),
             project_id: project.id,
             kind: massorca_core_store::WorkspaceKind::Folder,

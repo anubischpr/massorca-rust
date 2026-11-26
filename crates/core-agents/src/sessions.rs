@@ -2684,6 +2684,7 @@ pub(crate) mod tests {
         };
         store.insert_project(&project).unwrap();
         let workspace = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id.clone(),
             kind: WorkspaceKind::Folder,

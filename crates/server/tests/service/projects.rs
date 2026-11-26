@@ -491,6 +491,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id.clone(),
                 name: "main".to_owned(),
                 branch: None,

@@ -174,6 +174,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: "main".to_owned(),
             branch: None,

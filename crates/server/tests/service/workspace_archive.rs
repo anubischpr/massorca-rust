@@ -52,6 +52,7 @@ async fn create(client: &Client, project: &str, name: &str) -> Workspace {
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.to_owned(),
                 name: name.to_owned(),
                 branch: None,

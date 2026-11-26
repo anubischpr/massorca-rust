@@ -592,6 +592,13 @@ ALTER TABLE workspaces ADD COLUMN name_generated INTEGER NOT NULL DEFAULT 0 CHEC
 "#,
         foreign_keys_off: false,
     },
+    // Whether a workspace is the project's own checkout (decision 0112): only forgotten on removal, never deleted.
+    Migration {
+        sql: r#"
+ALTER TABLE workspaces ADD COLUMN in_place INTEGER NOT NULL DEFAULT 0 CHECK(in_place IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

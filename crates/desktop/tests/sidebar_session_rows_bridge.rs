@@ -113,6 +113,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: "main".to_owned(),
             branch: None,
@@ -191,6 +192,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
     // The service lets one session write in a workspace at a time, so the second session gets its own.
     let other = handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: workspace.project_id.clone(),
             name: "second".to_owned(),
             branch: None,

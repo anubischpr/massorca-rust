@@ -50,6 +50,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         comment: row.comment.clone(),
         setup: None,
         name_generated: row.name_generated,
+        in_place: row.in_place,
     }
 }
 

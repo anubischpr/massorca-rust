@@ -71,6 +71,7 @@ mod tests {
 
     fn params(name: &str) -> WorkspaceCreateParams {
         WorkspaceCreateParams {
+            in_place: false,
             project: "p1".to_owned(),
             name: name.to_owned(),
             branch: None,

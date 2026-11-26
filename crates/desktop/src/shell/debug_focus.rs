@@ -28,6 +28,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             base_ref: None,
         }],
         workspaces: vec![Workspace {
+            in_place: false,
             id: SAMPLE_WORKSPACE.into(),
             project_id: SAMPLE_PROJECT.into(),
             kind: WorkspaceKind::Worktree,
