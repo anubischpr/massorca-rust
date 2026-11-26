@@ -1,6 +1,7 @@
 //! Command descriptors: what each CLI command or palette entry runs (extensions.md section 9, item 5).
 
 mod automation_table;
+mod calendar_table;
 mod core_table;
 mod extension_table;
 mod git_table;
@@ -30,6 +31,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
     commands.extend(secret_table::secret_commands());
     commands.extend(team_table::team_commands());
     commands.extend(automation_table::automation_commands());
+    commands.extend(calendar_table::calendar_commands());
     commands.extend(extension_table::extension_commands());
     commands.extend(skill_table::skill_commands());
     commands.extend(hosted_service_table::hosted_service_commands());
