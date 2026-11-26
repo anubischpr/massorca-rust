@@ -79,13 +79,13 @@ h2 { margin: 0; font: 600 15px/22px var(--font-sans); }
 .is-max .level .spark { opacity: 1; transform: none; }
 .sub { color: var(--text-tertiary); font-size: 12px; line-height: 16px; }
 .sliderbox { flex: 1; display: flex; gap: 14px; margin-top: 10px; min-height: 0; }
-.slider { position: relative; width: 28px; flex: none; border-radius: 14px; background: var(--track); box-shadow: inset 0 0 0 1px var(--border-subtle); cursor: pointer; touch-action: none; outline: none; }
-.slider:focus-visible { box-shadow: inset 0 0 0 1px var(--border-subtle), 0 0 0 2px var(--surface-overlay), 0 0 0 4px var(--border-focus); }
-.fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 14px; background: linear-gradient(to top, var(--brand-1), var(--brand-2)); overflow: hidden; transition: height .22s cubic-bezier(.2,.8,.2,1); }
+.slider { position: relative; width: 28px; flex: none; border-radius: 14px; background: var(--track); cursor: pointer; touch-action: none; outline: none; }
+.slider:focus-visible { box-shadow: 0 0 0 2px var(--surface-overlay), 0 0 0 4px var(--border-focus); }
+.fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 14px; background: linear-gradient(to top, var(--brand-1), var(--brand-2)); overflow: hidden; clip-path: inset(0 round 14px); transition: height .22s cubic-bezier(.2,.8,.2,1); }
 .fill canvas { position: absolute; left: 0; bottom: 0; width: 28px; }
-.tick { position: absolute; left: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--text-tertiary); opacity: .45; pointer-events: none; }
+.tick { position: absolute; left: 12px; width: 4px; height: 4px; margin: -2px 0 0 0; border-radius: 50%; background: var(--text-tertiary); opacity: .45; pointer-events: none; }
 .tick.on { background: #fff; opacity: .7; }
-.thumb { position: absolute; left: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--thumb); box-shadow: 0 0 0 1px var(--thumb-ring), 0 2px 6px rgba(0,0,0,.25); transition: bottom .22s cubic-bezier(.2,.8,.2,1); pointer-events: none; }
+.thumb { position: absolute; left: 3px; width: 22px; height: 22px; margin: -11px 0 0 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 0 0 1px var(--thumb-ring), 0 2px 6px rgba(0,0,0,.25); transition: bottom .22s cubic-bezier(.2,.8,.2,1); pointer-events: none; }
 .labels { position: relative; flex: 1; min-width: 0; }
 .labels button { position: absolute; left: 0; transform: translateY(50%); background: transparent; border: 0; padding: 2px 4px; margin-left: -4px; border-radius: 4px; font: 400 13px/18px var(--font-sans); color: var(--text-tertiary); cursor: pointer; white-space: nowrap; }
 .labels button[aria-current="true"] { color: var(--text-primary); font-weight: 600; }
@@ -152,6 +152,7 @@ h2 { margin: 0; font: 600 15px/22px var(--font-sans); }
       <ul>
         <li><b>Below the top level:</b> only the gradient fill in the agent's colours. No particles, no glow.</li>
         <li><b>At the top level:</b> white particles drifting up inside the fill, a soft halo around the bar, a ring on the thumb, a light band climbing the fill every 1.6 s, and a sparkle next to the level name.</li>
+        <li><b>Shape (owner, 2026-11-25):</b> the track has no border. The thumb is centred exactly on the track's axis. The particles and the light band are clipped to the fill's rounded shape, and the halo follows the bar's rounded outline, so no square corner shows at any point of the animation.</li>
         <li><b>Reduced motion:</b> the same frame held still. The particles stay where they are, the halo and ring stay, and the light band rests at the top of the fill.</li>
       </ul>
     </div>

@@ -195,6 +195,8 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the workspace is created")
@@ -360,6 +362,8 @@ async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() 
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         })
         .await
         .expect("the second workspace is created");
