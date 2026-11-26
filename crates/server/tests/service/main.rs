@@ -41,6 +41,7 @@ mod registries;
 mod secrets;
 mod secrets_hardening;
 mod skills;
+mod stalled_reader;
 mod tasks;
 mod teams;
 mod terminal_secrets;
