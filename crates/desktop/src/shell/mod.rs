@@ -549,6 +549,12 @@ impl Shell {
             });
         })
         .detach();
+        cx.observe_window_activation(window, |shell, window, cx| {
+            if window.is_window_active() {
+                shell.fetch_on_focus(cx);
+            }
+        })
+        .detach();
         cx.observe_window_bounds(window, |_, window, cx| {
             ui_state::remember_window(cx, ui_state::WindowLayout::of(window.window_bounds()));
         })

@@ -280,3 +280,21 @@ fn a_refused_write_shows_the_services_sentence_and_the_next_stored_write_clears_
         None
     );
 }
+
+#[gpui::test]
+fn developer_tools_show_only_while_advanced_is_on(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    let advanced = |on: bool| setting("advanced.enabled", json!(on), json!(false), None);
+    start_with(&rig, cx, vec![advanced(false)]);
+    open_section(cx, "settings-nav-Privacy");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("button:settings-Privacy-9").is_none(),
+        "Developer tools wait for the Advanced switch"
+    );
+
+    changed(&rig, cx, advanced(true));
+    draw(cx);
+
+    assert!(cx.debug_bounds("button:settings-Privacy-9").is_some());
+}

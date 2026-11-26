@@ -8,8 +8,11 @@ use massorca_ui::text_preferences::{self, TextPreferences};
 use serde_json::{Value, json};
 
 use super::app_theme_tests::{Rig, rig};
+use crate::model::regions::Region;
 use crate::model::status_items::StatusItem;
+use crate::model::title_bar::title_bar;
 use crate::service::StoreUpdate;
+use massorca_ui::components::list_row::{self, RowDensity};
 
 /// Reports `value` for `key` as a change event carries it, and lets the shell follow it.
 fn changed(rig: &Rig, cx: &mut VisualTestContext, key: &str, value: Value) {
@@ -97,4 +100,60 @@ fn a_damaged_setting_keeps_its_default_and_the_others_still_apply(cx: &mut TestA
     assert_eq!(shown_items(&rig, cx), StatusItem::ALL.to_vec());
     assert_eq!(text_preferences::current().scrollback_lines, 5000);
     text_preferences::set(TextPreferences::default());
+}
+
+#[gpui::test]
+fn the_density_setting_sets_the_height_new_rows_take(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx);
+
+    changed(&rig, cx, "appearance.density", json!("compact"));
+    assert_eq!(list_row::default_density(), RowDensity::Compact);
+    changed(&rig, cx, "appearance.density", json!("comfortable"));
+    assert_eq!(list_row::default_density(), RowDensity::Comfortable);
+
+    changed(&rig, cx, "appearance.density", json!("roomy"));
+    assert_eq!(
+        list_row::default_density(),
+        RowDensity::Default,
+        "an unknown word keeps the default"
+    );
+    list_row::set_default_density(RowDensity::Default);
+}
+
+#[gpui::test]
+fn a_session_summary_turned_off_hides_its_region_and_its_toggle_until_turned_on(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = rig(cx);
+    rig.shell.update(cx, |shell, _| {
+        shell
+            .model
+            .restore_open_regions(vec![Region::SessionSummary, Region::Sidebar]);
+    });
+    let summary = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell.read_with(cx, |shell, _| {
+            let toggled = title_bar(shell.model())
+                .region_toggles
+                .iter()
+                .any(|toggle| toggle.region == Region::SessionSummary);
+            (
+                shell.model().regions().is_open(Region::SessionSummary),
+                toggled,
+            )
+        })
+    };
+    assert_eq!(summary(&rig, cx), (true, true));
+
+    changed(&rig, cx, "appearance.session_summary", json!(false));
+    assert_eq!(
+        summary(&rig, cx),
+        (true, false),
+        "the person's open choice is kept; only the region and its toggle are gone"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(!shell.model().region_visible(Region::SessionSummary));
+    });
+
+    changed(&rig, cx, "appearance.session_summary", json!(true));
+    assert_eq!(summary(&rig, cx), (true, true));
 }

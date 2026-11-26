@@ -38,7 +38,7 @@ use crate::model::settings::{
 };
 use crate::model::settings_sections::{
     CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, RowBody, RowSpec, SettingsSection,
-    WORKSPACE_FOLDER_KEY, hit_line, rows, search,
+    WORKSPACE_FOLDER_KEY, hidden, hit_line, rows, search,
 };
 use crate::service::{ConnectionState, StoreState};
 use massorca_protocol::methods::config::{ConfigSet, ConfigValue};
@@ -50,6 +50,9 @@ use settings_planned::planned_row;
 #[path = "settings_vault.rs"]
 mod settings_vault;
 use settings_vault::vault_page;
+
+/// The setting that shows developer tools (D-ST-10).
+const ADVANCED_KEY: &str = "advanced.enabled";
 
 /// The navigation column's width (`layout.settings.nav`, 232 px, owner 2026-11-13).
 const NAV_WIDTH: f32 = 232.0;
@@ -255,7 +258,14 @@ fn group(
     if let Some(note) = section.note() {
         group = group.description(note);
     }
+    let advanced = frame
+        .config
+        .iter()
+        .any(|value| value.key == ADVANCED_KEY && value.value.as_bool() == Some(true));
     for (index, spec) in listed {
+        if hidden(spec, advanced) {
+            continue;
+        }
         if spec.body == RowBody::PairedHosts {
             let theme = *cx.theme();
             for (name, state) in &frame.hosts {

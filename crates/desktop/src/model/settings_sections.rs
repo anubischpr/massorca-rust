@@ -10,6 +10,14 @@ use super::setting_rows::Live;
 pub const WORKSPACE_FOLDER_KEY: &str = "workspaces.default_root";
 /// Where conversations without a project are kept (A95). The service has no setting for it yet.
 pub const CONVERSATIONS_FOLDER: &str = "~/MassOrca/Conversations";
+/// The row that waits for the Advanced switch (D-ST-10).
+const DEVELOPER_TOOLS: &str = "Developer tools";
+
+/// Whether a row stays off the page: Developer tools while `advanced.enabled` is off.
+pub fn hidden(row: &RowSpec, advanced: bool) -> bool {
+    row.label == DEVELOPER_TOOLS && !advanced
+}
+
 /// The status of a row whose layer is not built yet.
 pub const NOT_AVAILABLE: &str = "Not available yet";
 
@@ -541,7 +549,7 @@ const PRIVACY: &[RowSpec] = &[
         body: RowBody::Setting(Live::Switch("advanced.enabled")),
     },
     RowSpec {
-        label: "Developer tools",
+        label: DEVELOPER_TOOLS,
         helper: "Tools for building and debugging MassOrca.",
         body: RowBody::Planned(Planned::Link),
     },
