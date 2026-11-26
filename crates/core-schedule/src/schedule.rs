@@ -4,6 +4,7 @@ use jiff::civil::{Date, Time};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
+use crate::cron::CronDays;
 use crate::occurrence::CompiledSchedule;
 use crate::zone::{ZoneSource, host_zone};
 
@@ -20,6 +21,10 @@ pub enum Cadence {
     Monthly,
     /// Needs [`Schedule::date`].
     Once,
+    /// Every hour, at the minute of [`Schedule::time`].
+    Hourly,
+    /// Monday to Friday, at [`Schedule::time`].
+    Weekdays,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,22 +89,39 @@ pub enum ScheduleError {
     UnknownZone(String),
     #[error("time zone name is {0} characters, more than 64")]
     ZoneTooLong(usize),
+    #[error("a cron expression has five fields, but this one has {0}")]
+    CronFieldCount(usize),
+    #[error("the cron {field} {text:?} is not valid")]
+    CronField { field: &'static str, text: String },
+    #[error("the cron {field} step {step} is larger than the field's range")]
+    CronStepTooLarge { field: &'static str, step: u8 },
+    #[error("this cron expression can never occur, such as 30 February")]
+    CronNeverOccurs,
+    #[error(
+        "this cron expression can go more than nine years without a run, such as 29 February on a Sunday"
+    )]
+    CronGapTooLong,
+    #[error("cron expression is {0} characters, more than the limit of 256")]
+    CronTooLong(usize),
 }
 
 /// The cadence with its parameters checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Rule {
     Daily,
+    Weekdays,
     Weekly(jiff::civil::Weekday),
     Monthly(i8),
     Once(Date),
+    Cron(CronDays),
 }
 
 impl Schedule {
     /// Checks every field and resolves the zone (the host's when `zone` is `None`).
     pub fn compile(&self) -> Result<CompiledSchedule, ScheduleError> {
         let rule = match self.cadence {
-            Cadence::Daily => Rule::Daily,
+            Cadence::Daily | Cadence::Hourly => Rule::Daily,
+            Cadence::Weekdays => Rule::Weekdays,
             Cadence::Weekly => Rule::Weekly(
                 self.weekday
                     .ok_or(ScheduleError::WeeklyWithoutWeekday)?
@@ -119,18 +141,34 @@ impl Schedule {
         };
         let time =
             parse_time(&self.time).ok_or_else(|| ScheduleError::BadTime(self.time.clone()))?;
-        let (zone, source) = match self.zone.as_deref() {
-            None => host_zone(),
-            Some(name) if name.chars().count() > MAX_ZONE_NAME_LEN => {
-                return Err(ScheduleError::ZoneTooLong(name.chars().count()));
-            }
-            Some(name) => (
-                TimeZone::get(name).map_err(|_| ScheduleError::UnknownZone(name.to_owned()))?,
-                ZoneSource::Named,
-            ),
+        let times = match self.cadence {
+            Cadence::Hourly => hourly_times(time),
+            _ => vec![time],
         };
-        Ok(CompiledSchedule::new(rule, time, zone, source))
+        let (zone, source) = resolve_zone(self.zone.as_deref())?;
+        Ok(CompiledSchedule::new(rule, times, zone, source))
     }
+}
+
+/// The zone a schedule names, or the host's zone when it names none, with where the zone came from.
+pub(crate) fn resolve_zone(zone: Option<&str>) -> Result<(TimeZone, ZoneSource), ScheduleError> {
+    match zone {
+        None => Ok(host_zone()),
+        Some(name) if name.chars().count() > MAX_ZONE_NAME_LEN => {
+            Err(ScheduleError::ZoneTooLong(name.chars().count()))
+        }
+        Some(name) => Ok((
+            TimeZone::get(name).map_err(|_| ScheduleError::UnknownZone(name.to_owned()))?,
+            ZoneSource::Named,
+        )),
+    }
+}
+
+/// Every hour of the day at the minute of `time`.
+fn hourly_times(time: Time) -> Vec<Time> {
+    (0..24_i8)
+        .filter_map(|hour| Time::new(hour, time.minute(), 0, 0).ok())
+        .collect()
 }
 
 fn two_digits(bytes: &[u8]) -> Option<i8> {

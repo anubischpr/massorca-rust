@@ -1,4 +1,6 @@
-use massorca_protocol::methods::secrets::{SecretDecline, SecretLink, SecretSet, SecretStatus};
+use massorca_protocol::methods::secrets::{
+    SecretDecline, SecretLink, SecretName, SecretSet, SecretStatus,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
@@ -10,10 +12,7 @@ fn a_command_that_stores_a_value_never_prints_it() {
     let (reply, _answer) = oneshot::channel();
     let command = SecretCommand::Set {
         params: SecretSet {
-            scope: "global".to_owned(),
-            name: "TOKEN".to_owned(),
-            value: "hidden-test-value".to_owned(),
-            replace: false,
+            ..crate::service::fixtures::base_secret_set()
         },
         reply,
     };
@@ -27,7 +26,7 @@ fn status(count: u64) -> SecretsUpdate {
         protection: "file".to_owned(),
         state: "ready".to_owned(),
         count,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     }))
 }
 
@@ -99,10 +98,9 @@ fn a_newer_read_still_lands_after_an_older_one_delivered() {
 async fn an_answer_that_stores_a_value_sends_the_value_to_the_service_only() {
     let (handle, mut script) = ServiceHandle::scripted();
     let params = SecretSet {
-        scope: "global".to_owned(),
         name: "OPENAI_API_KEY".to_owned(),
         value: "sk-scripted-value".to_owned(),
-        replace: false,
+        ..crate::service::fixtures::base_secret_set()
     };
     let call = tokio::spawn(async move { handle.secret_set(params).await });
     tokio::task::yield_now().await;
@@ -118,9 +116,7 @@ async fn an_answer_that_stores_a_value_sends_the_value_to_the_service_only() {
 async fn an_answer_that_links_names_the_scope_that_owns_the_secret() {
     let (handle, mut script) = ServiceHandle::scripted();
     let params = SecretLink {
-        scope: "project:p1".to_owned(),
-        name: "OPENAI_API_KEY".to_owned(),
-        from_scope: "global".to_owned(),
+        ..crate::service::fixtures::base_secret_link()
     };
     let call = tokio::spawn(async move { handle.secret_link(params).await });
     tokio::task::yield_now().await;
@@ -138,7 +134,7 @@ async fn a_decline_names_the_request_and_carries_no_value() {
     let call = tokio::spawn(async move {
         handle
             .secret_decline(SecretDecline {
-                request: "request-1".to_owned(),
+                ..crate::service::fixtures::base_secret_decline()
             })
             .await
     });
@@ -147,5 +143,23 @@ async fn a_decline_names_the_request_and_carries_no_value() {
         panic!("the service received no decline");
     };
     assert_eq!(params.request, "request-1");
+    call.abort();
+}
+
+#[tokio::test]
+async fn an_unlink_names_only_the_scope_and_the_name_of_the_link() {
+    let (handle, mut script) = ServiceHandle::scripted();
+    let params = SecretName {
+        ..crate::service::fixtures::base_secret_name()
+    };
+    let call = tokio::spawn(async move { handle.secret_unlink(params).await });
+    tokio::task::yield_now().await;
+    let Some(Command::Secret(SecretCommand::Unlink { params, .. })) = script.next() else {
+        panic!("the service received no unlink");
+    };
+    assert_eq!(
+        (params.scope.as_str(), params.name.as_str()),
+        ("project:p1", "OPENAI_API_KEY")
+    );
     call.abort();
 }

@@ -79,6 +79,8 @@ pub struct AppState {
     pub(crate) usage: Arc<crate::features::UsageBook>,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
     pub(crate) activity: Activity,
+    /// Which workspaces the first-prompt rename has decided (decision 0118); held in memory for the service's run.
+    pub(crate) first_prompt_titles: crate::features::first_prompt_rename::TitleBook,
 }
 
 /// The context a handler receives. The principal is read from here only.

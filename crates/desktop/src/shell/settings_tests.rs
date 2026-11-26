@@ -338,11 +338,7 @@ fn owned_secret(scope: &str, name: &str) -> SecretEntry {
         scope: scope.into(),
         name: name.into(),
         owner_scope: scope.into(),
-        linked: false,
-        linked_scopes: Vec::new(),
-        created_at_ms: 1,
-        rotated_at_ms: 1,
-        used_at_ms: None,
+        ..crate::service::fixtures::base_secret_entry()
     }
 }
 
@@ -350,10 +346,7 @@ fn owned_secret(scope: &str, name: &str) -> SecretEntry {
 fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
     let status = SecretStatus {
-        protection: "file".into(),
-        state: "ready".into(),
-        count: 1,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     };
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status))))
@@ -395,10 +388,8 @@ fn the_vault_dialogs_are_centred_in_the_window_whichever_row_opened_them(cx: &mu
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
             SecretStatus {
-                protection: "file".into(),
-                state: "ready".into(),
                 count: 3,
-                name_clashes: Vec::new(),
+                ..crate::service::fixtures::base_secret_status()
             },
         ))))
         .expect("the store listens");
@@ -433,10 +424,8 @@ fn open_vault_with_three_scopes(rig: &Rig, cx: &mut VisualTestContext) {
     rig._updates
         .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
             SecretStatus {
-                protection: "file".into(),
-                state: "ready".into(),
                 count: 4,
-                name_clashes: Vec::new(),
+                ..crate::service::fixtures::base_secret_status()
             },
         ))))
         .expect("the store listens");
@@ -697,10 +686,7 @@ fn an_empty_clipboard_is_refused_and_pastes_nothing(cx: &mut TestAppContext) {
 fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
     let status = SecretStatus {
-        protection: "file".into(),
-        state: "ready".into(),
-        count: 1,
-        name_clashes: Vec::new(),
+        ..crate::service::fixtures::base_secret_status()
     };
     let mut shared = owned_secret("global", "SHARED");
     shared.linked_scopes = vec!["project:p1".to_owned()];
@@ -741,9 +727,8 @@ fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &m
             );
             reply
                 .send(Ok(SecretRemoved {
-                    scope: "global".to_owned(),
-                    name: "SHARED".to_owned(),
                     links_removed: vec!["project:p1".to_owned()],
+                    ..crate::service::fixtures::base_secret_removed()
                 }))
                 .expect("the page listens");
         }
@@ -1123,13 +1108,9 @@ fn no_settings_section_opens_another_page(cx: &mut TestAppContext) {
 pub(super) fn paired_host(name: &str) -> HostRecord {
     HostRecord {
         name: name.into(),
-        server: "vps-server".into(),
         addresses: vec!["100.64.0.10:7347".into()],
-        pin: "sha256:test".into(),
-        device_id: "dev-1".into(),
-        device_name: "laptop".into(),
         scopes: vec!["read".into()],
-        paired_at_ms: 1,
+        ..crate::service::fixtures::base_host_record()
     }
 }
 
@@ -1199,4 +1180,90 @@ fn remove_on_a_host_row_opens_the_remove_confirm(cx: &mut TestAppContext) {
         counted |= matches!(command, Command::CountHostLoss { ref name, .. } if name == "vps");
     }
     assert!(counted, "the confirm asks the host what it holds");
+}
+
+/// A name a project links from another scope, as the store lists it.
+fn linked_secret(scope: &str, name: &str, owner: &str) -> SecretEntry {
+    SecretEntry {
+        scope: scope.into(),
+        name: name.into(),
+        owner_scope: owner.into(),
+        linked: true,
+        ..crate::service::fixtures::base_secret_entry()
+    }
+}
+
+/// Seeds a Global name and a project link to it, and opens the vault page.
+fn open_vault_with_a_link(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
+            SecretStatus {
+                count: 1,
+                ..crate::service::fixtures::base_secret_status()
+            },
+        ))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("global", "GITHUB_TOKEN"),
+            linked_secret("project:p1", "GITHUB_TOKEN", "global"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+}
+
+#[gpui::test]
+fn a_linked_name_is_unlinked_by_its_own_button_with_no_confirm(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_vault_with_a_link(&rig, cx);
+    click(cx, "button:settings-vault-unlink-project:p1-GITHUB_TOKEN");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("dialog-panel").is_none(),
+        "unlinking asks no confirm"
+    );
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Unlink { params, reply })) => {
+            assert_eq!(
+                (params.scope.as_str(), params.name.as_str()),
+                ("project:p1", "GITHUB_TOKEN"),
+                "only this scope's link goes"
+            );
+            reply
+                .send(Ok(crate::service::fixtures::base_secret_removed()))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.unlink was expected"),
+    }
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn an_unlink_refusal_keeps_the_row_and_says_why(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_vault_with_a_link(&rig, cx);
+    click(cx, "button:settings-vault-unlink-project:p1-GITHUB_TOKEN");
+    cx.run_until_parked();
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Unlink { reply, .. })) => {
+            reply
+                .send(Err(Refusal::unavailable("The service is not connected.")))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.unlink was expected"),
+    }
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-GITHUB_TOKEN")
+            .is_some(),
+        "the link is still listed"
+    );
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.settings.vault_notice.clone());
+    assert!(
+        notice.is_some_and(|text| text.contains("not connected")),
+        "the refusal is said on the page"
+    );
 }

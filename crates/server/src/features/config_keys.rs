@@ -63,6 +63,12 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Keep the computer awake while agents work.",
         ),
         (
+            "workspaces.rename_from_first_prompt",
+            Bool,
+            json!(true),
+            "Rename a generated workspace after its first agent prompt, from a title the agent writes.",
+        ),
+        (
             "usage.enabled",
             Bool,
             json!(false),
@@ -248,7 +254,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let settings = core_settings(root);
-        assert_eq!(settings.len(), 31);
+        assert_eq!(settings.len(), 32);
         let mut keys = HashSet::new();
         for decl in &settings {
             assert!(

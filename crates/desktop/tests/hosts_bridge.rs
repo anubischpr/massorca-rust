@@ -140,10 +140,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
     ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -184,10 +181,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
     ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -243,10 +237,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
     ready_to_offer(&server_handle, &mut server_updates, &mut state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -291,7 +282,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
 
     let missing = server_handle
         .revoke_device(DeviceRevokeParams {
-            device: "no-such-device".to_owned(),
+            ..base_device_revoke_params()
         })
         .await
         .expect_err("an unknown device is refused");
@@ -314,10 +305,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
     ready_to_offer(&server_handle, &mut server_updates, &mut state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -403,10 +391,7 @@ async fn paired_with(
 ) {
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -517,8 +502,7 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
-            icon: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -548,4 +532,32 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
         "{unanswered:?}"
     );
     drop(client_bridge);
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+/// Every `DeviceRevokeParams` field at its usual value; tests override the fields they vary.
+fn base_device_revoke_params() -> massorca_protocol::methods::devices::DeviceRevokeParams {
+    massorca_protocol::methods::devices::DeviceRevokeParams {
+        device: "no-such-device".to_owned(),
+    }
+}
+
+/// Every `PairingCreateParams` field at its usual value; tests override the fields they vary.
+fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingCreateParams {
+    massorca_protocol::methods::devices::PairingCreateParams {
+        ttl_secs: None,
+        admin: false,
+        standard: false,
+        addresses: Vec::new(),
+    }
 }

@@ -9,10 +9,10 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentKind,
-    AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
-    AgentWatchParams, KindEffort, KindModel, ModelSource,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentForgetParams, AgentForkParams,
+    AgentKind, AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentSetOptionsParams,
+    AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel, ModelSource,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -66,6 +66,21 @@ pub enum AgentCommand {
         #[arg(long, value_name = "ROWS")]
         rows: Option<u16>,
     },
+    /// Starts a new session from a copy of an exited session's conversation, with the kind's fork arguments, in the same
+    /// workspace. The source session keeps its own conversation.
+    Fork {
+        /// The source session: id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// The new session's first prompt, at most 8 KiB.
+        #[arg(long, allow_hyphen_values = true)]
+        prompt: Option<String>,
+        /// The new run's permission mode; the kind's default without it.
+        #[arg(long, value_name = "MODE")]
+        mode: Option<String>,
+        /// The new session's title; the source's title without it.
+        #[arg(long)]
+        title: Option<String>,
+    },
     /// Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
     Mode {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -75,6 +90,24 @@ pub enum AgentCommand {
         /// Type the switch into an agent whose kind reports no activity, so it may be in the middle of a prompt.
         #[arg(long)]
         force: bool,
+    },
+    /// Changes a session's model, effort or fast mode: typed into its run where the kind declares a live command for it,
+    /// otherwise applied at the session's next resume (decision 0171).
+    SetOptions {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// The model, one the kind takes at start.
+        #[arg(long)]
+        model: Option<String>,
+        /// The effort level, one the kind takes at start.
+        #[arg(long)]
+        effort: Option<String>,
+        /// Turns fast mode on.
+        #[arg(long, conflicts_with = "no_fast")]
+        fast: bool,
+        /// Turns fast mode off.
+        #[arg(long = "no-fast")]
+        no_fast: bool,
     },
     /// Marks a session's Waiting for you or Done state as seen, which clears its marker in every client.
     Seen {
@@ -614,6 +647,22 @@ pub async fn execute(
             }
             output.success(&resumed, &lines);
         }
+        AgentCommand::Fork {
+            session,
+            prompt,
+            mode,
+            title,
+        } => {
+            let forked = client
+                .agent_fork(&AgentForkParams {
+                    session,
+                    prompt,
+                    permission_mode: mode,
+                    title,
+                })
+                .await?;
+            output.success(&forked, &agent_text::session_details(&forked));
+        }
         AgentCommand::Mode {
             session,
             mode,
@@ -627,6 +676,28 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&set, &agent_text::mode_set_lines(&set));
+        }
+        AgentCommand::SetOptions {
+            session,
+            model,
+            effort,
+            fast,
+            no_fast,
+        } => {
+            let fast = match (fast, no_fast) {
+                (true, _) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+            };
+            let set = client
+                .agent_set_options(&AgentSetOptionsParams {
+                    session,
+                    model,
+                    effort,
+                    fast,
+                })
+                .await?;
+            output.success(&set, &agent_text::options_set_lines(&set));
         }
         AgentCommand::Seen { session } => {
             // Mark only the activity shown here, never one that arrived after it was read.

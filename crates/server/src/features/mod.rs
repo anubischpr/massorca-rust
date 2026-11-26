@@ -3,6 +3,8 @@
 mod agent_chat;
 mod agent_redaction;
 mod agents;
+mod automations;
+mod calendar;
 mod command_schema;
 mod config;
 pub(crate) use config::default_conversations_root;
@@ -12,6 +14,7 @@ mod events;
 mod extension_points;
 pub(crate) mod extension_process;
 mod extensions;
+pub(crate) mod first_prompt_rename;
 mod git;
 mod glab_login;
 mod host;
@@ -83,6 +86,8 @@ pub(crate) fn register_core(
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);
+    handles.extend(automations::register(registries)?);
+    handles.extend(calendar::register(registries)?);
     handles.extend(command_schema::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)

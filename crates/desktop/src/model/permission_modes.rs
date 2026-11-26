@@ -196,11 +196,7 @@ mod tests {
             label: label.into(),
             description: Some(format!("{label} description")),
             bypass,
-            live_switch: false,
-            may_fall_back: false,
-            icon: None,
-            tone: None,
-            selectable: true,
+            ..crate::service::fixtures::base_permission_mode()
         }
     }
 

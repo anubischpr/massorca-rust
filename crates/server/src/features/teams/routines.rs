@@ -237,7 +237,7 @@ impl HostZone {
     }
 }
 
-fn add_routine(
+pub(super) fn add_routine(
     store: &Store,
     params: RoutineAddParams,
     admin: bool,
@@ -456,7 +456,7 @@ pub(super) fn next_run_after(row: &TeamRoutineRow, now: i64) -> Result<Option<i6
 }
 
 /// The schedule a stored routine means. core-schedule checks it when it is compiled.
-pub(super) fn schedule_of(row: &TeamRoutineRow) -> Result<Schedule, ErrorBody> {
+pub(crate) fn schedule_of(row: &TeamRoutineRow) -> Result<Schedule, ErrorBody> {
     Ok(Schedule {
         cadence: core_cadence(&row.cadence)?,
         weekday: row.weekday.as_deref().map(core_weekday).transpose()?,

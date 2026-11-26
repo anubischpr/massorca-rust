@@ -141,6 +141,8 @@ pub struct WorkspaceStart {
     pub project_id: String,
     /// The project's name, or a plain word when the service no longer lists the project.
     pub project: String,
+    /// The project's icon, drawn in the heading (decision 0091).
+    pub icon: crate::model::project_icon::ProjectGlyph,
     pub host: &'static str,
     pub path: String,
     pub branch: Option<String>,
@@ -189,6 +191,8 @@ pub fn send_reason(
 pub struct StartOptions {
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Fast speed for the start, sent only when the person chose it on a model that takes it (capability `agent-fast/1`).
+    pub fast: Option<bool>,
 }
 
 /// The options a start sends: the declared model id and the declared effort id the picker chose (decisions 0094 and
@@ -200,11 +204,11 @@ pub fn start_options(offered: bool, model: Option<&str>, effort: Option<&str>) -
     StartOptions {
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
+        fast: None,
     }
 }
 
-/// Why Fast is off on every model until the service offers `agent-fast/1`. No declared model carries a Fast flag yet, and
-/// `agent.start` has no field for a speed, so Fast stays off even once the service offers it.
+/// Why Fast is off on every model until the service offers `agent-fast/1`.
 pub const FAST_NEEDS_NEWER_SERVICE: &str = "Fast mode needs a newer service.";
 
 /// The reason Fast is off on every model, or `None` once the service offers fast speed.
@@ -244,7 +248,7 @@ pub fn start_params(
         request_id: None,
         permission_mode,
         model: options.model,
-        fast: None,
+        fast: options.fast,
         effort: options.effort,
     }
 }
@@ -284,6 +288,13 @@ pub fn workspace_start(state: &StoreState, workspace_id: &str) -> Option<Workspa
         name: workspace.name.clone(),
         project_id: workspace.project_id.clone(),
         project,
+        icon: state
+            .projects
+            .iter()
+            .find(|project| project.id == workspace.project_id)
+            .map_or_else(Default::default, |project| {
+                crate::model::project_icon::ProjectGlyph::of(project.icon.as_ref())
+            }),
         host: LOCAL_HOST,
         path: workspace.path.clone(),
         branch: workspace.branch.clone(),
@@ -328,8 +339,7 @@ mod tests {
         let busy =
             crate::service::Refusal::from(&massorca_client::ClientError::Remote(ErrorBody {
                 code: codes::AGENT_WORKSPACE_BUSY.to_owned(),
-                message: "session x already writes in this workspace".to_owned(),
-                data: None,
+                ..crate::service::fixtures::base_error_body()
             }));
         let sentence = super::start_refusal_sentence(&busy);
         assert!(sentence.starts_with("Another session is already working in this workspace"));
@@ -458,8 +468,7 @@ mod tests {
         KindChat {
             supported,
             reason,
-            version: None,
-            range: None,
+            ..crate::service::fixtures::base_kind_chat()
         }
     }
 
@@ -584,6 +593,7 @@ mod tests {
             StartOptions {
                 model: Some("opus".to_owned()),
                 effort: Some("xhigh".to_owned()),
+                fast: None,
             }
         );
         assert_eq!(
@@ -607,8 +617,25 @@ mod tests {
             StartOptions {
                 model: Some("haiku".to_owned()),
                 effort: None,
+                fast: None,
             }
         );
         assert_eq!(start_options(true, None, None), StartOptions::default());
+    }
+
+    #[test]
+    fn the_start_carries_fast_only_when_the_person_chose_it() {
+        let fast = StartOptions {
+            fast: Some(true),
+            ..StartOptions::default()
+        };
+        assert_eq!(
+            start_params(None, "claude", "", None, fast, (120, 40)).fast,
+            Some(true)
+        );
+        assert_eq!(
+            start_params(None, "claude", "", None, StartOptions::default(), (120, 40)).fast,
+            None
+        );
     }
 }

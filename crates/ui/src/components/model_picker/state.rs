@@ -34,6 +34,8 @@ pub struct ModelOption {
     pub default_effort: usize,
     /// Whether the model offers Fast speed.
     pub fast: bool,
+    /// Why the model takes no Fast speed when its agent says why; the Fast segment names it on hover.
+    pub fast_reason: Option<SharedString>,
 }
 
 /// One agent or provider and its models.
@@ -372,6 +374,7 @@ pub(crate) mod fixtures {
                 .collect(),
             default_effort: default,
             fast,
+            fast_reason: None,
         }
     }
 

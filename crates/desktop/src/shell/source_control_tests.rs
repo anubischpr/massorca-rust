@@ -29,15 +29,7 @@ fn open_panel(rig: &Rig, cx: &mut VisualTestContext) {
 fn entry(path: &str) -> StatusEntry {
     StatusEntry {
         path: path.to_owned(),
-        original_path: None,
-        staged: None,
-        unstaged: None,
-        untracked: false,
-        conflict: None,
-        staged_lines: None,
-        unstaged_lines: None,
-        submodule: false,
-        path_lossy: false,
+        ..crate::service::fixtures::base_status_entry()
     }
 }
 
@@ -49,32 +41,27 @@ fn status(entries: Vec<StatusEntry>) -> GitStatus {
             upstream: Some("origin/main".into()),
             ahead: Some(1),
             behind: Some(0),
-            upstream_gone: false,
+            ..crate::service::fixtures::base_branch_state()
         },
-        operation: None,
         entries,
         totals: StatusTotals::default(),
-        truncated: false,
+        ..crate::service::fixtures::base_git_status()
     }
 }
 
 fn history() -> GitLog {
     let signature = Signature {
-        name: "Ada".into(),
-        email: "ada@example.invalid".into(),
-        time_ms: 1,
+        ..crate::service::fixtures::base_signature()
     };
     GitLog {
         commits: vec![Commit {
             id: "0123456789abcdef0123456789abcdef01234567".into(),
-            parents: Vec::new(),
             author: signature.clone(),
             committer: signature,
-            subject: "first".into(),
             message: "first\n".into(),
-            message_truncated: false,
+            ..crate::service::fixtures::base_commit()
         }],
-        next_cursor: None,
+        ..crate::service::fixtures::base_git_log()
     }
 }
 

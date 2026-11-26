@@ -177,6 +177,18 @@ impl Shell {
         cx.notify();
     }
 
+    /// "Open in Work panel" (title bar): shows the Work panel with `terminal` of `workspace` selected, leaving the
+    /// focus where it is.
+    pub(super) fn open_session_terminal(
+        &mut self,
+        workspace: &str,
+        terminal: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.model.show_region(Region::WorkPanel);
+        self.reveal_terminal(workspace, terminal, cx);
+    }
+
     /// `terminal.create` in `workspace`. The new terminal is selected and focused once the service
     /// answers; a refusal says why under the strip.
     ///

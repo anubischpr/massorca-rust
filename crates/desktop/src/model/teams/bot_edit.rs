@@ -1,4 +1,5 @@
-//! The Edit bot form: a bot's name, job, agent kind and Advanced options, and the fields an edit sends (`team.bot_update`).
+//! The Edit bot form: a bot's name, job, agent kind, skills and Advanced options, and the fields an edit sends
+//! (`team.bot_update`).
 
 use super::state::{TeamError, check_name};
 use super::types::Bot;
@@ -14,6 +15,8 @@ pub struct BotForm {
     pub model: Option<String>,
     /// The effort the bot runs at; `None` leaves it to the bot's job.
     pub effort: Option<String>,
+    /// The skill names the bot keeps, in order.
+    pub skills: Vec<String>,
 }
 
 /// The fields an edit changes; `None` leaves a field as it is.
@@ -26,6 +29,8 @@ pub struct BotChange {
     pub model: Option<String>,
     /// `Some("")` clears the effort, so the bot's job picks it again.
     pub effort: Option<String>,
+    /// The whole new list when the skills changed; an empty list clears them.
+    pub skills: Option<Vec<String>>,
 }
 
 impl BotForm {
@@ -37,6 +42,7 @@ impl BotForm {
             kind: bot.kind.clone(),
             model: bot.model.clone(),
             effort: bot.effort.clone(),
+            skills: bot.skills.clone(),
         }
     }
 }
@@ -53,6 +59,7 @@ impl BotChange {
             kind: (form.kind != opened.kind).then(|| form.kind.clone()),
             model: changed_option(&opened.model, &form.model),
             effort: changed_option(&opened.effort, &form.effort),
+            skills: (form.skills != opened.skills).then(|| form.skills.clone()),
         })
     }
 
@@ -79,6 +86,7 @@ mod tests {
             kind: "claude".into(),
             model: None,
             effort: None,
+            skills: Vec::new(),
         }
     }
 
@@ -199,7 +207,42 @@ mod tests {
             effort: Some("high".into()),
             agent: None,
             kind_unavailable: None,
+            skills: vec!["review".into()],
         };
-        assert_eq!(BotForm::of(&bot), stored());
+        assert_eq!(
+            BotForm::of(&bot),
+            BotForm {
+                skills: vec!["review".into()],
+                ..stored()
+            }
+        );
+    }
+
+    #[test]
+    fn changed_skills_are_sent_whole_and_unchanged_ones_send_nothing() {
+        let kept = BotForm {
+            skills: vec!["review".into(), "deploy".into()],
+            ..opened()
+        };
+        assert!(BotChange::between(&kept, &kept).expect("valid").is_empty());
+        let fewer = BotForm {
+            skills: vec!["deploy".into()],
+            ..kept.clone()
+        };
+        assert_eq!(
+            BotChange::between(&kept, &fewer),
+            Ok(BotChange {
+                skills: Some(vec!["deploy".into()]),
+                ..BotChange::default()
+            })
+        );
+        let none = BotForm {
+            skills: Vec::new(),
+            ..kept.clone()
+        };
+        assert_eq!(
+            BotChange::between(&kept, &none).map(|change| change.skills),
+            Ok(Some(Vec::new()))
+        );
     }
 }

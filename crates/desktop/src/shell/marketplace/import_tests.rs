@@ -74,17 +74,11 @@ fn import_without_the_capability_keeps_the_manual_folder_field(cx: &mut TestAppC
 fn ready_claude(folder: &str) -> ImportCandidates {
     ImportCandidates {
         candidates: vec![ImportCandidate {
-            kind: "claude".to_owned(),
-            ready: true,
             folder: Some(folder.to_owned()),
             files: vec![CandidateFile {
-                name: ".credentials.json".to_owned(),
-                required: true,
-                found: true,
-                reason: None,
-                path: None,
-                env: None,
+                ..crate::service::fixtures::base_candidate_file()
             }],
+            ..crate::service::fixtures::base_import_candidate()
         }],
     }
 }

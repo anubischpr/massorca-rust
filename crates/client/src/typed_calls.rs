@@ -6,14 +6,15 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
-    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
-    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
-    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
-    CredentialsKindRef, CredentialsRemoved, CredentialsShown, GenerateTitleParams,
-    GenerateTitleResult, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
+    AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentOptionsSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentSetOptionsParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    GenerateTitleParams, GenerateTitleResult, ImportCandidates, ImportCandidatesParams,
+    PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
@@ -604,6 +605,17 @@ impl Client {
         self.call(agents::RESUME, params).await
     }
 
+    /// `agent.fork`: starts a new session from a copy of an exited session's conversation (decision 0168). Needs
+    /// capability `agent-fork/1`; a service that does not offer it is refused before anything is sent.
+    pub async fn agent_fork(&self, params: &AgentForkParams) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_FORK),
+            capabilities::AGENT_FORK,
+            "a fork of a session",
+        )?;
+        self.call(agents::FORK, params).await
+    }
+
     /// `agent.set_mode`: switches a session's permission mode at once where the kind has a live switch, or stores it for
     /// the next resume; the result says which (capability `agent-modes/1`, decision 0083).
     pub async fn agent_set_mode(
@@ -611,6 +623,21 @@ impl Client {
         params: &AgentSetModeParams,
     ) -> Result<AgentModeSet, ClientError> {
         self.call(agents::SET_MODE, params).await
+    }
+
+    /// `agent.set_options`: changes a session's model, effort or fast mode, typed into a live run where the kind declares a
+    /// live command for it, or kept for the session's next resume (capability `agent-options-live/1`, decision 0171). A
+    /// service that does not offer it is refused before anything is sent.
+    pub async fn agent_set_options(
+        &self,
+        params: &AgentSetOptionsParams,
+    ) -> Result<AgentOptionsSet, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_OPTIONS_LIVE),
+            capabilities::AGENT_OPTIONS_LIVE,
+            "a change to a session's model, effort or fast mode",
+        )?;
+        self.call(agents::SET_OPTIONS, params).await
     }
 
     /// `agent.delegate`: starts a child session of a parent session; the child's record and an optional note.
@@ -808,6 +835,21 @@ mod require_offered_tests {
             }
             other => panic!("unexpected refusal: {other}"),
         }
+    }
+
+    #[test]
+    fn a_change_to_a_sessions_options_needs_agent_options_live() {
+        let what = "a change to a session's model, effort or fast mode";
+        let refused = require_offered(false, capabilities::AGENT_OPTIONS_LIVE, what)
+            .expect_err("refused without the capability");
+        match refused {
+            ClientError::CapabilityMissing { what, capability } => {
+                assert_eq!(what, "a change to a session's model, effort or fast mode");
+                assert_eq!(capability, "agent-options-live/1");
+            }
+            other => panic!("unexpected refusal: {other}"),
+        }
+        assert!(require_offered(true, capabilities::AGENT_OPTIONS_LIVE, what).is_ok());
     }
 
     #[test]
