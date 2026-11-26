@@ -76,6 +76,28 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             ),
         ),
         command(
+            "extension.program-update-review",
+            "Show what updating a host program a tool package installed would run",
+            "extensions.program_update_review",
+            args(
+                &["id", "program"],
+                json!({ "id": { "type": "string" }, "program": { "type": "string" } }),
+            ),
+        ),
+        command(
+            "extension.program-update",
+            "Update a host program a tool package installed, with the reviewed vendor command",
+            "extensions.program_update",
+            args(
+                &["id", "program", "consent"],
+                json!({
+                    "id": { "type": "string" },
+                    "program": { "type": "string" },
+                    "consent": { "type": "string" }
+                }),
+            ),
+        ),
+        command(
             "extension.log",
             "Show the recent install, update, rollback and remove runs of an extension",
             "extensions.log",

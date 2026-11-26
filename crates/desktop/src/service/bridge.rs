@@ -149,6 +149,11 @@ pub(crate) enum Command {
         request: u64,
         refresh: bool,
     },
+    /// Previews, places, removes or lists placed skills on This computer; the answer is a store update tagged with `request`.
+    SkillPlacement {
+        request: u64,
+        call: skills::PlacementCall,
+    },
     Secret(SecretCommand),
     /// A hosted-service call on this computer (`host: None`) or a paired host, answered on its oneshot.
     HostedServices {
@@ -943,6 +948,9 @@ impl Link {
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
+        self.emit(StoreUpdate::ProgramUpdateOffered(client.has_capability(
+            massorca_protocol::capabilities::EXTENSIONS_PROGRAMS,
+        )));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1047,6 +1055,9 @@ impl Link {
                             }
                             Some(Command::Skills { request, refresh }) => {
                                 skills::spawn_read(client, request, refresh, &self.updates);
+                            }
+                            Some(Command::SkillPlacement { request, call }) => {
+                                skills::spawn_placement(client, request, call, &self.updates);
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -1506,7 +1517,7 @@ fn refuse_while_down(command: Command) {
         Command::HostAgentStop { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::Skills { .. } | Command::HostSkills { .. } => {}
+        Command::Skills { .. } | Command::HostSkills { .. } | Command::SkillPlacement { .. } => {}
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
