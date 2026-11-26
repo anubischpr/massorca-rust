@@ -1,7 +1,10 @@
 //! The Automations page (decision 0123): the scheduled automations the service holds. Each row shows its schedule, its
-//! project and its next run, with a switch to enable it and Delete behind a confirm.
+//! project and its next run, with a switch to enable it, Edit, and Delete behind a confirm. The editor is `editor`.
 
 mod actions;
+mod editor;
+
+pub(in crate::shell) use editor::{AutomationEditor, editor_dialog};
 
 use super::Shell;
 use crate::model::automations::{AutomationsState, next_run_text, schedule_summary};
@@ -30,12 +33,17 @@ pub(in crate::shell) struct AutomationsFrame {
 pub(in crate::shell) fn page(frame: &AutomationsFrame, cx: &gpui::App) -> AnyElement {
     let theme = *cx.theme();
     let shell = &frame.shell;
-    let header = div().flex().items_center().justify_between().child(
-        div()
-            .text_style(TYPE_HEADING)
-            .text_color(theme.palette.text.primary)
-            .child("Automations"),
-    );
+    let header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_style(TYPE_HEADING)
+                .text_color(theme.palette.text.primary)
+                .child("Automations"),
+        )
+        .child(new_button(shell, frame.connected, ButtonVariant::Ghost));
     let mut body = div()
         .flex()
         .flex_col()
@@ -65,7 +73,8 @@ pub(in crate::shell) fn page(frame: &AutomationsFrame, cx: &gpui::App) -> AnyEle
             body = body.child(
                 EmptyState::new("automations-empty", "No automations yet")
                     .icon(IconName::CalendarClock)
-                    .explanation("No automation is defined in this profile.")
+                    .explanation("Create one to run an agent on a schedule, in a project.")
+                    .action(new_button(shell, frame.connected, ButtonVariant::Primary))
                     .into_any_element(),
             );
         }
@@ -112,7 +121,25 @@ pub(in crate::shell) fn delete_dialog(
         })
 }
 
-/// One automation: its name, schedule, project and next run, then its switch and its Delete control.
+/// "New automation": opens the editor on a new automation. It needs the service to save one.
+fn new_button(shell: &WeakEntity<Shell>, connected: bool, variant: ButtonVariant) -> Button {
+    let shell = shell.clone();
+    let button = Button::new("automations-new", "New automation")
+        .leading_icon(IconName::Plus)
+        .variant(variant)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_automation_editor(None, cx));
+        });
+    if connected {
+        button
+    } else {
+        button
+            .disabled(true)
+            .tooltip("Connect to MassOrca to create automations.")
+    }
+}
+
+/// One automation: its name, schedule, project and next run, then its switch and its Edit and Delete controls.
 fn automation_row(
     automation: &Automation,
     now_ms: i64,
@@ -134,6 +161,17 @@ fn automation_row(
                 });
             },
         )
+    };
+    let edit = {
+        let shell = shell.clone();
+        let id = id.clone();
+        Button::new(format!("automation-edit-{id}"), "Edit")
+            .variant(ButtonVariant::Ghost)
+            .on_click(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_automation_editor(Some(id.clone()), cx)
+                });
+            })
     };
     let delete = {
         let shell = shell.clone();
@@ -179,6 +217,7 @@ fn automation_row(
                 .items_center()
                 .gap(px(SPACE_2))
                 .child(switch)
+                .child(edit)
                 .child(delete),
         )
 }

@@ -276,6 +276,8 @@ pub struct Shell {
     marketplace_offers: Vec<crate::model::marketplace::HostTarget>,
     /// The Automations page's list, editor target, delete question and notice (decision 0123).
     automations: crate::model::automations::AutomationsState,
+    /// The automation editor's fields, while it is open.
+    automation_editor: Option<automations::AutomationEditor>,
     /// Whether a read of the automations is on its way to the service.
     automations_loading: bool,
     /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
@@ -599,6 +601,7 @@ impl Shell {
             ),
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             automations: Default::default(),
+            automation_editor: None,
             automations_loading: false,
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
@@ -1034,6 +1037,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let automation_editor = self
+            .automation_editor
+            .as_ref()
+            .map(|editor| automations::editor_dialog(editor, &shell, cx));
         let automation_delete = self
             .automations
             .delete_target()
@@ -1150,6 +1157,7 @@ impl Render for Shell {
             .when_some(receiver_menu, |el, menu| el.child(menu))
             .when_some(filter_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
+            .when_some(automation_editor, |el, dialog| el.child(dialog))
             .when_some(automation_delete, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
