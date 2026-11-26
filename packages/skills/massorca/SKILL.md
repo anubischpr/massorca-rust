@@ -264,6 +264,10 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca skills place <SKILL_ID> --agent <AGENTS>...`: Copies a skill the agent tools keep into the chosen agents' folders, and records the copies. `--agent` takes codex, claude, cursor, gemini, droid, continue, trae, grok, aug, muse, zcode.
 - `massorca skills unplace <NAME> [--agent <AGENTS>]...`: Removes the copies MassOrca placed for a skill. A copy the user changed is kept. `--agent` takes codex, claude, cursor, gemini, droid, continue, trae, grok, aug, muse, zcode.
 - `massorca skills managed`: Lists the skills MassOrca placed on this host.
+- `massorca skills bundled list`: Lists the skills MassOrca ships, and whether each is placed on this host.
+- `massorca skills bundled install <NAME> [--agent <AGENTS>]...`: Places a skill MassOrca ships for the chosen agents; without --agent, for every agent folder on this host. `--agent` takes codex, claude, cursor, gemini, droid, continue, trae, grok, aug, muse, zcode.
+- `massorca skills bundled refresh <NAME>`: Brings a placed skill MassOrca ships to this build's text. A copy the person changed is kept.
+- `massorca skills bundled remove <NAME>`: Removes a skill MassOrca ships from the agent folders it was placed in. A copy the person changed is kept.
 - `massorca skills bundled show <NAME>`: Prints a bundled skill's text as this build renders it. The checked-in copy must equal it; no service is needed.
 
 ### marketplace

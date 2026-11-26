@@ -1,11 +1,14 @@
 //! `massorca skills`: `installed` and `roots` (SKL-01) list what the agent tools and the registered projects keep on this
 //! host; `preview`, `place`, `unplace` and `managed` (SKL-02) copy a skill into the agents' folders and remove only the
-//! copies MassOrca placed. The service does the scans and the writes. `bundled show` (SKL-04) prints the MassOrca skill the
-//! way this build renders it; it needs no service.
+//! copies MassOrca placed. The service does the scans and the writes. `bundled` (SKL-04) lists, installs, refreshes and removes
+//! the skills MassOrca ships; `bundled show` prints one the way this build renders it and needs no service.
 
 use clap::Subcommand;
 use massorca_client::Client;
 use massorca_protocol::codes;
+use massorca_protocol::methods::skill_bundled::{
+    BundledSkill, BundledSkillState, SkillsBundledInstallParams, SkillsBundledNameParams,
+};
 use massorca_protocol::methods::skill_placement::{
     PlacementAgent, PlacementState, PlacementTopology, SkillPlaceParams, SkillPlacementResult,
     SkillUnplaceParams, SkillsManagedParams, SkillsManagedResult,
@@ -35,21 +38,38 @@ pub enum SkillCommand {
     Unplace(UnplaceArgs),
     /// Lists the skills MassOrca placed on this host.
     Managed,
-    /// The skills MassOrca ships: show one, or install, refresh and remove it (SKL-04).
+    /// The skills MassOrca ships: list them, install, refresh or remove one, or show its text (SKL-04).
     #[command(subcommand)]
     Bundled(BundledCommand),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum BundledCommand {
+    /// Lists the skills MassOrca ships, and whether each is placed on this host.
+    List,
+    /// Places a skill MassOrca ships for the chosen agents; without --agent, for every agent folder on this host.
+    Install(BundledInstallArgs),
+    /// Brings a placed skill MassOrca ships to this build's text. A copy the person changed is kept.
+    Refresh(BundledNameArgs),
+    /// Removes a skill MassOrca ships from the agent folders it was placed in. A copy the person changed is kept.
+    Remove(BundledNameArgs),
     /// Prints a bundled skill's text as this build renders it. The checked-in copy must equal it; no service is needed.
     Show(BundledNameArgs),
 }
 
 #[derive(Debug, clap::Args)]
 pub struct BundledNameArgs {
-    /// The bundled skill's name.
+    /// The bundled skill's name, as `skills bundled list` shows it.
     pub name: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct BundledInstallArgs {
+    /// The bundled skill's name, as `skills bundled list` shows it.
+    pub name: String,
+    /// An agent to place the skill for; repeat for several. Without it, every agent folder on this host.
+    #[arg(long = "agent", value_enum)]
+    pub agents: Vec<AgentArg>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -165,9 +185,77 @@ async fn run_service_command(
                 .await?;
             output.success(&managed, &managed_lines(&managed));
         }
-        SkillCommand::Bundled(BundledCommand::Show(args)) => show_bundled(&args.name, output)?,
+        SkillCommand::Bundled(command) => run_bundled(client, command, output).await?,
     }
     Ok(())
+}
+
+/// Runs one `skills bundled` subcommand. `show` is answered here without the service; the others go to it.
+async fn run_bundled(
+    client: &Client,
+    command: BundledCommand,
+    output: Output,
+) -> Result<(), CliError> {
+    match command {
+        BundledCommand::List => {
+            let listed = client.skills_bundled_list().await?;
+            output.success(&listed, &bundled_lines(&listed.skills));
+        }
+        BundledCommand::Install(args) => {
+            let result = client
+                .skills_bundled_install(&SkillsBundledInstallParams {
+                    name: args.name,
+                    agents: wire_agents(&args.agents),
+                })
+                .await?;
+            output.success(&result, &placement_lines(&result));
+        }
+        BundledCommand::Refresh(args) => {
+            let result = client
+                .skills_bundled_refresh(&SkillsBundledNameParams { name: args.name })
+                .await?;
+            output.success(&result, &placement_lines(&result));
+        }
+        BundledCommand::Remove(args) => {
+            let result = client
+                .skills_unplace(&SkillUnplaceParams {
+                    name: args.name,
+                    agents: Vec::new(),
+                })
+                .await?;
+            output.success(&result, &placement_lines(&result));
+        }
+        BundledCommand::Show(args) => show_bundled(&args.name, output)?,
+    }
+    Ok(())
+}
+
+/// One line per bundled skill: its name, its state on this host, and the agents it is placed for.
+fn bundled_lines(skills: &[BundledSkill]) -> Vec<String> {
+    if skills.is_empty() {
+        return vec!["MassOrca ships no skills".to_owned()];
+    }
+    skills
+        .iter()
+        .map(|skill| {
+            let state = match skill.state {
+                BundledSkillState::NotPlaced => "not installed",
+                BundledSkillState::Current => "installed",
+                BundledSkillState::Outdated => "update available",
+                BundledSkillState::Unknown => "status unknown",
+            };
+            let agents: Vec<&str> = skill
+                .agents
+                .iter()
+                .map(|agent| agent_name(*agent))
+                .collect();
+            if agents.is_empty() {
+                format!("{}  {state}", skill.name)
+            } else {
+                format!("{}  {state} for {}", skill.name, agents.join(", "))
+            }
+        })
+        .collect()
 }
 
 /// The `bundled show` result: the skill's name and its text.
