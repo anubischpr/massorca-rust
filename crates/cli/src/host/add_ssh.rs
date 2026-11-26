@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use massorca_client::{Client, HostRecord, Hosts, default_device_name, validate_host_name};
+use massorca_client::{
+    Client, HostRecord, Hosts, SshInstall, default_device_name, validate_host_name,
+};
 use massorca_core_remote::bootstrap::{BootstrapPlan, BootstrapReport, install_over_ssh};
 use massorca_profile::Profile;
 use massorca_protocol::pairing::Offer;
@@ -68,6 +70,7 @@ pub async fn execute(
         error
     })?;
     drop(client);
+    note_install(&hosts, &name, args, output);
     let mut lines = install_lines(&installed, &args.target);
     lines.extend(record_lines(&record));
     let report = install_report(&args.target, &installed, "paired", Some(record), None);
@@ -85,6 +88,7 @@ async fn upgrade(
 ) -> Result<(), CliError> {
     match status::check(hosts, name).await {
         Ok(connected) => {
+            note_install(hosts, name, args, output);
             let state = status::status_of(name, Ok(connected));
             let mut lines = install_lines(installed, &args.target);
             lines.push(format!(
@@ -103,6 +107,20 @@ async fn upgrade(
             );
             Err(error)
         }
+    }
+}
+
+/// Records how host `name` was installed, for the self-test's log hint. A note that cannot be written is only a warning:
+/// the host is installed and paired either way.
+fn note_install(hosts: &Hosts, name: &str, args: &HostAddSshArgs, output: Output) {
+    let install = SshInstall {
+        ssh_target: args.target.clone(),
+        ssh_args: args.ssh_arg.clone(),
+    };
+    if let Err(error) = hosts.note_ssh_install(name, &install) {
+        output.progress(&format!(
+            "warning: the install target of host {name} was not recorded: {error}"
+        ));
     }
 }
 
