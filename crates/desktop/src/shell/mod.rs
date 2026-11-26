@@ -145,6 +145,8 @@ mod settings_tests;
 #[cfg(test)]
 mod sidebar_session_rows_tests;
 #[cfg(test)]
+mod source_control_sync_tests;
+#[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
 mod start_page_tests;

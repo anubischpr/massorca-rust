@@ -15,6 +15,9 @@ use massorca_profile::Profile;
 use massorca_protocol::methods::git::commit::GitCommitParams;
 use massorca_protocol::methods::git::diff::GitDiffFileParams;
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitPullParams, GitPulled, GitPushParams, PullMode, PushOutcome,
+};
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::git::{ChangeKind, LineCounts};
 use massorca_protocol::methods::projects::ProjectAddParams;
@@ -657,4 +660,96 @@ fn base_line_counts() -> massorca_protocol::methods::git::LineCounts {
         removed: 0,
         binary: false,
     }
+}
+
+fn push_params(workspace: &str) -> GitPushParams {
+    GitPushParams {
+        workspace: workspace.to_owned(),
+        remote: None,
+        force_with_lease: None,
+        timeout_ms: None,
+    }
+}
+
+fn fetch_params(workspace: &str) -> GitFetchParams {
+    GitFetchParams {
+        workspace: workspace.to_owned(),
+        remote: None,
+        all: false,
+        timeout_ms: None,
+    }
+}
+
+fn pull_params(workspace: &str) -> GitPullParams {
+    GitPullParams {
+        workspace: workspace.to_owned(),
+        mode: PullMode::Merge,
+        timeout_ms: None,
+    }
+}
+
+/// Fetch, pull and push reach a local remote through the service. The push creates the branch on origin
+/// and sets it as the upstream; a commit pushed from another clone is fetched, then pulled in.
+#[tokio::test]
+async fn fetch_pull_and_push_reach_a_local_remote_through_the_service() {
+    let home = temp_home();
+    let (mut session, worktree) = Session::start(&home).await;
+    let id = session.id().to_owned();
+    session.handle.git_watch(&id);
+    session
+        .until("the status", |s| status(s, &id).is_some())
+        .await;
+    let branch = status(&session.state, &id)
+        .and_then(|st| st.branch.head)
+        .expect("the worktree is on a branch");
+
+    let remote = home.path().join("remote.git");
+    std::fs::create_dir_all(&remote).expect("the remote folder");
+    git(&remote, &["init", "--bare", "-q"]);
+    let remote_url = remote.display().to_string();
+    git(&worktree, &["remote", "add", "origin", &remote_url]);
+
+    let pushed = session
+        .handle
+        .git_push(push_params(&id))
+        .await
+        .expect("the push succeeds");
+    assert_eq!(pushed.outcome, PushOutcome::Created);
+    assert!(pushed.upstream_set, "the first push sets the upstream");
+
+    let other = home.path().join("other");
+    let other_url = other.display().to_string();
+    git(
+        home.path(),
+        &["clone", "-q", "--branch", &branch, &remote_url, &other_url],
+    );
+    std::fs::write(other.join("remote.txt"), "from another clone\n").expect("a file");
+    git(&other, &["add", "remote.txt"]);
+    git(&other, &["commit", "-q", "-m", "elsewhere"]);
+    git(&other, &["push", "-q", "origin", &branch]);
+
+    let fetched = session
+        .handle
+        .git_fetch(fetch_params(&id))
+        .await
+        .expect("the fetch succeeds");
+    assert!(
+        !fetched.updated.is_empty(),
+        "the fetch reports the branch that moved"
+    );
+
+    let pulled = session
+        .handle
+        .git_pull(pull_params(&id))
+        .await
+        .expect("the pull succeeds");
+    assert!(
+        matches!(pulled, GitPulled::FastForwarded { .. }),
+        "the worktree was only behind: {pulled:?}"
+    );
+    assert!(
+        worktree.join("remote.txt").exists(),
+        "the pulled file is in the worktree"
+    );
+    session.stop().await;
 }
