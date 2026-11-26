@@ -43,6 +43,7 @@ mod secrets;
 mod secrets_hardening;
 mod skills;
 mod tasks;
+mod team_room;
 mod teams;
 mod terminal_secrets;
 mod terminal_wait;

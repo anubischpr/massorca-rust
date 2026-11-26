@@ -76,6 +76,12 @@ pub const SECRETS: &str = "secrets/1";
 pub const TEAMS: &str = "teams/1";
 /// A team's Conference room (`team.room_list`, `team.room_post`) and the `team.room_changed` topic (decision 0102).
 pub const TEAM_ROOM: &str = "team-room/1";
+/// Choice cards in a team's room: the optional `card` field of a room line and `team.room_answer` (decision 0121). A
+/// host that has it also keeps `team-room/1`.
+pub const TEAM_ROOM_CARDS: &str = "team-room/2";
+/// Conversation replies in a team's room: `ask` and `reply_to` of `team.room_post`, and the `quoted` and `typing` fields
+/// of `team.room_list` (decision 0122). A host that has it also keeps `team-room/1` and `team-room/2`.
+pub const TEAM_ROOM_REPLIES: &str = "team-room/3";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).

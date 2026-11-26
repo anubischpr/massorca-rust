@@ -477,6 +477,7 @@ impl Shell {
             if let Some(teams) = store.read(cx).teams() {
                 shell.model.refresh_teams(teams);
             }
+            shell.follow_bot_skills(cx);
             if !store.read(cx).is_sample() {
                 let state = store.read(cx).state();
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
