@@ -29,6 +29,7 @@ use massorca_protocol::methods::events::{
     TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED,
     TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_TEAM_ROOM_CHANGED,
     TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_WORKSPACE_UPDATED,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -54,7 +55,6 @@ use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
-use super::workspace_create::WorkspaceCreateRequest;
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::host_sessions::{self, Followed};
@@ -73,8 +73,6 @@ use super::update::StoreUpdate;
 pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
 /// The fast speed of `agent.start`, which no service ships yet; it must match the service's name when one does.
 const AGENT_FAST_CAPABILITY: &str = "agent-fast/1";
-/// The collision-free option of `workspace.create`, which no service ships yet; it must match the service's name when one does.
-const WORKSPACE_UNIQUE_NAME_CAPABILITY: &str = "workspace-unique-name/1";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
@@ -87,7 +85,6 @@ pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
-        unique_name: bool,
         reply: oneshot::Sender<Result<Workspace, Refusal>>,
     },
     /// `git.branches` for one workspace: the local branch names, the current one first.
@@ -366,26 +363,13 @@ impl ServiceHandle {
         let _ = self.commands.send(Command::RetryNow);
     }
 
-    /// `workspace.create`. The store changes through the resulting event, not from this answer.
+    /// `workspace.create`. The store changes through the resulting event, not from this answer. The caller sets
+    /// `unique_name` and `name_generated` (`workspace-unique-name/1`, `workspace-rename/1`).
     pub async fn create_workspace(
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        self.create_workspace_with(params, false).await
-    }
-
-    /// `workspace.create` with the collision-free option when `unique_name` is set (capability `workspace-unique-name/1`).
-    pub async fn create_workspace_with(
-        &self,
-        params: WorkspaceCreateParams,
-        unique_name: bool,
-    ) -> Result<Workspace, Refusal> {
-        self.ask(|reply| Command::Create {
-            params,
-            unique_name,
-            reply,
-        })
-        .await
+        self.ask(|reply| Command::Create { params, reply }).await
     }
 
     /// `git.branches` for a workspace: the repository's local branch names, the current one first. Branches belong to the
@@ -945,8 +929,11 @@ impl Link {
             client.has_capability(AGENT_FAST_CAPABILITY),
         ));
         self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
-            client.has_capability(WORKSPACE_UNIQUE_NAME_CAPABILITY),
+            client.has_capability(massorca_protocol::capabilities::WORKSPACE_UNIQUE_NAME),
         ));
+        self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
+            massorca_protocol::capabilities::WORKSPACE_RENAME,
+        )));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
@@ -1131,7 +1118,8 @@ impl Link {
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
                 return Outcome::Continue;
             }
-            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
+            // A rename or comment change is read again too: the event names the workspace, not its name.
+            TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
                 })
@@ -1276,18 +1264,10 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
-        Command::Create {
-            params,
-            unique_name,
-            reply,
-        } => {
+        Command::Create { params, reply } => {
             tokio::spawn(async move {
-                let request = WorkspaceCreateRequest {
-                    create: &params,
-                    unique_name,
-                };
                 let result = client
-                    .call::<_, Workspace>(massorca_protocol::methods::workspaces::CREATE, &request)
+                    .workspace_create(&params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);

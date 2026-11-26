@@ -12,7 +12,9 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::methods::config::ConfigSet;
 use massorca_protocol::methods::projects::ProjectAddParams;
-use massorca_protocol::methods::workspaces::{WorkspaceCreateParams, WorkspaceRemoveParams};
+use massorca_protocol::methods::workspaces::{
+    WorkspaceCreateParams, WorkspaceRemoveParams, WorkspaceRenameParams,
+};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use serde_json::json;
@@ -154,6 +156,15 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         project: project.to_owned(),
         name: name.to_owned(),
         ..base_workspace_create_params()
+    }
+}
+
+fn rename_params(workspace: &str, name: &str) -> WorkspaceRenameParams {
+    WorkspaceRenameParams {
+        workspace: workspace.to_owned(),
+        name: name.to_owned(),
+        from_generated: true,
+        expected_branch: None,
     }
 }
 
@@ -463,6 +474,59 @@ async fn a_setting_changed_by_another_client_reaches_the_store_through_the_chang
     stop_service(service).await;
 }
 
+#[tokio::test]
+async fn a_rename_by_another_client_reaches_the_store_through_the_workspace_event() {
+    let home = temp_home();
+    let repo_dir = home.path().join("demo");
+    repo(&repo_dir);
+    let service = start_service(home.path()).await;
+    let project_id = add_project(home.path(), &repo_dir).await;
+
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first full list", |s| {
+        s.connection.is_connected() && s.loaded && s.project(&project_id).is_some()
+    })
+    .await;
+
+    // A name the service chose may be renamed; the create's answer does not touch the store, the event does.
+    let created = handle
+        .create_workspace(WorkspaceCreateParams {
+            name_generated: true,
+            ..create_params(&project_id, "first")
+        })
+        .await
+        .expect("the workspace is created");
+    until(&mut updates, &mut state, "the created event", |s| {
+        s.workspace(&created.id).is_some()
+    })
+    .await;
+
+    // Another client renames it; this bridge learns of the new name only from the `workspace.updated` event.
+    let other = Client::connect(
+        &profile(home.path()),
+        ConnectOptions::new(PeerInfo {
+            name: "massorca-test-client".to_owned(),
+            version: "0.0.0-test".to_owned(),
+        }),
+    )
+    .await
+    .expect("a client connects");
+    other
+        .workspace_rename(&rename_params(&created.id, "second"))
+        .await
+        .expect("the other client renames the workspace");
+    until(&mut updates, &mut state, "the rename event", |s| {
+        s.workspace(&created.id)
+            .is_some_and(|workspace| workspace.name == "second")
+    })
+    .await;
+
+    drop(other);
+    drop(bridge);
+    stop_service(service).await;
+}
+
 /// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
 fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
     massorca_protocol::methods::workspaces::WorkspaceCreateParams {
@@ -475,6 +539,8 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 

@@ -77,7 +77,6 @@ fn type_into(cx: &mut VisualTestContext, field: &Entity<TextField>, text: &str) 
 
 type CreateCall = (
     WorkspaceCreateParams,
-    bool,
     oneshot::Sender<Result<Workspace, Refusal>>,
 );
 type StartCall = (
@@ -94,11 +93,7 @@ enum Call {
 fn next_call(script: &mut Script) -> Option<Call> {
     while let Some(command) = script.next() {
         match command {
-            Command::Create {
-                params,
-                unique_name,
-                reply,
-            } => return Some(Call::Create((params, unique_name, reply))),
+            Command::Create { params, reply } => return Some(Call::Create((params, reply))),
             Command::AgentStart { params, reply } => return Some(Call::Start((params, reply))),
             Command::Chat(ChatCommand::Start { params, reply }) => {
                 return Some(Call::Start((params, reply)));
@@ -127,7 +122,7 @@ fn expect_start(script: &mut Script) -> StartCall {
 fn a_new_workspace_shows_a_placeholder_row_until_its_session_replaces_it(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (_, _, reply) = expect_create(&mut rig.script);
+    let (_, reply) = expect_create(&mut rig.script);
     let created = workspace("w9", "p1", "fix-the-login-bug", 9);
     reply
         .send(Ok(created.clone()))
@@ -236,7 +231,7 @@ fn send_creates_a_workspace_named_from_the_prompt_then_starts_the_agent_in_it(
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, _unique, reply) = expect_create(&mut rig.script);
+    let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
     assert_eq!(create.name, "fix-the-login-bug");
     assert!(
@@ -288,9 +283,12 @@ fn with_the_unique_name_capability_a_derived_name_asks_for_a_free_one_and_is_not
     cx.run_until_parked();
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, unique, reply) = expect_create(&mut rig.script);
+    let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "fix-the-login-bug");
-    assert!(unique, "a derived name asks the service for a free one");
+    assert!(
+        create.unique_name,
+        "a derived name asks the service for a free one"
+    );
     reply
         .send(Err(taken_name()))
         .expect("the shell waits for the create");
@@ -302,21 +300,43 @@ fn with_the_unique_name_capability_a_derived_name_asks_for_a_free_one_and_is_not
 }
 
 #[gpui::test]
+fn with_the_rename_capability_a_derived_name_is_marked_as_the_services_to_rename(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceRenameOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, _reply) = expect_create(&mut rig.script);
+    assert!(
+        create.name_generated,
+        "a name derived from the prompt is renamable"
+    );
+    assert!(!create.unique_name, "no unique offer: the client retries");
+}
+
+#[gpui::test]
 fn without_the_unique_name_capability_a_taken_derived_name_is_retried_with_a_suffix(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (first, unique, reply) = expect_create(&mut rig.script);
-    assert_eq!((first.name.as_str(), unique), ("fix-the-login-bug", false));
+    let (first, reply) = expect_create(&mut rig.script);
+    assert_eq!(
+        (first.name.as_str(), first.unique_name),
+        ("fix-the-login-bug", false)
+    );
     reply
         .send(Err(taken_name()))
         .expect("the shell waits for the create");
     cx.run_until_parked();
-    let (second, unique, reply) = expect_create(&mut rig.script);
+    let (second, reply) = expect_create(&mut rig.script);
     assert_eq!(
-        (second.name.as_str(), unique),
+        (second.name.as_str(), second.unique_name),
         ("fix-the-login-bug-2", false)
     );
     let created = workspace("w9", "p1", "fix-the-login-bug-2", 9);
@@ -339,13 +359,13 @@ fn without_the_unique_name_capability_every_name_taken_shows_the_error_and_start
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
     for attempt in 1..=crate::model::home_start::FREE_NAME_TRIES {
-        let (create, unique, reply) = expect_create(&mut rig.script);
+        let (create, reply) = expect_create(&mut rig.script);
         let expected = if attempt == 1 {
             "fix-the-login-bug".to_owned()
         } else {
             format!("fix-the-login-bug-{attempt}")
         };
-        assert_eq!((create.name, unique), (expected, false));
+        assert_eq!((create.name, create.unique_name), (expected, false));
         reply
             .send(Err(taken_name()))
             .expect("the shell waits for the create");
@@ -371,7 +391,7 @@ fn without_the_unique_name_capability_a_refusal_that_is_not_a_taken_name_is_show
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (_, _, reply) = expect_create(&mut rig.script);
+    let (_, reply) = expect_create(&mut rig.script);
     reply
         .send(Err(Refusal::Failed {
             code: massorca_protocol::codes::WORKSPACE_NAME_INVALID.to_owned(),
@@ -518,7 +538,7 @@ fn picking_a_branch_starts_the_new_worktree_from_it(cx: &mut TestAppContext) {
     );
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    let (create, _reply) = expect_create(&mut rig.script);
     assert_eq!(
         create.base.as_deref(),
         Some("release"),
@@ -533,7 +553,7 @@ fn an_untouched_popover_sends_the_plain_create_call(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     offer_chat(&rig);
     type_and_send(&rig, cx, "Fix the login bug");
-    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    let (create, _reply) = expect_create(&mut rig.script);
     assert_eq!(
         create.base, None,
         "no base picked: the service starts from the project's base"
@@ -549,7 +569,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
     rig.shell
         .update(cx, |shell, cx| shell.start_from_home("", composer, cx));
     cx.run_until_parked();
-    let (create, _unique, reply) = expect_create(&mut rig.script);
+    let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.name, "", "a blank name asks the service for one");
     reply
         .send(Ok(workspace("w9", "p1", "coral-reef", 9)))
@@ -564,7 +584,7 @@ fn an_empty_prompt_still_creates_the_workspace_and_starts_the_agent(cx: &mut Tes
 fn a_refused_create_shows_the_refusal_keeps_the_draft_and_starts_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = home_rig(cx);
     type_and_send(&rig, cx, "fix the login");
-    let (_, _, reply) = expect_create(&mut rig.script);
+    let (_, reply) = expect_create(&mut rig.script);
     let refusal = Refusal::NameProblem {
         message: "the name fix-the-login is taken".to_owned(),
     };
@@ -685,7 +705,7 @@ fn an_unsafe_data_folder_refusal_shows_a_banner_with_the_command_to_run(cx: &mut
     draw(cx);
     assert!(cx.debug_bounds("start-profile-banner").is_none());
     type_and_send(&rig, cx, "fix the login");
-    let (_, _, reply) = expect_create(&mut rig.script);
+    let (_, reply) = expect_create(&mut rig.script);
     reply
         .send(Err(unsafe_location()))
         .expect("the shell waits for the create");
@@ -848,7 +868,7 @@ fn no_project_without_the_capability_stays_off_and_send_creates_in_the_first_pro
         );
     });
     type_and_send(&rig, cx, "fix the login");
-    let (create, _, _) = expect_create(&mut rig.script);
+    let (create, _) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
 }
 
@@ -1011,7 +1031,7 @@ fn a_folder_project_without_a_workspace_at_its_folder_creates_one(cx: &mut TestA
     };
     let (mut rig, cx) = project_home(cx, folder, Vec::new());
     type_and_send(&rig, cx, "Summarise the notes");
-    let (create, _unique, reply) = expect_create(&mut rig.script);
+    let (create, reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1");
     let created = workspace("w9", "p1", "summarise-the-notes", 9);
     reply
@@ -1031,6 +1051,6 @@ fn a_git_project_still_creates_its_worktree_with_a_workspace_at_its_path(cx: &mu
     let existing = workspace("w1", "p1", "notes", 1);
     let (mut rig, cx) = project_home(cx, git, vec![existing]);
     type_and_send(&rig, cx, "Summarise the notes");
-    let (create, _unique, _reply) = expect_create(&mut rig.script);
+    let (create, _reply) = expect_create(&mut rig.script);
     assert_eq!(create.project, "p1", "a git project makes its own worktree");
 }

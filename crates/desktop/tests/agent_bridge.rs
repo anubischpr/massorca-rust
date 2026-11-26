@@ -963,6 +963,8 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 

@@ -80,6 +80,8 @@ pub enum StoreUpdate {
     AgentFastOffered(bool),
     /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`), read on each connect.
     WorkspaceUniqueNameOffered(bool),
+    /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
+    WorkspaceRenameOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
@@ -309,6 +311,8 @@ pub struct StoreState {
     /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`); without it a derived
     /// name is retried with a suffix on the client.
     pub workspace_unique_name: bool,
+    /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
+    pub workspace_rename: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
@@ -360,6 +364,7 @@ impl Default for StoreState {
             agent_chat: false,
             agent_fast: false,
             workspace_unique_name: false,
+            workspace_rename: false,
             agent_archive: false,
             agent_kind_chat: BTreeMap::new(),
             chat: BTreeMap::new(),
@@ -474,6 +479,7 @@ impl StoreState {
             StoreUpdate::WorkspaceUniqueNameOffered(offered) => {
                 self.workspace_unique_name = offered;
             }
+            StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::Chat { session, event } => {
@@ -827,6 +833,7 @@ pub(crate) mod fixtures {
             base_refresh: None,
             comment: None,
             setup: None,
+            name_generated: false,
         }
     }
 
@@ -1197,6 +1204,8 @@ pub(crate) mod fixtures {
             path: None,
             request_id: None,
             no_setup: false,
+            unique_name: false,
+            name_generated: false,
         }
     }
 
@@ -1874,6 +1883,17 @@ mod tests {
             Instant::now(),
         );
         assert!(state.workspace_unique_name);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_renames_a_generated_name() {
+        let mut state = StoreState::default();
+        assert!(
+            !state.workspace_rename,
+            "no read yet: a derived name is not marked as renamable"
+        );
+        state.apply(StoreUpdate::WorkspaceRenameOffered(true), Instant::now());
+        assert!(state.workspace_rename);
     }
 
     #[test]

@@ -326,6 +326,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "workspace.rename",
+            "Rename a workspace whose name the service chose, and its branch",
+            "workspace.rename",
+            json!({
+                "type": "object",
+                "required": ["workspace", "name", "from_generated"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from_generated": { "type": "boolean" },
+                    "expected_branch": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "workspace.check",
             "Check a workspace's folder and its git registration",
             "workspace.check",
@@ -449,6 +464,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "List agent kinds: package state (installed), whether a program is detected, and problems",
             "agent.kinds",
             no_args(),
+        ),
+        command(
+            "agent.models",
+            "List the models a kind's picker offers for an account: declared choices, then the vendor CLI's listing",
+            "agent.models",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "refresh": { "type": "boolean" }
+                }
+            }),
         ),
         command(
             "agent.start",

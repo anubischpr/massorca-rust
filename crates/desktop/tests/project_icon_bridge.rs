@@ -27,13 +27,20 @@ fn profile(home: &Path) -> Profile {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let output = massorca_process::command("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
-        .status()
+        .current_dir(dir)
+        .output()
         .expect("git runs");
-    assert!(status.success(), "git {args:?} failed");
+    assert!(output.status.success(), "git {args:?} failed");
 }
 
 fn repo(dir: &Path) {
