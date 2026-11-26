@@ -111,6 +111,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "automations.list",
             "automations.remove",
             "automations.show",
+            "calendar",
             "settings.get",
             "settings.list",
             "settings.reset",

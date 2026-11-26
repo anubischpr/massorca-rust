@@ -2,6 +2,7 @@
 //! calls and subscriptions over one connection (ADR 0002, 0003).
 
 mod automation_calls;
+mod calendar_calls;
 mod client;
 #[cfg(feature = "local")]
 mod connect;

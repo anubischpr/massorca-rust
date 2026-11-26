@@ -148,6 +148,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::automations::AutomationsCommand,
     },
+    /// Lists the runs of routines and automations in a window of days, on the shared schedule (decision 0124).
+    Calendar(crate::calendar::CalendarArgs),
     /// Installs, lists, enables, disables and removes extensions, such as the agent packages.
     #[command(visible_alias = "ext")]
     Extension {
