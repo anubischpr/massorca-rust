@@ -52,8 +52,12 @@ pub const ARCHIVE: &str = "agent.archive";
 pub const PROMPT: &str = "agent.prompt";
 /// Params: [`AgentResumeParams`] (an [`AgentSessionRef`] with an optional mode). Result: [`AgentSession`].
 pub const RESUME: &str = "agent.resume";
+/// Params: [`AgentForkParams`]. Result: [`AgentSession`], the new session. Capability `agent-fork/1` (decision 0168).
+pub const FORK: &str = "agent.fork";
 /// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
 pub const SET_MODE: &str = "agent.set_mode";
+/// Changes a session's model, effort or fast mode (decision 0171). Capability `agent-options-live/1`.
+pub const SET_OPTIONS: &str = "agent.set_options";
 /// Params: [`AgentMarkSeenParams`]. Result: [`AgentSession`]. Marks a session's latest `waiting` or `done` as seen
 /// (capability `agent-seen/1`).
 pub const MARK_SEEN: &str = "agent.mark_seen";
@@ -199,6 +203,8 @@ pub struct AgentQueueList {
 
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;
+/// Most characters of a session's `preview` (decision 0168).
+pub const MAX_PREVIEW_CHARS: usize = 200;
 /// Most bytes of a session's result text (0052).
 pub const MAX_RESULT_BYTES: usize = 16 * 1024;
 /// Most bytes of a hook payload (0053).
@@ -617,6 +623,23 @@ pub struct AgentResumeParams {
     pub rows: Option<u16>,
 }
 
+/// Params of `agent.fork` (decision 0168): a new session that continues a copy of `session`'s conversation, in the same
+/// workspace, with the kind's fork arguments. The source keeps its own conversation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentForkParams {
+    /// The source session: id, or a unique prefix of at least 8 characters. Its run must have exited.
+    pub session: String,
+    /// The new run's first prompt, at most [`MAX_PROMPT_BYTES`], delivered as a first start delivers one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// One of the kind's permission modes; the kind's default when absent, as a start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The new session's title; the source's title when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
 /// Params of `agent.set_mode`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSetModeParams {
@@ -646,6 +669,52 @@ pub enum ModeApplied {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentModeSet {
     pub applied: ModeApplied,
+    pub session: AgentSession,
+}
+
+/// Params of `agent.set_options` (decision 0171). An option left out keeps its value; at least one must be named. The
+/// values follow `agent.start`: a `model` and an `effort` the kind declares, and `fast` on a model that takes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetOptionsParams {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
+}
+
+/// Where one option that `agent.set_options` changed took effect (decision 0171).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OptionApplied {
+    /// The option was typed into the running agent, through the live command its kind declares. Nothing confirms the
+    /// agent took it: a fast mode the agent did not take stays unconfirmed (the session's `fast.confirmed`).
+    Live,
+    /// The option is kept for the session's next `agent.resume`; the running agent keeps its value until then.
+    NextResume,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where each option that `agent.set_options` changed took effect (decision 0171). An option that already had the value
+/// asked for is absent: nothing is typed for it, though its value is still kept for the next resume.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptionsApplied {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<OptionApplied>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<OptionApplied>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<OptionApplied>,
+}
+
+/// Result of `agent.set_options`: where each changed option took effect, and the session after the change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentOptionsSet {
+    pub applied: OptionsApplied,
     pub session: AgentSession,
 }
 
@@ -826,7 +895,7 @@ pub struct CredentialsRemoved {
 }
 
 /// Whether the session's current or last run is there; the terminal vocabulary (0052).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Execution {
     pub state: TerminalState,
     /// How the last run ended, once it has.
@@ -894,7 +963,7 @@ pub struct Activity {
 }
 
 /// One agent session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSession {
     /// UUID v7.
     pub id: String,
@@ -969,7 +1038,8 @@ pub struct AgentSession {
     pub delegation: Option<Box<DelegationOptions>>,
     /// Notes on the session in plain words (decision 0161): that a writing child of a plain folder shares its parent's
     /// folder, and that the current run got no delegation instructions because its CLI does not take them. Empty
-    /// (absent) otherwise, and from an older peer.
+    /// (absent) otherwise, and from an older peer. The current run's notes also say what a resume or fork left out of the
+    /// stored options, and that a first input the agent never took (decision 0168).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// Whether the run was started with fast mode on (capability `agent-fast/1`, decision 0165). Absent when off, and
@@ -981,6 +1051,32 @@ pub struct AgentSession {
     /// shows that another session also writes in the folder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shared_folder_with: Vec<String>,
+    /// Start options, lineage, branch and preview (decision 0168), flat on the wire.
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+}
+
+/// What a session view shows beside its record for a list (decision 0168). Every field is optional and flat on the
+/// wire of [`AgentSession`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMeta {
+    /// The model the session's latest run used (decision 0168): the one it was started with, kept across resumes and
+    /// forks while the kind still takes it. Absent when none was named, or the kind no longer takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The reasoning effort the session was started with (decision 0168), kept across resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// The branch of the session's workspace now (decision 0168). Absent for a plain folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// A short text for a session list (decision 0168), at most [`MAX_PREVIEW_CHARS`] characters: a chat's newest user or
+    /// assistant message, or a terminal session's `result`. Withheld as `result` is from a run holding secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// The session this one was forked from with `agent.fork` (decision 0168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
 }
 
 /// The children a session could delegate now (decision 0161).

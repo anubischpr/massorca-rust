@@ -191,6 +191,12 @@ directory that does not exist has no kinds.
   mode's `args` and before the caller's `args`. A kind without the option refuses it with
   `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
   `:` or `/`, never starting with `-`.
+- `model.live` (decision 0171): optional, the slash command that switches a running session to a
+  model, with `{value}` exactly once, such as `"/model {value}"`. It is a slash, a name of letters,
+  digits and dashes, no control character, at most 64 bytes. `agent.set_options` types it into a
+  live terminal run; a kind without it, and every chat run, applies a model at the session's next
+  resume. The built-in `claude` declares `/model {value}`, which the vendor's slash-command
+  reference does not list: that form is unverified.
 - `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
   efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
   absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
@@ -256,10 +262,14 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
-| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off. A resume takes no fast mode (decision 0165) unless `agent.set_options` chose one for the session (decision 0171). Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
-| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>." |
+| `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>."; and, for the current run, what a resume or fork left out of the stored model or effort, and a first input the agent never took (decision 0168) |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
+| `model?`, `effort?` | the model and the reasoning effort the latest run used (decision 0168): the start's, kept across resumes and forks, which pass them again when the kind still takes them; one it no longer takes is left out with a note, and the record then names what the run used |
+| `branch?` | the branch of the session's workspace now; absent for a plain folder (decision 0168) |
+| `preview?` | at most 200 characters on one line (decision 0168): a chat's newest user or assistant message, or a terminal session's `result`. Read from the store with the view's details, no file per row; the exit sweep does not read it. Withheld as `result` is from a run holding secrets |
+| `forked_from?` | the session this one was forked from with `agent.fork` (decision 0168) |
 
 ## Wire
 
@@ -282,7 +292,9 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
+| `agent.fork` | workspace | `session`, `prompt?`, `permission_mode?`, `title?` | `AgentSession`, the new session (capability `agent-fork/1`, decision 0168; the client refuses it before sending when the service does not offer it) |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
+| `agent.set_options` | workspace | `session`, `model?`, `effort?`, `fast?` (at least one) | `{ applied: { model?, effort?, fast? }, session: AgentSession }`, each named option `live` or `next_resume` and left out when it already has the value asked for (capability `agent-options-live/1`, decision 0171) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
 | `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `same_workspace?` (a writing child in the parent's own worktree; not with `name`, decision 0170), `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
@@ -303,7 +315,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.hook_refused`,
+`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.fork_unavailable`,
+`agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
@@ -353,6 +366,33 @@ that is a bypass mode: a pending bypass is used only by a resume that names it, 
 the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
+
+## Live session options (decision 0171)
+
+`agent.set_options` (capability `agent-options-live/1`) changes a session's `model`, `effort` and `fast`, the options
+`agent.start` takes. The service plans the whole call before it types or stores anything:
+
+- Values are checked as `agent.start` checks them (`option_args`, `fast_for`), against the model the call names, else the
+  model the live run runs with, or the one the next run keeps for a stopped session. A refused value fails with
+  `request.invalid_params` or `agent.option_unsupported`, and nothing changes.
+- A model with a `model.live` command, and the fast toggle (`fast.live`, decision 0165), are typed into the run's
+  terminal, in that order, when the run is ready for input; a busy run refuses the change with `agent.busy` and types
+  nothing. The run is marked as switching while they are typed, as a mode switch
+  is. The fast toggle is typed only when the run's recorded fast mode (`fast-requested` in the run directory) differs
+  from the one asked for. Everything else waits for the next resume: effort always, and a model or fast mode whose kind
+  declares no live command or whose run is not live. A chat run has no terminal, so it always waits. A kind that cannot
+  resume refuses a change that would wait, with `agent.resume_unavailable`.
+- The model and effort a session keeps for its next run are its stored columns (decision 0168). A `next_resume` change
+  writes them, an applied live change writes them too, and a resume launches with them through `kept_options`, where the
+  kind still takes them; their launch arguments go into the mode arguments. Fast mode has no column, so its chosen value
+  is held in memory and dropped on forget, and a resume puts it on the settings. `started` is what the live run runs with,
+  moved by its live changes, and is what a live change is checked against; it stays in memory.
+- The reply's `applied` names each changed option as `live` or `next_resume`. After a live fast toggle the session's
+  `fast` is `{ on, confirmed: false }`; nothing confirms it.
+- A typed live command starts the run's settle window, `TYPED_COMMAND_SETTLE` (2 seconds). Until it ends, non-forced
+  prompts, live changes and the queue wait (`agent.busy`); `force` and `send_now` pass. An accepted hook report ends the
+  window early; otherwise a timer ends it and drains the queue, so no report is needed (decision 0171). A mode switch
+  starts no window.
 
 ## No project (decision 0094)
 
@@ -441,11 +481,20 @@ A first prompt for a kind whose `prompt.mode` is `none` waits for the run's firs
 `idle` types it on a thread of its own, so the report returns at once. Decision 0054 leaves open
 what happens when no `idle` comes, so two bounds apply: the held prompt is dropped when the run
 exits first, and when no `idle` arrives within 120 s of the start (`FIRST_PROMPT_WAIT`). A drop is
-logged with the session id only. The session record does not show a drop: its activity stays as it
-was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
+logged with the session id only, and its run gets a note (`notes`) that the first input was dropped; the session is sent
+to watchers with it. Its activity stays as it was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
 cannot wait for one, so `agent.start` refuses such a first prompt with `agent.prompt_invalid`
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
+
+A first prompt that does not fit a launch argument (decision 0168) is held and typed at the first `idle` the
+same way, when the kind can take it so: it is longer than 4 KiB (`ARGV_PROMPT_MAX_BYTES`) or holds a line break,
+the kind maps an event to `idle`, and, for a line break, the kind pastes bracketed, so the lines are not submitted
+one by one. This holds for the `argv`, `flag` and `startup-query` modes, on a first start and on a fork. Otherwise
+the prompt stays on the command line: the run is spawned without a shell, so line breaks reach the agent intact,
+and the 8 KiB prompt limit keeps a quoted prompt inside Windows's 32,767-unit command line. A `.cmd` or `.bat` program
+runs through `cmd.exe`, whose line holds 8,191 characters, so its argument limit is 2 KiB (`CMD_SHIM_ARGV_PROMPT_MAX_BYTES`):
+a longer prompt is typed at the first `idle` when the kind can take it, and otherwise refused with `agent.prompt_invalid`.
 
 A first prompt for a kind whose `prompt.mode` is `startup-query` is one launch argument, `<flag>=<text>`,
 after the kind's arguments and the caller's (0054). The agent takes it as its startup query and submits
@@ -459,8 +508,8 @@ startup query of pv96 (`hermes chat --query=<text>`, decision 0054 amendment). N
 arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
 one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
 exit is cleared, and its activity is absent until the new run reports. The caller's arguments and
-environment of the first start are not kept, so a resumed run gets the kind's own arguments and the
-resume arguments only. The run is registered under the status lock before its program starts, as in
+environment of the first start are not kept, so a resumed run gets the kind's own arguments, the
+resume arguments, and the model and effort flags of the start (decision 0168) when the kind still takes them; a stored model or effort it no longer takes is left out, the run's notes say so, and the record is rewritten to what the run uses. The run is registered under the status lock before its program starts, as in
 `agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
 `agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
 session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has
@@ -468,6 +517,23 @@ no recorded end (no terminal and no exit; decision 0058); `agent.resume_not_foun
 session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 worktree; a folder workspace takes several writers (decision 0169).
+
+### Fork (decision 0168)
+
+`agent.fork` starts a new session from a copy of an exited session's conversation. A kind declares its fork form as
+data, `"fork": [..., "{ref}", ...]`, launch arguments holding `{ref}`, which takes the source's agent ref; the form
+needs `session_ref.learn`, since the fork's own ref is never assigned: the new run reports it, as a Codex first start
+does. The built-in `claude` declares `["--resume", "{ref}", "--fork-session"]` and `codex` `["fork", "{ref}"]`, the
+forms pv96 builds (`src/shared/agent-resume-argv.ts`); the other built-ins declare none.
+
+The new session has a new id, runs in the source's workspace, and records `forked_from`. It keeps the source's read-only mark and the model and effort its kind still takes (a stored one it no longer takes is
+left out and noted, as on a resume), takes `title` or the source's title, and its prompt and mode as a start does; its first
+prompt follows the fork form like a first prompt. A source holding vault secrets makes the fork hold them too, and
+`agent.fork` on it needs host-admin scope. Every check of `agent.start` follows, the one-writer rule among them. A ref the fork learns that equals its source's is
+dropped, so the fork never binds to the source's transcript: it keeps no ref, and resuming it is `agent.resume_unavailable`.
+Refusals: `agent.busy` while the source runs (its transcript may be mid-turn, and the fork would write in the same
+workspace); `agent.chat_unsupported` for a chat session; `agent.fork_unavailable` when the kind declares no fork form,
+the source's ref is not known, or the source's resume state is `agent.resume_not_found`.
 
 ### Resume state (decision 0160)
 

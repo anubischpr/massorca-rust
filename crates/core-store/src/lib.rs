@@ -35,7 +35,8 @@ pub use agent_chat::{
 };
 pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
 pub use agent_sessions::{
-    AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,
+    AgentSessionArchive, AgentSessionRow, PREVIEW_SOURCE_CHARS, RunExit, RunExitReason, RunMode,
+    SessionDetails, SessionOrigin, StoredActivity,
 };
 pub use automations::{AutomationRow, destination};
 pub use automations_runs::{AutomationRunRow, run_state};

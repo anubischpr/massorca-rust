@@ -1,7 +1,10 @@
 //! Automation runs (decision 0125): the claim that stores an occurrence once, run numbers that are never reused, a run
 //! that ends by its session, retention that never evicts a run in progress, and history removed with its automation.
 
-use massorca_core_store::{AutomationRow, AutomationRunRow, Store, new_id, run_state};
+use massorca_core_store::{
+    AgentSessionRow, AutomationRow, AutomationRunRow, ProjectKind, ProjectRow, RunMode, Store,
+    WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, run_state,
+};
 
 fn store_with_automation(next_run_at: Option<i64>) -> (Store, AutomationRow) {
     let store = Store::open_in_memory().expect("in-memory store opens");
@@ -183,4 +186,113 @@ fn a_run_left_dispatching_by_a_stop_is_settled_as_failed_and_a_dispatched_one_is
     );
     let kept = store.get_automation_run(&dispatched.id).unwrap().unwrap();
     assert_eq!(kept.state, run_state::DISPATCHED);
+}
+
+/// A store with one automation and one workspace, and an agent session in it with `request_id`; returns the store, the
+/// automation and the session id.
+fn store_with_session(request_id: Option<String>) -> (Store, AutomationRow, String) {
+    let (store, automation) = store_with_automation(None);
+    let project = ProjectRow {
+        id: new_id(),
+        kind: ProjectKind::Folder,
+        path: "/work/app".to_owned(),
+        path_key: "/work/app".to_owned(),
+        name: "app".to_owned(),
+        workspaces_root: "/work/app-workspaces".to_owned(),
+        added_at: 1,
+        base_ref: None,
+        icon: None,
+    };
+    store.insert_project(&project).unwrap();
+    let workspace = WorkspaceRow {
+        id: new_id(),
+        project_id: project.id,
+        kind: WorkspaceKind::Folder,
+        name: "app".to_owned(),
+        path: "/work/app".to_owned(),
+        path_key: "/work/app".to_owned(),
+        branch: None,
+        base_ref: None,
+        created_branch: false,
+        state: WorkspaceState::Ready,
+        request_id: None,
+        created_at: 1,
+        comment: None,
+        name_generated: false,
+    };
+    store.insert_workspace(&workspace).unwrap();
+    let session = AgentSessionRow {
+        id: new_id(),
+        kind: "fake".to_owned(),
+        workspace_id: workspace.id,
+        parent_id: None,
+        title: None,
+        read_only: false,
+        agent_ref: None,
+        terminal_id: None,
+        request_id,
+        created_at: 7,
+        exit: None,
+        activity: None,
+        result: None,
+        brought_back_at: None,
+        holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
+        retained: false,
+        released_at: None,
+    };
+    store.insert_agent_session(&session).unwrap();
+    (store, automation, session.id)
+}
+
+#[test]
+fn a_dispatched_run_whose_session_is_gone_is_stranded_and_one_whose_session_exists_is_kept() {
+    let (store, automation, session) = store_with_session(None);
+    let mut kept = run(&automation.id, run_state::DISPATCHING, 1);
+    store.insert_automation_run(&mut kept, None).unwrap();
+    store
+        .mark_automation_run_dispatched(&kept.id, &session, "w", 2)
+        .unwrap();
+    let mut lost = run(&automation.id, run_state::DISPATCHING, 1);
+    store.insert_automation_run(&mut lost, None).unwrap();
+    store
+        .mark_automation_run_dispatched(&lost.id, "gone", "w", 2)
+        .unwrap();
+
+    let failed = store
+        .fail_automation_runs_without_session("automation.run_stranded", "gone", 3)
+        .unwrap();
+
+    assert_eq!(failed, std::slice::from_ref(&automation.id));
+    let lost = store.get_automation_run(&lost.id).unwrap().unwrap();
+    assert_eq!(lost.state, run_state::DISPATCH_FAILED);
+    assert_eq!(lost.reason_code.as_deref(), Some("automation.run_stranded"));
+    let kept = store.get_automation_run(&kept.id).unwrap().unwrap();
+    assert_eq!(kept.state, run_state::DISPATCHED);
+}
+
+#[test]
+fn a_run_left_dispatching_whose_agent_started_is_reattached_to_its_session() {
+    let run_id = new_id();
+    let (store, automation, session) = store_with_session(Some(format!("automation.run:{run_id}")));
+    let mut dispatching = AutomationRunRow {
+        id: run_id,
+        ..run(&automation.id, run_state::DISPATCHING, 1)
+    };
+    store.insert_automation_run(&mut dispatching, None).unwrap();
+
+    let attached = store
+        .reattach_dispatching_automation_runs(10, "automation.run:")
+        .unwrap();
+    let settled = store
+        .settle_dispatching_automation_runs(10, "automation.run_interrupted", "stopped", 11)
+        .unwrap();
+
+    assert_eq!(attached, std::slice::from_ref(&session));
+    assert_eq!(settled, 0);
+    let run = store.get_automation_run(&dispatching.id).unwrap().unwrap();
+    assert_eq!(run.state, run_state::DISPATCHED);
+    assert_eq!(run.session_id.as_deref(), Some(session.as_str()));
+    assert_eq!(run.started_at, Some(7));
 }

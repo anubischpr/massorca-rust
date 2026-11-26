@@ -21,6 +21,7 @@ mod task_start;
 
 pub(crate) use routine_timer::follow_routines;
 pub(crate) use task_start::start_gate;
+pub(crate) use {task_start::worktree_name, task_state::observed_outcome};
 mod task_state;
 mod team;
 mod team_project;

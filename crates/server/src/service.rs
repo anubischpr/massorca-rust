@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
@@ -44,6 +44,7 @@ use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
 use crate::kind_packages::{ExtensionKindPackages, prepare_builtin_agents};
 use crate::network::{self, NetworkConfig};
+use crate::readiness::Readiness;
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
 use crate::start_timing::StartTimings;
@@ -313,6 +314,12 @@ impl Service {
             agent_changes.clone(),
             chat_changes.clone(),
         ));
+        // The prompt listener reaches the state once it is built, below (decision 0118).
+        let first_prompt_state: Arc<OnceLock<Weak<AppState>>> = Arc::default();
+        agents.set_prompt_listener(features::first_prompt_rename::prompt_listener(
+            Arc::clone(&first_prompt_state),
+            tokio::runtime::Handle::current(),
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -338,9 +345,12 @@ impl Service {
             },
             started_at_ms,
             activity: Activity::default(),
+            first_prompt_titles: Default::default(),
         });
+        let _ = first_prompt_state.set(Arc::downgrade(&state));
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
         let outcome_changes = state.agent_changes.subscribe();
+        let automation_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
 
         // Terminals and chat runs end as soon as shutdown is requested, alongside the connections' grace period.
@@ -357,6 +367,11 @@ impl Service {
         let outcomes_stop = tokio::spawn(features::follow_task_outcomes(
             Arc::clone(&state),
             outcome_changes,
+            signal.clone(),
+        ));
+        let automations_stop = tokio::spawn(features::follow_automations(
+            Arc::clone(&state),
+            automation_changes,
             signal.clone(),
         ));
         let routines_stop = tokio::spawn(features::follow_routines(
@@ -378,6 +393,7 @@ impl Service {
             let _ = terminals_stop.await;
             let _ = outcomes_stop.await;
             let _ = routines_stop.await;
+            let _ = automations_stop.await;
         });
         timings.mark("serving");
         timings.report();
@@ -455,6 +471,22 @@ pub struct RunningService {
 }
 
 impl RunningService {
+    /// Waits until the network listeners have made their first bind attempt, then reads the readiness record. `None` when
+    /// shutdown is requested first, so a service that is stopping reports nothing as ready.
+    pub async fn ready(&self) -> Option<Readiness> {
+        tokio::select! {
+            biased;
+            () = self.shutdown.listener_closed() => None,
+            () = self.state.network.wait_settled() => {
+                Some(Readiness::of(
+                    &self.state.profile,
+                    &self.state.network,
+                    self.state.terminals.live_count(),
+                ))
+            }
+        }
+    }
+
     /// What `service.info` reports.
     pub fn info(&self) -> ServiceInfo {
         features::info_of(&self.state)

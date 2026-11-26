@@ -26,7 +26,7 @@ pub struct Connected {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostStatus {
     pub name: String,
-    /// `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`.
+    /// `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`; a watch also reports `connecting`.
     pub state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_version: Option<String>,
@@ -96,38 +96,52 @@ async fn probe(hosts: &Hosts, name: &str) -> Result<Connected, ClientError> {
 
 /// The state of one host from its check.
 pub fn status_of(name: &str, result: Result<Connected, ClientError>) -> HostStatus {
-    let mut status = HostStatus {
-        name: name.to_owned(),
-        state: "error",
-        server_version: None,
-        scopes: None,
-        detail: None,
-    };
     match result {
-        Ok(connected) => {
-            status.state = "connected";
-            status.server_version = Some(connected.server_version);
-            status.scopes = Some(connected.scopes);
-        }
-        Err(ClientError::ServerIdentityMismatch(mismatch)) => {
+        Ok(connected) => HostStatus {
+            server_version: Some(connected.server_version),
+            scopes: Some(connected.scopes),
+            ..HostStatus::named(name, "connected")
+        },
+        Err(error) => failure_status(name, &error),
+    }
+}
+
+/// The state of a host that did not answer, from why.
+pub fn failure_status(name: &str, error: &ClientError) -> HostStatus {
+    let mut status = HostStatus::named(name, "error");
+    match error {
+        ClientError::ServerIdentityMismatch(mismatch) => {
             status.state = "identity_mismatch";
             status.detail = Some(mismatch.message());
         }
-        Err(ClientError::HostUnreachable(reason)) => {
+        ClientError::HostUnreachable(reason) => {
             status.state = "unreachable";
-            status.detail = Some(reason);
+            status.detail = Some(reason.clone());
         }
-        Err(ClientError::Disconnected) => {
+        ClientError::Disconnected => {
             status.state = "unreachable";
             status.detail = Some("the connection was lost".to_owned());
         }
-        Err(ClientError::Handshake { error, .. }) => {
+        ClientError::Handshake { error, .. } => {
             status.state = "refused";
-            status.detail = Some(error.code);
+            status.detail = Some(error.code.clone());
         }
-        Err(error) => status.detail = Some(error.to_string()),
+        error => status.detail = Some(error.to_string()),
     }
     status
+}
+
+impl HostStatus {
+    /// `name` in `state`, with nothing else known.
+    pub fn named(name: &str, state: &'static str) -> Self {
+        Self {
+            name: name.to_owned(),
+            state,
+            server_version: None,
+            scopes: None,
+            detail: None,
+        }
+    }
 }
 
 /// One host as a text line.

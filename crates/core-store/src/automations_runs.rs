@@ -341,4 +341,70 @@ impl Store {
         )?;
         Ok(settled)
     }
+
+    /// Fails every dispatched run whose agent session the store no longer has, with `code` and `message`: its session
+    /// was forgotten while nothing listened. A run whose session exists keeps its state, whatever that session shows.
+    /// Returns the automations whose runs it failed.
+    pub fn fail_automation_runs_without_session(
+        &self,
+        code: &str,
+        message: &str,
+        ended_at: i64,
+    ) -> Result<Vec<String>, StoreError> {
+        const LOST: &str = "state = 'dispatched' AND (session_id IS NULL OR session_id NOT IN (SELECT id FROM agent_sessions))";
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        let automations = {
+            let mut statement = transaction.prepare(&format!(
+                "SELECT DISTINCT automation_id FROM automation_runs WHERE {LOST}"
+            ))?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()?
+        };
+        transaction.execute(
+            &format!(
+                "UPDATE automation_runs SET state = 'dispatch_failed', reason_code = ?1, reason = ?2, ended_at = ?3 WHERE {LOST}"
+            ),
+            params![code, message, ended_at],
+        )?;
+        transaction.commit()?;
+        Ok(automations)
+    }
+
+    /// Marks dispatched every run created before `created_before` that is still dispatching but whose agent session
+    /// exists, found by its request id `<request_prefix><run id>`: the service stopped after the agent started and
+    /// before the start was saved. Returns the sessions it attached.
+    pub fn reattach_dispatching_automation_runs(
+        &self,
+        created_before: i64,
+        request_prefix: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        let found = {
+            let mut statement = transaction.prepare(
+                "SELECT r.id, s.id, s.workspace_id, s.created_at FROM automation_runs r JOIN agent_sessions s ON s.request_id = ?2 || r.id WHERE r.state = 'dispatching' AND r.created_at < ?1",
+            )?;
+            let rows = statement.query_map(params![created_before, request_prefix], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (run, session, workspace, started_at) in &found {
+            transaction.execute(
+                "UPDATE automation_runs SET state = 'dispatched', session_id = ?2, workspace_id = ?3, started_at = ?4 WHERE id = ?1",
+                params![run, session, workspace, started_at],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(found
+            .into_iter()
+            .map(|(_, session, _, _)| session)
+            .collect())
+    }
 }

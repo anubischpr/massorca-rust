@@ -48,6 +48,7 @@ rustix.workspace = true
 win32job.workspace = true
 
 [dev-dependencies]
+massorca-process = { workspace = true, features = ["test-support"] }
 massorca-core-store = { workspace = true, features = ["test-support"] }
 massorca-client.workspace = true
 massorca-ext-package.workspace = true

@@ -74,10 +74,9 @@ async fn gitea_connects_with_a_fake_token_and_disconnects_through_the_bridge() {
     until_connected(&mut updates).await;
 
     let params = ServiceConnect {
-        service: "gitea".to_owned(),
         token: TOKEN.to_owned(),
         base_url: Some("https://gitea.example.com".to_owned()),
-        email: None,
+        ..base_service_connect()
     };
     let connected = handle
         .connect_hosted_service(None, params)
@@ -121,4 +120,14 @@ async fn gitea_connects_with_a_fake_token_and_disconnects_through_the_bridge() {
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+}
+
+/// Every `ServiceConnect` field at its usual value; tests override the fields they vary.
+fn base_service_connect() -> massorca_protocol::methods::hosted_services::ServiceConnect {
+    massorca_protocol::methods::hosted_services::ServiceConnect {
+        service: "gitea".to_owned(),
+        token: String::new(),
+        base_url: None,
+        email: None,
+    }
 }

@@ -55,9 +55,14 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
+/// where its kind declares a live command for them, and kept for the session's next resume otherwise.
+pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
 /// `fast` on `agent.start` and `fast` on the kinds, models and sessions (decision 0165): fast mode passed to the settings the
 /// kind declares for it.
 pub const AGENT_FAST: &str = "agent-fast/1";
+/// `agent.fork` (decision 0168): a new session from a copy of an exited session's conversation, by the kind's fork form.
+pub const AGENT_FORK: &str = "agent-fork/1";
 /// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
 /// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
 pub const AGENT_CHAT: &str = "agent-chat/1";

@@ -11,7 +11,7 @@ export function SegmentedControl<T extends string>({
   onChange,
   accessibilityLabel,
 }: {
-  readonly options: readonly { readonly value: T; readonly label: string }[];
+  readonly options: readonly { readonly value: T; readonly label: string; readonly testID?: string }[];
   readonly value: T;
   readonly onChange: (next: T) => void;
   readonly accessibilityLabel: string;
@@ -28,6 +28,7 @@ export function SegmentedControl<T extends string>({
             accessibilityLabel={option.label}
             accessibilityState={{ selected }}
             onPress={() => onChange(option.value)}
+            testID={option.testID}
             style={[styles.segment, selected && { backgroundColor: palette['fill.selected.raised'] }]}
           >
             <Text style={[styles.label, { color: selected ? palette['text.primary'] : palette['text.secondary'] }]}>

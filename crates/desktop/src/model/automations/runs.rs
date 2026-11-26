@@ -10,8 +10,6 @@ use massorca_protocol::methods::automations::{
 pub struct RunHistory {
     automation: String,
     runs: Option<Result<Vec<AutomationRun>, String>>,
-    /// A later read is already planned, so a second one is not.
-    polling: bool,
 }
 
 impl RunHistory {
@@ -19,7 +17,6 @@ impl RunHistory {
         Self {
             automation,
             runs: None,
-            polling: false,
         }
     }
 
@@ -59,25 +56,6 @@ impl RunHistory {
                 None => runs.insert(0, run),
             }
         }
-    }
-
-    /// Whether a run is still going, so the table is read again.
-    pub fn in_progress(&self) -> bool {
-        self.runs().iter().any(|run| run.state.in_progress())
-    }
-
-    /// Plans a later read while a run is going; `false` when none is needed or one is already planned.
-    pub fn plan_poll(&mut self) -> bool {
-        if self.polling || !self.in_progress() {
-            return false;
-        }
-        self.polling = true;
-        true
-    }
-
-    /// The planned read is due.
-    pub fn poll_done(&mut self) {
-        self.polling = false;
     }
 }
 
@@ -183,23 +161,10 @@ mod tests {
         let mut history = RunHistory::new("a1".to_owned());
         history.set_runs(Ok(vec![run("old", AutomationRunState::Completed)]));
         history.put(run("new", AutomationRunState::Dispatched));
-        assert!(history.in_progress());
         history.put(run("new", AutomationRunState::DispatchFailed));
         let ids: Vec<&str> = history.runs().iter().map(|run| run.id.as_str()).collect();
         assert_eq!(ids, ["new", "old"]);
-        assert!(!history.in_progress());
-    }
-
-    #[test]
-    fn one_later_read_is_planned_while_a_run_is_going() {
-        let mut history = RunHistory::new("a1".to_owned());
-        history.set_runs(Ok(vec![run("r", AutomationRunState::Completed)]));
-        assert!(!history.plan_poll(), "nothing is going");
-        history.put(run("s", AutomationRunState::Dispatched));
-        assert!(history.plan_poll());
-        assert!(!history.plan_poll(), "one is already planned");
-        history.poll_done();
-        assert!(history.plan_poll());
+        assert_eq!(history.runs()[0].state, AutomationRunState::DispatchFailed);
     }
 
     #[test]

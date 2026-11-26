@@ -28,7 +28,12 @@ the timer, the claim and the sweep at start.
   passed are read. A claim is the compare-and-swap of decision 0082 on `next_run_at`; it stores the claim's runs and
   `last_run_at` in the same transaction, so two overlapping checks never start one occurrence twice. Each automation is
   claimed and started before the next one is claimed. A schedule that no longer compiles is skipped with a warning and
-  tried again at the next check, so a repaired one resumes; nothing is recorded for it.
+  tried again at the next check, so a repaired one resumes; nothing is recorded for it. The service starts the timer and
+  the run listener beside the routine timer, and stops them on the same signal.
+- D4a Edits. An edit, enable or disable writes the definition without `next_run_at` or `last_run_at`, which only a claim
+  moves. When the schedule changes (or the automation is enabled or disabled), the next run is moved by a
+  compare-and-swap on the stored next run, read again on each miss, so a claim made between the edit's read and its
+  write is never undone and its occurrence never runs twice.
 - D5 Missed runs. The latest due occurrence runs once when it is no later than its grace (720 minutes when unset) plus
   two checks of slack, as pv96 allows; otherwise it is recorded `skipped_missed` with `automation.run_missed`. Earlier
   occurrences a claim skips are folded into one `skipped_missed` row with their count. Nothing missed is replayed.
@@ -40,8 +45,9 @@ the timer, the claim and the sweep at start.
   `skipped_unavailable`. `automation.runs` (permission `read`) lists one automation's runs newest first by number, 20 a
   page by default and 100 at most, with `before` and `next_before` as the cursor.
 - D8 Launch (AUTO-06). A run starts the automation's agent through `agents.start`, the start tasks use, with the
-  automation's prompt and name as its title, and a request id per run so a retry finds its session. Where it runs: a
-  git project gets one worktree kept for the automation (`automation-<end of its id>`, made on its first run, request id
+  automation's prompt and name as its title, and a request id per run (`automation.run:<run id>`) so a retry finds its
+  session. Where it runs: a git project gets one worktree kept for the automation (named as a task's worktree is, from
+  the automation's name and six characters of the random end of its id; made on its first run, request id
   `automation.worktree:<id>`), so runs never write in the person's own checkout and worktrees do not pile up; a folder
   project runs in its folder's workspace, made when it has none and shared by several writers. A second run while the
   first still writes in the same worktree is refused by the one-writer rule and recorded `dispatch_failed`.
@@ -53,8 +59,12 @@ the timer, the claim and the sweep at start.
   the host can see; `dispatch_failed` with `automation.run_exited` when the agent exits without Done; `dispatch_failed`
   with `automation.run_stranded` when the agents domain forgets the session. An unverifiable session leaves the run
   `dispatched`: loss of contact is never evidence that the agent ended. A Done that landed before the run named its
-  session is settled right after the start. A run still `dispatching` when the service stopped is failed with
-  `automation.run_interrupted` at the next start; a `dispatched` one is kept and settled from its session.
+  session is settled right after the start. The listener reads every session at start and after a lag, and then fails
+  with `automation.run_stranded` every dispatched run whose session the store no longer has, since its Forgotten event
+  was missed; a run whose session exists stays, whatever that session shows. At the next start, a run still
+  `dispatching` whose agent session exists (found by its request id) is attached to it and settled from it: the
+  service stopped after the agent started and before the start was saved. Any other run still `dispatching` is failed
+  with `automation.run_interrupted`. A `dispatched` run is kept and settled from its session.
 - D11 Output. A run keeps the agent's last result text, which the agents domain caps at 16 KiB; the host keeps at most
   16,384 characters, dropping older text from the front. The full terminal snapshot of pv96 is not kept in this
   version.
@@ -81,8 +91,8 @@ the timer, the claim and the sweep at start.
 ## Desktop
 
 - D19 The Automations page (artboard `ws-automations.dc.html`, D-AG-14) gives each automation Run now and Runs. Runs
-  opens its run table: started, status, duration and the result or reason. The table is read when it opens and after a
-  run now, and read again every few seconds while one of its runs is in progress.
+  opens its run table: started, status, duration and the result or reason. The table is read when it opens, after a
+  run now, and when `automation.changed` arrives, which also reads the list again for its last and next runs.
 
 ## Not in this version
 
@@ -92,5 +102,3 @@ the timer, the claim and the sweep at start.
   retention (AUTO-10). Destinations, per-run worktrees and folding repeated `skipped_unavailable` rows (AUTO-02) are
   decision 0127.
 - Token usage (no session reports it) and the plain-text output snapshot beyond the result text.
-- The desktop reading `automation.changed` itself: the page reads the history on open, after a run now and while a run
-  is in progress.

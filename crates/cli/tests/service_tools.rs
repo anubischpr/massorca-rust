@@ -5,6 +5,7 @@ mod harness;
 use std::path::{Path, PathBuf};
 
 use harness::Sandbox;
+use massorca_process::test_executable::write_executable;
 use predicates::str::contains;
 
 /// A stand-in program `name` that prints `line`; a `.cmd` batch on Windows.
@@ -16,13 +17,7 @@ fn stand_in(dir: &Path, name: &str, line: &str) -> PathBuf {
         binary
     } else {
         let binary = dir.join(name);
-        std::fs::write(&binary, format!("#!/bin/sh\necho '{line}'\n")).expect("write the stand-in");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
-                .expect("make the stand-in executable");
-        }
+        write_executable(&binary, &format!("#!/bin/sh\necho '{line}'\n"));
         binary
     }
 }

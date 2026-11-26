@@ -105,9 +105,7 @@ mod tests {
             name: name.to_owned(),
             required,
             found,
-            reason: None,
-            path: None,
-            env: None,
+            ..crate::service::fixtures::base_candidate_file()
         }
     }
 
@@ -120,10 +118,10 @@ mod tests {
 
     fn candidate(ready: bool, folder: Option<&str>, files: Vec<CandidateFile>) -> ImportCandidate {
         ImportCandidate {
-            kind: "claude".to_owned(),
             ready,
             folder: folder.map(str::to_owned),
             files,
+            ..crate::service::fixtures::base_import_candidate()
         }
     }
 
