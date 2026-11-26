@@ -353,6 +353,7 @@ impl Service {
             },
             started_at_ms,
             activity: Activity::default(),
+            usage: Arc::default(),
         });
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
         let outcome_changes = state.agent_changes.subscribe();
@@ -378,6 +379,7 @@ impl Service {
             Arc::clone(&state),
             signal.clone(),
         ));
+        let usage_stop = tokio::spawn(features::follow_usage(Arc::clone(&state), signal.clone()));
         let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
@@ -393,6 +395,7 @@ impl Service {
             let _ = terminals_stop.await;
             let _ = outcomes_stop.await;
             let _ = routines_stop.await;
+            let _ = usage_stop.await;
         });
         timings.mark("serving");
         timings.report();

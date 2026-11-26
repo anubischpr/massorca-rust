@@ -41,6 +41,18 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "usage",
+            "Show each agent account's usage and limits on the service's host",
+            "usage.list",
+            usage_args(),
+        ),
+        command(
+            "usage.refresh",
+            "Read each agent account's usage again, then show it",
+            "usage.refresh",
+            usage_args(),
+        ),
+        command(
             "agent-context",
             "List every command with its method, permission and parameters",
             "commands.describe",
@@ -978,6 +990,17 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
     ]
+}
+
+/// The selection `usage.list` and `usage.refresh` take.
+fn usage_args() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string" },
+            "account": { "type": "string" }
+        }
+    })
 }
 
 pub(super) fn command(
