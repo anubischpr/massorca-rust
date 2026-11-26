@@ -173,6 +173,12 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Shows the git, forge CLI and shell tools on the service's host. Works with --host.
+    Tools {
+        /// Detects the tools again instead of answering from the service's last detection.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
     /// The local trace logs of the profile.
@@ -395,6 +401,19 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         comment: Option<String>,
     },
+    /// Renames a workspace whose name the service chose, and its unpublished branch. The folder keeps its name.
+    Rename {
+        /// Workspace id, name or path.
+        workspace: String,
+        /// The new name; a taken one moves on to `NAME-2` .. `NAME-100`.
+        new_name: String,
+        /// Required: only a name the service chose (a generated or derived one) is renamed.
+        #[arg(long, required = true)]
+        from_generated: bool,
+        /// Refuse unless the worktree is still on this branch.
+        #[arg(long, value_name = "BRANCH")]
+        expected_branch: Option<String>,
+    },
     /// Checks that a workspace's folder exists and is readable and, for a worktree, that git still lists it.
     Check {
         /// Workspace id, name or path.
@@ -432,6 +451,14 @@ pub struct WorkspaceCreateArgs {
     /// Do not run the setup script of the new worktree's `orca.yaml`.
     #[arg(long)]
     pub no_setup: bool,
+    /// When the name, its branch or its folder is taken, use the next free `NAME-2` .. `NAME-100` instead of refusing.
+    /// Not with `--branch`, `--existing-branch` or `--path`.
+    #[arg(long)]
+    pub unique: bool,
+    /// Marks NAME as derived by a script, not typed, so `workspace rename --from-generated` may replace it. Ignored with
+    /// `--branch` or `--existing-branch`. For scripts and tests.
+    #[arg(long)]
+    pub name_generated: bool,
 }
 
 #[derive(Debug, Args)]
@@ -475,6 +502,19 @@ pub enum PairCommand {
     Offer(PairOfferArgs),
     /// Pairs this computer with the server of an offer, and stores the server as a host.
     Accept(PairAcceptArgs),
+    /// Retires a pending offer before it expires, so a code that leaked no longer pairs.
+    Cancel(PairCancelArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
+pub struct PairCancelArgs {
+    /// The offer id `pair offer` printed.
+    #[arg(value_name = "OFFER-ID")]
+    pub offer_id: Option<String>,
+    /// Retires every pending offer of the service.
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -488,6 +528,14 @@ pub struct PairOfferArgs {
     /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
     #[arg(long, value_name = "SECS")]
     pub ttl: Option<u32>,
+    /// Address the new device dials, in place of the addresses the service is bound to; repeatable or
+    /// comma-separated, at most 8. HOST takes the listener's port. Use it behind NAT, in a container or for an
+    /// emulator (10.0.2.2 reaches the computer running an Android emulator).
+    #[arg(long = "address", value_name = "HOST[:PORT]", value_delimiter = ',')]
+    pub addresses: Vec<String>,
+    /// Leaves out the QR code printed after the offer in text output.
+    #[arg(long)]
+    pub no_qr: bool,
 }
 
 #[derive(Debug, Args)]

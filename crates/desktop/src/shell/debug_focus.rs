@@ -45,6 +45,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             base_refresh: None,
             comment: None,
             setup: None,
+            name_generated: false,
         }],
     }]
 }

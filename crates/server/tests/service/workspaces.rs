@@ -5,17 +5,18 @@ use std::path::Path;
 use std::time::Duration;
 
 use massorca_client::Subscription;
-use massorca_protocol::codes;
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_WORKSPACE_UPDATED,
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceList, WorkspaceListParams,
-    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceState,
+    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceState,
 };
+use massorca_protocol::{capabilities, codes};
 use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
@@ -60,6 +61,8 @@ pub(super) fn create_params(project: &str, name: &str) -> WorkspaceCreateParams 
         path: None,
         request_id: None,
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     }
 }
 
@@ -249,6 +252,92 @@ async fn a_refresh_base_create_starts_from_the_remote_branch_and_a_plain_one_fro
         .await
         .expect("refreshing create");
     assert_eq!(head_of(Path::new(&fresh.path)), remote);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn unique_name_moves_a_taken_name_on_and_a_typed_name_alone_is_still_refused() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(client.has_capability(capabilities::WORKSPACE_UNIQUE_NAME));
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let first: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "explore"))
+        .await
+        .expect("first create");
+
+    let refused = client
+        .call::<_, Workspace>(workspaces::CREATE, &create_params(&project.name, "explore"))
+        .await
+        .expect_err("a typed name alone is refused");
+    assert_eq!(remote_code(&refused), codes::WORKSPACE_NAME_TAKEN);
+
+    let mut unique = create_params(&project.name, "explore");
+    unique.unique_name = true;
+    let second: Workspace = client
+        .call(workspaces::CREATE, &unique)
+        .await
+        .expect("unique create");
+    assert_eq!(first.name, "explore");
+    assert_eq!(second.name, "explore-2");
+    assert_eq!(second.branch.as_deref(), Some("explore-2"));
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn rename_replaces_a_generated_name_and_its_branch_and_publishes_workspace_updated() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(client.has_capability(capabilities::WORKSPACE_RENAME));
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let typed: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "typed"))
+        .await
+        .expect("typed create");
+    let generated: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, ""))
+        .await
+        .expect("generated create");
+    assert!(generated.name_generated);
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let rename = |workspace: &str| WorkspaceRenameParams {
+        workspace: workspace.to_owned(),
+        name: "fix-login".to_owned(),
+        from_generated: true,
+        expected_branch: None,
+    };
+
+    let refused = client
+        .call::<_, Workspace>(workspaces::RENAME, &rename(&typed.id))
+        .await
+        .expect_err("a typed name is never renamed");
+    assert_eq!(remote_code(&refused), codes::WORKSPACE_NAME_NOT_GENERATED);
+
+    let renamed: Workspace = client
+        .call(workspaces::RENAME, &rename(&generated.id))
+        .await
+        .expect("rename");
+    assert_eq!(renamed.name, "fix-login");
+    assert_eq!(renamed.branch.as_deref(), Some("fix-login"));
+    assert_eq!(renamed.path, generated.path);
+    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes");
+    assert_eq!(
+        event,
+        ChangeEvent {
+            topic: TOPIC_WORKSPACE_UPDATED.to_owned(),
+            id: generated.id.clone()
+        }
+    );
     stop(running).await;
 }
 

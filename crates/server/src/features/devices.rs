@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use massorca_core_store::{DeviceRow, now_ms};
 use massorca_protocol::methods::devices::{
     self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
-    NetworkStatus, PairingCreateParams, PairingCreated, WhoAmI,
+    NetworkStatus, PairingCancelParams, PairingCancelled, PairingCreateParams, PairingCreated,
+    WhoAmI,
 };
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -13,7 +14,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
-use crate::network::{DEFAULT_TTL, MAX_TTL};
+use crate::network::{DEFAULT_TTL, MAX_TTL, normalize_addresses};
 use crate::owner::Owner;
 use crate::permission::{Permission, Principal, Scopes, authorize};
 use crate::registry::RegistrationHandle;
@@ -28,6 +29,12 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::NETWORK, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::PAIRING_ADDRESS, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::PAIRING_CANCEL, Owner::Core)?,
         methods.register(
             Owner::Core,
             devices::LIST,
@@ -70,6 +77,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::DEVICES,
             Permission::DeviceAdmin,
             pairing_create,
+        )?,
+        methods.register(
+            Owner::Core,
+            devices::PAIRING_CANCEL,
+            capabilities::PAIRING_CANCEL,
+            Permission::DeviceAdmin,
+            pairing_cancel,
         )?,
         methods.register(
             Owner::Core,
@@ -249,7 +263,13 @@ async fn pairing_create(
     let Some(pin) = network.server_pin else {
         return Err(unavailable());
     };
-    let addresses = network.advertised_addresses();
+    // Given addresses replace the bound ones (SRV-07): the address a device reaches may not be the one bound here.
+    let addresses = if params.addresses.is_empty() {
+        network.advertised_addresses()
+    } else {
+        normalize_addresses(&params.addresses, network.listening_port())
+            .map_err(|why| ErrorBody::new(codes::PAIRING_INVALID_ADDRESS, why))?
+    };
     if addresses.is_empty() {
         return Err(unavailable());
     }
@@ -268,13 +288,13 @@ async fn pairing_create(
     } else {
         Scopes::ADMIN
     };
-    let secret = network.pairing.create(ttl, scopes, Instant::now())?;
+    let minted = network.pairing.create(ttl, scopes, Instant::now())?;
     let expires_at_ms = now_ms() + i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
     let offer = Offer {
         server: network.machine_name.clone(),
         addresses: addresses.clone(),
         pin: pin.to_string(),
-        secret,
+        secret: minted.secret,
         expires_at_ms,
         scopes: scopes.names(),
     };
@@ -285,6 +305,36 @@ async fn pairing_create(
         scopes: scopes.names(),
         addresses,
         server_pin: pin.to_string(),
+        offer_id: Some(minted.id),
+    })
+}
+
+/// Retires the offer `offer_id` names, or every pending offer with `all`, before it expires (SRV-06).
+async fn pairing_cancel(
+    ctx: RequestCtx,
+    params: PairingCancelParams,
+) -> Result<PairingCancelled, ErrorBody> {
+    let pairing = &ctx.state.network.pairing;
+    let now = Instant::now();
+    let cancelled = match (params.offer_id.as_deref(), params.all) {
+        (Some(id), false) if pairing.cancel(id, now) => 1,
+        (Some(id), false) => {
+            return Err(ErrorBody::new(
+                codes::PAIRING_OFFER_NOT_FOUND,
+                format!("no pending offer {id:?}; it may have been used or have expired"),
+            ));
+        }
+        (None, true) => pairing.cancel_all(now),
+        _ => {
+            return Err(ErrorBody::new(
+                codes::REQUEST_INVALID_PARAMS,
+                "give offer_id or all, not both",
+            ));
+        }
+    };
+    tracing::info!(cancelled, "pairing offers were retired");
+    Ok(PairingCancelled {
+        cancelled: u32::try_from(cancelled).unwrap_or(u32::MAX),
     })
 }
 

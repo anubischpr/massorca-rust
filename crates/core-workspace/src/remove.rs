@@ -462,7 +462,7 @@ impl Workspaces {
         }
     }
 
-    fn project_of(&self, row: &WorkspaceRow) -> Result<ProjectRow, DomainError> {
+    pub(crate) fn project_of(&self, row: &WorkspaceRow) -> Result<ProjectRow, DomainError> {
         self.store.get_project(&row.project_id)?.ok_or_else(|| {
             DomainError::new(
                 codes::PROJECT_NOT_FOUND,

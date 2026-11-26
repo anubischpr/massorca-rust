@@ -6,7 +6,7 @@ use massorca_protocol::methods::agents::{AccountSummary, AgentKind};
 use massorca_protocol::methods::extensions::{ExtensionItem, ExtensionReview};
 
 use super::types::{AccountId, MarketplaceItemId, MarketplaceSnapshot};
-use crate::service::Refusal;
+use crate::service::{ExtensionHistory, Refusal};
 
 /// Reads the Marketplace and changes it. The sample implements it in memory; the real service
 /// implements it later. The account methods map to agent.accounts.list (the snapshot), add,
@@ -25,6 +25,10 @@ pub trait MarketplaceSource: std::fmt::Debug {
     /// Takes the update check's review of each installed package, which offers the updates the reviews differ on.
     /// A source that lists no service's packages ignores them.
     fn follow_update_reviews(&mut self, _reviews: &[ExtensionReview]) {}
+
+    /// Takes what the connected service offers for rollback and the run log, with each installed package's runs.
+    /// A source that lists no service's packages ignores it.
+    fn follow_history(&mut self, _history: &ExtensionHistory) {}
 
     /// Takes each kind's accounts the connected service lists. A source that lists no service's accounts ignores them.
     fn follow_accounts(

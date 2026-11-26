@@ -40,6 +40,14 @@ pub(super) fn nav_row(row: &NavRow, focus: &FocusHandle, shell: &WeakEntity<Shel
     item
 }
 
+/// The No Git marker of a folder project's row (WS-02): a warning badge with its word, found by its selector.
+fn no_git_marker(project_id: &str) -> impl IntoElement {
+    let selector = format!("sidebar-no-git-{project_id}");
+    div()
+        .debug_selector(move || selector)
+        .child(Badge::text("No Git").tone(BadgeTone::Warning))
+}
+
 /// One row of the project tree, identified by its position in the list.
 pub(super) fn tree_row(
     row: &TreeRow,
@@ -54,6 +62,7 @@ pub(super) fn tree_row(
             name,
             emoji,
             owner,
+            plain_folder,
             expanded,
         } => {
             // The "No project" group wears the struck folder, as its project menu row does (A95).
@@ -75,6 +84,11 @@ pub(super) fn tree_row(
                     let id = key_id.clone();
                     change(&key_shell, cx, move |shell| shell.toggle_project(&id));
                 });
+            let row = if *plain_folder {
+                row.trailing(no_git_marker(project_id))
+            } else {
+                row
+            };
             // The owner or org reads after the name, in the secondary text (A10).
             match owner {
                 Some(owner) => row.secondary(owner.clone()),
@@ -96,6 +110,7 @@ pub(super) fn tree_row(
             workspace_id,
             dimmed,
             local,
+            host,
         } => {
             let mut row = session_row(id, title, *agent, *state, *depth, *selected);
             if let Some(tooltip) = tooltip {
@@ -124,10 +139,13 @@ pub(super) fn tree_row(
             let (menu_shell, menu_session, menu_workspace) =
                 (shell.clone(), session_id.clone(), workspace_id.clone());
             let local = *local;
+            let remote_host = host.clone();
             let row = row.on_context_menu(move |window, cx| {
                 let (session, workspace) = (menu_session.clone(), menu_workspace.clone());
-                let _ = menu_shell.update(cx, |shell, cx| {
-                    shell.open_session_menu(Some(session), workspace, local, window, cx);
+                let _ = menu_shell.update(cx, |shell, cx| match &remote_host {
+                    // A session a paired host runs has its menu over that host's connection (STAT-16).
+                    Some(host) => shell.open_remote_session_menu(host.clone(), session, window, cx),
+                    None => shell.open_session_menu(Some(session), workspace, local, window, cx),
                 });
             });
             if *can_bring_back {

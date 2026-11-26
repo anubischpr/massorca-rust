@@ -10,12 +10,15 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+# QR codes of pairing offers (SRV-06); no default features, so no image dependency.
+qrcode = { version = "=0.14.1", default-features = false }
 massorca-protocol = { path = "crates/protocol" }
 massorca-ui = { path = "crates/ui" }
 massorca-profile = { path = "crates/profile" }
 massorca-core-store = { path = "crates/core-store" }
 massorca-core-vault = { path = "crates/core-vault" }
 massorca-core-git = { path = "crates/core-git" }
+massorca-core-tools = { path = "crates/core-tools" }
 massorca-core-terminal = { path = "crates/core-terminal" }
 massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }

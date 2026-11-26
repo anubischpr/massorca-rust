@@ -325,6 +325,8 @@ fn task_worktree(
         path: None,
         request_id: Some(format!("task.worktree:{}:{attempt}", task.id)),
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     })?;
     changes.workspace = Some(workspace.id.clone());
     Ok(workspace)
@@ -354,6 +356,8 @@ fn linked_folder(
                 path: None,
                 request_id: Some(format!("team.linked_folder:{project}")),
                 no_setup: false,
+                unique_name: false,
+                name_generated: false,
             })?;
             changes.workspace = Some(workspace.id.clone());
             workspace
@@ -438,6 +442,7 @@ fn spawn(
             request_id: Some(request.to_owned()),
             permission_mode: team_mode(agents, team, bot),
             model: None,
+            fast: None,
             effort: None,
         },
         grant,
@@ -623,6 +628,8 @@ fn team_folder(
         path: Some(path_text(&folder)?),
         request_id: Some(format!("team.folder:{}", team.id)),
         no_setup: false,
+        unique_name: false,
+        name_generated: false,
     })?;
     workspaces.share_writers(&workspace.id)?;
     store
@@ -893,6 +900,7 @@ mod tests {
             request_id: None,
             created_at: 1,
             comment: None,
+            name_generated: false,
         };
         store.insert_workspace(&workspace).expect("workspace");
         let session = AgentSessionRow {

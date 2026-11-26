@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::assert::Assert;
 use harness::{Sandbox, single_document, with_json};
+use massorca_process::test_executable::write_executable;
 use tempfile::TempDir;
 
 const TOKEN: &str = "cli-service-token-6b2f0d";
@@ -28,13 +29,7 @@ fn fake_glab(bin: &Path) {
         fs::write(bin.join("glab.cmd"), script).expect("the fake glab");
     } else {
         let script = "#!/bin/sh\nd=${0%/*}\nprintf '%s\\n' \"$*\" >>\"$d/args.txt\"\nwhile IFS= read -r l || [ -n \"$l\" ]; do printf '%s\\n' \"$l\"; done >>\"$d/stdin.txt\"\nif [ -e \"$d/reject\" ]; then while IFS= read -r l; do printf '%s\\n' \"$l\" >&2; done <\"$d/stdin.txt\"; exit 1; fi\nexit 0\n";
-        let path = bin.join("glab");
-        fs::write(&path, script).expect("the fake glab");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
+        write_executable(&bin.join("glab"), script);
     }
 }
 

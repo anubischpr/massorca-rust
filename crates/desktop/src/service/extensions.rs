@@ -2,6 +2,7 @@
 //! on each connect and after an `extension.*` event. A write answers its caller, then both lists are read again,
 //! so the store follows the service and never the answer. Each read takes a number and the store keeps the newest.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -12,8 +13,9 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AgentKind, AgentKinds};
 use massorca_protocol::methods::extensions::{
     ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
-    ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRemoveParams, ExtensionRemoved,
-    ExtensionReview, ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionLog, ExtensionRemoveParams,
+    ExtensionRemoved, ExtensionReview, ExtensionRollbackParams, ExtensionRun,
+    ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -30,6 +32,30 @@ pub struct ExtensionsRead {
     pub installed: Result<Vec<ExtensionItem>, Refusal>,
     /// Every built-in catalogue entry with its state, installed or not.
     pub catalogue: Result<Vec<ExtensionItem>, Refusal>,
+    /// What the service offers for rollback and the run log, and each installed package's runs.
+    pub history: ExtensionHistory,
+}
+
+/// What the service offers for rollback and the run log, read with the lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtensionHistory {
+    /// The service offers `extensions.rollback` (capability `extensions-rollback/1`).
+    pub rollback_offered: bool,
+    /// The service offers `extensions.log` (capability `extensions-log/1`).
+    pub log_offered: bool,
+    /// Each installed package's runs, oldest first, by package id. A package whose log is refused has none.
+    pub runs: BTreeMap<String, Vec<ExtensionRun>>,
+}
+
+/// What `extensions.rollback` answered: the package as restored, or the consent its restored version needs first.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RollbackAnswer {
+    Restored(ExtensionInstalled),
+    /// The version a rollback restores and the consent fingerprint of its review; the call is sent again with it.
+    ConsentNeeded {
+        version: String,
+        consent: String,
+    },
 }
 
 /// A paired host's agent kinds and extension lists, read together on the host's own connection.
@@ -153,7 +179,9 @@ pub(super) fn spawn_host_call(
 ) {
     let changes = !matches!(
         command,
-        ExtensionCommand::Inspect { .. } | ExtensionCommand::Asset { .. }
+        ExtensionCommand::Inspect { .. }
+            | ExtensionCommand::Asset { .. }
+            | ExtensionCommand::Log { .. }
     );
     tokio::spawn(async move {
         let listing = match connect_host(&profile, &host).await {
@@ -210,6 +238,14 @@ async fn answer_host_call(client: &Client, command: ExtensionCommand) {
             .await;
             let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
         }
+        ExtensionCommand::Rollback { params, reply } => {
+            let result = rollback_answer(client.extension_rollback(&params).await);
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::Log { id, reply } => {
+            let result = client.extension_log(&id).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
     }
 }
 
@@ -242,6 +278,16 @@ pub(crate) enum ExtensionCommand {
         params: ExtensionUpdateParams,
         reply: oneshot::Sender<Result<ExtensionInstalled, Refusal>>,
     },
+    /// `extensions.rollback`: restores the version an update replaced. Without consent it answers with the consent needed.
+    Rollback {
+        params: ExtensionRollbackParams,
+        reply: oneshot::Sender<Result<RollbackAnswer, Refusal>>,
+    },
+    /// `extensions.log`: a package's recent runs. Changes nothing, so no read follows it.
+    Log {
+        id: String,
+        reply: oneshot::Sender<Result<ExtensionLog, Refusal>>,
+    },
 }
 
 /// Reads both lists. A refusal from the service is the answer for its list; a lost link is passed on, so the
@@ -250,11 +296,67 @@ pub(super) async fn read(client: &Client, reads: &Sequence) -> Result<Extensions
     let number = reads.next();
     let (installed, catalogue) =
         tokio::join!(client.extension_list(), client.extension_catalogue());
+    let installed = part(installed)?;
+    let runs = match &installed {
+        Ok(items) if client.has_capability(capabilities::EXTENSIONS_LOG) => {
+            runs_of(client, items).await?
+        }
+        _ => BTreeMap::new(),
+    };
     Ok(ExtensionsRead {
         number,
-        installed: part(installed)?,
+        installed,
         catalogue: part(catalogue)?,
+        history: ExtensionHistory {
+            rollback_offered: client.has_capability(capabilities::EXTENSIONS_ROLLBACK),
+            log_offered: client.has_capability(capabilities::EXTENSIONS_LOG),
+            runs,
+        },
     })
+}
+
+/// Each installed package's runs, read with each list read so a rollback target stays current. A package whose log is
+/// refused has none; a lost link is passed on, as the lists pass it.
+async fn runs_of(
+    client: &Client,
+    installed: &[ExtensionItem],
+) -> Result<BTreeMap<String, Vec<ExtensionRun>>, ClientError> {
+    let mut runs = BTreeMap::new();
+    for item in installed {
+        match client.extension_log(&item.id).await {
+            Ok(log) => {
+                runs.insert(item.id.clone(), log.runs);
+            }
+            Err(ClientError::Remote(_) | ClientError::Protocol(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(runs)
+}
+
+/// A rollback's answer: the restored package, or the consent its version needs first. That consent is an answer, not a
+/// refusal; any other refusal is returned as it came.
+fn rollback_answer(
+    result: Result<ExtensionInstalled, ClientError>,
+) -> Result<RollbackAnswer, ClientError> {
+    match result {
+        Ok(installed) => Ok(RollbackAnswer::Restored(installed)),
+        Err(error) => consent_needed(&error).ok_or(error),
+    }
+}
+
+/// The version and consent a refusal names for a rollback that needs the restored version's consent.
+fn consent_needed(error: &ClientError) -> Option<RollbackAnswer> {
+    match error {
+        ClientError::Remote(body) if body.code == codes::EXTENSION_CONSENT_REQUIRED => {
+            let data = body.data.as_ref()?;
+            Some(RollbackAnswer::ConsentNeeded {
+                version: data.get("version")?.as_str()?.to_owned(),
+                consent: data.get("consent")?.as_str()?.to_owned(),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn part(
@@ -309,6 +411,22 @@ impl ServiceHandle {
         params: ExtensionUpdateParams,
     ) -> Result<ExtensionInstalled, Refusal> {
         self.ask(|reply| Command::Extension(ExtensionCommand::Update { params, reply }))
+            .await
+    }
+
+    /// `extensions.rollback`. Without the consent of the restored version the answer names it, and the call is sent again
+    /// with that consent. The list changes through the reads that follow the answer.
+    pub async fn rollback_extension(
+        &self,
+        params: ExtensionRollbackParams,
+    ) -> Result<RollbackAnswer, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::Rollback { params, reply }))
+            .await
+    }
+
+    /// `extensions.log`: a package's recent runs, oldest first. Nothing changes on the service.
+    pub async fn extension_log(&self, id: String) -> Result<ExtensionLog, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::Log { id, reply }))
             .await
     }
 
@@ -455,6 +573,21 @@ pub(super) fn spawn_call(
                 .await
             });
         }
+        ExtensionCommand::Rollback { params, reply } => {
+            write(client, updates, reads, reply, move |client| async move {
+                rollback_answer(client.extension_rollback(&params).await)
+            });
+        }
+        ExtensionCommand::Log { id, reply } => {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .extension_log(&id)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
     }
 }
 
@@ -505,6 +638,12 @@ pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         ExtensionCommand::Update { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::Rollback { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::Log { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -560,8 +699,8 @@ mod tests {
     use massorca_protocol::methods::extensions::{ExtensionRemoveParams, ExtensionRemoved};
 
     use super::{
-        HostListing, HostLists, Refusal, connect_listing, has_extensions, listing_of,
-        remove_with_uninstall_consent, uninstall_fingerprint,
+        HostListing, HostLists, Refusal, RollbackAnswer, connect_listing, consent_needed,
+        has_extensions, listing_of, remove_with_uninstall_consent, uninstall_fingerprint,
     };
 
     /// The refusal the service gives when a removal needs its uninstall commands accepted first.
@@ -691,5 +830,23 @@ mod tests {
     #[test]
     fn a_host_that_answers_its_lists_gives_them() {
         assert_eq!(listing_of(Ok(no_lists())), HostListing::Lists(no_lists()));
+    }
+
+    #[test]
+    fn a_rollback_refusal_names_the_restored_version_and_its_consent() {
+        let mut body = ErrorBody::new(
+            codes::EXTENSION_CONSENT_REQUIRED,
+            "the restored version needs its review",
+        );
+        body.data = Some(serde_json::json!({ "version": "1.0.0", "consent": "fp-1" }));
+        assert_eq!(
+            consent_needed(&ClientError::Remote(body)),
+            Some(RollbackAnswer::ConsentNeeded {
+                version: "1.0.0".to_owned(),
+                consent: "fp-1".to_owned(),
+            })
+        );
+        let busy = ClientError::Remote(ErrorBody::new("extension.busy", "busy"));
+        assert_eq!(consent_needed(&busy), None);
     }
 }
