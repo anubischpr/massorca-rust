@@ -177,7 +177,7 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "team.room.post",
-            "Post a line to a team's Conference room; a person's line becomes a started task",
+            "Post a line to a team's Conference room; a person's line becomes a task, a routine or a choice card",
             "team.room_post",
             json!({
                 "type": "object",
@@ -187,6 +187,20 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "text": { "type": "string" },
                     "bot": { "type": "string" },
                     "to": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.room.answer",
+            "Answer a Conference room choice card once: a bot, another team, or this team's Todo",
+            "team.room_answer",
+            json!({
+                "type": "object",
+                "required": ["team", "message", "choice"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "message": { "type": "string" },
+                    "choice": { "type": "string" }
                 }
             }),
         ),

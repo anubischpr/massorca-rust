@@ -92,6 +92,18 @@ impl SidebarRow {
         Self::nav(id, icon, name).map_row(|r| r.title_strong(true))
     }
 
+    /// A project at the top level whose icon is an emoji or an image, drawn in place of the folder glyph (decision 0091).
+    pub fn project_element(
+        id: impl Into<ElementId>,
+        icon: impl IntoElement,
+        name: impl Into<SharedString>,
+    ) -> Self {
+        Self::new(id, name).map_row(|r| {
+            r.leading(RowLeading::Element(icon.into_any_element()))
+                .title_strong(true)
+        })
+    }
+
     /// A host under a project (A10). A reachable host shows its connection dot and
     /// "Connected"; an unreachable one shows the dashed glyph, its last known state
     /// and a dimmed row.

@@ -37,6 +37,8 @@ pub struct ExtensionManagerRow {
     state: ExtensionState,
     status_word: SharedString,
     on_action: Option<ActionHandler>,
+    show_switch: bool,
+    show_more: bool,
 }
 
 impl std::fmt::Debug for ExtensionManagerRow {
@@ -65,6 +67,8 @@ impl ExtensionManagerRow {
             state,
             status_word: SharedString::default(),
             on_action: None,
+            show_switch: true,
+            show_more: true,
         }
     }
 
@@ -107,6 +111,18 @@ impl ExtensionManagerRow {
         listener: impl Fn(ExtensionAction, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_action = Some(Rc::new(listener));
+        self
+    }
+
+    /// Drops the Enabled switch, for an item that has nothing to turn on or off.
+    pub fn without_switch(mut self) -> Self {
+        self.show_switch = false;
+        self
+    }
+
+    /// Drops the More button, for an item with no action its menu could offer.
+    pub fn without_more(mut self) -> Self {
+        self.show_more = false;
         self
     }
 }
@@ -228,8 +244,8 @@ impl RenderOnce for ExtensionManagerRow {
             .child(plate)
             .child(text)
             .child(status)
-            .child(switch)
-            .child(more)
+            .children(self.show_switch.then_some(switch))
+            .children(self.show_more.then_some(more))
     }
 }
 
@@ -291,6 +307,31 @@ mod tests {
                 .status_word("Enabled")
                 .on_action(move |action, _, _| seen.borrow_mut().push(action))
         }
+    }
+
+    struct BareRowHarness;
+
+    impl gpui::Render for BareRowHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            ExtensionManagerRow::new(
+                "row-1",
+                "notes",
+                ExtensionState::Installed {
+                    enabled: true,
+                    update: None,
+                },
+            )
+            .without_switch()
+            .without_more()
+        }
+    }
+
+    #[gpui::test]
+    fn a_row_without_a_switch_or_more_draws_neither(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| BareRowHarness);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("row-switch:row-1").is_none());
+        assert!(cx.debug_bounds("button:row-1-more").is_none());
     }
 
     fn drawn(

@@ -661,6 +661,10 @@ fn a_team_project_takes_a_workspaces_source_on_add_and_update_and_names_it_in_th
     sandbox
         .run("default", &["team", "create", "alpha"])
         .success();
+    sandbox.json_ok(
+        "default",
+        &["team", "update", "alpha", "--workspaces", "true"],
+    );
     let folder = sandbox.json_ok("default", &["project", "add", notes_text, "--folder"]);
     let folder_id = folder["id"].as_str().expect("project id").to_owned();
 
@@ -760,7 +764,7 @@ fn a_team_project_records_its_code_source_only_when_the_team_has_workspaces() {
         .code(1);
     let document = single_document(&refused);
     assert_eq!(
-        document["error"]["code"], "request.invalid_params",
+        document["error"]["code"], "team.workspaces_off",
         "{document}"
     );
 
@@ -868,4 +872,98 @@ fn the_board_without_a_project_lists_only_the_cards_no_project_holds() {
             ],
         )
         .failure();
+}
+
+#[test]
+fn a_bot_takes_skills_on_add_and_update_and_shows_them_in_text() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+
+    let plain = sandbox.json_ok(
+        "default",
+        &[
+            "team", "bot", "add", "alpha", "ada", "--agent", "codex", "--job", "Reviews",
+        ],
+    );
+    assert!(plain.get("skills").is_none(), "{plain}");
+
+    let added = stdout_text(
+        &sandbox
+            .run(
+                "default",
+                &[
+                    "team",
+                    "bot",
+                    "add",
+                    "alpha",
+                    "mara",
+                    "--agent",
+                    "claude",
+                    "--job",
+                    "Writes the parser",
+                    "--skills",
+                    "review, deploy",
+                ],
+            )
+            .success(),
+    );
+    assert!(added.contains("with skills review, deploy"), "{added}");
+
+    let renamed = sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "mara", "--job", "Ships"],
+    );
+    assert_eq!(renamed["skills"], serde_json::json!(["review", "deploy"]));
+    let replaced = sandbox.json_ok(
+        "default",
+        &[
+            "team", "bot", "update", "alpha", "mara", "--skills", "notes",
+        ],
+    );
+    assert_eq!(replaced["skills"], serde_json::json!(["notes"]));
+
+    let listed = stdout_text(
+        &sandbox
+            .run("default", &["team", "bot", "list", "alpha"])
+            .success(),
+    );
+    let lines: Vec<&str> = listed.lines().collect();
+    assert!(lines[0].ends_with("	-"), "{listed}");
+    assert!(lines[1].ends_with("	notes"), "{listed}");
+
+    let cleared = sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "mara", "--skills", ""],
+    );
+    assert!(cleared.get("skills").is_none(), "{cleared}");
+}
+
+#[test]
+fn a_team_with_workspaces_off_is_refused_a_project_link_with_the_reason() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_str().expect("utf-8 path");
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox.json_ok("default", &["project", "add", notes_text, "--folder"]);
+
+    let refused = sandbox
+        .run(
+            "default",
+            &[
+                "team", "project", "add", "alpha", "parser", "--source", "notes",
+            ],
+        )
+        .failure()
+        .code(1);
+    let reason = stderr_text(&refused);
+    assert!(reason.contains("team.workspaces_off"), "{reason}");
+    assert!(reason.contains("--workspaces true"), "{reason}");
+
+    let plain = sandbox.json_ok("default", &["team", "project", "add", "alpha", "parser"]);
+    assert!(plain["source_project"].is_null());
 }

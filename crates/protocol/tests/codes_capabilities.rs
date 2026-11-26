@@ -108,6 +108,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::AGENT_PROMPT_INVALID, "agent.prompt_invalid"),
     (codes::AGENT_RESUME_UNAVAILABLE, "agent.resume_unavailable"),
     (codes::AGENT_RESUME_NOT_FOUND, "agent.resume_not_found"),
+    (codes::AGENT_FORK_UNAVAILABLE, "agent.fork_unavailable"),
     (codes::AGENT_HOOK_REFUSED, "agent.hook_refused"),
     (codes::AGENT_DELEGATE_NEEDS_GIT, "agent.delegate_needs_git"),
     (codes::AGENT_DEPTH_EXCEEDED, "agent.depth_exceeded"),
@@ -154,6 +155,9 @@ const ERROR_CODES: &[(&str, &str)] = &[
         "team.routine_run_interrupted",
     ),
     (codes::TEAM_ROUTINE_CHANGED, "team.routine_changed"),
+    (codes::TEAM_ROOM_CARD_NOT_FOUND, "team.room_card_not_found"),
+    (codes::TEAM_ROOM_CARD_ANSWERED, "team.room_card_answered"),
+    (codes::TEAM_ROOM_LINE_NOT_FOUND, "team.room_line_not_found"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
@@ -161,6 +165,12 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TASK_NOT_FOUND, "task.not_found"),
     (codes::TASK_RUNNING, "task.running"),
     (codes::EXTENSION_UP_TO_DATE, "extension.up_to_date"),
+    (codes::AUTOMATION_NOT_FOUND, "automation.not_found"),
+    (
+        codes::AUTOMATION_SCHEDULE_INVALID,
+        "automation.schedule_invalid",
+    ),
+    (codes::AUTOMATION_ZONE_INVALID, "automation.zone_invalid"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -199,7 +209,10 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
+    assert_eq!(capabilities::AGENT_FORK, "agent-fork/1");
     assert_eq!(capabilities::AGENT_MODELS, "agent-models/1");
     assert_eq!(capabilities::AGENT_TITLE, "agent-title/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
+    assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");
+    assert_eq!(capabilities::AUTOMATIONS, "automations/1");
 }

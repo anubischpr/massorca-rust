@@ -12,6 +12,7 @@ mod hosted_services;
 mod import_folder;
 mod install_details;
 mod install_review;
+mod installed_offers;
 mod item_images;
 mod item_page;
 mod package_problem;
@@ -26,6 +27,7 @@ mod skill_placement;
 mod skills;
 mod source;
 mod types;
+mod your_apps;
 
 pub use accounts::{
     AccountActivity, AccountView, TerminalSignIn, account_block, account_views, busy_refusal,
@@ -47,6 +49,7 @@ pub use import_folder::{
 };
 pub use install_details::review_details;
 pub use install_review::{ReviewOutcome, installer_runs, review_outcome};
+pub use installed_offers::{RowOffers, row_offers};
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, banner_palette_slot,
@@ -75,3 +78,4 @@ pub use types::{
     AccountId, AccountState, AgentAccount, DEFAULT_AGENT_KEY, Host, HostId, HostState, ItemKind,
     ItemState, MarketplaceItem, MarketplaceItemId, MarketplaceSnapshot, SignInFlow, SignInStep,
 };
+pub use your_apps::{AppAction, AppRow, service_apps, skill_apps};

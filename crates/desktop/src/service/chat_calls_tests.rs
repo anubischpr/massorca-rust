@@ -16,19 +16,10 @@ use super::{Refusal, ServiceHandle, StoreUpdate};
 fn start_params() -> AgentStartParams {
     AgentStartParams {
         workspace: Some("w1".to_owned()),
-        kind: "claude".to_owned(),
         prompt: Some("hi".to_owned()),
-        args: Vec::new(),
-        env: Default::default(),
-        read_only: false,
-        title: None,
         cols: Some(120),
         rows: Some(40),
-        request_id: None,
-        permission_mode: None,
-        model: None,
-        effort: None,
-        fast: None,
+        ..crate::service::fixtures::base_agent_start_params()
     }
 }
 

@@ -30,9 +30,7 @@ pub fn close_check(sessions: &[AgentSession]) -> Option<CloseRisk> {
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::agents::{
-        Activity, ActivitySource, ActivityState, AgentSession, Outcome,
-    };
+    use massorca_protocol::methods::agents::{Activity, ActivityState, AgentSession, Outcome};
     use massorca_protocol::methods::terminals::TerminalState;
 
     use super::{CloseRisk, close_check};
@@ -44,9 +42,8 @@ mod tests {
         session.activity = Some(Activity {
             state,
             outcome,
-            source: ActivitySource::Hook,
             at_ms: 5,
-            seen_at_ms: None,
+            ..crate::service::fixtures::base_activity()
         });
         session
     }

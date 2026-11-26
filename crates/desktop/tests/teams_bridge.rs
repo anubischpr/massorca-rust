@@ -1,7 +1,9 @@
 //! The Bot Teams reads of the bridge against a real service in a temporary profile, driven headlessly: no
 //! window opens. The service runs in this test's runtime; the bridge runs on its own thread, as in the app.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Once, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -22,6 +24,12 @@ use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
 struct TempHome {
@@ -63,22 +71,23 @@ async fn start_service(home: &Path) -> RunningService {
     .expect("the service starts")
 }
 
-async fn stop_service(running: RunningService) {
+/// Stops the service and says how long the stop took.
+async fn stop_service(running: RunningService) -> Duration {
+    record_link_events();
+    let started = Instant::now();
     running.shutdown_handle().shutdown();
     timeout(WAIT, running.wait())
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+    started.elapsed()
 }
 
 /// A client of the same service, as the CLI would be.
 async fn client_of(home: &Path) -> Client {
     Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects")
@@ -106,15 +115,75 @@ async fn until(
 async fn until_the_link_stops(
     updates: &mut UnboundedReceiver<StoreUpdate>,
     state: &mut StoreState,
+    stop_took: Duration,
 ) {
     until_within(
         LINK_LOSS_WAIT,
         updates,
         state,
-        "the link to stop",
+        &format!("the link to stop (the service stop returned after {stop_took:?})"),
         |state| !state.connection.is_connected(),
     )
     .await;
+}
+
+/// Debug events of the connection and pump, kept with the time they happened so a stalled link wait can print them.
+static LINK_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LINK_EVENTS_FROM: OnceLock<Instant> = OnceLock::new();
+
+/// Records the `connection::serve` and client pump timing events; no payloads are in them.
+struct LinkEvents;
+
+struct FieldText(String);
+
+impl Visit for FieldText {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.0.push_str(&format!(" {}={value:?}", field.name()));
+    }
+}
+
+impl<S: Subscriber> Layer<S> for LinkEvents {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let target = event.metadata().target();
+        if !(target.starts_with("massorca_server::connection")
+            || target.starts_with("massorca_client::pump"))
+        {
+            return;
+        }
+        let mut fields = FieldText(String::new());
+        event.record(&mut fields);
+        let from = LINK_EVENTS_FROM.get_or_init(Instant::now);
+        LINK_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("+{:?} {target}{}", from.elapsed(), fields.0));
+    }
+}
+
+/// Starts recording the link events once for this test binary.
+fn record_link_events() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        LINK_EVENTS_FROM.get_or_init(Instant::now);
+        let layer = LinkEvents.with_filter(LevelFilter::DEBUG);
+        // Another subscriber being set already only means the events go unrecorded.
+        let _ = tracing_subscriber::registry().with(layer).try_init();
+    });
+}
+
+fn link_events() -> Vec<String> {
+    LINK_EVENTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// The variant name of a debug-printed update, so a trace never carries its payload.
+fn update_kind(debug: &str) -> &str {
+    debug
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()
+        .unwrap_or_default()
 }
 
 async fn until_within(
@@ -124,14 +193,27 @@ async fn until_within(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
+    let started = Instant::now();
+    // Each applied update by kind and time, so a stall names the last step the bridge reached.
+    let mut trace: Vec<String> = Vec::new();
     let folded = timeout(budget, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
+            trace.push(format!(
+                "+{:?} {}",
+                started.elapsed(),
+                update_kind(&format!("{update:?}"))
+            ));
             state.apply(update, Instant::now());
         }
     })
     .await;
-    assert!(folded.is_ok(), "timed out waiting for {what}: {state:?}");
+    assert!(
+        folded.is_ok(),
+        "timed out waiting for {what} after {:?}; updates applied while waiting: {trace:#?}; connection and pump events (since the first stop, all tests of this binary): {:#?}; {state:?}",
+        started.elapsed(),
+        link_events()
+    );
 }
 
 #[tokio::test]
@@ -143,9 +225,8 @@ async fn the_bridge_reads_every_team_with_its_board() {
         .team_create(&TeamCreateParams {
             name: "Desarrollo".to_owned(),
             purpose: Some("Ship the Teams surface".to_owned()),
-            character: None,
-            access: None,
             workspaces: Some(true),
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -153,10 +234,7 @@ async fn the_bridge_reads_every_team_with_its_board() {
         .task_create(&TaskCreateParams {
             team: team.id.clone(),
             title: "Write the spec".to_owned(),
-            body: None,
-            bot: None,
-            project: None,
-            origin: None,
+            ..base_task_create_params()
         })
         .await
         .expect("the task is created");
@@ -215,11 +293,7 @@ async fn a_team_created_through_another_client_reaches_the_store_without_a_reque
     let client = client_of(home.path()).await;
     client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -250,8 +324,8 @@ async fn the_teams_are_not_claimed_once_the_service_is_gone() {
     .await;
     assert!(teams_view(&state).is_connected());
 
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     assert!(!teams_view(&state).is_connected());
 }
 
@@ -268,11 +342,9 @@ async fn a_team_and_a_bot_are_written_through_the_bridge_and_read_back() {
 
     handle
         .create_team(TeamCreateParams {
-            name: "Ops".to_owned(),
             purpose: Some("Run it".to_owned()),
-            character: None,
-            access: None,
             workspaces: Some(false),
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -305,12 +377,7 @@ async fn a_team_and_a_bot_are_written_through_the_bridge_and_read_back() {
     handle
         .add_bot(BotAddParams {
             team: team_key,
-            name: "Nora".to_owned(),
-            job: "Reviews".to_owned(),
-            kind: "claude".to_owned(),
-            model: None,
-            effort: None,
-            lead: false,
+            ..base_bot_add_params()
         })
         .await
         .expect("the bot is added");
@@ -347,10 +414,7 @@ async fn a_name_the_service_refuses_comes_back_as_a_name_problem() {
     .await;
     let desarrollo = || TeamCreateParams {
         name: "Desarrollo".to_owned(),
-        purpose: None,
-        character: None,
-        access: None,
-        workspaces: None,
+        ..base_team_create_params()
     };
     handle
         .create_team(desarrollo())
@@ -377,15 +441,11 @@ async fn a_write_is_refused_while_the_service_is_down() {
         state.teams.is_some()
     })
     .await;
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     let refusal = handle
         .create_team(TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect_err("nothing is sent while the service is down");
@@ -402,22 +462,14 @@ async fn a_card_is_finished_and_reopened_through_the_service() {
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
     client
         .task_create(&TaskCreateParams {
             team: team.id.clone(),
-            title: "Rotate the keys".to_owned(),
-            body: None,
-            bot: None,
-            project: None,
-            origin: None,
+            ..base_task_create_params()
         })
         .await
         .expect("the task is created");
@@ -473,12 +525,8 @@ async fn a_card_is_finished_and_reopened_through_the_service() {
 fn nora(team: &str, lead: bool) -> BotAddParams {
     BotAddParams {
         team: team.to_owned(),
-        name: "Nora".to_owned(),
-        job: "Reviews".to_owned(),
-        kind: "claude".to_owned(),
-        model: None,
-        effort: None,
         lead,
+        ..base_bot_add_params()
     }
 }
 
@@ -489,11 +537,7 @@ async fn a_bot_with_no_card_is_listed_from_the_first_read() {
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -530,11 +574,7 @@ async fn a_bot_added_through_another_client_reaches_the_store_without_a_request(
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -566,22 +606,16 @@ async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
     let project = client
         .team_project_add(&TeamProjectAddParams {
             team: team.id.clone(),
-            name: "Checkout".to_owned(),
             goal: Some("Ship checkout".to_owned()),
             brief: Some("Checkout copy".to_owned()),
-            source_project: None,
-            code_source: None,
+            ..base_team_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -589,10 +623,8 @@ async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
         .task_create(&TaskCreateParams {
             team: team.id.clone(),
             title: "Draft the page".to_owned(),
-            body: None,
-            bot: None,
             project: Some(project.id.clone()),
-            origin: None,
+            ..base_task_create_params()
         })
         .await
         .expect("the task is created");
@@ -631,11 +663,7 @@ async fn a_team_project_added_through_another_client_reaches_the_store_without_a
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -649,11 +677,7 @@ async fn a_team_project_added_through_another_client_reaches_the_store_without_a
     client
         .team_project_add(&TeamProjectAddParams {
             team: team.id.clone(),
-            name: "Checkout".to_owned(),
-            goal: None,
-            brief: None,
-            source_project: None,
-            code_source: None,
+            ..base_team_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -711,22 +735,15 @@ async fn team_with_checkout(
     let client = client_of(home).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
     client
         .team_project_add(&TeamProjectAddParams {
             team: team.id.clone(),
-            name: "Checkout".to_owned(),
-            goal: None,
             brief: Some("Old brief".to_owned()),
-            source_project: None,
-            code_source: None,
+            ..base_team_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -817,10 +834,8 @@ async fn a_team_access_change_reaches_the_service_and_the_read_shows_it() {
     let team = client
         .team_create(&TeamCreateParams {
             name: "Desarrollo".to_owned(),
-            purpose: None,
-            character: None,
             access: Some(TeamAccess::Full),
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -895,11 +910,9 @@ async fn a_team_update_through_the_bridge_changes_only_the_fields_given() {
     .await;
     handle
         .create_team(TeamCreateParams {
-            name: "Ops".to_owned(),
             purpose: Some("Run it".to_owned()),
-            character: None,
-            access: None,
             workspaces: Some(false),
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -915,10 +928,7 @@ async fn a_team_update_through_the_bridge_changes_only_the_fields_given() {
         .update_team(TeamUpdateParams {
             team: team_key_named(&state, "Ops"),
             name: Some("Platform".to_owned()),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_update_params()
         })
         .await
         .expect("the team is renamed");
@@ -959,10 +969,7 @@ async fn a_team_renamed_to_a_name_another_team_has_is_refused_as_a_name_problem(
         handle
             .create_team(TeamCreateParams {
                 name: name.to_owned(),
-                purpose: None,
-                character: None,
-                access: None,
-                workspaces: None,
+                ..base_team_create_params()
             })
             .await
             .expect("the team is created");
@@ -976,10 +983,7 @@ async fn a_team_renamed_to_a_name_another_team_has_is_refused_as_a_name_problem(
         .update_team(TeamUpdateParams {
             team: team_key_named(&state, "Dev"),
             name: Some("Ops".to_owned()),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_update_params()
         })
         .await
         .expect_err("the name is taken");
@@ -1002,11 +1006,7 @@ async fn a_team_removed_through_the_bridge_leaves_the_read_and_a_second_removal_
     .await;
     handle
         .create_team(TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -1054,11 +1054,8 @@ async fn a_team_project_added_through_the_bridge_is_stored_and_a_refused_one_is_
     .await;
     handle
         .create_team(TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
             workspaces: Some(false),
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -1075,11 +1072,8 @@ async fn a_team_project_added_through_the_bridge_is_stored_and_a_refused_one_is_
     let refusal = handle
         .add_team_project(TeamProjectAddParams {
             team: team.clone(),
-            name: "Checkout".to_owned(),
-            goal: None,
-            brief: None,
-            source_project: None,
             code_source: Some(CodeSource::ExistingRepository),
+            ..base_team_project_add_params()
         })
         .await
         .expect_err("a code source needs Workspaces");
@@ -1091,11 +1085,8 @@ async fn a_team_project_added_through_the_bridge_is_stored_and_a_refused_one_is_
     let project = handle
         .add_team_project(TeamProjectAddParams {
             team: team.clone(),
-            name: "Checkout".to_owned(),
             goal: Some("Ship the cart".to_owned()),
-            brief: None,
-            source_project: None,
-            code_source: None,
+            ..base_team_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -1160,11 +1151,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -1176,10 +1163,8 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
         .task_create(&TaskCreateParams {
             team: team.id.clone(),
             title: "Review the diff".to_owned(),
-            body: None,
             bot: Some(bot.id.clone()),
-            project: None,
-            origin: None,
+            ..base_task_create_params()
         })
         .await
         .expect("the task is created");
@@ -1199,7 +1184,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
         .remove_bot(BotRemoveParams {
             team: team_key.clone(),
             bot: bot_key.clone(),
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect_err("a bot that owns an open task is refused");
@@ -1213,11 +1198,7 @@ async fn a_bot_renamed_through_the_bridge_keeps_its_job_and_one_with_open_work_i
             team: team_key,
             bot: bot_key,
             name: Some("Lucia".to_owned()),
-            job: None,
-            kind: None,
-            model: None,
-            effort: None,
-            lead: None,
+            ..base_bot_update_params()
         })
         .await
         .expect("the bot is renamed");
@@ -1248,11 +1229,7 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
     let client = client_of(home.path()).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
@@ -1276,7 +1253,7 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
         .remove_bot(BotRemoveParams {
             team: team_key.clone(),
             bot: bot_key.clone(),
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect("the bot is removed");
@@ -1297,7 +1274,7 @@ async fn a_bot_without_open_work_is_removed_through_the_bridge_and_a_second_remo
         .remove_bot(BotRemoveParams {
             team: team_key,
             bot: bot_key,
-            unassign: false,
+            ..base_bot_remove_params()
         })
         .await
         .expect_err("a bot that is gone is refused");
@@ -1324,22 +1301,14 @@ async fn team_with_an_unassigned_card(home: &Path) -> (Client, String) {
     let client = client_of(home).await;
     let team = client
         .team_create(&TeamCreateParams {
-            name: "Ops".to_owned(),
-            purpose: None,
-            character: None,
-            access: None,
-            workspaces: None,
+            ..base_team_create_params()
         })
         .await
         .expect("the team is created");
     client
         .task_create(&TaskCreateParams {
             team: team.id.clone(),
-            title: "Rotate the keys".to_owned(),
-            body: None,
-            bot: None,
-            project: None,
-            origin: None,
+            ..base_task_create_params()
         })
         .await
         .expect("the task is created");
@@ -1351,7 +1320,7 @@ async fn open_cards(client: &Client, team: &str) -> usize {
     let board = client
         .team_board(&BoardParams {
             team: team.to_owned(),
-            project: None,
+            ..base_board_params()
         })
         .await
         .expect("the Board is read");
@@ -1421,4 +1390,105 @@ async fn a_card_with_no_run_is_not_stopped_and_the_service_says_so() {
         "the card stays in Open"
     );
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `BoardParams` field at its usual value; tests override the fields they vary.
+fn base_board_params() -> massorca_protocol::methods::teams::BoardParams {
+    massorca_protocol::methods::teams::BoardParams {
+        team: String::new(),
+        project: None,
+    }
+}
+
+/// Every `TaskCreateParams` field at its usual value; tests override the fields they vary.
+fn base_task_create_params() -> massorca_protocol::methods::tasks::TaskCreateParams {
+    massorca_protocol::methods::tasks::TaskCreateParams {
+        team: String::new(),
+        title: "Rotate the keys".to_owned(),
+        body: None,
+        bot: None,
+        project: None,
+        origin: None,
+    }
+}
+
+/// Every `TeamCreateParams` field at its usual value; tests override the fields they vary.
+fn base_team_create_params() -> massorca_protocol::methods::teams::TeamCreateParams {
+    massorca_protocol::methods::teams::TeamCreateParams {
+        name: "Ops".to_owned(),
+        purpose: None,
+        character: None,
+        access: None,
+        workspaces: None,
+    }
+}
+
+/// Every `TeamProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_team_project_add_params() -> massorca_protocol::methods::teams::TeamProjectAddParams {
+    massorca_protocol::methods::teams::TeamProjectAddParams {
+        team: String::new(),
+        name: "Checkout".to_owned(),
+        goal: None,
+        brief: None,
+        source_project: None,
+        code_source: None,
+    }
+}
+
+/// Every `TeamUpdateParams` field at its usual value; tests override the fields they vary.
+fn base_team_update_params() -> massorca_protocol::methods::teams::TeamUpdateParams {
+    massorca_protocol::methods::teams::TeamUpdateParams {
+        team: String::new(),
+        name: None,
+        purpose: None,
+        character: None,
+        access: None,
+        workspaces: None,
+    }
+}
+
+/// Every `BotAddParams` field at its usual value; tests override the fields they vary.
+fn base_bot_add_params() -> massorca_protocol::methods::teams::BotAddParams {
+    massorca_protocol::methods::teams::BotAddParams {
+        team: String::new(),
+        name: "Nora".to_owned(),
+        job: "Reviews".to_owned(),
+        kind: "claude".to_owned(),
+        model: None,
+        effort: None,
+        lead: false,
+        skills: Vec::new(),
+    }
+}
+
+/// Every `BotRemoveParams` field at its usual value; tests override the fields they vary.
+fn base_bot_remove_params() -> massorca_protocol::methods::teams::BotRemoveParams {
+    massorca_protocol::methods::teams::BotRemoveParams {
+        team: String::new(),
+        bot: String::new(),
+        unassign: false,
+    }
+}
+
+/// Every `BotUpdateParams` field at its usual value; tests override the fields they vary.
+fn base_bot_update_params() -> massorca_protocol::methods::teams::BotUpdateParams {
+    massorca_protocol::methods::teams::BotUpdateParams {
+        team: String::new(),
+        bot: String::new(),
+        name: None,
+        job: None,
+        kind: None,
+        model: None,
+        effort: None,
+        lead: None,
+        skills: None,
+    }
 }

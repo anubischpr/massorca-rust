@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use super::Shell;
-use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
+use super::start_placement::{host_pill, off_pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
@@ -57,6 +57,8 @@ use massorca_protocol::methods::chat::RunType;
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
 pub(super) struct StartFrame {
+    /// The heading's project icon popover, when it is open for this page's project (decision 0091).
+    pub project_icon: Option<crate::model::project_icon::ProjectIconPopover>,
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
@@ -127,6 +129,48 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
         .child("What should we work on in ")
         .child(project_link)
         .child("?");
+    let heading = {
+        let (open_shell, choose_shell) = (frame.shell.clone(), frame.shell.clone());
+        let (open_project, choose_project) = (page.project_id.clone(), page.project_id.clone());
+        let refusal = frame
+            .project_icon
+            .as_ref()
+            .and_then(|popover| popover.refusal.clone());
+        let icon = massorca_ui::components::project_icon_popover::ProjectIconControl::new(
+            "start-project-icon",
+            super::project_mark::project_mark(&page.icon),
+            frame.project_icon.is_some(),
+            move |open, _, cx| {
+                let _ = open_shell.update(cx, |shell, cx| {
+                    let canvas = shell.model.canvas();
+                    shell.project_icon =
+                        open.then(|| crate::model::project_icon::ProjectIconPopover {
+                            project: open_project.clone(),
+                            refusal: None,
+                            canvas,
+                        });
+                    cx.notify();
+                });
+            },
+            move |choice, _, cx| {
+                let _ = choose_shell.update(cx, |shell, cx| {
+                    shell.choose_project_icon(choose_project.clone(), choice, cx);
+                });
+            },
+        )
+        .current(match &page.icon {
+            crate::model::project_icon::ProjectGlyph::Lucide(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .refusal(refusal.map(gpui::SharedString::from));
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(massorca_ui::tokens::SPACE_3))
+            .child(icon)
+            .child(heading)
+    };
 
     let host = host_pill(
         "start-host",
@@ -136,9 +180,9 @@ pub(super) fn start_page(frame: StartFrame, window: &mut Window, cx: &mut App) -
     );
     let project = {
         let shell = frame.shell.clone();
-        pill(
+        super::start_placement::pill_with(
             "start-project",
-            IconName::Folder,
+            super::project_mark::project_mark(&page.icon),
             page.project.clone(),
             None,
             true,
@@ -311,25 +355,32 @@ pub(super) fn access_tags(choices: &[ModeChoice]) -> Vec<Option<SharedString>> {
 
 /// The installed kinds as the picker's rail offers them: each kind's declared models with the levels each accepts. A
 /// kind that declares no models is its own one row, with the levels the kind declares. Each agent carries the brand
-/// colours its Marketplace listing gives.
+/// colours its Marketplace listing gives. A model takes Fast only while the service offers `agent-fast/1` and the model
+/// declares it (decision 0165); otherwise the model names why, when its kind says so.
 pub(super) fn picker_agents(
     kinds: &[AgentKind],
     installed: &[KindChoice],
     brands: &BTreeMap<String, AgentBrand>,
+    fast_offered: bool,
 ) -> Vec<AgentOption> {
     installed
         .iter()
         .map(|choice| {
             let kind = kinds.iter().find(|kind| kind.id == choice.id);
             let declared = kind.map(declared_models).unwrap_or_default();
+            let kind_reason = kind_fast_reason(kind);
             let models = if declared.is_empty() {
                 let (efforts, default_effort) = kind.map_or_else(|| (Vec::new(), 0), kind_levels);
+                let takes_fast = kind
+                    .and_then(|kind| kind.fast.as_ref())
+                    .is_some_and(|fast| fast.supported);
                 vec![ModelOption {
                     id: choice.id.clone().into(),
                     name: choice.name.clone().into(),
                     efforts,
                     default_effort,
-                    fast: false,
+                    fast: fast_offered && takes_fast,
+                    fast_reason: kind_reason,
                 }]
             } else {
                 declared
@@ -343,7 +394,12 @@ pub(super) fn picker_agents(
                             .map(|effort| SharedString::from(effort.label))
                             .collect(),
                         default_effort: model.default_effort,
-                        fast: false,
+                        fast: fast_offered && model.fast,
+                        fast_reason: if model.fast {
+                            None
+                        } else {
+                            kind_reason.clone()
+                        },
                     })
                     .collect()
             };
@@ -356,6 +412,16 @@ pub(super) fn picker_agents(
             }
         })
         .collect()
+}
+
+/// The reason a kind gives for taking no fast mode (`AgentKind.fast`), when it gives one.
+fn kind_fast_reason(kind: Option<&AgentKind>) -> Option<SharedString> {
+    kind?
+        .fast
+        .as_ref()
+        .filter(|fast| !fast.supported)
+        .and_then(|fast| fast.reason.clone())
+        .map(SharedString::from)
 }
 
 /// A kind's own levels as its picker row lists them, in declared order, and the index of its declared default.
@@ -766,10 +832,14 @@ impl Shell {
             .collect();
         let preselect = preselected_model(&installed_kinds).map(SharedString::from);
         composer.update(cx, |composer, cx| {
-            composer.set_picker_agents(picker_agents(&kinds, &choices, &brands), preselect, cx);
+            composer.set_picker_agents(
+                picker_agents(&kinds, &choices, &brands, agent_fast),
+                preselect,
+                cx,
+            );
             // The picker says so and links to the Marketplace; a list not read yet is not "none installed".
             composer.set_no_agents_installed(connected && choices.is_empty(), cx);
-            // Fast is off on every model until the service offers its speed (`AGENT_FAST_CAPABILITY`).
+            // Fast needs the service's speed (`agent-fast/1`) and a model that takes it; the picker says why it is off.
             composer.set_picker_fast_reason(fast_reason(agent_fast).map(SharedString::from), cx);
         });
         let chosen = composer
@@ -915,14 +985,14 @@ impl Shell {
         ui_state::remember_start_mode(cx, &kind, mode.as_deref());
     }
 
-    /// The model and effort `composer`'s picker chose, sent only when the service offers them.
+    /// The model, effort and speed `composer`'s picker chose, sent only when the service offers them. Fast is sent
+    /// only when the person chose it on a model that takes it and the service offers `agent-fast/1`.
     pub(super) fn chosen_options(&self, composer: &Entity<Composer>, cx: &App) -> StartOptions {
         let state = self.store.read(cx).state();
-        picked_options(
-            composer.read(cx).picker().read(cx).state(),
-            state.agent_options,
-            &state.agent_kinds,
-        )
+        let picker = composer.read(cx).picker().read(cx).state();
+        let mut options = picked_options(picker, state.agent_options, &state.agent_kinds);
+        options.fast = (state.agent_fast && picker.choice().fast).then_some(true);
+        options
     }
 
     /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
