@@ -119,9 +119,10 @@ fn the_handles_can_move_between_threads() {
 /// A file in `dir` with `body` and the given Unix mode.
 #[cfg(unix)]
 fn program_file(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
+    use massorca_process::test_executable::write_executable;
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);
-    std::fs::write(&path, body).expect("write the program");
+    write_executable(&path, body);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
     path
 }

@@ -20,6 +20,7 @@ tracing.workspace = true
 win32job.workspace = true
 
 [dev-dependencies]
+massorca-process = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 
 [lints]
