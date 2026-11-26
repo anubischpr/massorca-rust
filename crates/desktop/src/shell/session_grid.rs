@@ -51,6 +51,18 @@ impl Shell {
             .any(|record| record.id == terminal && (record.cols, record.rows) == (cols, rows))
     }
 
+    /// Remembers the grid of a paired host's terminal when the open remote session shows it, so a session started next
+    /// opens at that grid too.
+    pub(super) fn note_remote_grid(&mut self, host: &str, terminal: &str, cols: u16, rows: u16) {
+        if self
+            .remote_terminal
+            .as_ref()
+            .is_some_and(|attached| attached.is(host, terminal))
+        {
+            self.session_grid = Some((cols, rows));
+        }
+    }
+
     /// Remembers `terminal`'s new grid when it is the terminal the session view shows.
     pub(super) fn note_terminal_grid(&mut self, terminal: &str, cols: u16, rows: u16, cx: &App) {
         let shown = matches!(self.model.canvas(), Canvas::Session(_))

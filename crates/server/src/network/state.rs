@@ -102,6 +102,19 @@ impl NetworkState {
         addresses
     }
 
+    /// The port of the first bound listener, which an offer address without a port takes; 0 when none is bound.
+    pub(crate) fn listening_port(&self) -> u16 {
+        self.lock()
+            .iter()
+            .find_map(|(_, state)| match state {
+                ListenerState::Listening {
+                    bound: Some(bound), ..
+                } => Some(bound.port()),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
     pub(crate) fn listener_infos(&self) -> Vec<ListenerInfo> {
         self.lock()
             .iter()

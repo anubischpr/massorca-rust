@@ -6,7 +6,9 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClipboardItem, Context, Entity, SharedString, WeakEntity, Window, div, px,
 };
-use massorca_protocol::methods::devices::{DeviceRevokeParams, PairingCreateParams};
+use massorca_protocol::methods::devices::{
+    DeviceRevokeParams, PairingCancelParams, PairingCreateParams,
+};
 use massorca_ui::assets::FONT_MONO;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
@@ -19,7 +21,7 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
-use super::Shell;
+use super::{Shell, pairing_qr};
 use crate::model::devices::{DeviceRow, DevicesView, REVOKE_LOSS, RevokeFlow, revoke_title};
 use crate::model::navigation::Page;
 use crate::model::pairing::{
@@ -32,19 +34,35 @@ const NO_SERVICE_OFFER: &str = "The MassOrca service is not connected. No offer 
 const NO_SERVICE_PAIR: &str = "The MassOrca service is not connected. Nothing was paired.";
 /// What the confirm says when there is no service to revoke through.
 const NO_SERVICE_REVOKE: &str = "The MassOrca service is not connected. Nothing was revoked.";
+/// What the offer row says when there is no service to retire the offer through.
+const NO_SERVICE_RETIRE: &str =
+    "The MassOrca service is not connected. The offer still works until it expires.";
 
 /// What the Pairing page draws in one frame: the state, the fields, the paired devices and the Shell.
 pub(super) struct PairingFrame {
     pub state: PairingState,
     pub offer_field: Entity<TextField>,
     pub name_field: Entity<TextField>,
+    /// "Custom address": what the offer lists instead of the bound addresses, when not empty.
+    pub address_field: Entity<TextField>,
+    pub retire: OfferRetire,
     /// The devices the store holds: being read, listed, or refused.
     pub devices: DevicesView,
     pub shell: WeakEntity<Shell>,
 }
 
+/// Retiring the offer on screen: its id (absent from services before `pairing-cancel/1`), whether the retire is under
+/// way, and the service's sentence when it refused.
+#[derive(Clone, Debug, Default)]
+pub(super) struct OfferRetire {
+    pub id: Option<String>,
+    pub busy: bool,
+    pub error: Option<String>,
+}
+
 impl Shell {
     /// "Make offer": asks this computer's service for an offer. The page shows it only once the service answers.
+    /// A new offer retires the one on screen first, so only the offer shown can pair.
     pub(super) fn make_offer(&mut self, cx: &mut Context<Self>) {
         if !pairing::can_make_offer(&self.pairing.offer) {
             return;
@@ -54,21 +72,75 @@ impl Shell {
             cx.notify();
             return;
         };
+        let addresses = custom_addresses(self.pairing_address.read(cx).text());
+        let previous = std::mem::take(&mut self.offer_retire).id;
         self.pairing.offer = OfferState::Making;
         cx.notify();
         cx.spawn(async move |this, cx| {
+            if let Some(offer_id) = previous {
+                // A failure here leaves the old offer to expire on its own.
+                let _ = service
+                    .cancel_offer(PairingCancelParams {
+                        offer_id: Some(offer_id),
+                        all: false,
+                    })
+                    .await;
+            }
             let params = PairingCreateParams {
                 ttl_secs: None,
                 // A paired device is the owner with full access; older servers default to read and workspace.
                 admin: true,
                 standard: false,
+                addresses,
             };
             let result = service.create_offer(params).await;
             let _ = this.update(cx, |shell, cx| {
                 shell.pairing.offer = match result {
-                    Ok(created) => OfferState::Made(OfferView::from_created(&created)),
+                    Ok(created) => {
+                        shell.offer_retire.id = created.offer_id.clone();
+                        OfferState::Made(OfferView::from_created(&created))
+                    }
                     Err(refusal) => OfferState::Refused(refusal.sentence()),
                 };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// "Retire offer": the shown offer stops pairing at once. The page clears it only once the service says so.
+    pub(super) fn retire_offer(&mut self, cx: &mut Context<Self>) {
+        if self.offer_retire.busy {
+            return;
+        }
+        let Some(offer_id) = self.offer_retire.id.clone() else {
+            return;
+        };
+        let Some(service) = self.service.clone() else {
+            self.offer_retire.error = Some(NO_SERVICE_RETIRE.to_owned());
+            cx.notify();
+            return;
+        };
+        self.offer_retire.busy = true;
+        self.offer_retire.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let params = PairingCancelParams {
+                offer_id: Some(offer_id),
+                all: false,
+            };
+            let result = service.cancel_offer(params).await;
+            let _ = this.update(cx, |shell, cx| {
+                match result {
+                    Ok(_) => {
+                        shell.offer_retire = OfferRetire::default();
+                        shell.pairing.offer = OfferState::Idle;
+                    }
+                    Err(refusal) => {
+                        shell.offer_retire.busy = false;
+                        shell.offer_retire.error = Some(refusal.sentence());
+                    }
+                }
                 cx.notify();
             });
         })
@@ -187,6 +259,15 @@ impl Shell {
     }
 }
 
+/// The custom addresses typed for an offer, split at commas and spaces. The service checks each one.
+pub(super) fn custom_addresses(typed: &str) -> Vec<String> {
+    typed
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The Pairing page: this computer's offer, then the pairing it accepts, each a settings group.
 pub(super) fn pairing_page(frame: &PairingFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
@@ -247,15 +328,30 @@ fn offer_group(frame: &PairingFrame, theme: &Theme) -> AnyElement {
         .description(
             "Make an offer and enter it on the other device. An offer works once and expires.",
         )
+        .row(
+            SettingsRow::new("pairing-offer-address", "Custom address")
+                .helper(
+                    "The address the other device dials, when it is not one this PC is bound to. Leave empty to use the bound addresses.",
+                )
+                .control(frame.address_field.clone()),
+        )
         .row(make.control(button));
     if let OfferState::Made(view) = &frame.state.offer {
-        group = group.row(offer_text_row(view, theme));
+        if let Some(tile) = pairing_qr::tile(&view.offer) {
+            group = group.row(
+                SettingsRow::new("pairing-offer-qr", "QR code")
+                    .helper("Scan it with MassOrca on the phone. It is the same offer as the code below.")
+                    .control(tile),
+            );
+        }
+        group = group.row(offer_text_row(view, frame, theme));
     }
     group.into_any_element()
 }
 
-/// The offer as text, in mono, with a copy button. It is shown only here, while it is made.
-fn offer_text_row(view: &OfferView, theme: &Theme) -> AnyElement {
+/// The offer as text, in mono, with a copy button and, when the service can, "Retire offer". It is shown only here,
+/// while it is made.
+fn offer_text_row(view: &OfferView, frame: &PairingFrame, theme: &Theme) -> AnyElement {
     let text = div()
         .flex_1()
         .min_w_0()
@@ -271,10 +367,33 @@ fn offer_text_row(view: &OfferView, theme: &Theme) -> AnyElement {
     let copy = Button::new("pairing-copy-offer", "Copy offer")
         .variant(ButtonVariant::Ghost)
         .on_click(move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(offer.clone())));
-    SettingsRow::new("pairing-offer-text", "Offer code")
+    let mut control = div().flex().gap(px(SPACE_2)).child(text).child(copy);
+    if frame.retire.id.is_some() {
+        let shell = frame.shell.clone();
+        let label = if frame.retire.busy {
+            "Retiring offer"
+        } else {
+            "Retire offer"
+        };
+        let retire = Button::new("pairing-retire-offer", label)
+            .variant(ButtonVariant::Secondary)
+            .disabled(frame.retire.busy)
+            .on_click(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.retire_offer(cx));
+            });
+        control = control.child(
+            div()
+                .debug_selector(|| "pairing-retire-offer".to_owned())
+                .child(retire),
+        );
+    }
+    let mut row = SettingsRow::new("pairing-offer-text", "Offer code")
         .helper(OFFER_WARNING)
-        .control(div().flex().gap(px(SPACE_2)).child(text).child(copy))
-        .into_any_element()
+        .control(control);
+    if let Some(error) = &frame.retire.error {
+        row = row.status(RowStatus::Error(error.clone().into()));
+    }
+    row.into_any_element()
 }
 
 /// Accepting an offer another host made: the offer, an optional name, and the Pair button with its result.

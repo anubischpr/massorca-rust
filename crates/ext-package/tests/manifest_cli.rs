@@ -83,3 +83,32 @@ fn an_install_program_must_be_on_the_vendor_allowlist_and_bare() {
     });
     assert!(problems(allowed).is_empty());
 }
+
+#[test]
+fn an_uninstall_may_start_with_the_clis_own_binary_but_an_install_may_not() {
+    let own_uninstall = json!({
+        "binary": "gentle-shell", "source": "https://github.com/vendor/gentle-shell",
+        "uninstall": [{ "os": "linux", "command": ["gentle-shell", "self-uninstall", "--yes"] }]
+    });
+    assert!(problems(own_uninstall).is_empty());
+    let own_install = json!({
+        "binary": "gentle-shell", "source": "https://github.com/vendor/gentle-shell",
+        "install": [{ "os": "linux", "command": ["gentle-shell", "install"] }]
+    });
+    assert!(
+        problems(own_install)
+            .iter()
+            .any(|problem| problem.path.ends_with("/install/0/command")),
+        "an install never starts the CLI itself"
+    );
+    let other_uninstall = json!({
+        "binary": "gentle-shell", "source": "https://github.com/vendor/gentle-shell",
+        "uninstall": [{ "os": "linux", "command": ["gentle-tools", "self-uninstall"] }]
+    });
+    assert!(
+        problems(other_uninstall)
+            .iter()
+            .any(|problem| problem.path.ends_with("/uninstall/0/command")),
+        "an uninstall starts only the CLI's own binary or an allowlisted program"
+    );
+}

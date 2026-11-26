@@ -5,13 +5,13 @@
 //! `assistant_message` or `thinking` is stored apart from its body, so an append writes only the text and the stream gets
 //! an `append` update with the byte offset it starts at; a replay sends the item's whole state instead.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use massorca_core_store::{ChatItemRow, NewChatItem, Store, StoreError, now_ms};
 use massorca_protocol::methods::agents::Outcome;
 use massorca_protocol::methods::chat::{
-    ChatBatch, ChatCursor, ChatItem, ChatItemBody, ChatUpdate, MessageState, ResetReason, Turn,
-    TurnState,
+    Approval, ApprovalScope, ApprovalState, ChatBatch, ChatCursor, ChatItem, ChatItemBody,
+    ChatUpdate, MessageState, ResetReason, SubagentStatus, ToolStatus, Turn, TurnState,
 };
 use serde_json::Value;
 
@@ -24,7 +24,57 @@ use super::adapter::JournalOp;
 pub(crate) struct JournalState {
     pub(crate) epoch: String,
     pub(crate) open_turn: Option<String>,
+    /// The turns of prompts handed to the CLI while a turn ran (a forced prompt, decision 0101, D7), oldest first. They
+    /// end with the open turn: a `result` closes them all (the CLI may fold them into the running turn), an interrupt
+    /// interrupts them (it cancels the CLI's queued messages), and the run's end ends them.
+    held_turns: Vec<String>,
     keys: HashMap<String, String>,
+    /// The approval items still pending (decision 0101, D6).
+    pending_approvals: BTreeSet<String>,
+    /// How the newest turn ended, while none is open.
+    last_end: Option<(TurnState, Option<Outcome>)>,
+    /// The activity last recorded for the session, so only a change is written.
+    recorded: Option<ChatActivity>,
+}
+
+/// What a chat session is doing, as its journal shows it: the activity the service records for it (decision 0101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChatActivity {
+    /// No turn runs: before the first prompt, or after an interrupted or unverifiable turn.
+    Idle,
+    /// A turn runs.
+    Working,
+    /// A turn runs and waits for an answer to a permission request.
+    Waiting,
+    /// The newest turn completed, with the CLI's verdict.
+    Done(Option<Outcome>),
+}
+
+impl JournalState {
+    /// The item id the adapter's `key` names, when the run used it.
+    pub(crate) fn item_id(&self, key: &str) -> Option<&str> {
+        self.keys.get(key).map(String::as_str)
+    }
+
+    /// Whether a turn runs or a permission request waits: a prompt now would land inside a turn (decision 0101, D7).
+    pub(crate) fn busy(&self) -> bool {
+        self.turn_running() || !self.pending_approvals.is_empty()
+    }
+
+    /// Whether a turn is open, the running one or one opened for a held prompt.
+    fn turn_running(&self) -> bool {
+        self.open_turn.is_some() || !self.held_turns.is_empty()
+    }
+
+    /// The session's activity as the journal shows it.
+    pub(crate) fn activity(&self) -> ChatActivity {
+        match (self.turn_running(), &self.last_end) {
+            (true, _) if !self.pending_approvals.is_empty() => ChatActivity::Waiting,
+            (true, _) => ChatActivity::Working,
+            (false, Some((TurnState::Completed, outcome))) => ChatActivity::Done(*outcome),
+            (false, _) => ChatActivity::Idle,
+        }
+    }
 }
 
 impl JournalState {
@@ -32,17 +82,22 @@ impl JournalState {
     /// when it is still running.
     pub(crate) fn open(store: &Store, session: &str) -> Result<Self, StoreError> {
         let head = store.open_chat_journal(session, &uuid::Uuid::now_v7().to_string())?;
-        let open_turn = store
-            .latest_chat_item_of_type(session, "turn")?
-            .map(item_of)
-            .filter(|item| {
-                matches!(&item.body, ChatItemBody::Turn(turn) if turn.state == TurnState::Running)
-            })
-            .map(|item| item.id);
+        // Every turn still running is read back, so the next end closes them all.
+        let mut held_turns = store.running_chat_turns(session)?;
+        let open_turn = if held_turns.is_empty() {
+            None
+        } else {
+            Some(held_turns.remove(0))
+        };
+        let pending_approvals = store.pending_chat_approvals(session)?.into_iter().collect();
         Ok(Self {
             epoch: head.epoch,
             open_turn,
+            held_turns,
             keys: HashMap::new(),
+            pending_approvals,
+            last_end: None,
+            recorded: None,
         })
     }
 }
@@ -102,6 +157,38 @@ impl<'a> JournalWriter<'a> {
         }
     }
 
+    /// Whether a turn runs or a permission request waits.
+    pub(crate) fn busy(&self) -> bool {
+        self.state.busy()
+    }
+
+    /// The open turn's id, or else the first turn opened for a held prompt.
+    pub(crate) fn open_turn(&self) -> Option<String> {
+        self.state
+            .open_turn
+            .clone()
+            .or_else(|| self.state.held_turns.first().cloned())
+    }
+
+    /// The item id the adapter's `key` names.
+    pub(crate) fn item_id(&self, key: &str) -> Option<String> {
+        self.state.item_id(key).map(str::to_owned)
+    }
+
+    /// The item `id`, as it is now.
+    pub(crate) fn item(&self, id: &str) -> Result<Option<ChatItem>, StoreError> {
+        Ok(self.store.chat_item(self.session, id)?.map(item_of))
+    }
+
+    /// The session's activity when it differs from the one last recorded, which it then becomes.
+    pub(crate) fn activity_change(&mut self) -> Option<ChatActivity> {
+        let now = self.state.activity();
+        (self.state.recorded != Some(now)).then(|| {
+            self.state.recorded = Some(now);
+            now
+        })
+    }
+
     /// The batch of every change applied, or `None` when nothing changed.
     pub(crate) fn finish(self) -> Option<ChatBatch> {
         let seq = self.seq?;
@@ -116,6 +203,13 @@ impl<'a> JournalWriter<'a> {
     }
 
     fn changed(&mut self, item: ChatItem) {
+        if let ChatItemBody::Approval(approval) = &item.body {
+            if approval.state == ApprovalState::Pending {
+                self.state.pending_approvals.insert(item.id.clone());
+            } else {
+                self.state.pending_approvals.remove(&item.id);
+            }
+        }
         self.seq = Some(item.seq);
         self.updates.push(ChatUpdate::Item { item });
     }
@@ -163,9 +257,22 @@ impl<'a> JournalWriter<'a> {
     /// Opens a turn for the person's `text`: a running turn item, then the `user_message` that opened it. Returns the
     /// turn id. A turn still open is ended `unverifiable` first: nothing says how it ended.
     pub(crate) fn start_turn(&mut self, text: &str) -> Result<String, StoreError> {
-        if self.state.open_turn.is_some() {
+        if self.state.turn_running() {
             self.end_turn(TurnState::Unverifiable, None)?;
         }
+        self.open_new_turn(text, false)
+    }
+
+    /// Opens a turn for a prompt handed to the CLI while a turn runs (decision 0101, D7): its turn item and its
+    /// `user_message` show at once, and the turn ends with the running one. Without a running turn it is an ordinary
+    /// turn.
+    pub(crate) fn hold_turn(&mut self, text: &str) -> Result<String, StoreError> {
+        let held = self.state.open_turn.is_some();
+        self.open_new_turn(text, held)
+    }
+
+    /// Adds a running turn item and the `user_message` that opened it; `held` keeps it beside the open turn.
+    fn open_new_turn(&mut self, text: &str, held: bool) -> Result<String, StoreError> {
         let turn_id = uuid::Uuid::now_v7().to_string();
         let user_id = uuid::Uuid::now_v7().to_string();
         let turn = ChatItemBody::Turn(Turn {
@@ -183,7 +290,11 @@ impl<'a> JournalWriter<'a> {
                 text: text.to_owned(),
             },
         )?;
-        self.state.open_turn = Some(turn_id.clone());
+        if held {
+            self.state.held_turns.push(turn_id.clone());
+        } else {
+            self.state.open_turn = Some(turn_id.clone());
+        }
         Ok(turn_id)
     }
 
@@ -193,9 +304,21 @@ impl<'a> JournalWriter<'a> {
         state: TurnState,
         outcome: Option<Outcome>,
     ) -> Result<(), StoreError> {
+        // A request still pending when its turn ends is cancelled, never answered (decision 0101, D6).
+        self.cancel_pending_approvals()?;
+        let held = std::mem::take(&mut self.state.held_turns);
+        if !held.is_empty() || self.state.open_turn.is_some() {
+            self.state.last_end = Some((state, outcome));
+        }
+        for held in held {
+            self.close_turn(&held, state, outcome)?;
+        }
         let Some(turn_id) = self.state.open_turn.take() else {
             return Ok(());
         };
+        if state != TurnState::Completed {
+            self.interrupt_open_calls(&turn_id)?;
+        }
         for item_type in ["assistant_message", "thinking"] {
             for row in self
                 .store
@@ -222,8 +345,19 @@ impl<'a> JournalWriter<'a> {
                 self.replace(&item.id, &completed)?;
             }
         }
-        if let Some(row) = self.store.chat_item(self.session, &turn_id)?
+        self.close_turn(&turn_id, state, outcome)
+    }
+
+    /// The turn item `turn_id` takes `state` and `outcome`, when it is still running.
+    fn close_turn(
+        &mut self,
+        turn_id: &str,
+        state: TurnState,
+        outcome: Option<Outcome>,
+    ) -> Result<(), StoreError> {
+        if let Some(row) = self.store.chat_item(self.session, turn_id)?
             && let ChatItemBody::Turn(turn) = item_of(row).body
+            && turn.state == TurnState::Running
         {
             let ended = ChatItemBody::Turn(Turn {
                 state,
@@ -231,9 +365,91 @@ impl<'a> JournalWriter<'a> {
                 completed_at_ms: Some(now_ms()),
                 ..turn
             });
-            self.replace(&turn_id, &ended)?;
+            self.replace(turn_id, &ended)?;
         }
         Ok(())
+    }
+
+    /// Every pending approval becomes `cancelled`.
+    fn cancel_pending_approvals(&mut self) -> Result<(), StoreError> {
+        let pending: Vec<String> = self.state.pending_approvals.iter().cloned().collect();
+        for id in pending {
+            match self.store.chat_item(self.session, &id)?.map(item_of) {
+                Some(ChatItem {
+                    body: ChatItemBody::Approval(approval),
+                    ..
+                }) if approval.state == ApprovalState::Pending => {
+                    let cancelled = Approval {
+                        state: ApprovalState::Cancelled,
+                        settled_at_ms: Some(now_ms()),
+                        ..approval
+                    };
+                    self.replace(&id, &ChatItemBody::Approval(cancelled))?;
+                }
+                _ => {
+                    self.state.pending_approvals.remove(&id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The tool calls and sub-agents of `turn` still running end `interrupted` (decision 0101, D8).
+    fn interrupt_open_calls(&mut self, turn: &str) -> Result<(), StoreError> {
+        for item_type in ["tool_use", "subagent"] {
+            for row in self.store.chat_turn_items(self.session, turn, item_type)? {
+                let item = item_of(row);
+                let interrupted = match item.body {
+                    ChatItemBody::ToolUse(mut tool)
+                        if matches!(tool.status, ToolStatus::Started | ToolStatus::Updated) =>
+                    {
+                        tool.status = ToolStatus::Interrupted;
+                        ChatItemBody::ToolUse(tool)
+                    }
+                    ChatItemBody::Subagent {
+                        tool_use_id,
+                        description,
+                        agent_type,
+                        status: SubagentStatus::Running,
+                    } => ChatItemBody::Subagent {
+                        tool_use_id,
+                        description,
+                        agent_type,
+                        status: SubagentStatus::Interrupted,
+                    },
+                    _ => continue,
+                };
+                self.replace(&item.id, &interrupted)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Settles the pending approval `id` with the person's answer: `allowed` with `scope`, or `denied`. Returns the item
+    /// after the answer, or `None` when it is not a pending approval: the first answer wins (decision 0101, D6).
+    pub(crate) fn settle_approval(
+        &mut self,
+        id: &str,
+        state: ApprovalState,
+        scope: Option<ApprovalScope>,
+    ) -> Result<Option<ChatItem>, StoreError> {
+        let Some(item) = self.store.chat_item(self.session, id)?.map(item_of) else {
+            return Ok(None);
+        };
+        let ChatItemBody::Approval(approval) = item.body else {
+            return Ok(None);
+        };
+        if approval.state != ApprovalState::Pending {
+            return Ok(None);
+        }
+        let settled = Approval {
+            state,
+            scope,
+            settled_at_ms: Some(now_ms()),
+            ..approval
+        };
+        self.replace(id, &ChatItemBody::Approval(settled))?;
+        Ok(self.store.chat_item(self.session, id)?.map(item_of))
     }
 
     /// Applies one adapter op.
@@ -278,6 +494,8 @@ impl<'a> JournalWriter<'a> {
                 Ok(())
             }
             JournalOp::EndTurn { state, outcome } => self.end_turn(state, outcome),
+            // Bytes for the run, which the service writes; nothing for the journal.
+            JournalOp::Send { .. } => Ok(()),
         }
     }
 }
@@ -423,6 +641,134 @@ mod tests {
                 state: MessageState::Running,
             },
         }
+    }
+
+    fn pending(request_id: &str) -> JournalOp {
+        JournalOp::Add {
+            key: Some(crate::chat::approval_key(request_id)),
+            parent: None,
+            body: ChatItemBody::Approval(Approval {
+                request_id: request_id.to_owned(),
+                tool: "Bash".to_owned(),
+                input_summary: "ls".to_owned(),
+                truncated: false,
+                tool_use_id: Some("toolu_1".to_owned()),
+                can_always: false,
+                suggestions: Vec::new(),
+                state: ApprovalState::Pending,
+                scope: None,
+                settled_at_ms: None,
+            }),
+        }
+    }
+
+    fn tool(id: &str) -> JournalOp {
+        JournalOp::Add {
+            key: Some(format!("tool:{id}")),
+            parent: None,
+            body: ChatItemBody::ToolUse(massorca_protocol::methods::chat::ToolUse {
+                tool_use_id: id.to_owned(),
+                name: "Bash".to_owned(),
+                input_summary: "ls".to_owned(),
+                status: ToolStatus::Started,
+                output_summary: None,
+                truncated: false,
+            }),
+        }
+    }
+
+    fn body_of(store: &Store, session: &str, state: &JournalState, key: &str) -> ChatItemBody {
+        let id = state.item_id(key).expect("a key the run used");
+        item_of(store.chat_item(session, id).unwrap().unwrap()).body
+    }
+
+    #[test]
+    fn the_activity_follows_the_turn_and_its_pending_requests_and_the_first_answer_wins() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        assert_eq!(state.activity(), ChatActivity::Idle);
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer.start_turn("go").unwrap();
+        assert_eq!(writer.activity_change(), Some(ChatActivity::Working));
+        writer.apply(pending("r-1")).unwrap();
+        assert!(writer.busy());
+        assert_eq!(writer.activity_change(), Some(ChatActivity::Waiting));
+        assert_eq!(writer.activity_change(), None, "only a change is reported");
+        let id = writer.item_id(&crate::chat::approval_key("r-1")).unwrap();
+        let allowed = writer
+            .settle_approval(&id, ApprovalState::Allowed, Some(ApprovalScope::Once))
+            .unwrap()
+            .expect("the first answer settles it");
+        assert!(matches!(&allowed.body, ChatItemBody::Approval(approval)
+            if approval.state == ApprovalState::Allowed && approval.settled_at_ms.is_some()));
+        assert_eq!(
+            writer
+                .settle_approval(&id, ApprovalState::Denied, None)
+                .unwrap(),
+            None,
+            "a second answer loses"
+        );
+        assert_eq!(writer.activity_change(), Some(ChatActivity::Working));
+        writer
+            .apply(JournalOp::EndTurn {
+                state: TurnState::Completed,
+                outcome: Some(Outcome::Success),
+            })
+            .unwrap();
+        assert_eq!(
+            writer.activity_change(),
+            Some(ChatActivity::Done(Some(Outcome::Success)))
+        );
+        assert!(!writer.busy());
+    }
+
+    #[test]
+    fn an_interrupted_turn_interrupts_its_calls_and_cancels_its_requests_even_after_a_restart() {
+        let (store, session) = chat_session();
+        let mut state = JournalState::open(&store, &session).unwrap();
+        let mut writer = JournalWriter::new(&store, &session, &mut state);
+        writer.start_turn("go").unwrap();
+        writer.apply(tool("toolu_1")).unwrap();
+        writer.apply(pending("r-1")).unwrap();
+        writer.finish();
+        let tool_id = state.item_id("tool:toolu_1").unwrap().to_owned();
+        let approval_id = state
+            .item_id(&crate::chat::approval_key("r-1"))
+            .unwrap()
+            .to_owned();
+
+        // A service that restarts reads the open turn and the pending request back from the store.
+        let mut reopened = JournalState::open(&store, &session).unwrap();
+        assert!(reopened.busy());
+        assert_eq!(reopened.activity(), ChatActivity::Waiting);
+        let mut writer = JournalWriter::new(&store, &session, &mut reopened);
+        writer.end_turn(TurnState::Interrupted, None).unwrap();
+        assert_eq!(writer.activity_change(), Some(ChatActivity::Idle));
+        writer.finish();
+        let body = |id: &str| item_of(store.chat_item(&session, id).unwrap().unwrap()).body;
+        assert!(
+            matches!(body(&tool_id), ChatItemBody::ToolUse(tool) if tool.status == ToolStatus::Interrupted)
+        );
+        assert!(
+            matches!(body(&approval_id), ChatItemBody::Approval(approval)
+            if approval.state == ApprovalState::Cancelled)
+        );
+        assert!(!reopened.busy());
+        // A completed turn leaves its calls as they are.
+        let mut writer = JournalWriter::new(&store, &session, &mut reopened);
+        writer.start_turn("again").unwrap();
+        writer.apply(tool("toolu_2")).unwrap();
+        writer
+            .apply(JournalOp::EndTurn {
+                state: TurnState::Completed,
+                outcome: None,
+            })
+            .unwrap();
+        writer.finish();
+        assert!(
+            matches!(body_of(&store, &session, &reopened, "tool:toolu_2"),
+            ChatItemBody::ToolUse(tool) if tool.status == ToolStatus::Started)
+        );
     }
 
     #[test]

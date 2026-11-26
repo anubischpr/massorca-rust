@@ -172,6 +172,7 @@ pub struct Switch {
     id: ElementId,
     checked: bool,
     label: Option<SharedString>,
+    accessible_name: Option<SharedString>,
     helper: Option<SharedString>,
     error: Option<SharedString>,
     disabled: bool,
@@ -198,6 +199,7 @@ impl Switch {
             id: id.into(),
             checked,
             label: None,
+            accessible_name: None,
             helper: None,
             error: None,
             disabled: false,
@@ -206,6 +208,12 @@ impl Switch {
             focus: None,
             on_change: None,
         }
+    }
+
+    /// The name a screen reader gives the track when no visible label names it (a row whose name is elsewhere).
+    pub fn accessible_name(mut self, name: impl Into<SharedString>) -> Self {
+        self.accessible_name = Some(name.into());
+        self
     }
 
     /// The setting's name, on the left of the track.
@@ -359,8 +367,8 @@ impl Switch {
                 .hover(move |s| s.bg(hover.track).border_color(hover.border))
                 .active(move |s| s.bg(pressed.track).border_color(pressed.border));
         }
-        if let Some(label) = &self.label {
-            track = track.aria_label(label.clone());
+        if let Some(name) = self.label.as_ref().or(self.accessible_name.as_ref()) {
+            track = track.aria_label(name.clone());
         }
         if let Some(on_change) = self.on_change.clone().filter(|_| interactive) {
             let next = !checked;
@@ -594,6 +602,21 @@ mod a11y_tests {
         .expect("reported");
         assert_eq!(node.role(), Role::Switch);
         assert_eq!(node.label(), Some("Sync settings"));
+        assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[gpui::test]
+    fn a_switch_without_a_label_is_named_by_its_accessible_name(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Switch::new("row-switch", true)
+                    .accessible_name("Enable Quick notes")
+                    .track(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Switch);
+        assert_eq!(node.label(), Some("Enable Quick notes"));
         assert_eq!(node.toggled(), Some(Toggled::True));
     }
 

@@ -414,6 +414,26 @@ impl Store {
         )
     }
 
+    /// The ids of a session's approval items still pending, oldest first (decision 0101, D6): a service that restarts
+    /// finds them, so they are cancelled with the run they belonged to rather than left waiting.
+    pub fn pending_chat_approvals(&self, session: &str) -> Result<Vec<String>, StoreError> {
+        self.query_all(
+            "SELECT id FROM agent_chat_items WHERE session_id = ?1 AND type = 'approval' AND body LIKE '%\"state\":\"pending\"%' ORDER BY position",
+            params![session],
+            |row| row.get(0),
+        )
+    }
+
+    /// The ids of a session's turn items still running, oldest first: the open turn and the turns of prompts the CLI
+    /// holds (decision 0101, D7).
+    pub fn running_chat_turns(&self, session: &str) -> Result<Vec<String>, StoreError> {
+        self.query_all(
+            "SELECT id FROM agent_chat_items WHERE session_id = ?1 AND type = 'turn' AND body LIKE '%\"state\":\"running\"%' ORDER BY position",
+            params![session],
+            |row| row.get(0),
+        )
+    }
+
     /// The newest item of `item_type` in a session's journal.
     pub fn latest_chat_item_of_type(
         &self,

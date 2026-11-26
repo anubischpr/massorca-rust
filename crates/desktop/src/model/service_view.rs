@@ -15,7 +15,7 @@ use super::teams::{TeamsState, live_teams};
 use super::workspace_flow::NO_PROJECT_LABEL;
 use crate::model::marketplace::DEFAULT_AGENT_KEY;
 use crate::service::{ConnectionState, StoreState};
-use massorca_protocol::methods::projects::{Project, ProjectIcon};
+use massorca_protocol::methods::projects::{Project, ProjectIcon, ProjectKind};
 use massorca_protocol::methods::workspaces::Workspace;
 
 /// The one host a local service stands for in the tree (A10).
@@ -52,6 +52,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                 name: project.name.clone(),
                 emoji: project.icon.as_ref().and_then(emoji_of),
                 owner: remote_owner_of(project),
+                plain_folder: project.kind == ProjectKind::Folder,
                 hosts: vec![HostGroup {
                     name: LOCAL_HOST.to_owned(),
                     reach,
@@ -83,6 +84,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             name: NO_PROJECT_LABEL.to_owned(),
             emoji: None,
             owner: None,
+            plain_folder: false,
             hosts: vec![HostGroup {
                 name: LOCAL_HOST.to_owned(),
                 reach,
@@ -434,13 +436,19 @@ mod tests {
     fn the_first_session_takes_the_placeholders_place_in_the_tree() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s0", "w1", 1)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s0", "w1", 1))),
+            now,
+        );
         let placeholder = tree_rows(&state, now)
             .iter()
             .position(|row| matches!(row, TreeRow::Placeholder { .. }))
             .expect("the placeholder is listed");
 
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         let rows = tree_rows(&state, now);
         assert!(
             !rows
@@ -457,7 +465,10 @@ mod tests {
     fn a_workspace_with_no_session_left_has_no_row_and_no_placeholder_comes_back() {
         let now = Instant::now();
         let mut state = created_with_kind(now, "codex");
-        state.apply(StoreUpdate::AgentChanged(agent("s4", "w4", 5)), now);
+        state.apply(
+            StoreUpdate::AgentChanged(Box::new(agent("s4", "w4", 5))),
+            now,
+        );
         state.apply(StoreUpdate::AgentGone("s4".into()), now);
         assert!(placeholders_of(&state, now).is_empty());
         assert!(!state.awaiting_session.contains_key("w4"));

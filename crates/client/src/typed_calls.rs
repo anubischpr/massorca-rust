@@ -7,13 +7,15 @@ use massorca_protocol::methods::agents::{
     AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
     AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentHookParams, AgentKinds,
-    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
-    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentRenameParams, AgentResumeParams,
-    AgentRetainParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
+    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, GenerateTitleParams,
+    GenerateTitleResult, ImportCandidates, ImportCandidatesParams, PromptReceipt, QueuedPrompt,
 };
+use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -21,7 +23,7 @@ use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef,
 };
-use massorca_protocol::methods::service::{self, ServiceInfo};
+use massorca_protocol::methods::service::{self, ServiceInfo, ToolList, ToolsParams};
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalInputParams,
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
@@ -55,6 +57,17 @@ impl Client {
     /// `service.info`: the service's identity, protocol version, capabilities and process.
     pub async fn service_info(&self) -> Result<ServiceInfo, ClientError> {
         self.call(service::INFO, &()).await
+    }
+
+    /// `service.tools`: the developer tools on the service's host. `refresh` detects them again instead of answering
+    /// from the service's last detection.
+    pub async fn service_tools(&self, refresh: bool) -> Result<ToolList, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::SERVICE_TOOLS),
+            capabilities::SERVICE_TOOLS,
+            "service.tools",
+        )?;
+        self.call(service::TOOLS, &ToolsParams { refresh }).await
     }
 
     /// `service.shutdown`: asks the service to stop. The request is answered before the service winds down.
@@ -264,9 +277,25 @@ impl Client {
         self.call(agents::KINDS, &()).await
     }
 
+    /// `agent.models`: the models a kind's picker offers for an account, the declared choices first and then what the
+    /// kind's vendor CLI lists (decision 0166). A service that does not offer `agent-models/1` is refused before anything
+    /// is sent.
+    pub async fn agent_models(
+        &self,
+        params: &AgentModelsParams,
+    ) -> Result<AgentModels, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_MODELS),
+            capabilities::AGENT_MODELS,
+            "the models of an agent kind",
+        )?;
+        self.call(agents::MODELS, params).await
+    }
+
     /// `agent.start`: starts an agent session in a workspace, or with no workspace in the conversations folder (decision
-    /// 0094). A start with no workspace needs capability `agent-no-project/1`, and one with a `model` or an `effort` needs
-    /// `agent-options/1`; a service that offers neither is refused before anything is sent.
+    /// 0094). A start with no workspace needs capability `agent-no-project/1`, one with a `model` or an `effort` needs
+    /// `agent-options/1`, and one with `fast` needs `agent-fast/1` (decision 0165); a service that offers none of them is
+    /// refused before anything is sent.
     pub async fn agent_start(
         &self,
         params: &AgentStartParams,
@@ -285,7 +314,52 @@ impl Client {
                 "a model or an effort",
             )?;
         }
+        if params.fast.is_some() {
+            require_offered(
+                self.has_capability(capabilities::AGENT_FAST),
+                capabilities::AGENT_FAST,
+                "fast mode",
+            )?;
+        }
         self.call(agents::START, params).await
+    }
+
+    /// `agent.chat.start`: starts an agent session whose run is a structured chat (decision 0101). Needs capability
+    /// `agent-chat/1`; a service that does not offer it is refused before anything is sent. A kind that cannot run as a
+    /// chat is refused with `agent.chat_unsupported`, and the caller may start it with [`Self::agent_start`] instead.
+    pub async fn agent_chat_start(
+        &self,
+        params: &AgentStartParams,
+    ) -> Result<AgentSession, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::AGENT_CHAT),
+            capabilities::AGENT_CHAT,
+            "a chat session",
+        )?;
+        let params = chat::AgentChatStartParams {
+            start: params.clone(),
+        };
+        self.call(chat::START, &params).await
+    }
+
+    /// `agent.chat.approval.answer`: answers a chat session's permission request; the result is the approval item after
+    /// the answer (decision 0101, D6).
+    pub async fn agent_chat_answer(
+        &self,
+        params: &chat::ChatApprovalAnswerParams,
+    ) -> Result<chat::ChatItem, ClientError> {
+        self.call(chat::APPROVAL_ANSWER, params).await
+    }
+
+    /// `agent.chat.interrupt`: ends a chat session's running turn and keeps the session (decision 0101, D8).
+    pub async fn agent_chat_interrupt(
+        &self,
+        session: &str,
+    ) -> Result<chat::ChatInterrupted, ClientError> {
+        let params = agents::AgentSessionRef {
+            session: session.to_owned(),
+        };
+        self.call(chat::INTERRUPT, &params).await
     }
 
     /// `agent.list`: sessions newest first, or only those of one workspace (a selector).
@@ -660,6 +734,15 @@ impl Client {
     ) -> Result<AccountSummary, ClientError> {
         self.call(agents::ACCOUNTS_CHECK, params).await
     }
+
+    /// `agent.generate_title`: names a chat from its first prompt and reply, by one run of the kind's one-shot form
+    /// (capability `agent-title/1`, decision 0167).
+    pub async fn agent_generate_title(
+        &self,
+        params: &GenerateTitleParams,
+    ) -> Result<GenerateTitleResult, ClientError> {
+        self.call(agents::GENERATE_TITLE, params).await
+    }
 }
 
 fn kind_ref(kind: &str) -> CredentialsKindRef {
@@ -700,6 +783,23 @@ mod require_offered_tests {
             ClientError::CapabilityMissing { what, capability } => {
                 assert_eq!(what, "a session with no project");
                 assert_eq!(capability, "agent-no-project/1");
+            }
+            other => panic!("unexpected refusal: {other}"),
+        }
+    }
+
+    #[test]
+    fn the_models_of_an_agent_kind_need_agent_models() {
+        let refused = require_offered(
+            false,
+            capabilities::AGENT_MODELS,
+            "the models of an agent kind",
+        )
+        .expect_err("refused without the capability");
+        match refused {
+            ClientError::CapabilityMissing { what, capability } => {
+                assert_eq!(what, "the models of an agent kind");
+                assert_eq!(capability, "agent-models/1");
             }
             other => panic!("unexpected refusal: {other}"),
         }

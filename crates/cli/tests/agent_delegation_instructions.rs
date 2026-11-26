@@ -9,9 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use harness::{
-    ChildGuard, Sandbox, eventually, git, git_repo, massorca_in, single_document, with_json,
-};
+use harness::{ChildGuard, Sandbox, eventually, git, git_repo, massorca_in};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -182,15 +180,6 @@ fn wait_for_line(sandbox: &Sandbox, terminal: &str, line: &str) -> Vec<String> {
     })
 }
 
-fn error_code(sandbox: &Sandbox, args: &[&str]) -> String {
-    let outcome = sandbox.run("default", &with_json(args)).failure();
-    let document = single_document(&outcome);
-    document["error"]["code"]
-        .as_str()
-        .expect("an error code")
-        .to_owned()
-}
-
 #[test]
 fn a_run_finds_massorca_first_on_its_path_and_gets_the_instructions_only_while_it_may_delegate() {
     let sandbox = Sandbox::new();
@@ -238,7 +227,7 @@ fn a_run_finds_massorca_first_on_its_path_and_gets_the_instructions_only_while_i
 }
 
 #[test]
-fn a_writing_child_of_a_folder_shares_it_while_any_other_writer_is_still_refused() {
+fn a_writing_child_of_a_folder_shares_it_and_so_does_any_other_writer() {
     let sandbox = Sandbox::new();
     declare_fake(&sandbox);
     let _service = spawn_service(&sandbox, &[]);
@@ -277,11 +266,18 @@ fn a_writing_child_of_a_folder_shares_it_while_any_other_writer_is_still_refused
     );
     assert!(parent.get("notes").is_none(), "{parent}");
 
-    // A writing start outside the parent's tree is refused as before.
-    assert_eq!(
-        error_code(&sandbox, &["agent", "start", "fake", "--workspace", "main"]),
-        "agent.workspace_busy"
+    // A folder takes several writers (decision 0169): a writing start outside the tree is not refused, and it lists
+    // both the parent and its child.
+    let other = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
     );
+    let shared = other["shared_folder_with"]
+        .as_array()
+        .expect("the folder's other writers");
+    assert_eq!(shared.len(), 2, "{other}");
+    assert!(shared.contains(&json!(id_of(&parent))), "{other}");
+    assert!(shared.contains(&json!(id_of(&child))), "{other}");
 }
 
 #[test]

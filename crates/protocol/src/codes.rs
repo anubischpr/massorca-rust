@@ -150,6 +150,10 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 /// The service has no network listener, so an offer would name no address.
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+/// An address given for a pairing offer is not one a device could dial (a wildcard, port 0, a path, credentials).
+pub const PAIRING_INVALID_ADDRESS: &str = "pairing.invalid_address";
+/// `pairing.cancel` named an offer that is not pending: unknown, used or expired.
+pub const PAIRING_OFFER_NOT_FOUND: &str = "pairing.offer_not_found";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
@@ -220,6 +224,12 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
+/// The kind declares no one-shot form, so it cannot name a chat (decision 0167).
+pub const AGENT_ONESHOT_UNSUPPORTED: &str = "agent.oneshot_unsupported";
+/// A one-shot run that names a chat did not finish within its time limit (decision 0167).
+pub const AGENT_ONESHOT_TIMEOUT: &str = "agent.oneshot_timeout";
+/// A one-shot run that names a chat exited with a failure, or printed no usable title (decision 0167).
+pub const AGENT_ONESHOT_FAILED: &str = "agent.oneshot_failed";
 /// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
 pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 /// The kind declares no permission mode of that id, or none at all; the data names the kind, the mode and the known ids.
@@ -246,6 +256,9 @@ pub const AGENT_NOT_CHAT: &str = "agent.not_chat";
 /// `agent.chat.approval.answer` names a request the session never had, or one that is no longer pending (decision 0101).
 /// The error's `data` is the approval item when it exists.
 pub const AGENT_APPROVAL_SETTLED: &str = "agent.approval_settled";
+/// `agent.chat.approval.answer` names a `seq` the approval item no longer has: the CLI sent the request again, with new
+/// input, since the person saw it (decision 0101). The error's `data` is the item as it is now.
+pub const AGENT_APPROVAL_CHANGED: &str = "agent.approval_changed";
 /// `agent.chat.history` names a cursor from another journal epoch; the client resubscribes (decision 0101).
 pub const AGENT_CURSOR_STALE: &str = "agent.cursor_stale";
 

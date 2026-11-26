@@ -32,6 +32,15 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "service.tools",
+            "Show the git, forge CLI and shell tools on the service's host",
+            "service.tools",
+            json!({
+                "type": "object",
+                "properties": { "refresh": { "type": "boolean" } }
+            }),
+        ),
+        command(
             "agent-context",
             "List every command with its method, permission and parameters",
             "commands.describe",
@@ -249,7 +258,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "type": "object",
                 "properties": {
                     "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
-                    "admin": { "type": "boolean" }
+                    "admin": { "type": "boolean" },
+                    "addresses": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
+                }
+            }),
+        ),
+        command(
+            "pair.cancel",
+            "Retire a pending pairing offer before it expires",
+            "pairing.cancel",
+            json!({
+                "type": "object",
+                "properties": {
+                    "offer_id": { "type": "string" },
+                    "all": { "type": "boolean" }
                 }
             }),
         ),
@@ -442,6 +464,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "List agent kinds: package state (installed), whether a program is detected, and problems",
             "agent.kinds",
             no_args(),
+        ),
+        command(
+            "agent.models",
+            "List the models a kind's picker offers for an account: declared choices, then the vendor CLI's listing",
+            "agent.models",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "refresh": { "type": "boolean" }
+                }
+            }),
         ),
         command(
             "agent.start",
@@ -700,6 +736,48 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.chat.start",
+            "Start an agent session whose run is a structured chat",
+            "agent.chat.start",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "workspace": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "title": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "permission_mode": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.approval.answer",
+            "Answer a chat session's permission request",
+            "agent.chat.approval.answer",
+            json!({
+                "type": "object",
+                "required": ["session", "request_id", "decision"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "request_id": { "type": "string" },
+                    "decision": { "type": "string", "enum": ["allow", "deny"] },
+                    "scope": { "type": "string", "enum": ["once", "always"] },
+                    "message": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.chat.interrupt",
+            "Interrupt a chat session's running turn and keep the session",
+            "agent.chat.interrupt",
+            selector("session"),
+        ),
+        command(
             "agent.chat.history",
             "Page back through a chat session's transcript",
             "agent.chat.history",
@@ -879,6 +957,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "required": ["kind"],
                 "properties": {
                     "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.title",
+            "Name a chat from its first prompt and reply",
+            "agent.generate_title",
+            json!({
+                "type": "object",
+                "required": ["kind", "prompt"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "reply": { "type": "string" },
+                    "model": { "type": "string" },
                     "account": { "type": "string" }
                 }
             }),

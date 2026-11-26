@@ -3,8 +3,11 @@
 //! service is down.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use massorca_client::{Client, ClientError, HostRecord, Hosts, default_device_name};
+use massorca_client::{
+    Client, ClientError, DeviceRevocation, HostRecord, Hosts, default_device_name,
+};
 use massorca_core_remote::bootstrap::{
     BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_LISTEN, RemoteMachine,
     install_over_ssh, probe_over_ssh,
@@ -14,8 +17,10 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::pairing::Offer;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
+use super::host_sessions::{Followed, connected, follow};
 use super::refusal::{Refusal, sentence};
 use super::update::{HostLink, StoreUpdate};
 
@@ -58,14 +63,31 @@ pub struct SshFailed {
     pub log: Vec<String>,
 }
 
+/// What removing a host did (D-HO-03): the device on the host, and where its old files wait when they could not be
+/// deleted at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRemoval {
+    pub host: String,
+    pub device: DeviceRevocation,
+    pub leftover: Option<PathBuf>,
+}
+
+/// What the remove confirm counts on a host before it is forgotten: its projects and its agent sessions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostLoss {
+    pub projects: usize,
+    pub sessions: usize,
+}
+
 /// Runs a host call on its own task. Host calls need no connection to this computer's service.
 pub(super) fn spawn(
     profile: Profile,
     command: Command,
     updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: &Followed,
 ) {
     match command {
-        Command::RefreshHosts => refresh(&profile, &updates),
+        Command::RefreshHosts => refresh(&profile, &updates, followed),
         Command::AddSshHost { host, reply } => {
             tokio::spawn(async move {
                 let result = add_ssh(&profile, host, &updates).await;
@@ -76,6 +98,17 @@ pub(super) fn spawn(
             tokio::spawn(async move {
                 let result = accept_offer(&profile, &offer, name, &updates).await;
                 let _ = reply.send(result);
+            });
+        }
+        Command::RemoveHost { name, reply } => {
+            tokio::spawn(async move {
+                let result = remove(&profile, &name, &updates).await;
+                let _ = reply.send(result);
+            });
+        }
+        Command::CountHostLoss { name, reply } => {
+            tokio::spawn(async move {
+                let _ = reply.send(count_loss(&profile, &name).await);
             });
         }
         Command::ProbeSshHost {
@@ -141,35 +174,96 @@ impl ServiceHandle {
         self.ask(|reply| Command::AcceptOffer { offer, name, reply })
             .await
     }
+
+    /// Forgets a host, as `massorca host remove` does: this device is revoked there when the host answers, then the
+    /// record and device key are deleted here. Nothing else on the host changes.
+    pub async fn remove_host(&self, name: String) -> Result<HostRemoval, Refusal> {
+        self.ask(|reply| Command::RemoveHost { name, reply }).await
+    }
+
+    /// Counts the projects and sessions on a host, for the remove confirm. A host that does not answer is refused.
+    pub async fn count_host_loss(&self, name: String) -> Result<HostLoss, Refusal> {
+        self.ask(|reply| Command::CountHostLoss { name, reply })
+            .await
+    }
 }
 
-/// Lists the hosts, then checks each one at once; each check reports when it finishes.
-fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>) {
+/// The device is revoked first and a failed revoke never stops the removal, as in `host remove`.
+async fn remove(
+    profile: &Profile,
+    name: &str,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) -> Result<HostRemoval, Refusal> {
+    let hosts = Hosts::of(profile);
+    hosts.get(name).map_err(|error| Refusal::from(&error))?;
+    let device = hosts.revoke_this_device(name, &peer()).await;
+    let removed = hosts.remove(name).map_err(|error| Refusal::from(&error))?;
+    if let Ok(records) = hosts.list() {
+        let _ = updates.send(StoreUpdate::HostsResync(records));
+    }
+    Ok(HostRemoval {
+        host: name.to_owned(),
+        device,
+        leftover: removed.leftover,
+    })
+}
+
+async fn count_loss(profile: &Profile, name: &str) -> Result<HostLoss, Refusal> {
+    let hosts = Hosts::of(profile);
+    let client = Client::connect_host(&hosts, name, &peer())
+        .await
+        .map_err(|error| Refusal::from(&error))?;
+    let projects = client
+        .project_list()
+        .await
+        .map_err(|error| Refusal::from(&error))?;
+    let sessions = client
+        .agent_list(None)
+        .await
+        .map_err(|error| Refusal::from(&error))?;
+    Ok(HostLoss {
+        projects: projects.projects.len(),
+        sessions: sessions.sessions.len(),
+    })
+}
+
+/// Lists the hosts, then checks each one that no task follows at once; each check reports when it finishes. A host
+/// a task follows reports through that task's own connection, so it is not checked again here.
+fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>, followed: &Followed) {
     let hosts = Hosts::of(profile);
     let Ok(records) = hosts.list() else {
         return;
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
     for record in records {
-        tokio::spawn(probe(hosts.clone(), record.name, updates.clone()));
+        if let Some(claim) = followed.claim(&record.name) {
+            tokio::spawn(follow(profile.clone(), record.name, claim, updates.clone()));
+        }
     }
 }
 
-async fn probe(hosts: Hosts, name: String, updates: mpsc::UnboundedSender<StoreUpdate>) {
-    let link = match Client::connect_host(&hosts, &name, &peer()).await {
-        Ok(client) => connected(&client),
-        Err(error) => HostLink::from_error(&error),
-    };
-    let _ = updates.send(StoreUpdate::HostLinkChanged { name, link });
+/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs. This is the fallback for a host
+/// with no live event subscription: a host that a task follows is left to that task.
+pub(super) fn check_hosts_again(
+    profile: Profile,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+    followed: Followed,
+) {
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(HOST_CHECK_EVERY);
+        every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            if updates.is_closed() {
+                return;
+            }
+            refresh(&profile, &updates, &followed);
+        }
+    });
 }
 
-fn connected(client: &Client) -> HostLink {
-    let server = &client.welcome().server;
-    HostLink::Connected {
-        server: server.name.clone(),
-        version: server.version.clone(),
-    }
-}
+/// How often the paired hosts without a live event subscription are checked again (STAT-16, STAT-17).
+const HOST_CHECK_EVERY: Duration = Duration::from_secs(30);
 
 /// Tells the store the hosts as they are now, then what this call found about the host it changed.
 fn announce(

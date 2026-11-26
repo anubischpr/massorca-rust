@@ -1,6 +1,6 @@
 // Source control copy, the Changes segment (screen spec 10.3, read only in M5).
 
-export const SOURCE_CONTROL_TITLE = 'Source control';
+export const CHANGES_VIEW = 'Changes';
 export const LOADING_CHANGES = 'Loading changes';
 export const CHANGES_FAILED_TITLE = 'Could not read the changes';
 export const NO_GIT_TITLE = 'Git is not available in this folder';
