@@ -12,11 +12,24 @@ use massorca_ui::components::transcript::{
 
 use crate::model::chat_transcript::ChatTranscript;
 use crate::model::source_control_diff::parse_patch;
+use crate::model::transcript_secret_cards::SecretCard;
 
-/// The rows of a transcript in timeline order. The session's newest turn is added last when the page does not hold it
-/// and it still runs, so a long turn keeps its footer.
-pub(super) fn transcript_rows(transcript: &ChatTranscript) -> Vec<TranscriptRow> {
-    let mut rows: Vec<TranscriptRow> = transcript.items().iter().filter_map(item_row).collect();
+/// The rows of a transcript in timeline order, with the session's secret cards placed by their time: each comes before
+/// the first item made after it. The session's newest turn is added last when the page does not hold it and it still
+/// runs, so a long turn keeps its footer.
+pub(super) fn transcript_rows(
+    transcript: &ChatTranscript,
+    secrets: &[SecretCard],
+) -> Vec<TranscriptRow> {
+    let mut cards = secrets.iter().peekable();
+    let mut rows: Vec<TranscriptRow> = Vec::new();
+    for item in transcript.items() {
+        while let Some(card) = cards.next_if(|card| card.at_ms < item.at_ms) {
+            rows.push(card.row.clone());
+        }
+        rows.extend(item_row(item));
+    }
+    rows.extend(cards.map(|card| card.row.clone()));
     if let Some(turn) = transcript.latest_turn()
         && !transcript.items().iter().any(|item| item.id == turn.id)
     {
@@ -207,6 +220,8 @@ fn approval_title(tool: &str) -> String {
 mod tests {
     use super::*;
     use massorca_protocol::methods::chat::{ChatCursor, ChatEvent, ChatItem, ChatSnapshot};
+    use massorca_ui::components::secret_request_card::SecretState;
+    use massorca_ui::components::transcript::SecretRow;
 
     fn item(id: &str, position: u64, body: wire::ChatItemBody) -> ChatItem {
         ChatItem {
@@ -264,6 +279,84 @@ mod tests {
         rows.iter().map(|row| row.id().as_str()).collect()
     }
 
+    fn timed(mut item: ChatItem, at_ms: i64) -> ChatItem {
+        item.at_ms = at_ms;
+        item
+    }
+
+    fn secret_card(id: &str, at_ms: i64) -> SecretCard {
+        SecretCard {
+            at_ms,
+            row: TranscriptRow::Secret {
+                id: format!("secret-{id}").into(),
+                secret: SecretRow {
+                    request_id: id.into(),
+                    name: "OPENAI_API_KEY".into(),
+                    title: "Claude needs a secret".into(),
+                    reason: None,
+                    scope: "for project alpha".into(),
+                    state: SecretState::Pending,
+                    storable: true,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn a_secret_card_sits_before_the_first_item_made_after_it() {
+        let transcript = transcript(
+            vec![
+                timed(
+                    item(
+                        "ask",
+                        1,
+                        wire::ChatItemBody::UserMessage {
+                            text: "set it up".to_owned(),
+                        },
+                    ),
+                    100,
+                ),
+                timed(
+                    item(
+                        "answer",
+                        2,
+                        wire::ChatItemBody::AssistantMessage {
+                            text: "Waiting.".to_owned(),
+                            state: wire::MessageState::Completed,
+                        },
+                    ),
+                    300,
+                ),
+            ],
+            None,
+        );
+
+        let rows = transcript_rows(&transcript, &[secret_card("r1", 200)]);
+
+        assert_eq!(ids(&rows), ["ask", "secret-r1", "answer"]);
+    }
+
+    #[test]
+    fn a_card_made_after_every_item_follows_them_and_precedes_a_running_footer() {
+        let transcript = transcript(
+            vec![timed(
+                item(
+                    "ask",
+                    1,
+                    wire::ChatItemBody::UserMessage {
+                        text: "later".to_owned(),
+                    },
+                ),
+                100,
+            )],
+            Some(turn("t1", 2, wire::TurnState::Running)),
+        );
+
+        let rows = transcript_rows(&transcript, &[secret_card("r1", 500)]);
+
+        assert_eq!(ids(&rows), ["ask", "secret-r1", "t1"]);
+    }
+
     #[test]
     fn items_map_to_rows_in_timeline_order() {
         let transcript = transcript(
@@ -288,7 +381,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert_eq!(ids(&rows), ["ask", "answer"]);
         assert!(matches!(rows[0], TranscriptRow::UserMessage { .. }));
@@ -298,10 +391,10 @@ mod tests {
     #[test]
     fn a_completed_turn_has_no_footer_and_a_running_one_has_its_own_row() {
         let completed = transcript(vec![turn("t1", 1, wire::TurnState::Completed)], None);
-        assert!(transcript_rows(&completed).is_empty());
+        assert!(transcript_rows(&completed, &[]).is_empty());
 
         let running = transcript(vec![turn("t2", 1, wire::TurnState::Running)], None);
-        let rows = transcript_rows(&running);
+        let rows = transcript_rows(&running, &[]);
         assert!(matches!(
             rows.as_slice(),
             [TranscriptRow::Turn {
@@ -324,7 +417,7 @@ mod tests {
             Some(turn("t1", 2, wire::TurnState::Running)),
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert_eq!(ids(&rows), ["ask", "t1"]);
     }
@@ -346,7 +439,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[0],
@@ -365,7 +458,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[0],
@@ -400,7 +493,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         let TranscriptRow::Plan { plan, .. } = &rows[0] else {
             panic!("expected a plan row, found {rows:?}");
@@ -425,7 +518,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[0],
@@ -462,7 +555,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[..],
@@ -490,7 +583,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         let TranscriptRow::Plan { plan, .. } = &rows[0] else {
             panic!("expected a plan row, found {rows:?}");
@@ -512,7 +605,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[0],
@@ -524,7 +617,7 @@ mod tests {
     fn an_unknown_turn_state_keeps_a_footer_that_says_it_is_unverifiable() {
         let transcript = transcript(vec![turn("t3", 1, wire::TurnState::Unknown)], None);
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             rows.as_slice(),
@@ -549,7 +642,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         assert!(matches!(
             &rows[0],
@@ -579,7 +672,7 @@ mod tests {
             None,
         );
 
-        let rows = transcript_rows(&transcript);
+        let rows = transcript_rows(&transcript, &[]);
 
         let TranscriptRow::Approval { approval, .. } = &rows[0] else {
             panic!("an approval row");

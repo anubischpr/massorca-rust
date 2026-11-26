@@ -540,7 +540,7 @@ impl Shell {
             self.chat_transcripts
                 .get(&id)
                 .or_else(|| state.chat.get(&id))
-                .map(transcript_rows)
+                .map(|transcript| transcript_rows(transcript, &[]))
         };
         let transcript = match held {
             Some(rows) => Some(rows),

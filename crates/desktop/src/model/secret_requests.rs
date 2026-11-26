@@ -38,6 +38,7 @@ pub fn request_rows(secrets: &SecretsState, projects: &[Project]) -> Vec<Request
     let storable = scope_choices(projects);
     requests
         .iter()
+        .filter(|request| request.state == "pending")
         .map(|request| row(request, entries, projects, &storable))
         .collect()
 }
@@ -164,6 +165,19 @@ mod tests {
         let rows = request_rows(&secrets, &[project("p1", "oppm")]);
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].can_store);
+    }
+
+    #[test]
+    fn a_resolved_request_is_not_listed_as_pending() {
+        let declined = SecretRequest {
+            state: "declined".to_owned(),
+            ..request("r5", "project:p1", "KEY", None)
+        };
+        let secrets = SecretsState {
+            requests: Some(Ok(vec![declined])),
+            ..SecretsState::default()
+        };
+        assert!(request_rows(&secrets, &[project("p1", "oppm")]).is_empty());
     }
 
     #[test]

@@ -56,5 +56,6 @@ pub mod status_items;
 pub mod teams;
 pub mod terminals;
 pub mod title_bar;
+pub mod transcript_secret_cards;
 pub mod work_panel;
 pub mod workspace_flow;

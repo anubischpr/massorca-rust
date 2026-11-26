@@ -1,5 +1,6 @@
-//! The secret vault as the bridge reads it (decision 0071). The status, the names of every scope and the pending
-//! requests are read together: after each connect, on each `secret.changed` or request event and after each write.
+//! The secret vault as the bridge reads it (decision 0071). The status, the names of every scope and the requests, the
+//! resolved ones included for the transcripts' cards, are read together: after each connect, on each `secret.changed`
+//! or request event and after each write.
 //! A read answers only with names and times, so the store never holds a value.
 
 use std::future::Future;
@@ -69,7 +70,7 @@ pub(super) fn refresh_in_background(
         let (status, list, requests) = tokio::join!(
             client.secret_status(),
             client.secret_list(&SecretListParams { scope: None }),
-            client.secret_requests(&SecretRequestsParams { all: false })
+            client.secret_requests(&SecretRequestsParams { all: true })
         );
         order.deliver(
             number,
