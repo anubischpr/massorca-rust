@@ -10,7 +10,7 @@ use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::remote_sessions::{RemoteSessions, remote_row, session_tree_rows};
-use super::shell::{ShellSnapshot, find_session};
+use super::shell::{SessionRow, ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, TreeRow, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
 use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
@@ -373,6 +373,28 @@ impl ShellModel {
     /// The workspace the Sidebar or the start page chose, if any.
     pub fn selected_workspace(&self) -> Option<&str> {
         self.selected_workspace.as_deref()
+    }
+
+    /// The workspace the Title bar's actions act on: the open session's, else the one the start page shows. A
+    /// remote session runs on its host, so none.
+    pub fn current_workspace(&self) -> Option<&str> {
+        if self.open_remote.is_some() {
+            return None;
+        }
+        match self.open_session_row() {
+            Some(session) => Some(session.workspace_id.as_str()),
+            None => self.selected_workspace(),
+        }
+    }
+
+    /// The open session of this window's service. A remote session is never this one, even while an earlier
+    /// session's id is still held.
+    pub fn open_session_row(&self) -> Option<&SessionRow> {
+        if self.open_remote.is_some() {
+            return None;
+        }
+        let id = self.snapshot.active_session.as_deref()?;
+        find_session(&self.snapshot.projects, id)
     }
 
     /// A click on a workspace opens its start page, leaving any full page first (D-WS-01).

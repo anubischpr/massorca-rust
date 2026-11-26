@@ -113,6 +113,7 @@ fn session_row(
         agent: agent_of_kind(&session.kind),
         state: status,
         workspace_id: session.workspace_id.clone(),
+        terminal_id: session.terminal_id.clone(),
         branch: workspace.and_then(|workspace| workspace.branch.clone()),
         path: workspace.map(|workspace| workspace.path.clone()),
         place: parent.map(|parent| place_of(session, parent, listed)),

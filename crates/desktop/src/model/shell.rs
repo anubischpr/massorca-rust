@@ -46,6 +46,8 @@ pub struct SessionRow {
     pub state: AgentState,
     /// The workspace the session runs in. It shows in the row's tooltip, never as a row (A97).
     pub workspace_id: String,
+    /// The current or last run's terminal, which the Work panel shows; None for a chat session.
+    pub terminal_id: Option<String>,
     /// The branch of the session's worktree; None for a plain folder.
     pub branch: Option<String>,
     /// The worktree's path, or the folder's path.

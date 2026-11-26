@@ -310,6 +310,7 @@ mod tests {
             agent: Agent::Claude,
             state: AgentState::Idle,
             workspace_id: "w".into(),
+            terminal_id: None,
             branch: Some("feat/x".into()),
             path: Some("D:/w".into()),
             place: None,

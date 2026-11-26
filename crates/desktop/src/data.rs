@@ -28,6 +28,7 @@ fn session(ws: Ws, id: &str, title: &str, agent: Agent, state: AgentState) -> Se
         agent,
         state,
         workspace_id: ws.0.into(),
+        terminal_id: None,
         branch: ws.1.map(Into::into),
         path: Some(ws.2.into()),
         place: None,

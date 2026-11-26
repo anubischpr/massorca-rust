@@ -388,6 +388,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// "New chat" (title bar): the start page of the current workspace, or of none, with its composer focused. Chat
+    /// becomes the start mode only when the picked agent offers it; otherwise the page keeps its mode.
+    pub(super) fn open_new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.model.current_workspace().map(str::to_owned);
+        self.model.close_session();
+        self.model.select_workspace(workspace.clone());
+        let id = workspace.unwrap_or_else(|| HOME_START.to_owned());
+        let composer = self.start_composer(&id, cx);
+        if self.chat_availability(&id, cx).is_available() {
+            self.set_start_mode(&id, StartMode::Chat, cx);
+        }
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
+        cx.notify();
+    }
+
     /// Opens or closes the branch pill's menu. It starts closed.
     pub(super) fn toggle_branch_menu(&mut self, cx: &mut Context<Self>) {
         self.home_details.branch_menu = !self.home_details.branch_menu;
