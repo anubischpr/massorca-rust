@@ -1,9 +1,11 @@
-//! Scheduled automation definitions for the shell (decision 0123): each `automation.*` call the shell makes, answered on
-//! its oneshot. The service keeps the definitions; the shell keeps the list it draws and reads it again after a change.
+//! Scheduled automations for the shell (decisions 0123 and 0125): each `automation.*` call the shell makes, answered on
+//! its oneshot. The service keeps the definitions and runs; the shell keeps what it draws and reads it again after a
+//! change.
 
 use massorca_client::Client;
 use massorca_protocol::methods::automations::{
-    Automation, AutomationCreateParams, AutomationList, AutomationRef, AutomationUpdateParams,
+    Automation, AutomationCreateParams, AutomationList, AutomationRef, AutomationRun,
+    AutomationRunList, AutomationRunsParams, AutomationUpdateParams,
 };
 use tokio::sync::oneshot;
 
@@ -34,6 +36,14 @@ pub(crate) enum AutomationCommand {
     Remove {
         automation: String,
         reply: oneshot::Sender<Result<Automation, Refusal>>,
+    },
+    RunNow {
+        automation: String,
+        reply: oneshot::Sender<Result<AutomationRun, Refusal>>,
+    },
+    Runs {
+        params: AutomationRunsParams,
+        reply: oneshot::Sender<Result<AutomationRunList, Refusal>>,
     },
 }
 
@@ -72,6 +82,16 @@ pub(super) fn spawn_call(client: &Client, command: AutomationCommand) {
                     .await;
                 let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
             }
+            AutomationCommand::RunNow { automation, reply } => {
+                let answer = client
+                    .automation_run_now(&AutomationRef { automation })
+                    .await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
+            }
+            AutomationCommand::Runs { params, reply } => {
+                let answer = client.automation_runs(&params).await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
+            }
         }
     });
 }
@@ -87,6 +107,12 @@ pub(super) fn refuse(command: AutomationCommand, refusal: Refusal) {
         | AutomationCommand::Enable { reply, .. }
         | AutomationCommand::Disable { reply, .. }
         | AutomationCommand::Remove { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        AutomationCommand::RunNow { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        AutomationCommand::Runs { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -132,6 +158,23 @@ impl ServiceHandle {
     /// `automation.rm`: removes an automation; the removed automation comes back.
     pub async fn automation_remove(&self, automation: String) -> Result<Automation, Refusal> {
         self.ask(|reply| Command::Automation(AutomationCommand::Remove { automation, reply }))
+            .await
+    }
+
+    /// `automation.run_now`: runs an automation now; the run it recorded comes back, also one that could not start.
+    pub async fn automation_run_now(&self, automation: String) -> Result<AutomationRun, Refusal> {
+        self.ask(|reply| Command::Automation(AutomationCommand::RunNow { automation, reply }))
+            .await
+    }
+
+    /// `automation.runs`: the newest runs of an automation.
+    pub async fn automation_runs(&self, automation: String) -> Result<AutomationRunList, Refusal> {
+        let params = AutomationRunsParams {
+            automation,
+            limit: None,
+            before: None,
+        };
+        self.ask(|reply| Command::Automation(AutomationCommand::Runs { params, reply }))
             .await
     }
 }
