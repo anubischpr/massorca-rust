@@ -9,12 +9,16 @@ use gpui::{
 
 use super::element::TextAreaElement;
 use super::{
-    Backspace, Cancel, CopySelection, CutSelection, Delete, InsertNewline, KEY_CONTEXT, MoveDown,
-    MoveLeft, MoveRight, MoveRowEnd, MoveRowStart, MoveUp, PasteText, SelectAll, SelectDown,
-    SelectLeft, SelectRight, SelectRowEnd, SelectRowStart, SelectUp, Submit, SubmitWithModifier,
-    TextArea, TextAreaEvent, TextAreaKey,
+    Backspace, Cancel, CopySelection, CutSelection, Delete, InsertNewline, KEY_CONTEXT,
+    MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveRight, MoveRowEnd, MoveRowStart,
+    MoveUp, PasteText, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft,
+    SelectRight, SelectRowEnd, SelectRowStart, SelectUp, Submit, SubmitWithModifier, TextArea,
+    TextAreaEvent, TextAreaKey,
 };
-use crate::components::text_editing::TextBuffer;
+use crate::components::text_editing::{
+    DeleteWordBackward, DeleteWordForward, MoveWordLeft, MoveWordRight, Redo, SelectWordLeft,
+    SelectWordRight, TextBuffer, Undo,
+};
 
 impl Render for TextArea {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -34,6 +38,42 @@ impl Render for TextArea {
             }))
             .on_action(cx.listener(|this, _: &Delete, window, cx| {
                 this.edit(window, cx, TextBuffer::delete);
+            }))
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.edit(window, cx, TextBuffer::undo);
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.edit(window, cx, TextBuffer::redo);
+            }))
+            .on_action(cx.listener(|this, _: &MoveWordLeft, window, cx| {
+                this.move_caret(TextBuffer::move_word_left, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MoveWordRight, window, cx| {
+                this.move_caret(TextBuffer::move_word_right, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectWordLeft, window, cx| {
+                this.move_caret(TextBuffer::select_word_left, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectWordRight, window, cx| {
+                this.move_caret(TextBuffer::select_word_right, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteWordBackward, window, cx| {
+                this.edit(window, cx, TextBuffer::delete_word_backward);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteWordForward, window, cx| {
+                this.edit(window, cx, TextBuffer::delete_word_forward);
+            }))
+            .on_action(cx.listener(|this, _: &MoveDocumentStart, window, cx| {
+                this.move_caret(TextBuffer::move_home, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MoveDocumentEnd, window, cx| {
+                this.move_caret(TextBuffer::move_end, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectDocumentStart, window, cx| {
+                this.move_caret(TextBuffer::select_home, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectDocumentEnd, window, cx| {
+                this.move_caret(TextBuffer::select_end, true, window, cx);
             }))
             .on_action(cx.listener(|this, _: &MoveLeft, window, cx| {
                 this.move_caret(TextBuffer::move_left, true, window, cx);

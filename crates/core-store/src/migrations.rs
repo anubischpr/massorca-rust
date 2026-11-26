@@ -585,6 +585,13 @@ CREATE TABLE script_trust (
 "#,
         foreign_keys_off: false,
     },
+    // Whether the service chose a workspace's name (decision 0111): only such a name may be renamed for the person.
+    Migration {
+        sql: r#"
+ALTER TABLE workspaces ADD COLUMN name_generated INTEGER NOT NULL DEFAULT 0 CHECK(name_generated IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
     // A session's start options and lineage (decision 0168): the model and the effort it was started with, kept across
     // resumes, and the session it was forked from. Plain text, not a foreign key: forgetting the source keeps the fork.
     Migration {

@@ -45,6 +45,7 @@ fn seed(store: &Store, notes: usize) -> (String, String, String) {
         request_id: None,
         created_at: now_ms(),
         comment: None,
+        name_generated: false,
     };
     store.insert_workspace(&workspace).expect("workspace");
     let row = |terminal: Option<String>| AgentSessionRow {

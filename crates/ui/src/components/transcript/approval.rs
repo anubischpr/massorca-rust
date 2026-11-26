@@ -9,7 +9,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::TextStyled;
 use crate::tokens::{
-    Palette, RADIUS_LG, SPACE_2, SPACE_3, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION,
+    Palette, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION,
     TYPE_MONO_SM,
 };
 
@@ -107,6 +107,10 @@ fn pending_card(
                 .child(approval.title.clone()),
         )
         .child(sunken_text(&approval.input, approval.truncated, p))
+        .when(
+            approval.can_always && !approval.suggestions.is_empty(),
+            |card| card.child(always_rules(id, &approval.suggestions, p)),
+        )
         .when_some(host_unreachable, |card, host| {
             card.child(
                 div()
@@ -118,6 +122,31 @@ fn pending_card(
             )
         })
         .child(actions)
+        .into_any_element()
+}
+
+/// What an Always answer writes: each rule on a line of its own, so the person sees it before accepting.
+fn always_rules(id: &SharedString, rules: &[SharedString], p: Palette) -> AnyElement {
+    div()
+        .debug_selector({
+            let id = id.clone();
+            move || format!("approval-always-{id}")
+        })
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_1))
+        .child(
+            div()
+                .text_style(TYPE_CAPTION)
+                .text_color(p.text.tertiary)
+                .child("Always allows"),
+        )
+        .children(rules.iter().map(|rule| {
+            div()
+                .text_style(TYPE_MONO_SM)
+                .text_color(p.text.secondary)
+                .child(rule.clone())
+        }))
         .into_any_element()
 }
 

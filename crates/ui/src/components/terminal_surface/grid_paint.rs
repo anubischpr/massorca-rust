@@ -12,7 +12,7 @@ use gpui::{
 
 use super::feed::{RenderCell, RenderCursor, RenderSnapshot};
 use super::geometry::CellSize;
-use crate::assets::FONT_MONO;
+use crate::text_preferences;
 use crate::tokens::{
     BORDER_WIDTH_DEFAULT, BORDER_WIDTH_THICK, Color, TYPE_TERMINAL, TerminalColors,
 };
@@ -155,7 +155,7 @@ fn glyph(cell: &RenderCell) -> String {
 /// The size of one cell in the terminal font: the advance of `M` and the terminal line height.
 pub fn cell_metrics(cx: &App) -> Option<CellSize> {
     let text = cx.text_system();
-    let font_id = text.resolve_font(&font(FONT_MONO));
+    let font_id = text.resolve_font(&font(text_preferences::terminal_family()));
     let advance = text.advance(font_id, px(TYPE_TERMINAL.size), 'M').ok()?;
     Some(CellSize {
         width: f32::from(advance.width),
@@ -229,7 +229,7 @@ fn paint_span(
             FontStyle::Normal
         },
         features: features.clone(),
-        ..font(FONT_MONO)
+        ..font(text_preferences::terminal_family())
     };
     let run = TextRun {
         len: span.text.len(),

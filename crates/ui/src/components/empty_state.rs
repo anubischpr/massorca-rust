@@ -3,9 +3,9 @@
 //! and one action. The Work panel variant (A43) is a centred column of actions
 //! with no panel, title or explanation.
 
-use crate::assets::FONT_SANS;
 use crate::components::button::{Button, ButtonVariant};
 use crate::icon::{Icon, IconName, IconSize};
+use crate::text_preferences;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_EMPTY_STATE_TEXT_MAX_WIDTH, Measure, RADIUS_LG, SPACE_1, SPACE_2, SPACE_4, SPACE_8,
@@ -167,8 +167,9 @@ fn measure_px(cx: &App, measure: Measure) -> Option<f32> {
         Measure::Px(px) => Some(px),
         Measure::Ch(count) => {
             let text = cx.text_system();
-            let face = text.resolve_font(&font(FONT_SANS));
-            let zero = text.advance(face, px(TYPE_BODY.size), '0').ok()?;
+            let face = text.resolve_font(&font(text_preferences::interface_family()));
+            let body = px(text_preferences::scale_size(TYPE_BODY.size));
+            let zero = text.advance(face, body, '0').ok()?;
             Some(f32::from(zero.width) * count)
         }
         Measure::Percent(_) => None,
