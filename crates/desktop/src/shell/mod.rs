@@ -99,6 +99,8 @@ use zones::ZoneFocus;
 #[cfg(test)]
 mod add_host_tests;
 #[cfg(test)]
+mod add_project_icon_tests;
+#[cfg(test)]
 mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
