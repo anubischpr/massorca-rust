@@ -110,6 +110,7 @@ fn session_row(
     SessionRow {
         id: session.id.clone(),
         title: title_of(session, workspace),
+        archived: session.archived,
         agent: agent_of_kind(&session.kind),
         state: status,
         workspace_id: session.workspace_id.clone(),

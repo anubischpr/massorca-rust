@@ -24,6 +24,7 @@ mod item_images_tests;
 mod log_view;
 mod more_menu;
 mod package;
+mod program_update;
 mod review;
 mod rollback;
 mod services;
@@ -37,7 +38,7 @@ mod tests;
 use super::Shell;
 use crate::model::marketplace::{
     AccountId, HostTarget, ItemKind, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource,
-    SourceError,
+    RowOffers, SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
@@ -46,13 +47,14 @@ pub(super) use host_pick::{HostPick, host_picker_for};
 pub(super) use log_view::RunLogView;
 pub(super) use rollback::RollbackConfirm;
 pub(super) use services::ServiceDialog;
-use std::collections::BTreeSet;
+pub(super) use skills::PlacementReview;
+use std::collections::{BTreeMap, BTreeSet};
 
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, WeakEntity,
     Window, div, prelude::*, px,
 };
-use massorca_protocol::methods::extensions::ExtensionReview;
+use massorca_protocol::methods::extensions::{ExtensionReview, ProgramUpdateReview};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::select::SelectView;
@@ -93,6 +95,9 @@ pub(super) struct InstallReview {
     pub details_open: bool,
     pub sending: bool,
     pub error: Option<String>,
+    /// For an update of a host program MassOrca installed: the program, and its review once read (decision 0151).
+    pub program: Option<String>,
+    pub update: Option<ProgramUpdateReview>,
 }
 
 /// What the Marketplace pages draw for one frame, gathered by the shell.
@@ -128,6 +133,12 @@ pub(super) struct MarketplaceFrame {
     service_error: Option<(String, String)>,
     /// The Skills section's host and what it shows for that host (SKL-01).
     skills: skills::SkillsSection,
+    /// Your apps: the installed skills and connected services of the shown host, and what could not be read.
+    apps: installed::YourApps,
+    /// What each installed item's More menu offers.
+    offers: BTreeMap<MarketplaceItemId, RowOffers>,
+    /// Whether the item page shows Update: a host program MassOrca installed, and the service offers updates.
+    updatable: bool,
     shell: WeakEntity<Shell>,
 }
 
@@ -138,6 +149,9 @@ pub(super) fn frame(
     weak: WeakEntity<Shell>,
     cx: &App,
 ) -> MarketplaceFrame {
+    let skills = skills::section_of(shell, cx);
+    let apps = installed::your_apps(shell, &skills, cx);
+    let offers = installed::row_offers_of(shell, cx);
     MarketplaceFrame {
         snapshot: shell.model.marketplace().clone(),
         page,
@@ -160,7 +174,13 @@ pub(super) fn frame(
         host_status: shell.picker_status(cx),
         services: shell.marketplace_services.clone(),
         service_error: shell.marketplace_service_error.clone(),
-        skills: skills::section_of(shell, cx),
+        skills,
+        apps,
+        offers,
+        updatable: match page {
+            MarketplacePage::Item(id) => shell.updatable_program(id, cx).is_some(),
+            _ => false,
+        },
         shell: weak,
     }
 }
@@ -216,12 +236,18 @@ impl Shell {
     /// Opens a Marketplace view or an item's page from anywhere in the shell.
     pub(super) fn open_marketplace(&mut self, page: MarketplacePage, cx: &mut Context<Self>) {
         self.marketplace_error = None;
-        if page == MarketplacePage::Category(ItemKind::Skill) {
+        if matches!(
+            page,
+            MarketplacePage::Category(ItemKind::Skill) | MarketplacePage::Installed
+        ) {
             let target = self.shown_target();
             self.read_skills(&target, false);
         }
         self.model.open_page(Page::Marketplace(page));
-        if page == MarketplacePage::Category(ItemKind::Service) {
+        if matches!(
+            page,
+            MarketplacePage::Category(ItemKind::Service) | MarketplacePage::Installed
+        ) {
             self.read_hosted_services(cx);
         }
         cx.notify();

@@ -94,6 +94,10 @@ const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// A stdin line starting with this switches the permission mode; the rest of the line is the mode.
 const MODE_SWITCH: &str = "/mode ";
+/// A stdin line starting with this switches the model; the rest of the line is the model (decision 0171).
+const MODEL_SWITCH: &str = "/model ";
+/// A stdin line of exactly this text toggles fast mode (decision 0171).
+const FAST_TOGGLE: &str = "/fast";
 /// Names a file the `chat` mode waits for after the first part of each reply, so a test can subscribe in between.
 const CHAT_GO_FILE_ENV: &str = "FAKE_CHAT_GO_FILE";
 /// Set to `1`, the `chat` mode never reads its input, as a CLI that is stuck.
@@ -145,6 +149,7 @@ fn main() -> ExitCode {
     }
     read_keys_as_typed();
     let agent = Agent::new(&arguments);
+    let mut fast = arguments.settings.as_deref().is_some_and(fast_mode_on);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
     if let Some(prompt) = &arguments.prompt
@@ -165,6 +170,16 @@ fn main() -> ExitCode {
                     "mode switched {}",
                     text[MODE_SWITCH.len()..].trim()
                 ));
+            }
+            text if text.starts_with(MODEL_SWITCH) => {
+                say(&format!(
+                    "model switched {}",
+                    text[MODEL_SWITCH.len()..].trim()
+                ));
+            }
+            FAST_TOGGLE => {
+                fast = !fast;
+                say(&format!("fast toggled {}", if fast { "on" } else { "off" }));
             }
             text => {
                 if let Flow::Finish(code) = agent.handle_prompt(text, &mut input) {

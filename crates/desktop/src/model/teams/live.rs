@@ -86,6 +86,7 @@ fn live_bot(ids: &TeamIds, bot: &WireBot, kinds: &[AgentKind]) -> Option<Bot> {
         model: bot.model.clone(),
         effort: bot.effort.clone(),
         kind_unavailable: kind_unavailable_reason(kinds, &bot.kind),
+        skills: bot.skills.clone(),
     })
 }
 
@@ -591,6 +592,7 @@ mod tests {
             effort: None,
             lead: false,
             created_at_ms: 1,
+            skills: Vec::new(),
         }
     }
 
