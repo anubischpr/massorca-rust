@@ -1746,6 +1746,17 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Every `BundledSkill` field at its usual value; tests override the fields they vary.
+    pub fn base_bundled_skill() -> massorca_protocol::methods::skill_bundled::BundledSkill {
+        massorca_protocol::methods::skill_bundled::BundledSkill {
+            name: String::new(),
+            description: String::new(),
+            version: String::new(),
+            state: massorca_protocol::methods::skill_bundled::BundledSkillState::NotPlaced,
+            agents: Vec::new(),
+        }
+    }
+
     /// Every `AccountsImported` field at its usual value; tests override the fields they vary.
     pub fn base_accounts_imported() -> massorca_protocol::methods::agents::AccountsImported {
         massorca_protocol::methods::agents::AccountsImported {

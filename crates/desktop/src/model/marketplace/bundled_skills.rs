@@ -91,25 +91,23 @@ fn action(state: BundledSkillState, agents: &[PlacementAgent]) -> Option<Bundled
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
+    use crate::service::fixtures::base_bundled_skill;
 
-    /// A bundled skill as the service sends it, built from its JSON so the test does not spell out the protocol struct.
-    fn skill(name: &str, state: &str, agents: &[&str]) -> BundledSkill {
-        serde_json::from_value(json!({
-            "name": name,
-            "description": format!("Writes {name} notes"),
-            "version": "1.0.0",
-            "state": state,
-            "agents": agents,
-        }))
-        .expect("a bundled skill")
+    /// A bundled skill the service sends, with the name, state and agents the test varies.
+    fn skill(name: &str, state: BundledSkillState, agents: &[PlacementAgent]) -> BundledSkill {
+        BundledSkill {
+            name: name.to_owned(),
+            description: format!("Writes {name} notes"),
+            state,
+            agents: agents.to_vec(),
+            ..base_bundled_skill()
+        }
     }
 
     #[test]
     fn a_skill_that_is_not_placed_says_so_and_offers_install() {
-        let rows = bundled_rows(&[skill("massorca", "not_placed", &[])]);
+        let rows = bundled_rows(&[skill("massorca", BundledSkillState::NotPlaced, &[])]);
         assert_eq!(rows[0].name, "massorca");
         assert_eq!(rows[0].description, "Writes massorca notes");
         assert_eq!(rows[0].state_line, "Not installed");
@@ -118,7 +116,11 @@ mod tests {
 
     #[test]
     fn a_placed_skill_names_its_agent_tools_and_offers_remove() {
-        let rows = bundled_rows(&[skill("massorca", "current", &["claude", "cursor"])]);
+        let rows = bundled_rows(&[skill(
+            "massorca",
+            BundledSkillState::Current,
+            &[PlacementAgent::Claude, PlacementAgent::Cursor],
+        )]);
         assert_eq!(rows[0].state_line, "Installed for Claude Code and Cursor");
         assert_eq!(rows[0].action, Some(BundledAction::Remove));
         assert_eq!(
@@ -130,9 +132,13 @@ mod tests {
     #[test]
     fn an_outdated_skill_offers_update_and_one_with_no_agent_offers_nothing() {
         let rows = bundled_rows(&[
-            skill("massorca", "outdated", &["codex"]),
-            skill("notes", "outdated", &[]),
-            skill("tools", "current", &[]),
+            skill(
+                "massorca",
+                BundledSkillState::Outdated,
+                &[PlacementAgent::Codex],
+            ),
+            skill("notes", BundledSkillState::Outdated, &[]),
+            skill("tools", BundledSkillState::Current, &[]),
         ]);
         assert_eq!(rows[0].state_line, "Update available for Codex");
         assert_eq!(rows[0].action, Some(BundledAction::Update));
@@ -144,7 +150,11 @@ mod tests {
 
     #[test]
     fn a_state_from_a_newer_service_says_it_is_unknown_and_offers_nothing() {
-        let rows = bundled_rows(&[skill("massorca", "paused", &["claude"])]);
+        let rows = bundled_rows(&[skill(
+            "massorca",
+            BundledSkillState::Unknown,
+            &[PlacementAgent::Claude],
+        )]);
         assert_eq!(rows[0].state_line, "Status unknown");
         assert_eq!(rows[0].action, None);
     }
