@@ -179,6 +179,10 @@ project) at the time the project is added.
   anyway and prints `archive failed, removed anyway: <reason>`. An untrusted script does not run
   (`archive skipped: <reason>`) and the removal goes ahead. Folder workspaces have no archive
   script (decision 0095).
+- Removing any workspace, worktree or folder, also deletes what the service kept of what ran
+  in it: its sessions with their archived output, and its terminals with their scrollback,
+  ended ones and those a retained session kept included. The archive script's terminal stays,
+  so `archive script ran in terminal <ID>` can still be read. Files on disk are not touched.
 
 Settings that affect workspace names are changed with `config set` (`config list` shows every setting).
 `workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt the person
