@@ -98,7 +98,7 @@ fn status_lines(status: &ServerStatus) -> Vec<String> {
     lines
 }
 
-fn listener_table(listeners: &[ListenerInfo]) -> Vec<String> {
+pub(crate) fn listener_table(listeners: &[ListenerInfo]) -> Vec<String> {
     let rows = listeners
         .iter()
         .map(|listener| {

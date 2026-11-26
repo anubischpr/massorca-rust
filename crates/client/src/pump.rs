@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::error::ClientError;
@@ -47,6 +47,8 @@ struct Routes {
 pub(crate) struct Shared {
     last_id: AtomicU64,
     routes: Mutex<Routes>,
+    /// Woken once the connection has ended.
+    ended: Notify,
 }
 
 impl Shared {
@@ -62,6 +64,19 @@ impl Shared {
         }
         routes.pending.insert(id, pending);
         Ok(())
+    }
+
+    /// Resolves once the connection has ended. Cancel-safe.
+    pub(crate) async fn closed(&self) {
+        loop {
+            let notified = self.ended.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            if lock(&self.routes).closed {
+                return;
+            }
+            notified.await;
+        }
     }
 
     pub(crate) fn forget(&self, id: u64) {
@@ -94,6 +109,8 @@ impl Shared {
         for (_, items) in routes.streams.drain() {
             let _ = items.try_send(Item::Lost);
         }
+        drop(routes);
+        self.ended.notify_waiters();
     }
 
     fn answer(&self, id: u64, reply: Reply) {

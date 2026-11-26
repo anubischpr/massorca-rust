@@ -289,7 +289,7 @@ async fn pairing_create(
         Scopes::ADMIN
     };
     let minted = network.pairing.create(ttl, scopes, Instant::now())?;
-    let expires_at_ms = now_ms() + i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
+    let expires_at_ms = minted.expires_at_ms;
     let offer = Offer {
         server: network.machine_name.clone(),
         addresses: addresses.clone(),

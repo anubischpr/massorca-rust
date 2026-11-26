@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Test helpers for other crates' dev-dependencies; the product never enables it.
+test-support = []
+
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys.workspace = true
 

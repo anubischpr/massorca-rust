@@ -34,7 +34,7 @@ machine.
 
 | Command | What it does |
 |---|---|
-| `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
+| `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. Prints a readiness record once it accepts connections (see below). |
 | `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
 | `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
@@ -89,7 +89,9 @@ machine.
 | `host show <NAME>` | Shows one host: addresses, pin, device, scopes and pairing time. |
 | `host remove <NAME> [--keep-device] [--uninstall --ssh <TARGET>]` | Forgets a host. Unless `--keep-device`, revokes this device on the server when the host answers. `--uninstall` also stops and removes the service over SSH; if that fails the host is kept, so the command can be run again. |
 | `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
+| `host status --watch [<NAME>]` | Keeps a connection open to one host, or to every host, and prints a line each time its state changes, until interrupted: `connecting`, `connected` (with the server version), `unreachable` (with why, the next attempt and its delay), `refused`, `identity_mismatch` or `error`. A lost host is retried with the network backoff, 250 ms doubling to 30 s; unreachable says nothing about the work on it. A refusal, a changed server key or any other failure a retry would not fix is reported once and not retried; once every watched host has ended so, the watch exits with that failure and its exit code (the first host by name when there are several), while any host that can still change keeps it running. With `--json`, each line is one `{"ok":true,"result":{...}}` document with `name`, `state`, `server_version`, `detail`, `attempt` and `retry_in_ms` as they apply. Without hosts it prints `no hosts` and ends. |
 | `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
+| `host self-test [<NAME>]` | Runs the checks of one paired host in order and prints one line per check: `record` (the stored record and pin), `address` (the addresses resolve), `port` (a TCP connection is accepted), `identity` (the secure connection's server key matches the pin paired with; a different key shows both keys and is not retried), `protocol` (the handshake agrees on a protocol), `paired` (the server still lists this device), `service` (`service.info`: version and uptime) and `latency` (the round trip of that call). A check is `pass`, `fail` with why and the fix, or `skipped` and names the failed check it waited for; the first failure skips the rest. Exits 0 only when every check passes, otherwise 1 with `host.self_test_failed`. With `--json` the one document holds every check: on success under `result`, on failure under `error.data` (`name`, `passed` and `checks[]` with `name`, `state`, `detail` and `fix`). Without `NAME` it checks this computer's own service instead: `endpoint`, `connect` (a local connection that never starts the service), `protocol`, `service`, `latency`, and `network` only when the service listens on the network. When a check fails on a host that `host add-ssh` installed, a `logs:` line prints the `ssh` command that reads its service log (`journalctl --user -u massorca.service -n 100 --no-pager`, through the same target and `--ssh-arg` values). The command prints the line only; it never runs SSH. |
 | `host memory` | Shows the memory of the service and of each live terminal's processes (agent runs included), read on the host that runs them: the total, the service, then one row per terminal with its workspace, agent session, process count and memory. Working set on Windows, resident set on Linux and macOS (decision 0081). Sizes use binary units: `N KB` under 1 MiB, `x.y MB` under 1 GiB, `x.yz GB` above. A size that rounds up to the next unit is shown in it (`1.0 MB`, not `1024 KB`). Processes that could not be read are counted, not added. A terminal counts its session on Linux and its parent tree on macOS, so a process that started its own session (Linux) or was reparented away (macOS) is not counted (decision 0081, D6). A terminal whose processes cannot be listed or read shows `-` and `unverifiable` instead of a size and is not in the total. A terminal with some processes read and some not shows its size with `(partial)`: that size covers only the processes read, the total counts it so, and a line says how many terminals are partial. Works with `--host`. A service that cannot be reached or is lost mid-call (`service.unavailable`, `service.disconnected`, `host.unreachable`, `client.io`) prints `unverifiable` (`memory.unverifiable`) and exits 4, never a size; other failures, such as `host.identity_mismatch` or a refused handshake, keep their own code. |
 | `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
@@ -385,9 +387,33 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   could not finish (`homes/.KIND.old-...`) refuses the next import with
   `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
-`service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
-With `--json` it prints the start document on stdout, and the service log goes to the
-profile's log files only unless `--log-stderr` is given.
+`service run` prints its readiness record once the service accepts connections, and only after its
+network listeners have made their first bind attempt (bound, or waiting with the reason). It is never
+printed earlier, and it is printed once per process. In text mode it is a few lines: `service ready for
+profile <name> (pid <n>)`, `version <v>, protocol <p>`, `local endpoint: <path or pipe>`, the listener
+table, `server pin`, `advertised endpoints`, `pending offers`, and `pairing: available` or
+`pairing: unavailable: <reason>`, and `live terminals`. With no network listener it says so instead.
+
+With `--json` it is one line on stdout, `{"ok":true,"result":{...}}`. `result` holds:
+
+- `schema` (`orca_server_ready`) and `schema_version` (`1`);
+- the start identity: `profile`, `pid`, `version`, `protocol`, `started_at_ms`, `capabilities`;
+- `endpoint`, the local socket path or named pipe;
+- `bound_endpoints` and `advertised_endpoints`, `host:port` lists: the bound listener addresses, and
+  what a pairing offer lists when it names no address (the bound listeners and their MagicDNS names).
+  Both are empty without a network listener;
+- `pairing`: `available`, `reason` when not available, and `pending_offers`, each
+  `{offer_id, expires_at_ms, scopes}`. Pending offers at readiness are normally none;
+- `health`: `live_terminals`, the terminals alive in the service's in-process terminal host;
+- `network`, with a network listener only: `listeners`, `server_pin` (a public key fingerprint) and
+  `pending_offers` (a count).
+
+A pairing secret is never printed. Three fields of the startup contract are not in the record, because
+the service does not produce them: a runtime id, the managed-WSL reconciliation state, and terminal-daemon
+health. A web client URL and a pairing QR or URL are not produced either: no offer exists at startup, and
+an offer's secret is shown only when it is made. `server status` shows the same listeners and pin later.
+
+The service log goes to the profile's log files only unless `--log-stderr` is given.
 
 ### Hosts and pairing
 
@@ -415,7 +441,8 @@ An offer is a credential until it is used or expires. If one leaks, retire it wi
 
 The accepted host is stored in this profile. `--host vps` then addresses it, and `host list`,
 `host status` and `host remove` manage it. A host that does not answer is reported as
-`unreachable`; nothing is inferred about the work on it (decision 0044).
+`unreachable`; nothing is inferred about the work on it (decision 0044). `host self-test <NAME>` runs
+each check of that host in turn and names the step that fails, with its fix.
 
 ## Output
 
