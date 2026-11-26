@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
-use crate::backup;
+use crate::backup::{self, BackupLabel};
 use crate::error::StoreError;
 use crate::migration_files::{self, FileMigration};
 
@@ -737,14 +737,14 @@ pub(crate) fn with_foreign_keys_off<T>(
 pub(crate) fn back_up_before_first_step(
     transaction: &Transaction<'_>,
     file: Option<&Path>,
-    found: i64,
+    label: BackupLabel<'_>,
     backed_up: &mut bool,
 ) -> Result<(), StoreError> {
     if !*backed_up
         && let Some(file) = file
         && backup::holds_objects(transaction)?
     {
-        backup::create_before_migration(file, found)?;
+        backup::create_before_migration(file, label)?;
     }
     *backed_up = true;
     Ok(())
@@ -764,7 +764,7 @@ fn run_step(
     if user_version(&transaction)? != found {
         return Ok(());
     }
-    back_up_before_first_step(&transaction, file, found, backed_up)?;
+    back_up_before_first_step(&transaction, file, BackupLabel::Version(found), backed_up)?;
     transaction.execute_batch(step.sql)?;
     if step.foreign_keys_off
         && let Some(table) = first_foreign_key_violation(&transaction)?

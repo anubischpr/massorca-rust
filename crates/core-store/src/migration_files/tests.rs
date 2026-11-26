@@ -102,7 +102,7 @@ fn backups(path: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(path.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.contains(".bak-v"))
+        .filter(|name| name.contains(".bak-"))
         .collect();
     names.sort();
     names
@@ -247,8 +247,66 @@ fn a_file_only_upgrade_is_backed_up_once_for_all_its_steps() {
 
     run(&path, FROZEN, &[A, B]).unwrap();
 
-    assert_eq!(backups(&path), ["store.db.bak-v2"]);
+    assert_eq!(backups(&path), ["store.db.bak-0110-202611261430"]);
     assert_eq!(applied(&path), [A.id, B.id]);
+}
+
+#[test]
+fn successive_file_only_upgrades_keep_each_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database(&dir);
+    run(&path, FROZEN, &[]).unwrap();
+    run(&path, FROZEN, &[A]).unwrap();
+    let first = fs::read(dir.path().join("store.db.bak-0110-202611261430")).unwrap();
+
+    run(&path, FROZEN, &[A, B]).unwrap();
+
+    assert_eq!(
+        backups(&path),
+        [
+            "store.db.bak-0110-202611261430",
+            "store.db.bak-0111-202611261430"
+        ]
+    );
+    assert_eq!(
+        fs::read(dir.path().join("store.db.bak-0110-202611261430")).unwrap(),
+        first,
+        "the backup taken before the first upgrade is not replaced"
+    );
+    assert_eq!(applied(&path), [A.id, B.id]);
+}
+
+#[test]
+fn a_retry_after_the_first_step_fails_does_not_replace_its_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database(&dir);
+    run(&path, FROZEN, &[]).unwrap();
+    let broken = file(
+        "0114-202611261430",
+        "CREATE TABLE step_broken (x INTEGER); SELECT * FROM no_such_table;",
+    );
+    run(&path, FROZEN, &[broken]).unwrap_err();
+    let first = fs::read(dir.path().join("store.db.bak-0114-202611261430")).unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE changed_since_first_try (x INTEGER);")
+        .unwrap();
+
+    run(&path, FROZEN, &[broken]).unwrap_err();
+
+    assert_eq!(
+        fs::read(dir.path().join("store.db.bak-0114-202611261430")).unwrap(),
+        first,
+        "the first backup still holds the database as it was before the first try"
+    );
+    assert_eq!(
+        backups(&path),
+        [
+            "store.db.bak-0114-202611261430",
+            "store.db.bak-0114-202611261430.2"
+        ]
+    );
+    assert!(applied(&path).is_empty());
 }
 
 #[test]

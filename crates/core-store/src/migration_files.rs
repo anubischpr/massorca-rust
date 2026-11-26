@@ -7,9 +7,10 @@ use std::path::Path;
 use rusqlite::{Connection, TransactionBehavior, params};
 use tracing::warn;
 
+use crate::backup::BackupLabel;
 use crate::error::StoreError;
 use crate::migrations::{
-    back_up_before_first_step, first_foreign_key_violation, user_version, with_foreign_keys_off,
+    back_up_before_first_step, first_foreign_key_violation, with_foreign_keys_off,
 };
 
 /// A step kept in its own file; `id` is the file name's `<block>-<yyyymmddhhmm>` part.
@@ -96,8 +97,7 @@ fn run_step(
     if applied_ids(&transaction)?.contains(step.id) {
         return Ok(());
     }
-    let found = user_version(&transaction)?;
-    back_up_before_first_step(&transaction, file, found, backed_up)?;
+    back_up_before_first_step(&transaction, file, BackupLabel::Step(step.id), backed_up)?;
     transaction.execute_batch(CREATE_TRACKING_TABLE)?;
     transaction.execute_batch(step.sql)?;
     if step.foreign_keys_off
