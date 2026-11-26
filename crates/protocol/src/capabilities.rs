@@ -60,6 +60,8 @@ pub const AGENT_CHAT: &str = "agent-chat/1";
 /// Import source detection (decision 0097): `agent.accounts.import_candidates`, and `agent.accounts.import` without
 /// `from`, which copies each declared file from where the kind's CLI keeps it.
 pub const AGENT_IMPORT_DETECT: &str = "agent-import-detect/1";
+/// `agent.models`: the models a kind's picker offers for an account, declared and listed by its vendor CLI (decision 0166).
+pub const AGENT_MODELS: &str = "agent-models/1";
 /// Chat titles (`agent.generate_title`, decision 0167): a short title named from a chat's first prompt and reply by a
 /// one-shot run of the kind.
 pub const AGENT_TITLE: &str = "agent-title/1";

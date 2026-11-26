@@ -6,6 +6,7 @@ pub mod components;
 pub mod gallery;
 pub mod icon;
 pub mod style;
+pub mod text_preferences;
 pub mod theme;
 pub mod tokens;
 

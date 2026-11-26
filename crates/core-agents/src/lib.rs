@@ -13,6 +13,7 @@ pub mod fast_mode;
 pub mod instructions;
 pub mod kind;
 pub mod launch;
+mod model_catalog;
 mod modes;
 pub mod oneshot;
 pub mod packages;

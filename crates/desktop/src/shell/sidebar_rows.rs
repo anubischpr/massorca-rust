@@ -110,6 +110,7 @@ pub(super) fn tree_row(
             workspace_id,
             dimmed,
             local,
+            host,
         } => {
             let mut row = session_row(id, title, *agent, *state, *depth, *selected);
             if let Some(tooltip) = tooltip {
@@ -138,10 +139,13 @@ pub(super) fn tree_row(
             let (menu_shell, menu_session, menu_workspace) =
                 (shell.clone(), session_id.clone(), workspace_id.clone());
             let local = *local;
+            let remote_host = host.clone();
             let row = row.on_context_menu(move |window, cx| {
                 let (session, workspace) = (menu_session.clone(), menu_workspace.clone());
-                let _ = menu_shell.update(cx, |shell, cx| {
-                    shell.open_session_menu(Some(session), workspace, local, window, cx);
+                let _ = menu_shell.update(cx, |shell, cx| match &remote_host {
+                    // A session a paired host runs has its menu over that host's connection (STAT-16).
+                    Some(host) => shell.open_remote_session_menu(host.clone(), session, window, cx),
+                    None => shell.open_session_menu(Some(session), workspace, local, window, cx),
                 });
             });
             if *can_bring_back {

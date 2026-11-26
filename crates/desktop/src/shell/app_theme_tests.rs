@@ -15,10 +15,11 @@ use tokio::sync::oneshot;
 
 type ConfigSetCall = (ConfigSet, oneshot::Sender<Result<ConfigValue, Refusal>>);
 
-struct Rig {
-    shell: Entity<Shell>,
-    updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+/// A connected shell on a scripted service, shared with the other element tests that need one.
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
 fn setup(cx: &mut TestAppContext) {
@@ -28,12 +29,12 @@ fn setup(cx: &mut TestAppContext) {
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 /// Clicks the centre of the element with this debug selector, after a fresh draw.
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
     let bounds = cx
         .debug_bounds(selector)
@@ -46,7 +47,7 @@ fn theme(cx: &mut VisualTestContext) -> Appearance {
 }
 
 /// A connected shell on a scripted service. Its theme starts dark, and no setting is listed yet.
-fn rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
+pub(super) fn rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
