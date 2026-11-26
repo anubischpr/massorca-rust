@@ -423,6 +423,7 @@ jobs:
             ${{ runner.temp }}/logcat-full.txt
             ${{ runner.temp }}/logcat-crash.txt
             ${{ runner.temp }}/terminal-screen.txt
+            ${{ runner.temp }}/phone-screen-text.txt
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
