@@ -409,6 +409,9 @@ pub fn terminal_details(terminal: &Terminal) -> Vec<String> {
     if let Some(title) = &terminal.title {
         lines.push(format!("title: {title}"));
     }
+    if terminal.git_credential_guard {
+        lines.push("git credential guard: on".to_owned());
+    }
     lines
 }
 

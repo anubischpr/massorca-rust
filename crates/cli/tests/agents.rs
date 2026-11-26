@@ -133,10 +133,15 @@ fn a_started_agent_runs_in_its_workspace_and_stops_and_is_forgotten() {
         .stdout(contains("execution: live"))
         .stdout(contains("activity: done (success) from hook"));
 
-    assert_eq!(
-        error_code(&sandbox, &["agent", "start", "fake", "--workspace", "main"]),
-        "agent.workspace_busy"
+    // A folder takes a second writing session beside the first (decision 0169); it lists the first.
+    let second = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
     );
+    let second_id = text(&second, "id").to_owned();
+    assert_eq!(second["shared_folder_with"], json!([session]));
+    sandbox.json_ok("default", &["agent", "stop", &second_id, "--force"]);
+    sandbox.json_ok("default", &["agent", "forget", &second_id]);
     let reader = sandbox.json_ok(
         "default",
         &[

@@ -159,6 +159,75 @@ journal"):
 - The error codes moved to `codes.rs` (`AGENT_CHAT_UNSUPPORTED`, `AGENT_NOT_CHAT`, `AGENT_APPROVAL_SETTLED`,
   `AGENT_CURSOR_STALE`); the constants in `chat.rs` name them.
 
+## Amendment: the Claude adapter (2026-11-25)
+
+The slice that serves `agent.chat.start`, approvals, interrupt and resume, with the Claude adapter, amends the wire
+additively and fixes what this decision left to it.
+
+- Diffs. `diff` gains `status: added | modified | deleted | renamed` (absent from an older peer: `modified`; a value
+  from a newer one decodes as `unknown`, read as `modified`) and `old_path?`, the earlier path of a `renamed` file.
+  Claude's edit tools produce `added` (a `Write` that created its file) and `modified`; nothing in its vocabulary
+  deletes or renames a file, so `deleted`, `renamed` and `old_path` wait for another adapter.
+- Plans. `plan` gains `document?`: the path of the file the plan was written to, as the agent names it. Claude's
+  `ExitPlanMode` with a plan file adds such a plan; a `TodoWrite` plan has none.
+- Parents. An item's `parent` is the `id` of the `subagent` item whose run produced it (its journal item id, not the
+  vendor's tool-use id).
+- Client rules. An update whose `op` the client does not know (`ChatUpdate::Unknown`) means the client's copy may be
+  wrong: it resubscribes from its cursor. An item whose `type` it does not know (`ChatItemBody::Unknown`) is skipped
+  and kept by id, so a later update of it replaces it.
+- D11 is met: the service registers `agent-chat/1` in every build.
+- The version range (D10). The built-in `claude` kind declares `"chat": { "adapter": "claude-stream-json",
+  "min_version": "2.1.258", "max_major": 2 }`: 2.1.258 is the release the reference's frame vocabulary was read from
+  (`claude-stream-json-frame-schema.ts`: "SDKMessage discriminators from Claude Agent SDK 0.3.251 / Claude Code
+  2.1.258"), and its captures were recorded against 2.1.280. Every 2.x from there is accepted; the owner's target,
+  2.1.330, is inside. A new major version is refused until it is probed.
+- Launch flags: `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages
+  --permission-prompt-tool stdio`, then the kind's arguments. `--replay-user-messages`, which the reference adds for its
+  send acknowledgement, is not passed: the journal opens a turn when the service writes the prompt.
+- What `always` writes (D6). The approval item gains `suggestions`: each change an `always` answer would write, as
+  `{ type, rules, destination }` with every rule as `Tool` or `Tool(rule)`. Only rule additions that allow, written to
+  `session` or `localSettings`, are listed and written back as `updatedPermissions`; a mode switch (`setMode`), a rule
+  that denies, added directories and any other destination (`userSettings`, `projectSettings`) are dropped and never
+  sent. `can_always` is true only when at least one suggestion is listed. A request whose input is not an object is
+  denied, with a notice, and gets no item.
+- Answers bind to what the person saw. `agent.chat.approval.answer` takes an optional `seq`, the approval item's `seq`
+  the person answered; the CLI may send a request again under the same id with new input, which replaces the item, and
+  an answer whose `seq` no longer matches is refused with `agent.approval_changed` (data: the item now). A request id
+  the current run never sent is `agent.approval_settled`, as `codes.rs` describes it. The answer is recorded in the
+  store first; a write to the run that fails after it adds an error notice.
+- Held prompts (D7). A forced prompt mid-turn is written at once and opens its own running turn, with its
+  `user_message`, at once. The CLI may fold it into the running turn (the reference's `fold` capture), so the next
+  `result` closes the running turn and every turn opened for held prompts; an interrupt ends them all `interrupted`,
+  and the interrupt is sent with `cancel_queued: true` so the CLI drops what it holds; the run's end ends them too. The
+  `result` frame that answers an interrupt is skipped, since the interrupt already ended the turn.
+- A queued prompt whose delivery finds the chat busy (a prompt won the race) waits again instead of failing.
+- A failed version probe is kept for 60 s, a successful one until the program changes; a chat resume probes before it
+  takes the start gates.
+- The details of approvals, interrupt, prompts, activity, resume and probing are in `docs/architecture/agents.md`,
+  "Chat runs and the journal".
+
+What only a real Claude run can confirm, beyond the list above:
+
+- That Claude Code 2.1.330 prints `2.1.330 (Claude Code)` for `--version`, and that the stream-json vocabulary between
+  2.1.258 and 2.1.330 is still the one the adapter reads.
+- That stream-json mode needs no `initialize` control request before the first user message (the reference's SDK sends
+  one; this adapter does not).
+- That each whole `assistant` frame carries the next content blocks of its message in order, so the block count of the
+  frames matches the `index` of the partial frames (the adapter keys text by message id and that count).
+- That an `interrupt` is always followed by exactly one `result` for the interrupted turn (the capture
+  `claude-lifecycle-capture-interrupt-lost` shows `error_during_execution`), and none when no turn ran.
+- That a user message written while a turn runs is queued by the CLI and run as its next turn with its own `result`.
+- That the `tool_use_result` of an edit's `user` frame carries `type: create | update` and `structuredPatch` hunks in
+  the shape the adapter reads, and that `TodoWrite` is offered at all (2.1.x may offer `TaskCreate`/`TaskUpdate`
+  instead, which then show as ordinary tool calls), and whether `ExitPlanMode` names a plan file (`planFilePath`).
+- That `updatedPermissions` set to the accepted `addRules` suggestions is what an `always` should write, and that a
+  `control_response` of subtype `error` is an acceptable refusal of a control request the service does not serve.
+- That a user message written mid-turn is folded into the running turn (one `result`) or run as a turn of its own (a
+  second `result`, whose frames the journal then shows outside any turn), and that `cancel_queued` is accepted by every
+  version in the range.
+- That `--resume <id>` with `--permission-prompt-tool stdio` resumes the conversation the run's `--session-id` named,
+  and replays nothing the adapter would journal twice.
+
 ## Consequences
 
 - The desktop builds its Chat segment against these types now and turns it on when `agent-chat/1` is offered.

@@ -16,6 +16,7 @@ mod model_catalog;
 mod modes;
 pub mod packages;
 pub mod paths;
+mod probe;
 mod process_tree;
 pub mod prompt;
 pub mod provided_env;
