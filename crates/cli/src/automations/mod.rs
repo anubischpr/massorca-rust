@@ -1,20 +1,24 @@
 //! `massorca automations ...`: scheduled automations (decision 0123). Creates, edits, shows, lists, removes, enables and
 //! disables them; runs one now and lists its runs (decision 0125).
 
+mod destination;
 mod options;
 mod text;
 
 use clap::Subcommand;
 use massorca_client::Client;
+use massorca_protocol::capabilities;
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
-    AutomationCadence, AutomationCreateParams, AutomationRef, AutomationRunsParams,
-    AutomationUpdateParams, AutomationWeekday,
+    AutomationCadence, AutomationCreateParams, AutomationDestination, AutomationRef,
+    AutomationRunsParams, AutomationUpdateParams, AutomationWeekday,
 };
+use massorca_protocol::methods::workspaces::WorkspaceRef;
 
 pub use options::{CadenceArg, CreateArgs, EditArgs, WeekdayArg};
 
 use crate::connect::connect;
+use crate::cwd_path::PathRules;
 use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::target::Target;
@@ -78,16 +82,20 @@ pub async fn execute(
     let client = connect(target, autostart).await?;
     match command {
         AutomationsCommand::Create(args) => {
+            let params = create_params(&client, target, args).await?;
+            require_destinations(&client, params.destination.as_ref())?;
             let created = client
-                .automation_create(&create_params(args))
+                .automation_create(&params)
                 .await
                 .map_err(|error| too_old(error.into()))?;
             output.success(&created, &[text::automation_line(&created, "created")]);
         }
         AutomationsCommand::Edit(args) => {
             check_time_given(&client, &args).await?;
+            let update = update_params(args);
+            require_destinations(&client, update.destination.as_ref())?;
             let edited = client
-                .automation_update(&update_params(args))
+                .automation_update(&update)
                 .await
                 .map_err(|error| too_old(error.into()))?;
             output.success(&edited, &[text::automation_line(&edited, "updated")]);
@@ -177,6 +185,21 @@ fn too_old(error: CliError) -> CliError {
     error
 }
 
+/// A destination needs a host that knows `automation-destinations/1`; an older one would drop it.
+fn require_destinations(
+    client: &Client,
+    destination: Option<&AutomationDestination>,
+) -> Result<(), CliError> {
+    if destination.is_some() && !client.has_capability(capabilities::AUTOMATION_DESTINATIONS) {
+        return Err(CliError::new(
+            codes::METHOD_NOT_FOUND,
+            "this host is too old for automation destinations; update it",
+            exit::ERROR,
+        ));
+    }
+    Ok(())
+}
+
 /// A daily, hourly, weekdays or weekly schedule needs a time, and a cron automation keeps none. An edit that makes one
 /// of those without `--time` is refused here, so the message can name the option to add.
 async fn check_time_given(client: &Client, args: &EditArgs) -> Result<(), CliError> {
@@ -212,9 +235,52 @@ fn schedule_phrase(cadence: CadenceArg) -> &'static str {
     }
 }
 
-fn create_params(args: CreateArgs) -> AutomationCreateParams {
-    AutomationCreateParams {
-        project: args.project,
+/// The create params. The destination is the flags given, else the MassOrca workspace the current directory is in, which
+/// then also names the project when no `--project` is given (decision 0127).
+async fn create_params(
+    client: &Client,
+    target: &Target,
+    args: CreateArgs,
+) -> Result<AutomationCreateParams, CliError> {
+    let paths = PathRules::for_target(target);
+    let (destination, enclosing_project) = match destination::from_flags(
+        args.workspace.clone(),
+        args.new_worktree,
+        args.base_branch.clone(),
+    ) {
+        Some(given) => (Some(given), None),
+        None => match destination::enclosing(client, paths).await? {
+            Some(workspace) => (
+                Some(destination::existing(&workspace)),
+                Some(workspace.project_id),
+            ),
+            None => (None, None),
+        },
+    };
+    let project = match (
+        args.project.clone(),
+        enclosing_project,
+        args.workspace.as_deref(),
+    ) {
+        (Some(project), _, _) | (None, Some(project), _) => project,
+        (None, None, Some(workspace)) => {
+            client
+                .workspace_show(&WorkspaceRef {
+                    workspace: workspace.to_owned(),
+                })
+                .await?
+                .project_id
+        }
+        (None, None, None) => {
+            return Err(CliError::new(
+                "usage.missing_project",
+                "pass --project, or run inside a MassOrca worktree to use its project",
+                exit::USAGE,
+            ));
+        }
+    };
+    Ok(AutomationCreateParams {
+        project,
         name: args.name,
         prompt: args.prompt,
         agent: args.agent,
@@ -225,7 +291,8 @@ fn create_params(args: CreateArgs) -> AutomationCreateParams {
         zone: args.zone,
         grace_minutes: args.grace,
         creation_key: args.creation_key,
-    }
+        destination,
+    })
 }
 
 fn update_params(args: EditArgs) -> AutomationUpdateParams {
@@ -241,5 +308,6 @@ fn update_params(args: EditArgs) -> AutomationUpdateParams {
         cron: args.cron,
         zone: args.zone,
         grace_minutes: args.grace,
+        destination: destination::from_flags(args.workspace, args.new_worktree, args.base_branch),
     }
 }

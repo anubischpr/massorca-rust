@@ -56,9 +56,10 @@ impl From<WeekdayArg> for AutomationWeekday {
 pub struct CreateArgs {
     /// Name of the automation.
     pub name: String,
-    /// The project the runs work in: its id, its name or its path.
+    /// The project the runs work in: its id, its name or its path. Without it, the project of `--workspace`, or of the
+    /// MassOrca worktree the current directory is in.
     #[arg(long, value_name = "PROJECT")]
-    pub project: String,
+    pub project: Option<String>,
     /// The prompt the agent starts with on each run.
     #[arg(long, value_name = "TEXT")]
     pub prompt: String,
@@ -86,6 +87,15 @@ pub struct CreateArgs {
     /// A key a retried create repeats, so the retry returns the automation the first create made.
     #[arg(long, value_name = "KEY")]
     pub creation_key: Option<String>,
+    /// Runs in this existing workspace, by id, a worktree or a folder: every run goes there.
+    #[arg(long, value_name = "WORKSPACE", conflicts_with = "new_worktree")]
+    pub workspace: Option<String>,
+    /// Starts a new worktree for each run, titled with the automation's name, in the project's repository.
+    #[arg(long, conflicts_with = "workspace")]
+    pub new_worktree: bool,
+    /// The branch a new worktree per run starts from; needs `--new-worktree`.
+    #[arg(long, value_name = "BRANCH", requires = "new_worktree")]
+    pub base_branch: Option<String>,
 }
 
 /// Options of `automations edit`. Only the options given change; `--zone ""` returns it to the host's zone.
@@ -113,4 +123,13 @@ pub struct EditArgs {
     pub zone: Option<String>,
     #[arg(long, value_name = "MINUTES")]
     pub grace: Option<i64>,
+    /// Runs in this existing workspace, by id, a worktree or a folder: every run goes there.
+    #[arg(long, value_name = "WORKSPACE", conflicts_with = "new_worktree")]
+    pub workspace: Option<String>,
+    /// Starts a new worktree for each run, titled with the automation's name, in the project's repository.
+    #[arg(long, conflicts_with = "workspace")]
+    pub new_worktree: bool,
+    /// The branch a new worktree per run starts from; needs `--new-worktree`.
+    #[arg(long, value_name = "BRANCH", requires = "new_worktree")]
+    pub base_branch: Option<String>,
 }
