@@ -9,6 +9,7 @@ mod backup;
 mod bots;
 mod devices;
 mod error;
+mod migration_files;
 #[cfg(test)]
 mod migration_folder;
 mod migrations;
