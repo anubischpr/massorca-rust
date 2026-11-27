@@ -224,6 +224,65 @@ const FfiConverterTypeAgentSessionSummary = (() => {
 })();
 
 /**
+ * A bot of a team: the one that does the work of its routines.
+ */
+export type BotSummary = {
+  id: string;
+  teamId: string;
+  name: string;
+  /**
+   * Whether this is the team's lead bot.
+   */
+  lead: boolean;
+};
+
+/**
+ * Generated factory for {@link BotSummary} record objects.
+ */
+export const BotSummary = (() => {
+  const defaults = () => ({});
+  const create = (() => {
+    return uniffiCreateRecord<BotSummary, ReturnType<typeof defaults>>(
+      defaults,
+    );
+  })();
+  return Object.freeze({
+    create,
+    new: create,
+    defaults: () => Object.freeze(defaults()) as Partial<BotSummary>,
+  });
+})();
+
+const FfiConverterTypeBotSummary = (() => {
+  type TypeName = BotSummary;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      return {
+        id: FfiConverterString.readFromCursor(c),
+        teamId: FfiConverterString.readFromCursor(c),
+        name: FfiConverterString.readFromCursor(c),
+        lead: FfiConverterBool.readFromCursor(c),
+      };
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      FfiConverterString.writeIntoCursor(value.id, c);
+      FfiConverterString.writeIntoCursor(value.teamId, c);
+      FfiConverterString.writeIntoCursor(value.name, c);
+      FfiConverterBool.writeIntoCursor(value.lead, c);
+    }
+    allocationSize(value: TypeName): number {
+      return (
+        FfiConverterString.allocationSize(value.id) +
+        FfiConverterString.allocationSize(value.teamId) +
+        FfiConverterString.allocationSize(value.name) +
+        FfiConverterBool.allocationSize(value.lead)
+      );
+    }
+  }
+  return new FFIConverter();
+})();
+
+/**
  * One changed file. Each change reads as its word, such as `modified`.
  */
 export type GitFileStatus = {
@@ -643,6 +702,253 @@ const FfiConverterTypeProtocolInfo = (() => {
         FfiConverterString.allocationSize(value.serverName) +
         FfiConverterString.allocationSize(value.serverVersion) +
         FfiConverterSequenceString.allocationSize(value.capabilities)
+      );
+    }
+  }
+  return new FFIConverter();
+})();
+
+/**
+ * One run of a routine: an occurrence it claimed, or a run made now.
+ */
+export type RoutineRunSummary = {
+  id: string;
+  routineId: string;
+  /**
+   * The occurrence the run stands for, in UTC epoch milliseconds.
+   */
+  scheduledForMs: bigint;
+  /**
+   * The task the run made, when it made one.
+   */
+  taskId?: string;
+  /**
+   * Why the run or its task did not start, as a sentence.
+   */
+  error?: string;
+  /**
+   * The protocol code of `error`, such as `bot.not_found`.
+   */
+  errorCode?: string;
+  createdAtMs: bigint;
+};
+
+/**
+ * Generated factory for {@link RoutineRunSummary} record objects.
+ */
+export const RoutineRunSummary = (() => {
+  const defaults = () => ({});
+  const create = (() => {
+    return uniffiCreateRecord<RoutineRunSummary, ReturnType<typeof defaults>>(
+      defaults,
+    );
+  })();
+  return Object.freeze({
+    create,
+    new: create,
+    defaults: () => Object.freeze(defaults()) as Partial<RoutineRunSummary>,
+  });
+})();
+
+const FfiConverterTypeRoutineRunSummary = (() => {
+  type TypeName = RoutineRunSummary;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      return {
+        id: FfiConverterString.readFromCursor(c),
+        routineId: FfiConverterString.readFromCursor(c),
+        scheduledForMs: FfiConverterInt64.readFromCursor(c),
+        taskId: FfiConverterOptionalString.readFromCursor(c),
+        error: FfiConverterOptionalString.readFromCursor(c),
+        errorCode: FfiConverterOptionalString.readFromCursor(c),
+        createdAtMs: FfiConverterInt64.readFromCursor(c),
+      };
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      FfiConverterString.writeIntoCursor(value.id, c);
+      FfiConverterString.writeIntoCursor(value.routineId, c);
+      FfiConverterInt64.writeIntoCursor(value.scheduledForMs, c);
+      FfiConverterOptionalString.writeIntoCursor(value.taskId, c);
+      FfiConverterOptionalString.writeIntoCursor(value.error, c);
+      FfiConverterOptionalString.writeIntoCursor(value.errorCode, c);
+      FfiConverterInt64.writeIntoCursor(value.createdAtMs, c);
+    }
+    allocationSize(value: TypeName): number {
+      return (
+        FfiConverterString.allocationSize(value.id) +
+        FfiConverterString.allocationSize(value.routineId) +
+        FfiConverterInt64.allocationSize(value.scheduledForMs) +
+        FfiConverterOptionalString.allocationSize(value.taskId) +
+        FfiConverterOptionalString.allocationSize(value.error) +
+        FfiConverterOptionalString.allocationSize(value.errorCode) +
+        FfiConverterInt64.allocationSize(value.createdAtMs)
+      );
+    }
+  }
+  return new FFIConverter();
+})();
+
+/**
+ * A routine of a team: a schedule that starts its bot on a task each time it is due.
+ */
+export type RoutineSummary = {
+  id: string;
+  teamId: string;
+  /**
+   * The bot the runs' tasks are for; absent once that bot is removed.
+   */
+  botId?: string;
+  name: string;
+  /**
+   * `daily`, `weekly`, `monthly` or `once`; `unknown` for a cadence this build does not know.
+   */
+  cadence: string;
+  /**
+   * The time of day, `HH:MM`, 24-hour.
+   */
+  time: string;
+  /**
+   * The day of a weekly routine, `monday` to `sunday`; `unknown` for a day this build does not know.
+   */
+  weekday?: string;
+  /**
+   * The day of the month, 1 to 28, of a monthly routine.
+   */
+  monthDay?: number;
+  /**
+   * The date, `YYYY-MM-DD`, of a once routine.
+   */
+  runDate?: string;
+  /**
+   * An IANA zone name; absent means the host's zone.
+   */
+  zone?: string;
+  /**
+   * A paused routine has no next run until it is resumed.
+   */
+  paused: boolean;
+  /**
+   * The next run in UTC epoch milliseconds; absent while paused or once a one-time routine has run.
+   */
+  nextRunAtMs?: bigint;
+  createdAtMs: bigint;
+};
+
+/**
+ * Generated factory for {@link RoutineSummary} record objects.
+ */
+export const RoutineSummary = (() => {
+  const defaults = () => ({});
+  const create = (() => {
+    return uniffiCreateRecord<RoutineSummary, ReturnType<typeof defaults>>(
+      defaults,
+    );
+  })();
+  return Object.freeze({
+    create,
+    new: create,
+    defaults: () => Object.freeze(defaults()) as Partial<RoutineSummary>,
+  });
+})();
+
+const FfiConverterTypeRoutineSummary = (() => {
+  type TypeName = RoutineSummary;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      return {
+        id: FfiConverterString.readFromCursor(c),
+        teamId: FfiConverterString.readFromCursor(c),
+        botId: FfiConverterOptionalString.readFromCursor(c),
+        name: FfiConverterString.readFromCursor(c),
+        cadence: FfiConverterString.readFromCursor(c),
+        time: FfiConverterString.readFromCursor(c),
+        weekday: FfiConverterOptionalString.readFromCursor(c),
+        monthDay: FfiConverterOptionalUInt8.readFromCursor(c),
+        runDate: FfiConverterOptionalString.readFromCursor(c),
+        zone: FfiConverterOptionalString.readFromCursor(c),
+        paused: FfiConverterBool.readFromCursor(c),
+        nextRunAtMs: FfiConverterOptionalInt64.readFromCursor(c),
+        createdAtMs: FfiConverterInt64.readFromCursor(c),
+      };
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      FfiConverterString.writeIntoCursor(value.id, c);
+      FfiConverterString.writeIntoCursor(value.teamId, c);
+      FfiConverterOptionalString.writeIntoCursor(value.botId, c);
+      FfiConverterString.writeIntoCursor(value.name, c);
+      FfiConverterString.writeIntoCursor(value.cadence, c);
+      FfiConverterString.writeIntoCursor(value.time, c);
+      FfiConverterOptionalString.writeIntoCursor(value.weekday, c);
+      FfiConverterOptionalUInt8.writeIntoCursor(value.monthDay, c);
+      FfiConverterOptionalString.writeIntoCursor(value.runDate, c);
+      FfiConverterOptionalString.writeIntoCursor(value.zone, c);
+      FfiConverterBool.writeIntoCursor(value.paused, c);
+      FfiConverterOptionalInt64.writeIntoCursor(value.nextRunAtMs, c);
+      FfiConverterInt64.writeIntoCursor(value.createdAtMs, c);
+    }
+    allocationSize(value: TypeName): number {
+      return (
+        FfiConverterString.allocationSize(value.id) +
+        FfiConverterString.allocationSize(value.teamId) +
+        FfiConverterOptionalString.allocationSize(value.botId) +
+        FfiConverterString.allocationSize(value.name) +
+        FfiConverterString.allocationSize(value.cadence) +
+        FfiConverterString.allocationSize(value.time) +
+        FfiConverterOptionalString.allocationSize(value.weekday) +
+        FfiConverterOptionalUInt8.allocationSize(value.monthDay) +
+        FfiConverterOptionalString.allocationSize(value.runDate) +
+        FfiConverterOptionalString.allocationSize(value.zone) +
+        FfiConverterBool.allocationSize(value.paused) +
+        FfiConverterOptionalInt64.allocationSize(value.nextRunAtMs) +
+        FfiConverterInt64.allocationSize(value.createdAtMs)
+      );
+    }
+  }
+  return new FFIConverter();
+})();
+
+/**
+ * A team of the host, as the app lists it.
+ */
+export type TeamSummary = {
+  id: string;
+  name: string;
+};
+
+/**
+ * Generated factory for {@link TeamSummary} record objects.
+ */
+export const TeamSummary = (() => {
+  const defaults = () => ({});
+  const create = (() => {
+    return uniffiCreateRecord<TeamSummary, ReturnType<typeof defaults>>(
+      defaults,
+    );
+  })();
+  return Object.freeze({
+    create,
+    new: create,
+    defaults: () => Object.freeze(defaults()) as Partial<TeamSummary>,
+  });
+})();
+
+const FfiConverterTypeTeamSummary = (() => {
+  type TypeName = TeamSummary;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      return {
+        id: FfiConverterString.readFromCursor(c),
+        name: FfiConverterString.readFromCursor(c),
+      };
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      FfiConverterString.writeIntoCursor(value.id, c);
+      FfiConverterString.writeIntoCursor(value.name, c);
+    }
+    allocationSize(value: TypeName): number {
+      return (
+        FfiConverterString.allocationSize(value.id) +
+        FfiConverterString.allocationSize(value.name)
       );
     }
   }
@@ -3244,9 +3550,62 @@ export interface HostLike {
   ): /*throws*/ Promise<GitStatusSummary>;
   name(): string;
   /**
+   * Pauses a routine of `team`: it has no next run until it is resumed.
+   */
+  pauseRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<RoutineSummary>;
+  /**
    * The protocol version, the server and what it can do.
    */
   protocol(): ProtocolInfo;
+  /**
+   * Resumes a paused routine of `team` from now; runs missed while it was paused are not made up.
+   */
+  resumeRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<RoutineSummary>;
+  /**
+   * The newest `limit` runs of a routine, newest first; the host's default when `limit` is absent.
+   */
+  routineRuns(
+    team: string,
+    routine: string,
+    limit: number | undefined,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<Array<RoutineRunSummary>>;
+  /**
+   * Makes one run of a routine of `team` now. It does not move the routine's schedule.
+   */
+  runRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<RoutineRunSummary>;
+  /**
+   * The bots of `team` (its id or exact name), in the order the host lists them.
+   */
+  teamBots(
+    team: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<Array<BotSummary>>;
+  /**
+   * The routines of `team` (its id or exact name), in creation order.
+   */
+  teamRoutines(
+    team: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<Array<RoutineSummary>>;
+  /**
+   * The teams of the host, by name.
+   */
+  teams(asyncOpts_?: {
+    signal: AbortSignal;
+  }): /*throws*/ Promise<Array<TeamSummary>>;
   /**
    * The terminals of every workspace, or only those of `workspace` (its id), live and exited.
    */
@@ -3418,6 +3777,60 @@ export class Host extends UniffiAbstractObject implements HostLike {
   }
 
   /**
+   * Pauses a routine of `team`: it has no next run until it is resumed.
+   */
+  async pauseRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<RoutineSummary> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_pause_routine(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+            FfiConverterString.lower(routine, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterTypeRoutineSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
    * The protocol version, the server and what it can do.
    */
   protocol(): ProtocolInfo {
@@ -3434,6 +3847,327 @@ export class Host extends UniffiAbstractObject implements HostLike {
       return FfiConverterTypeProtocolInfo.lift(__rb);
     } finally {
       nativeModule().rustbuffer_free(__rb);
+    }
+  }
+
+  /**
+   * Resumes a paused routine of `team` from now; runs missed while it was paused are not made up.
+   */
+  async resumeRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<RoutineSummary> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_resume_routine(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+            FfiConverterString.lower(routine, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterTypeRoutineSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * The newest `limit` runs of a routine, newest first; the host's default when `limit` is absent.
+   */
+  async routineRuns(
+    team: string,
+    routine: string,
+    limit: number | undefined,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<Array<RoutineRunSummary>> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_routine_runs(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+            FfiConverterString.lower(routine, nativeModule().rustbuffer_alloc),
+            FfiConverterOptionalUInt32.lower(
+              limit,
+              nativeModule().rustbuffer_alloc,
+            ),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterSequenceTypeRoutineRunSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * Makes one run of a routine of `team` now. It does not move the routine's schedule.
+   */
+  async runRoutine(
+    team: string,
+    routine: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<RoutineRunSummary> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_run_routine(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+            FfiConverterString.lower(routine, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterTypeRoutineRunSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * The bots of `team` (its id or exact name), in the order the host lists them.
+   */
+  async teamBots(
+    team: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<Array<BotSummary>> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_team_bots(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterSequenceTypeBotSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * The routines of `team` (its id or exact name), in creation order.
+   */
+  async teamRoutines(
+    team: string,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<Array<RoutineSummary>> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_team_routines(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(team, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterSequenceTypeRoutineSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * The teams of the host, by name.
+   */
+  async teams(asyncOpts_?: {
+    signal: AbortSignal;
+  }): Promise<Array<TeamSummary>> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_teams(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterSequenceTypeTeamSummary.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
     }
   }
 
@@ -4495,6 +5229,12 @@ const FfiConverterSequenceTypeGitFileStatus = new FfiConverterArray(
   FfiConverterTypeGitFileStatus,
 );
 
+// FfiConverter for number | undefined
+const FfiConverterOptionalUInt8 = new FfiConverterOptional(FfiConverterUInt8);
+
+// FfiConverter for bigint | undefined
+const FfiConverterOptionalInt64 = new FfiConverterOptional(FfiConverterInt64);
+
 // FfiConverter for Array<AgentSessionSummary>
 const FfiConverterSequenceTypeAgentSessionSummary = new FfiConverterArray(
   FfiConverterTypeAgentSessionSummary,
@@ -4502,9 +5242,6 @@ const FfiConverterSequenceTypeAgentSessionSummary = new FfiConverterArray(
 
 // FfiConverter for number | undefined
 const FfiConverterOptionalUInt32 = new FfiConverterOptional(FfiConverterUInt32);
-
-// FfiConverter for bigint | undefined
-const FfiConverterOptionalInt64 = new FfiConverterOptional(FfiConverterInt64);
 
 // FfiConverter for AgentEvent | undefined
 const FfiConverterOptionalTypeAgentEvent = new FfiConverterOptional(
@@ -4519,6 +5256,26 @@ const FfiConverterOptionalTypeGitEvent = new FfiConverterOptional(
 // FfiConverter for TerminalEvent | undefined
 const FfiConverterOptionalTypeTerminalEvent = new FfiConverterOptional(
   FfiConverterTypeTerminalEvent,
+);
+
+// FfiConverter for Array<RoutineRunSummary>
+const FfiConverterSequenceTypeRoutineRunSummary = new FfiConverterArray(
+  FfiConverterTypeRoutineRunSummary,
+);
+
+// FfiConverter for Array<BotSummary>
+const FfiConverterSequenceTypeBotSummary = new FfiConverterArray(
+  FfiConverterTypeBotSummary,
+);
+
+// FfiConverter for Array<RoutineSummary>
+const FfiConverterSequenceTypeRoutineSummary = new FfiConverterArray(
+  FfiConverterTypeRoutineSummary,
+);
+
+// FfiConverter for Array<TeamSummary>
+const FfiConverterSequenceTypeTeamSummary = new FfiConverterArray(
+  FfiConverterTypeTeamSummary,
 );
 
 // FfiConverter for Array<TerminalSummary>
@@ -4628,11 +5385,67 @@ function uniffiEnsureInitialized() {
     );
   }
   if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_pause_routine() !==
+    16160
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_pause_routine',
+    );
+  }
+  if (
     nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_protocol() !==
     36433
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_massorca_client_ffi_checksum_method_host_protocol',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_resume_routine() !==
+    32329
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_resume_routine',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_routine_runs() !==
+    40162
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_routine_runs',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_run_routine() !==
+    4887
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_run_routine',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_team_bots() !==
+    3795
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_team_bots',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_team_routines() !==
+    34967
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_team_routines',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_teams() !==
+    7113
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_teams',
     );
   }
   if (
@@ -4806,6 +5619,7 @@ export default Object.freeze({
     FfiConverterTypeAgentItem,
     FfiConverterTypeAgentSessionSummary,
     FfiConverterTypeAgentWatch,
+    FfiConverterTypeBotSummary,
     FfiConverterTypeFfiError,
     FfiConverterTypeGitEvent,
     FfiConverterTypeGitFileStatus,
@@ -4819,7 +5633,10 @@ export default Object.freeze({
     FfiConverterTypeMassOrca,
     FfiConverterTypeOfferSummary,
     FfiConverterTypeProtocolInfo,
+    FfiConverterTypeRoutineRunSummary,
+    FfiConverterTypeRoutineSummary,
     FfiConverterTypeStorageError,
+    FfiConverterTypeTeamSummary,
     FfiConverterTypeTerminalEvent,
     FfiConverterTypeTerminalSummary,
     FfiConverterTypeTerminalView,
