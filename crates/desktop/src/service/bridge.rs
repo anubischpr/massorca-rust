@@ -64,10 +64,11 @@ use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
-use super::host_sessions::{self, Followed};
+use super::host_sessions;
 use super::host_terminal::{self, HostAttach};
 use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
@@ -142,7 +143,7 @@ pub(crate) enum Command {
     Automation(AutomationCommand),
     /// A calendar call (decision 0124), answered on its oneshot.
     Calendar(CalendarCommand),
-    /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
+    /// A paired host's Marketplace lists, read on the host's live connection; answered as a store update.
     HostRead {
         host: String,
         request: u64,
@@ -158,7 +159,7 @@ pub(crate) enum Command {
         request: u64,
         refresh: bool,
     },
-    /// Discovers a paired host's skills on its own connection; the answer is a store update tagged with `request`.
+    /// Discovers a paired host's skills on its live connection; the answer is a store update tagged with `request`.
     HostSkills {
         host: String,
         request: u64,
@@ -210,13 +211,13 @@ pub(crate) enum Command {
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
-    /// `agent.stop` on a paired host's own connection, answered on its oneshot; never sent to This PC's service.
+    /// `agent.stop` on a paired host's live connection, answered on its oneshot; never sent to This PC's service.
     HostAgentStop {
         host: String,
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
-    /// A terminal of a paired host, attached over that host's own connection; its items and writes are the attach's.
+    /// A terminal of a paired host, attached over that host's live connection; its items and writes are the attach's.
     HostTerminalAttach(HostAttach),
     /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
     AgentForget {
@@ -289,6 +290,10 @@ pub(crate) enum Command {
     },
     /// Re-reads the paired hosts and checks each one. Needs no connection to this computer's service.
     RefreshHosts,
+    /// Tries one paired host again at once, closing its connection first when it has one.
+    ReconnectHost {
+        name: String,
+    },
     /// Installs the service on an SSH host and pairs with it. Needs no connection to this computer's service.
     AddSshHost {
         host: SshHost,
@@ -626,6 +631,7 @@ impl ServiceBridge {
         let (connection_tx, connection) = watch::channel(ConnectionState::Connecting);
         let (closing, _) = watch::channel(false);
         let (finished_tx, finished) = watch::channel(false);
+        let live_hosts = LiveHosts::new(&profile, updates_tx.clone());
         let link = Link {
             profile,
             options,
@@ -642,7 +648,7 @@ impl ServiceBridge {
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
             closing: closing.subscribe(),
-            followed: Followed::default(),
+            live_hosts,
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -754,17 +760,18 @@ struct Link {
     accounts_order: Arc<AccountsFreshness>,
     /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
     closing: watch::Receiver<bool>,
-    /// The paired hosts a task follows, so the poll leaves them to it (STAT-16).
-    followed: Followed,
+    /// One live link per paired host, kept whatever this computer's service is doing (REM-07).
+    live_hosts: LiveHosts,
 }
 
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
-        hosts::check_hosts_again(
+        hosts::follow_paired(&self.profile, &self.live_hosts, &self.updates);
+        hosts::relist_hosts(
             self.profile.clone(),
+            self.live_hosts.clone(),
             self.updates.clone(),
-            self.followed.clone(),
         );
         let mut backoff = backoff();
         let mut link_was_up = false;
@@ -811,6 +818,7 @@ impl Link {
     fn host_call(&self, command: Command) -> Option<Command> {
         match command {
             Command::RefreshHosts
+            | Command::ReconnectHost { .. }
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
             | Command::RemoveHost { .. }
@@ -820,7 +828,7 @@ impl Link {
                     self.profile.clone(),
                     command,
                     self.updates.clone(),
-                    &self.followed,
+                    &self.live_hosts,
                 );
                 None
             }
@@ -829,23 +837,23 @@ impl Link {
                 session,
                 reply,
             } => {
-                host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
+                host_sessions::spawn_stop(self.live_hosts.clone(), host, session, reply);
                 None
             }
             Command::HostTerminalAttach(attach) => {
-                host_terminal::spawn_attach(self.profile.clone(), attach);
+                host_terminal::spawn_attach(self.live_hosts.clone(), attach);
                 None
             }
             Command::HostedServices {
                 host: Some(host),
                 command,
             } => {
-                hosted_services::spawn_host(self.profile.clone(), host, command);
+                hosted_services::spawn_host(self.live_hosts.clone(), host, command);
                 None
             }
             Command::HostRead { host, request } => {
                 extensions::spawn_host_read(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     self.updates.clone(),
@@ -858,7 +866,7 @@ impl Link {
                 command,
             } => {
                 extensions::spawn_host_call(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     command,
@@ -872,7 +880,7 @@ impl Link {
                 refresh,
             } => {
                 skills::spawn_host_read(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     refresh,

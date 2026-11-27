@@ -12,9 +12,9 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
-    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceRenameParams, WorkspaceUpdateParams,
+    self, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceCreateParams,
+    WorkspaceCurrentParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
+    WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -196,6 +196,26 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
     })
 }
 
+/// Forgets the terminals of the removed workspace `id` with their output, exited ones and those a retained session kept
+/// included; the workspace's session rows and their archived output go with its row. `keep` is the archive script's
+/// terminal, whose output the removal names. Files on disk are not touched.
+async fn forget_terminals(ctx: &RequestCtx, id: &str, keep: Option<String>) {
+    let terminals = ctx.state.terminals.clone();
+    let id = id.to_owned();
+    let forgotten = tokio::task::spawn_blocking(move || {
+        for terminal in terminals.list(Some(&id)) {
+            if keep.as_deref() != Some(terminal.id.as_str()) {
+                // Already exited after `stop_runs`; one gone meanwhile needs nothing more.
+                let _ = terminals.close(&terminal.id);
+            }
+        }
+    })
+    .await;
+    if let Err(error) = forgotten {
+        tracing::warn!(%error, "forgetting a removed workspace's terminals failed");
+    }
+}
+
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_workspace_with_git_state(&params.workspace)).await
@@ -229,6 +249,7 @@ pub(crate) async fn finish_begun_removal(
     let domain = for_mutation(ctx).await?;
     publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun);
     let removed = blocking(move || domain.finish_remove(&begun, waivers)).await?;
+    forget_terminals(ctx, &removed.workspace.id, None).await;
     publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
 }
@@ -263,6 +284,15 @@ pub(crate) async fn remove_workspace(
     stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
     let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    let archive_terminal = match &archive {
+        Some(WorkspaceArchive::Succeeded { terminal })
+        | Some(WorkspaceArchive::Failed {
+            terminal: Some(terminal),
+            ..
+        }) => Some(terminal.clone()),
+        _ => None,
+    };
+    forget_terminals(ctx, &begun.id, archive_terminal).await;
     removed.archive = archive;
     publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
