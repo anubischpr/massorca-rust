@@ -20,5 +20,8 @@ tempfile.workspace = true
 zip.workspace = true
 massorca-process.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+junction = "=2.1.0"
+
 [lints]
 workspace = true

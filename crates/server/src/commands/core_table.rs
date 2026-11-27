@@ -693,6 +693,21 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.set-options",
+            "Change an agent session's model, effort or fast mode, live where its kind allows or at its next resume",
+            "agent.set_options",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "fast": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.seen",
             "Mark an agent session's waiting or done state as seen",
             "agent.mark_seen",

@@ -1,6 +1,8 @@
 //! The client of the MassOrca service: connects to a profile's endpoint, starts the service when allowed, and makes typed
 //! calls and subscriptions over one connection (ADR 0002, 0003).
 
+mod automation_calls;
+mod calendar_calls;
 mod client;
 #[cfg(feature = "local")]
 mod connect;
@@ -41,7 +43,7 @@ pub use error::ClientError;
 pub use error::profile_refusal;
 pub use forward_calls::{ForwardEnd, ForwardHandle};
 pub use handshake::Welcome;
-pub use host_link::{HostDial, LiveHost, LiveState};
+pub use host_link::{HostDial, LiveHost, LiveState, LiveWatch};
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::{DeviceRevocation, Hosts, SshInstall};

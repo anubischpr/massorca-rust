@@ -7,6 +7,8 @@ use massorca_protocol::methods::extensions::{
     RiskLevel, SourceKind,
 };
 
+use massorca_protocol::methods::extension_points::ExtensionPointsList;
+
 use crate::workspace_text;
 
 /// Items as a table; `none` is the line for an empty list.
@@ -35,12 +37,15 @@ pub fn item_rows(items: &[ExtensionItem], none: &str) -> Vec<String> {
     lines
 }
 
-/// What detection sees for each agent CLI: the path found, or that none was found, and the PATH it searched.
+/// What detection sees for each agent CLI and host program: the path found, or that none was found, and the PATH it
+/// searched.
 pub fn doctor_lines(item: &ExtensionItem) -> Vec<String> {
     let mut lines = vec![format!("{} ({})", item.name, item.id)];
-    for agent in &item.agents {
+    let agents = item.agents.iter().map(|agent| ("agent", agent));
+    let programs = item.programs.iter().map(|program| ("program", program));
+    for (label, agent) in agents.chain(programs) {
         let Some(cli) = &agent.cli else {
-            lines.push(format!("agent {}: no CLI declared", agent.id));
+            lines.push(format!("{label} {}: no CLI declared", agent.id));
             continue;
         };
         let found = match (agent.detected, &agent.program_path) {
@@ -50,7 +55,7 @@ pub fn doctor_lines(item: &ExtensionItem) -> Vec<String> {
         };
         let source = agent.path_source.as_deref().unwrap_or("unknown");
         lines.push(format!(
-            "agent {}: {} {found}; PATH source: {source}",
+            "{label} {}: {} {found}; PATH source: {source}",
             agent.id, cli.binary
         ));
     }
@@ -76,7 +81,9 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
     for permission in &item.permissions {
         lines.push(permission_line(permission));
     }
-    for agent in &item.agents {
+    let agents = item.agents.iter().map(|agent| ("agent", agent));
+    let programs = item.programs.iter().map(|program| ("program", program));
+    for (label, agent) in agents.chain(programs) {
         let found = match &agent.program_path {
             Some(path) if agent.detected => format!("detected at {path}"),
             _ => "not detected".to_owned(),
@@ -86,7 +93,7 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
         } else {
             ""
         };
-        lines.push(format!("agent {}: {found}{by_package}", agent.id));
+        lines.push(format!("{label} {}: {found}{by_package}", agent.id));
         if let Some(cli) = &agent.cli {
             let checked = cli
                 .source_checked
@@ -166,6 +173,35 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
 
 /// What an install did.
 /// A package's runs, oldest first, each followed by the output lines it kept; `none` when it has never run.
+/// Each owner with the keys it holds on each point, then the enabled extensions that registered nothing.
+pub fn points_lines(points: &ExtensionPointsList) -> Vec<String> {
+    let mut lines = Vec::new();
+    for owner in &points.owners {
+        lines.push(owner.owner.clone());
+        for (point, keys) in [
+            ("tools", &owner.tools),
+            ("skills", &owner.skills),
+            ("views", &owner.views),
+            ("themes", &owner.themes),
+            ("status rules", &owner.status_rules),
+        ] {
+            if !keys.is_empty() {
+                lines.push(format!("  {point}: {}", keys.join(", ")));
+            }
+        }
+    }
+    lines.extend(points.problems.iter().map(|problem| {
+        format!(
+            "{}: nothing registered ({}): {}",
+            problem.id, problem.code, problem.message
+        )
+    }));
+    if lines.is_empty() {
+        lines.push("no extension registered on the points".to_owned());
+    }
+    lines
+}
+
 pub fn run_lines(log: &ExtensionLog, none: &str) -> Vec<String> {
     if log.runs.is_empty() {
         return vec![none.to_owned()];
@@ -303,6 +339,15 @@ fn plan_line(plan: &CliPlan) -> String {
                 ""
             }
         ),
+        CliPlanState::Manual { commands } => format!(
+            "cli {} ({binary}): not found; it needs administrator rights, so run this command yourself (MassOrca never runs it): {}",
+            plan.agent,
+            commands
+                .iter()
+                .map(|command| command_text(command))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
         CliPlanState::Unsupported => format!(
             "cli {} ({binary}): not found, and no vendor command for this system; the agent registers without it",
             plan.agent
@@ -438,4 +483,43 @@ fn command_lines(plan: &CliPlan) -> Vec<String> {
         ));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_protocol::methods::extension_points::{
+        ExtensionPointOwner, ExtensionPointProblem, ExtensionPointsList,
+    };
+
+    use super::points_lines;
+
+    #[test]
+    fn points_list_each_owner_s_keys_and_the_packages_that_registered_nothing() {
+        let points = ExtensionPointsList {
+            owners: vec![ExtensionPointOwner {
+                owner: "ext:acme.all".to_owned(),
+                skills: vec!["acme.all/review".to_owned()],
+                status_rules: vec!["acme.all/waiting".to_owned()],
+                ..ExtensionPointOwner::default()
+            }],
+            problems: vec![ExtensionPointProblem {
+                id: "acme.bad".to_owned(),
+                code: "extension.tampered".to_owned(),
+                message: "the files of acme.bad cannot be trusted".to_owned(),
+            }],
+        };
+        assert_eq!(
+            points_lines(&points),
+            [
+                "ext:acme.all",
+                "  skills: acme.all/review",
+                "  status rules: acme.all/waiting",
+                "acme.bad: nothing registered (extension.tampered): the files of acme.bad cannot be trusted",
+            ]
+        );
+        assert_eq!(
+            points_lines(&ExtensionPointsList::default()),
+            ["no extension registered on the points"]
+        );
+    }
 }

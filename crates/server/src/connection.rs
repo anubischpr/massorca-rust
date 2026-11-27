@@ -1,6 +1,7 @@
 //! One client connection: the handshake, then requests and streams until the peer leaves or the service stops.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use tokio::sync::mpsc;
@@ -49,6 +50,8 @@ pub(crate) async fn serve(
     let _reader = AbortOnDrop::new(reader.abort_handle());
     let _writer = AbortOnDrop::new(writer.abort_handle());
 
+    let mut shutdown_seen = None;
+    let mut connection_id = None;
     let serving = async {
         if let Some(negotiated) =
             handshake::accept(&mut inbound, &outbound, &state, max_frame_len, &origin).await
@@ -57,6 +60,7 @@ pub(crate) async fn serve(
                 pending.authenticated();
             }
             // Revoking the device closes this connection at once (decision 0041).
+            connection_id = Some(negotiated.connection_id.clone());
             let mut live = negotiated.live;
             let session = Arc::new(Session {
                 state,
@@ -68,7 +72,7 @@ pub(crate) async fn serve(
                 max_frame_len,
                 streams: StreamTable::default(),
             });
-            run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
+            shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
         }
     };
     let writer_ended = tokio::select! {
@@ -84,6 +88,13 @@ pub(crate) async fn serve(
     }
     // Dropping an unopened gate ends the reader, and with it the writer; a refusal must be flushed first.
     drop(pre_auth);
+    // Timing only, no payloads: tells a connection that never returned from one that returned late.
+    tracing::debug!(
+        connection = connection_id.as_deref().unwrap_or("none"),
+        writer_ended,
+        since_shutdown = ?shutdown_seen.map(|seen: Instant| seen.elapsed()),
+        "connection served"
+    );
 }
 
 /// Why a session stopped reading requests.
@@ -101,7 +112,7 @@ async fn run_session(
     inbound: &mut mpsc::Receiver<Frame>,
     signal: &mut ShutdownSignal,
     mut live: Option<&mut LiveGuard>,
-) {
+) -> Option<Instant> {
     let mut requests = JoinSet::new();
     let closing = loop {
         tokio::select! {
@@ -119,6 +130,7 @@ async fn run_session(
         }
     };
 
+    let shutdown_seen = (closing == Closing::ShuttingDown).then(Instant::now);
     // Each open stream is told why it ends, so a client does not mistake it for a finished stream.
     let reason = match closing {
         Closing::PeerLeft => None,
@@ -139,6 +151,7 @@ async fn run_session(
     while requests.join_next().await.is_some() {}
     // Also ends streams that requests opened while draining.
     end_streams(session, reason.as_ref()).await;
+    shutdown_seen
 }
 
 async fn end_streams(session: &Session, reason: Option<&ErrorBody>) {

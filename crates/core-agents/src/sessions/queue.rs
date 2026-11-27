@@ -1236,6 +1236,7 @@ mod tests {
             pending: None,
             pending_switch: None,
             typed_since_report,
+            settle_until: None,
             switching: false,
             delivering: true,
             finished: false,

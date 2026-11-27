@@ -11,6 +11,7 @@ mod context;
 mod dispatch;
 mod error;
 mod event_bus;
+mod extension_points;
 mod features;
 mod handshake;
 mod instance_lock;

@@ -77,6 +77,15 @@ pub(crate) fn reasons(manifest: &Manifest) -> Vec<RiskReason> {
             );
         }
     }
+    for program in &contributes.host_programs {
+        push(format!("hostPrograms:{}", program.id), PROGRAM);
+        if !program.cli.install.is_empty() {
+            push(
+                format!("hostPrograms:{}:install", program.id),
+                VENDOR_INSTALLER,
+            );
+        }
+    }
     for server in &contributes.mcp_servers {
         push(format!("mcpServers:{}", server.id), PROGRAM);
     }

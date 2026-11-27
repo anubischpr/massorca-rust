@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::AbortHandle;
 
 #[cfg(feature = "local")]
 use crate::connect;
@@ -26,12 +27,15 @@ use crate::transport::FrameIo;
 /// Items a subscriber may leave unread before its stream ends with `stream.overflow`.
 const SUBSCRIPTION_CAPACITY: usize = 256;
 
-/// A connection to a service. Clones share it, and it ends when the last clone is dropped.
+/// A connection to a service. Clones share it, and it ends when the last clone is dropped or one of them calls
+/// `close`.
 #[derive(Clone)]
 pub struct Client {
     shared: Arc<Shared>,
     welcome: Arc<Welcome>,
     outbound: mpsc::Sender<Frame>,
+    /// The socket reader and writer; stopping them ends the connection for every clone.
+    sockets: Arc<[AbortHandle; 2]>,
 }
 
 impl fmt::Debug for Client {
@@ -62,9 +66,21 @@ impl Client {
             .any(|offered| offered == name)
     }
 
+    /// Ends the connection for every clone at once: pending calls fail as disconnected and open streams end as lost.
+    pub fn close(&self) {
+        for socket in self.sockets.iter() {
+            socket.abort();
+        }
+    }
+
     /// Resolves once the connection has ended: the service closed it, or it was lost. Cancel-safe.
     pub async fn closed(&self) {
         self.shared.closed().await;
+    }
+
+    /// Whether the connection has ended, without waiting. See [`Client::closed`].
+    pub fn is_closed(&self) -> bool {
+        self.shared.is_closed()
     }
 
     /// Calls a method and decodes its result. A failure the service reports is `ClientError::Remote`.
@@ -167,11 +183,13 @@ impl Client {
             ..
         } = io;
         let shared = Arc::new(Shared::default());
+        let sockets = Arc::new([reader.abort_handle(), writer.abort_handle()]);
         tokio::spawn(pump::run(Arc::clone(&shared), inbound, reader, writer));
         Self {
             shared,
             welcome: Arc::new(welcome),
             outbound,
+            sockets,
         }
     }
 }

@@ -56,6 +56,8 @@ pub const RESUME: &str = "agent.resume";
 pub const FORK: &str = "agent.fork";
 /// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
 pub const SET_MODE: &str = "agent.set_mode";
+/// Changes a session's model, effort or fast mode (decision 0171). Capability `agent-options-live/1`.
+pub const SET_OPTIONS: &str = "agent.set_options";
 /// Params: [`AgentMarkSeenParams`]. Result: [`AgentSession`]. Marks a session's latest `waiting` or `done` as seen
 /// (capability `agent-seen/1`).
 pub const MARK_SEEN: &str = "agent.mark_seen";
@@ -667,6 +669,52 @@ pub enum ModeApplied {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentModeSet {
     pub applied: ModeApplied,
+    pub session: AgentSession,
+}
+
+/// Params of `agent.set_options` (decision 0171). An option left out keeps its value; at least one must be named. The
+/// values follow `agent.start`: a `model` and an `effort` the kind declares, and `fast` on a model that takes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetOptionsParams {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
+}
+
+/// Where one option that `agent.set_options` changed took effect (decision 0171).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OptionApplied {
+    /// The option was typed into the running agent, through the live command its kind declares. Nothing confirms the
+    /// agent took it: a fast mode the agent did not take stays unconfirmed (the session's `fast.confirmed`).
+    Live,
+    /// The option is kept for the session's next `agent.resume`; the running agent keeps its value until then.
+    NextResume,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where each option that `agent.set_options` changed took effect (decision 0171). An option that already had the value
+/// asked for is absent: nothing is typed for it, though its value is still kept for the next resume.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptionsApplied {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<OptionApplied>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<OptionApplied>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<OptionApplied>,
+}
+
+/// Result of `agent.set_options`: where each changed option took effect, and the session after the change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentOptionsSet {
+    pub applied: OptionsApplied,
     pub session: AgentSession,
 }
 

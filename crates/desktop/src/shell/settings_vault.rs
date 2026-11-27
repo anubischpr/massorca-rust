@@ -3,6 +3,7 @@
 
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, SharedString, div, px};
+use massorca_protocol::methods::secrets::{SecretName, SecretRemoved};
 use massorca_ui::components::badge::Badge;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
@@ -20,6 +21,7 @@ use crate::model::secret_vault::{
     ScopeGroup, SecretRow, VaultPage, VaultScopeFilter, filtered_groups, group_count_line,
 };
 use crate::model::settings_sections::SettingsSection;
+use crate::service::Refusal;
 use crate::shell::Shell;
 
 /// The page: the header, the toolbar, the status line, then the cards of the scopes the filter keeps.
@@ -29,6 +31,7 @@ pub(super) fn vault_page(frame: &SettingsFrame<'_>, cx: &mut App) -> Vec<AnyElem
     page.extend(requests_block(frame, &theme));
     page.push(toolbar(frame, &theme));
     page.extend(status_line(frame, &theme));
+    page.extend(notice_line(frame, &theme));
     let VaultPage::Listed(listing) = &frame.vault else {
         return page;
     };
@@ -274,6 +277,18 @@ fn status_line(frame: &SettingsFrame<'_>, theme: &Theme) -> Option<AnyElement> {
     )
 }
 
+/// The last unlink's refusal, in the danger tone, until the next unlink.
+fn notice_line(frame: &SettingsFrame<'_>, theme: &Theme) -> Option<AnyElement> {
+    let text = frame.model.vault_notice.clone()?;
+    Some(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(theme.palette.status.danger_fg)
+            .child(text)
+            .into_any_element(),
+    )
+}
+
 /// One scope's card: its icon and title with the count, then each name in it.
 fn scope_card(group: &ScopeGroup, frame: &SettingsFrame<'_>, theme: &Theme) -> AnyElement {
     let p = &theme.palette;
@@ -349,6 +364,8 @@ fn name_row(
                 frame,
                 connected,
             ));
+    } else {
+        actions = actions.child(unlink_button(&row.scope, &row.name, frame, connected));
     }
     let selector = format!("settings-vault-{}-{}", row.scope, row.name);
     div()
@@ -415,6 +432,27 @@ fn rotate_button(
     .into_any_element()
 }
 
+/// Unlink: removes this scope's link to the owner's name, with no confirm; the owner keeps the secret.
+fn unlink_button(
+    scope: &str,
+    name: &str,
+    frame: &SettingsFrame<'_>,
+    connected: bool,
+) -> AnyElement {
+    let (scope, name) = (scope.to_owned(), name.to_owned());
+    let shell = frame.shell.clone();
+    Button::new(
+        SharedString::from(format!("settings-vault-unlink-{scope}-{name}")),
+        "Unlink",
+    )
+    .variant(ButtonVariant::Secondary)
+    .disabled(!connected)
+    .on_click(move |_, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.unlink_secret(&scope, &name, cx));
+    })
+    .into_any_element()
+}
+
 /// Delete: a trash icon, named for its secret, that opens the confirm naming the scopes losing it.
 fn delete_button(
     scope: &str,
@@ -445,6 +483,42 @@ fn delete_button(
 
 impl Shell {
     /// The search over names: the text the field settled on.
+    /// Unlink: asks the service to remove this scope's link to `name`. The owner keeps the secret; the list follows
+    /// the refetch that the answer triggers, and a refusal is kept on the page.
+    fn unlink_secret(&mut self, scope: &str, name: &str, cx: &mut Context<Self>) {
+        self.settings.vault_notice = None;
+        let Some(service) = self.service.clone() else {
+            self.settings.vault_notice =
+                Some(Refusal::unavailable("The service is not connected.").message());
+            cx.notify();
+            return;
+        };
+        let params = SecretName {
+            scope: scope.to_owned(),
+            name: name.to_owned(),
+        };
+        let name = name.to_owned();
+        cx.spawn(async move |this, cx| {
+            let result = service.secret_unlink(params).await;
+            let _ = this.update(cx, |shell, cx| shell.unlink_answered(&name, result, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The answer to an unlink: removed needs no word, since the list follows; a refusal names the link that stays.
+    fn unlink_answered(
+        &mut self,
+        name: &str,
+        result: Result<SecretRemoved, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.vault_notice = result
+            .err()
+            .map(|refusal| format!("{name} stays linked: {}", refusal.message()));
+        cx.notify();
+    }
+
     pub(in crate::shell) fn set_vault_query(&mut self, text: &str, cx: &mut Context<Self>) {
         self.settings.vault_query = text.to_owned();
         cx.notify();

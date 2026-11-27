@@ -143,6 +143,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Creates, edits, lists, shows, removes, enables and disables scheduled automations (decision 0123).
+    Automations {
+        #[command(subcommand)]
+        command: crate::automations::AutomationsCommand,
+    },
+    /// Lists the runs of routines and automations in a window of days, on the shared schedule (decision 0124).
+    Calendar(crate::calendar::CalendarArgs),
     /// Installs, lists, enables, disables and removes extensions, such as the agent packages.
     #[command(visible_alias = "ext")]
     Extension {
@@ -507,7 +514,8 @@ pub enum PairCommand {
 #[command(group(clap::ArgGroup::new("which").required(true).args(["offer_id", "all"])))]
 pub struct PairCancelArgs {
     /// The offer id `pair offer` printed.
-    #[arg(value_name = "OFFER-ID")]
+    // Ids are base64url and may start with '-'.
+    #[arg(value_name = "OFFER-ID", allow_hyphen_values = true)]
     pub offer_id: Option<String>,
     /// Retires every pending offer of the service.
     #[arg(long)]

@@ -47,11 +47,9 @@ pub fn uninstall_effects(manifest: &Manifest, cli_installed: bool) -> UninstallE
             _ => (Vec::new(), secrets.is_some()),
         };
     let cli_binaries = if cli_installed {
-        contributes
-            .agent_adapters
-            .iter()
-            .filter_map(|adapter| adapter.cli.as_ref())
-            .map(|cli| cli.binary.clone())
+        manifest
+            .program_clis()
+            .map(|(_, cli)| cli.binary.clone())
             .collect()
     } else {
         Vec::new()
