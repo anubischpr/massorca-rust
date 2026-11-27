@@ -3,10 +3,11 @@
 //! own. Each computer is a temporary profile; nothing reaches a real service or a real host.
 
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use massorca_client::Hosts;
 use massorca_desktop::model::navigation::Mode;
 use massorca_desktop::model::remote_sessions::remote_sessions;
 use massorca_desktop::model::service_view::service_snapshot;
@@ -24,6 +25,10 @@ use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service, Servic
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, timeout};
+
+#[path = "support/host_proxy.rs"]
+mod host_proxy;
+use host_proxy::HostProxy;
 
 struct TempHome {
     _temp: TempDir,
@@ -47,11 +52,13 @@ fn profile(home: &Path) -> Profile {
 }
 
 async fn start_listening(home: &Path) -> RunningService {
+    start_listening_at(home, SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await
+}
+
+/// A service that listens on `address`, as a host coming back where it was paired.
+async fn start_listening_at(home: &Path, address: SocketAddr) -> RunningService {
     let network = NetworkConfig {
-        listen: vec![ListenSpec::Address(SocketAddr::from((
-            Ipv4Addr::LOCALHOST,
-            0,
-        )))],
+        listen: vec![ListenSpec::Address(address)],
     };
     Service::start_with_network(
         ServiceConfig {
@@ -242,8 +249,7 @@ async fn a_paired_hosts_session_is_listed_and_kept_unverifiable_when_the_host_st
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
         .await
         .expect("the offer pairs");
-    // Pairing does not check the host on its own; a check reads its sessions on the same connection.
-    client_handle.refresh_hosts();
+    // The host's live link reads its sessions on its connection; nothing needs to ask.
     let mut state = StoreState::default();
     let session_id = session.id.clone();
     until(&mut client_updates, &mut state, "the host's session", |s| {
@@ -268,10 +274,10 @@ async fn a_paired_hosts_session_is_listed_and_kept_unverifiable_when_the_host_st
         "the host's session is not in This PC's rows"
     );
 
-    // The host stops: the next check does not reach it, and its session stays listed, unverifiable.
+    // The host stops: its link loses the connection, and its session stays listed, unverifiable.
+    let address = paired_address(&client_home.path, "vps");
     drop(server_bridge);
     stop_service(server).await;
-    client_handle.refresh_hosts();
     until(&mut client_updates, &mut state, "the host unreached", |s| {
         s.host_sessions.get("vps").is_some_and(|held| !held.reached)
     })
@@ -286,15 +292,30 @@ async fn a_paired_hosts_session_is_listed_and_kept_unverifiable_when_the_host_st
         "a host that cannot be reached is unverifiable, never exited"
     );
 
+    // The host comes back where it was: once its link reconnects, its sessions are read again and live.
+    let server = start_listening_at(&server_home.path, address).await;
+    client_handle.reconnect_host("vps".to_owned());
+    until(
+        &mut client_updates,
+        &mut state,
+        "the host reached again",
+        |s| s.host_sessions.get("vps").is_some_and(|held| held.reached),
+    )
+    .await;
+    assert!(
+        listed_under(&state, "vps").contains(&session.id),
+        "the host's session is listed again"
+    );
+
     drop(client_bridge);
+    stop_service(server).await;
 }
 
-/// The bridge's poll checks a host every 30 s; a change inside this window reached the desktop by the host's
-/// event subscription, not by the poll.
-const BEFORE_THE_POLL: Duration = Duration::from_secs(10);
+/// Nothing reads a followed host on a timer; a change inside this window reached the desktop by the host's event.
+const BY_THE_EVENT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() {
+async fn a_session_started_on_the_host_is_listed_by_its_event() {
     let server_home = temp_home();
     let repo_dir = server_home.path.with_file_name("repo");
     repo(&repo_dir);
@@ -318,7 +339,6 @@ async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() 
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
         .await
         .expect("the offer pairs");
-    client_handle.refresh_hosts();
     let mut state = StoreState::default();
     let first_id = first.id.clone();
     until(&mut client_updates, &mut state, "the first session", |s| {
@@ -343,7 +363,7 @@ async fn a_session_started_on_the_host_is_listed_by_its_event_before_the_poll() 
         &mut client_updates,
         &mut state,
         "the second session by event",
-        BEFORE_THE_POLL,
+        BY_THE_EVENT,
         |s| listed_under(s, "vps").contains(&second_id),
     )
     .await;
@@ -378,7 +398,6 @@ async fn a_stop_of_a_paired_hosts_session_is_answered_by_that_host() {
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
         .await
         .expect("the offer pairs");
-    client_handle.refresh_hosts();
     let mut state = StoreState::default();
     let session_id = session.id.clone();
     until(&mut client_updates, &mut state, "the host's session", |s| {
@@ -462,4 +481,122 @@ fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingC
         standard: false,
         addresses: Vec::new(),
     }
+}
+
+/// The address the paired host `name` was reached at, so a restarted service can listen there again.
+fn paired_address(home: &Path, name: &str) -> SocketAddr {
+    let record = Hosts::of(&profile(home))
+        .get(name)
+        .expect("the host is paired");
+    record
+        .addresses
+        .iter()
+        .find_map(|address| address.to_socket_addrs().ok()?.next())
+        .expect("the host has an address")
+}
+
+/// Stores host `name` again with `addresses` in place of the ones it was paired at, keeping its key.
+fn readdress(home: &Path, name: &str, addresses: Vec<String>) {
+    let hosts = Hosts::of(&profile(home));
+    let mut record = hosts.get(name).expect("the host is paired");
+    let identity = hosts.identity(name).expect("its device key");
+    hosts.remove(name).expect("the old record goes");
+    record.addresses = addresses;
+    hosts
+        .add(&record, &identity)
+        .expect("the new record is stored");
+}
+
+/// Waits until `holds`, or fails once WAIT has passed.
+async fn until_holds(what: &str, holds: impl Fn() -> bool) {
+    let reached = timeout(WAIT, async {
+        while !holds() {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn one_connection_serves_a_hosts_sessions_and_calls_until_the_host_is_removed() {
+    let server_home = temp_home();
+    let repo_dir = server_home.path.with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(&server_home.path);
+    let server = start_listening(&server_home.path).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(&server_home.path);
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let workspace = add_workspace(&server_handle, &repo_dir).await;
+    let session = start_fake(&server_handle, &workspace.id).await;
+    let offer = server_handle
+        .create_offer(PairingCreateParams {
+            ..base_pairing_create_params()
+        })
+        .await
+        .expect("an offer is made");
+    let client_home = temp_home();
+    let (client_bridge, client_handle, _client_updates) = bridge_for(&client_home.path);
+    client_handle
+        .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
+        .await
+        .expect("the offer pairs");
+    drop(client_bridge);
+    // The host is reached through a relay that counts this computer's connections to it.
+    let relay = HostProxy::start(paired_address(&client_home.path, "vps")).await;
+    readdress(&client_home.path, "vps", vec![relay.address.to_string()]);
+
+    let (bridge, handle, mut updates) = bridge_for(&client_home.path);
+    let mut state = StoreState::default();
+    let session_id = session.id.clone();
+    until(&mut updates, &mut state, "the host's session", |s| {
+        s.host_sessions
+            .get("vps")
+            .is_some_and(|held| held.reached && held.sessions.iter().any(|l| l.id == session_id))
+    })
+    .await;
+    // A call to the host, and the re-read its change starts, go over the same connection.
+    let loss = handle
+        .count_host_loss("vps".to_owned())
+        .await
+        .expect("the host counts what it runs");
+    assert_eq!(loss.sessions, 1);
+    let stopped = handle
+        .host_agent_stop("vps", &session.id)
+        .await
+        .expect("the host stops its session");
+    assert_ne!(
+        stopped.execution, session.execution,
+        "the stop changed the session"
+    );
+    until(
+        &mut updates,
+        &mut state,
+        "the stop read again by its event",
+        |s| {
+            s.host_sessions.get("vps").is_some_and(|held| {
+                held.sessions
+                    .iter()
+                    .any(|listed| listed.id == session_id && listed.execution != session.execution)
+            })
+        },
+    )
+    .await;
+    assert_eq!(relay.accepted(), 1, "one connection to the host, shared");
+
+    // Removing the host stops its link and its follower: the connection closes and none is opened again.
+    handle
+        .remove_host("vps".to_owned())
+        .await
+        .expect("the host is removed");
+    until_holds("the host's connection closed", || relay.open() == 0).await;
+    // The revoke dials on its own (once, or twice to confirm); after it nothing does.
+    let dialed = relay.accepted();
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(relay.accepted(), dialed, "nothing dials a forgotten host");
+
+    drop(bridge);
+    drop(server_bridge);
+    stop_service(server).await;
 }

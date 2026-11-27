@@ -49,6 +49,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::CONFIG,
             capabilities::DEVICES,
             capabilities::EVENTS,
+            capabilities::EXTENSION_POINTS,
             capabilities::EXTENSIONS_LOG,
             capabilities::EXTENSIONS_PROGRAMS,
             capabilities::EXTENSIONS_ROLLBACK,
