@@ -24,7 +24,7 @@ pub use tls::{client_tls_config, server_tls_config};
 pub use trace_log::{
     DESKTOP_LOG_PREFIX, KEPT_LOG_FILES, SERVICE_LOG_PREFIX, daily_log_file, newest_log_file,
 };
-pub use transport::{Accepted, ClientWs, ServerWs, accept, connect};
+pub use transport::{Accepted, ClientWs, ClientWsOver, ServerWs, accept, connect, connect_stream};
 
 /// The only path a server upgrades to WebSocket.
 pub const WS_PATH: &str = "/massorca/v1";
