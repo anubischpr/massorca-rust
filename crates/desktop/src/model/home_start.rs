@@ -209,6 +209,7 @@ pub fn create_params(
 ) -> WorkspaceCreateParams {
     let typed = non_empty(&details.name);
     let mut params = WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: typed.unwrap_or_else(|| workspace_name_seed(prompt)),
         branch: None,

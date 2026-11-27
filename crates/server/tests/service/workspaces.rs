@@ -25,7 +25,7 @@ use massorca_core_store::{
 
 use super::common::{connect, profile, remote_code, start, stop, temp_home};
 
-fn git_repo(dir: &Path) {
+pub(super) fn git_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create repository dir");
     git(dir, &["init", "-q"]);
     std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
@@ -33,7 +33,7 @@ fn git_repo(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
-fn git(dir: &Path, args: &[&str]) {
+pub(super) fn git(dir: &Path, args: &[&str]) {
     let output = massorca_process::command("git")
         .args([
             "-c",
@@ -54,8 +54,9 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
+pub(super) fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         branch: None,
@@ -70,17 +71,18 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     }
 }
 
-fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
+pub(super) fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
     WorkspaceRemoveParams {
         workspace: workspace.to_owned(),
         force,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
         allow_failed_archive: false,
     }
 }
 
-async fn next_event(events: &mut Subscription) -> ChangeEvent {
+pub(super) async fn next_event(events: &mut Subscription) -> ChangeEvent {
     timeout(Duration::from_secs(10), events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
@@ -89,7 +91,11 @@ async fn next_event(events: &mut Subscription) -> ChangeEvent {
 }
 
 /// A git project at `repo` whose workspaces go under `<home>/ws`.
-async fn add_repo_project(client: &massorca_client::Client, home: &Path, repo: &Path) -> Project {
+pub(super) async fn add_repo_project(
+    client: &massorca_client::Client,
+    home: &Path,
+    repo: &Path,
+) -> Project {
     client
         .call(
             projects::ADD,
@@ -520,6 +526,7 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
                 force: true,
                 discard_ignored: true,
                 forget_orphan: false,
+                with_children: false,
                 allow_failed_archive: false,
             },
         )
@@ -714,5 +721,71 @@ async fn current_names_the_workspace_that_holds_a_directory_and_refuses_one_outs
         remote_code(&refused.expect_err("outside")),
         codes::WORKSPACE_NOT_FOUND
     );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_in_place_workspace_is_the_project_checkout_and_removing_it_only_forgets_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "main"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(
+        client
+            .welcome()
+            .capabilities
+            .iter()
+            .any(|name| name == capabilities::WORKSPACE_IN_PLACE),
+        "the service offers workspace-in-place/1"
+    );
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let mut params = create_params(&project.name, "");
+    params.in_place = true;
+
+    let created = client
+        .workspace_create(&params)
+        .await
+        .expect("create in place");
+    assert!(created.in_place);
+    assert_eq!(created.kind, WorkspaceKind::Worktree);
+    assert_eq!(created.branch.as_deref(), Some("main"));
+    assert!(created.setup.is_none(), "no worktree, so no setup script");
+    assert_eq!(
+        next_event(&mut events).await,
+        ChangeEvent {
+            topic: TOPIC_WORKSPACE_CREATED.to_owned(),
+            id: created.id.clone()
+        }
+    );
+    let again = client
+        .workspace_create(&params)
+        .await
+        .expect("a repeat returns the same workspace");
+    assert_eq!(again.id, created.id);
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_CREATED);
+
+    let mut with_branch = params.clone();
+    with_branch.branch = Some("topic".to_owned());
+    let refused = client.workspace_create(&with_branch).await;
+    assert_eq!(
+        remote_code(&refused.expect_err("refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, false))
+        .await
+        .expect("remove");
+    assert!(removed.directory_kept);
+    assert!(!removed.branch_deleted);
+    assert!(repo.join("README.md").is_file());
+    assert_eq!(
+        next_event(&mut events).await.topic,
+        TOPIC_WORKSPACE_REMOVING
+    );
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_REMOVED);
     stop(running).await;
 }

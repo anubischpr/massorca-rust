@@ -8,7 +8,6 @@ use massorca_protocol::methods::workspaces::Workspace;
 use crate::branch_prefix::BranchPrefix;
 use crate::error::DomainError;
 use crate::layout::WorkspaceLayout;
-use crate::views;
 
 /// The projects and workspaces domain API. Share one value across threads behind an `Arc`.
 #[derive(Debug)]
@@ -121,7 +120,7 @@ impl Workspaces {
     /// The workspace `selector` names: id, then exact name (unique within a project only),
     /// then path.
     pub fn show_workspace(&self, selector: &str) -> Result<Workspace, DomainError> {
-        Ok(views::workspace(&self.resolve_workspace(selector)?))
+        Ok(self.view(&self.resolve_workspace(selector)?))
     }
 
     /// Like `show_workspace`, with git's lock and prune state of the worktree. It runs git, so only

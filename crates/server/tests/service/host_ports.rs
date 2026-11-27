@@ -124,6 +124,7 @@ async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id,
                 name: "notes".to_owned(),
                 branch: None,

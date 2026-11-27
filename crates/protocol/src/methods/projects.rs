@@ -17,6 +17,8 @@ pub const INSPECT: &str = "project.inspect";
 pub const SET_BASE: &str = "project.set_base";
 /// Params: [`ProjectUpdateParams`]. Result: [`Project`]. Capability `project-update/1`.
 pub const UPDATE: &str = "project.update";
+/// Params: [`ProjectRef`]. Result: [`Project`]. Capability `project-init-git/1`: a folder project becomes a git project.
+pub const INIT_GIT: &str = "project.init_git";
 /// Params: [`ProjectScriptsParams`]. Result: [`ProjectScripts`]. Capability `script-trust/1` (decision 0095).
 pub const SCRIPTS: &str = "project.scripts";
 /// Params: [`ProjectTrustScriptParams`]. Result: [`ProjectScript`]. Capability `script-trust/1` (decision 0095).
@@ -122,14 +124,22 @@ pub struct Project {
     /// The project's icon; absent when it has none (decision 0091).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<ProjectIcon>,
+    /// The owner segment of the primary remote's repository (`origin`, else the first remote); absent for a
+    /// folder project or a remote that does not parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_owner: Option<String>,
 }
 
 /// A project's icon (decision 0091): a Lucide icon by name, one emoji, or an image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProjectIcon {
-    /// A Lucide icon by its name, drawn in the project's colour.
-    Lucide { name: String },
+    /// A Lucide icon by its name, drawn in `color`; absent is neutral.
+    Lucide {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<IconColor>,
+    },
     /// One emoji.
     Emoji { emoji: String },
     /// A PNG as a base64 data URI; a `file` icon may also be a WebP.
@@ -139,6 +149,58 @@ pub enum ProjectIcon {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+}
+
+/// The colour of a Lucide icon: one of the six usage colours or the neutral one, by its token (never a status colour).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IconColor {
+    #[serde(rename = "usage-1")]
+    Usage1,
+    #[serde(rename = "usage-2")]
+    Usage2,
+    #[serde(rename = "usage-3")]
+    Usage3,
+    #[serde(rename = "usage-4")]
+    Usage4,
+    #[serde(rename = "usage-5")]
+    Usage5,
+    #[serde(rename = "usage-6")]
+    Usage6,
+    #[serde(rename = "neutral")]
+    Neutral,
+    /// A token from a newer peer that this build does not know; never sent by this build, refused by validation.
+    #[serde(other)]
+    Unknown,
+}
+
+impl IconColor {
+    /// The colour a wire token names; `None` for a token this build does not know.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "usage-1" => Some(Self::Usage1),
+            "usage-2" => Some(Self::Usage2),
+            "usage-3" => Some(Self::Usage3),
+            "usage-4" => Some(Self::Usage4),
+            "usage-5" => Some(Self::Usage5),
+            "usage-6" => Some(Self::Usage6),
+            "neutral" => Some(Self::Neutral),
+            _ => None,
+        }
+    }
+
+    /// The wire token of this colour.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Usage1 => "usage-1",
+            Self::Usage2 => "usage-2",
+            Self::Usage3 => "usage-3",
+            Self::Usage4 => "usage-4",
+            Self::Usage5 => "usage-5",
+            Self::Usage6 => "usage-6",
+            Self::Neutral => "neutral",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// Where an image icon came from: uploaded by its owner, or detected in the repository's files.
@@ -187,14 +249,16 @@ impl ProjectIcon {
     /// The icon with its text trimmed and its label capped, or why it is not a valid icon.
     pub fn normalized(self) -> Result<Self, String> {
         match self {
-            Self::Lucide { name } => {
+            Self::Lucide { name, color } => {
                 let name = name.trim().to_owned();
-                if is_lucide_name(&name) {
-                    Ok(Self::Lucide { name })
-                } else {
+                if !is_lucide_name(&name) {
                     Err(format!(
                         "a Lucide icon name is letters and digits, starting with a letter, at most {MAX_LUCIDE_NAME_LENGTH} characters"
                     ))
+                } else if color == Some(IconColor::Unknown) {
+                    Err("a Lucide icon colour is usage-1 to usage-6 or neutral".to_owned())
+                } else {
+                    Ok(Self::Lucide { name, color })
                 }
             }
             Self::Emoji { emoji } => {

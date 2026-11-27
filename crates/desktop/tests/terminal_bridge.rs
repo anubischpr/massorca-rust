@@ -172,6 +172,7 @@ fn shell() -> ShellSpec {
 
 fn workspace_params(project: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: "terminal".to_owned(),
         ..base_workspace_create_params()
@@ -535,6 +536,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 
