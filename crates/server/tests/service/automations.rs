@@ -630,6 +630,7 @@ async fn folder_workspace(client: &Client, project: &str, name: &str, dir: &Path
             no_setup: false,
             unique_name: false,
             name_generated: false,
+            in_place: false,
         })
         .await
         .expect("workspace.create")

@@ -176,6 +176,7 @@ fn project_place(
                 no_setup: false,
                 unique_name: false,
                 name_generated: false,
+                in_place: false,
             })?;
             Ok((created.workspace, !created.repeated))
         }
@@ -221,6 +222,7 @@ fn folder(workspaces: &Workspaces, project: &Project) -> Result<(Workspace, bool
                 no_setup: false,
                 unique_name: true,
                 name_generated: false,
+                in_place: false,
             })?;
             (created.workspace, !created.repeated)
         }
