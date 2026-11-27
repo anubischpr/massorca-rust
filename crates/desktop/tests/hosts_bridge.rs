@@ -1,22 +1,30 @@
 //! Hosts, devices and pairing through the bridge, against real services on loopback (decisions 0041 and 0046).
 //! Each computer is a temporary profile; nothing reaches a real service or a real host.
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use massorca_client::{DeviceRevocation, Hosts, default_device_name};
+use massorca_client::{
+    Backoff, ClientError, DeviceRevocation, HostDial, Hosts, LiveHost, LiveState,
+    default_device_name,
+};
 use massorca_desktop::service::{
     HostLink, HostLoss, Refusal, ServiceBridge, ServiceHandle, SshHost, StoreState, StoreUpdate,
     connect_options,
 };
 use massorca_profile::Profile;
+use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::devices::{DeviceRevokeParams, PairingCreateParams};
 use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, timeout};
+
+#[path = "support/host_proxy.rs"]
+mod host_proxy;
+use host_proxy::HostProxy;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
 struct TempHome {
@@ -48,11 +56,13 @@ fn profile(home: &Path) -> Profile {
 
 /// A service that listens on an ephemeral loopback port, as a computer that others pair with.
 async fn start_listening(home: &Path) -> RunningService {
+    start_listening_at(home, SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await
+}
+
+/// A service that listens on `address`, as a host coming back where it was paired.
+async fn start_listening_at(home: &Path, address: SocketAddr) -> RunningService {
     let network = NetworkConfig {
-        listen: vec![ListenSpec::Address(SocketAddr::from((
-            Ipv4Addr::LOCALHOST,
-            0,
-        )))],
+        listen: vec![ListenSpec::Address(address)],
     };
     Service::start_with_network(
         ServiceConfig {
@@ -140,10 +150,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
     ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -184,10 +191,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
     ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -206,26 +210,22 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
 
     drop(server_bridge);
     stop_service(server).await;
-    client_handle.refresh_hosts();
+    // The host is followed live: no refresh is needed to learn that it stopped answering.
     until(
         &mut client_updates,
         &mut state,
         "the unreachable host",
         |s| {
-            s.hosts
-                .iter()
-                .any(|entry| matches!(&entry.link, HostLink::Unreachable(_)))
+            s.hosts.iter().any(|entry| {
+                matches!(
+                    &entry.link,
+                    HostLink::Reconnecting { reason, .. } if reason.starts_with("The host is unreachable: ")
+                )
+            })
         },
     )
     .await;
     let entry = state.hosts.first().expect("the host stays listed");
-    assert!(
-        matches!(
-            &entry.link,
-            HostLink::Unreachable(message) if message.starts_with("The host is unreachable: ")
-        ),
-        "{entry:?}"
-    );
     assert!(
         entry.last_connected.is_some(),
         "the last time it answered is kept"
@@ -243,10 +243,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
     ready_to_offer(&server_handle, &mut server_updates, &mut state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -291,7 +288,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
 
     let missing = server_handle
         .revoke_device(DeviceRevokeParams {
-            device: "no-such-device".to_owned(),
+            ..base_device_revoke_params()
         })
         .await
         .expect_err("an unknown device is refused");
@@ -314,10 +311,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
     ready_to_offer(&server_handle, &mut server_updates, &mut state).await;
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -403,10 +397,7 @@ async fn paired_with(
 ) {
     let offer = server_handle
         .create_offer(PairingCreateParams {
-            ttl_secs: None,
-            admin: false,
-            standard: false,
-            addresses: Vec::new(),
+            ..base_pairing_create_params()
         })
         .await
         .expect("an offer is made");
@@ -504,6 +495,56 @@ async fn a_host_that_does_not_answer_is_still_forgotten_and_says_the_device_stay
 }
 
 #[tokio::test]
+async fn a_refresh_during_a_removal_does_not_bring_the_removed_host_back() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, mut client_updates, _state) =
+        paired_with(&server_handle).await;
+
+    // The host answers nothing from now on, so the revoke waits out its connect timeout during the removal.
+    let (_silent, address) = silent_address();
+    readdress(client_home.path(), "vps", vec![address]);
+    while client_updates.try_recv().is_ok() {}
+
+    let removing = client_handle.remove_host("vps".to_owned());
+    tokio::pin!(removing);
+    let refresh = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(refresh);
+    let mut refreshed = false;
+    // Updates sent while the removal runs are read and set aside: only what follows its answer is checked below.
+    let removal = loop {
+        tokio::select! {
+            outcome = &mut removing => break outcome,
+            () = &mut refresh, if !refreshed => {
+                refreshed = true;
+                client_handle.refresh_hosts();
+            }
+            _ = client_updates.recv() => {}
+        }
+    };
+    removal.expect("the host is removed");
+
+    // Once the removal has answered, nothing about the removed host arrives: its link and its follower are gone.
+    let quiet = tokio::time::sleep(Duration::from_secs(5));
+    tokio::pin!(quiet);
+    loop {
+        tokio::select! {
+            () = &mut quiet => break,
+            update = client_updates.recv() => {
+                let update = update.expect("the bridge is running");
+                assert!(!concerns_host(&update, "vps"), "{update:?}");
+            }
+        }
+    }
+    drop(client_bridge);
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
 async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
     let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
@@ -517,8 +558,7 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
-            icon: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
@@ -548,4 +588,282 @@ async fn the_remove_confirm_counts_the_projects_and_sessions_on_the_host() {
         "{unanswered:?}"
     );
     drop(client_bridge);
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+/// Every `DeviceRevokeParams` field at its usual value; tests override the fields they vary.
+fn base_device_revoke_params() -> massorca_protocol::methods::devices::DeviceRevokeParams {
+    massorca_protocol::methods::devices::DeviceRevokeParams {
+        device: "no-such-device".to_owned(),
+    }
+}
+
+/// Every `PairingCreateParams` field at its usual value; tests override the fields they vary.
+fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingCreateParams {
+    massorca_protocol::methods::devices::PairingCreateParams {
+        ttl_secs: None,
+        admin: false,
+        standard: false,
+        addresses: Vec::new(),
+    }
+}
+
+/// The address the paired host `name` was reached at, so a restarted service can listen there again.
+fn paired_address(home: &Path, name: &str) -> SocketAddr {
+    let record = Hosts::of(&profile(home))
+        .get(name)
+        .expect("the host is paired");
+    record
+        .addresses
+        .iter()
+        .find_map(|address| address.to_socket_addrs().ok()?.next())
+        .expect("the host has an address")
+}
+
+#[tokio::test]
+async fn a_paired_host_is_followed_live_while_it_stops_and_comes_back() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, mut client_updates, mut state) =
+        paired_with(&server_handle).await;
+    let address = paired_address(client_home.path(), "vps");
+
+    drop(server_bridge);
+    stop_service(server).await;
+    until(&mut client_updates, &mut state, "the lost host", |s| {
+        s.hosts
+            .iter()
+            .any(|entry| matches!(entry.link, HostLink::Reconnecting { .. }))
+    })
+    .await;
+
+    let server = start_listening_at(server_home.path(), address).await;
+    // Retry now: the host is tried at once instead of after its backoff.
+    client_handle.reconnect_host("vps".to_owned());
+    until(&mut client_updates, &mut state, "the host back", |s| {
+        is_connected(s, "vps")
+    })
+    .await;
+
+    drop(client_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
+async fn a_bridge_follows_the_hosts_paired_before_it_started() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, _client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+    drop(client_bridge);
+
+    // A new run of the desktop: no page asked for the hosts, and the paired host is connected all the same.
+    let (bridge, _handle, mut updates) = bridge_for(client_home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the paired host", |s| {
+        is_connected(s, "vps")
+    })
+    .await;
+
+    drop(bridge);
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+/// Stores host `name` again with `addresses` in place of the ones it was paired at, keeping its key.
+fn readdress(home: &Path, name: &str, addresses: Vec<String>) {
+    let hosts = Hosts::of(&profile(home));
+    let mut record = hosts.get(name).expect("the host is paired");
+    let identity = hosts.identity(name).expect("its device key");
+    hosts.remove(name).expect("the old record goes");
+    record.addresses = addresses;
+    hosts
+        .add(&record, &identity)
+        .expect("the new record is stored");
+}
+
+/// Whether an update is about host `name`: its link or its sessions.
+fn concerns_host(update: &StoreUpdate, name: &str) -> bool {
+    match update {
+        StoreUpdate::HostLinkChanged { name: host, .. } => host == name,
+        StoreUpdate::HostSessions(read) => read.host == name,
+        _ => false,
+    }
+}
+
+/// An address that accepts TCP and never answers TLS, so each try waits out the whole connect timeout.
+fn silent_address() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a silent listener");
+    let address = listener.local_addr().expect("its address").to_string();
+    (listener, address)
+}
+
+/// The live link of host `name` on the computer at `home`, until its state satisfies `done`.
+async fn follow_until(home: &Path, name: &str, what: &str, done: impl Fn(&LiveState) -> bool) {
+    let peer = PeerInfo {
+        name: "massorca-desktop-test".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    };
+    let link = LiveHost::start(
+        HostDial::new(Hosts::of(&profile(home)), name, peer),
+        Backoff::default(),
+    );
+    let mut states = link.subscribe();
+    let reached = timeout(
+        Duration::from_secs(45),
+        states.wait_for(|state| done(state)),
+    )
+    .await
+    .is_ok_and(|waited| waited.is_ok());
+    assert!(
+        reached,
+        "timed out waiting for {what}: {:?}",
+        *states.borrow()
+    );
+}
+
+#[tokio::test]
+async fn a_host_whose_first_address_is_silent_is_reached_at_the_next_one() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, _client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+    drop(client_bridge);
+    let working = paired_address(client_home.path(), "vps").to_string();
+    let (_silent, silent) = silent_address();
+    readdress(client_home.path(), "vps", vec![silent, working]);
+
+    follow_until(
+        client_home.path(),
+        "vps",
+        "the second address",
+        LiveState::is_connected,
+    )
+    .await;
+
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+#[tokio::test]
+async fn another_key_at_the_next_address_is_a_mismatch_and_not_unreachable() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, _client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+    drop(client_bridge);
+    // Another computer, with a key of its own, answers at the second address.
+    let other_home = temp_home();
+    let other = start_listening(other_home.path()).await;
+    let (other_bridge, other_handle, mut other_updates) = bridge_for(other_home.path());
+    let mut other_state = StoreState::default();
+    ready_to_offer(&other_handle, &mut other_updates, &mut other_state).await;
+    let other_address = other_handle
+        .network_status()
+        .await
+        .expect("the other listener")
+        .listeners[0]
+        .bound
+        .clone()
+        .expect("the other listener is bound");
+    let (_silent, silent) = silent_address();
+    readdress(client_home.path(), "vps", vec![silent, other_address]);
+
+    follow_until(client_home.path(), "vps", "the mismatch", |state| {
+        matches!(state, LiveState::Ended { error } if matches!(**error, ClientError::ServerIdentityMismatch(_)))
+    })
+    .await;
+
+    drop(other_bridge);
+    stop_service(other).await;
+    drop(server_bridge);
+    stop_service(server).await;
+}
+
+/// Waits until `holds`, or fails once WAIT has passed.
+async fn until_holds(what: &str, holds: impl Fn() -> bool) {
+    let reached = timeout(WAIT, async {
+        while !holds() {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn retry_now_reconnects_the_host_it_names_and_no_other() {
+    let server_home = temp_home();
+    let server = start_listening(server_home.path()).await;
+    let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
+    let mut server_state = StoreState::default();
+    ready_to_offer(&server_handle, &mut server_updates, &mut server_state).await;
+    let (client_home, client_bridge, client_handle, _client_updates, _state) =
+        paired_with(&server_handle).await;
+    // The same server paired a second time, as a second host.
+    let offer = server_handle
+        .create_offer(PairingCreateParams {
+            ..base_pairing_create_params()
+        })
+        .await
+        .expect("a second offer is made");
+    client_handle
+        .accept_offer(offer.offer.expose().to_owned(), Some("nas".to_owned()))
+        .await
+        .expect("the second offer pairs");
+    drop(client_bridge);
+    let target = paired_address(client_home.path(), "vps");
+    let vps = HostProxy::start(target).await;
+    let nas = HostProxy::start(target).await;
+    readdress(client_home.path(), "vps", vec![vps.address.to_string()]);
+    readdress(client_home.path(), "nas", vec![nas.address.to_string()]);
+
+    let (bridge, handle, mut updates) = bridge_for(client_home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "both hosts", |s| {
+        is_connected(s, "vps") && is_connected(s, "nas")
+    })
+    .await;
+    assert_eq!(
+        (vps.accepted(), nas.accepted()),
+        (1, 1),
+        "one connection per host"
+    );
+
+    handle.reconnect_host("vps".to_owned());
+    until_holds("the second connection to vps", || vps.accepted() == 2).await;
+    until(&mut updates, &mut state, "vps back", |s| {
+        is_connected(s, "vps")
+    })
+    .await;
+    sleep(Duration::from_millis(500)).await;
+    assert_eq!(nas.accepted(), 1, "nas is left alone");
+    until_holds("the old connection to vps closed", || vps.open() == 1).await;
+    assert_eq!(vps.accepted(), 2, "and no other was opened");
+
+    drop(bridge);
+    drop(server_bridge);
+    stop_service(server).await;
 }

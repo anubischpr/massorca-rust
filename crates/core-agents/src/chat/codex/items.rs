@@ -11,7 +11,8 @@
 //! - Any other type: one warning notice per type, never its content.
 
 use massorca_protocol::methods::chat::{
-    ChatItemBody, DiffStatus, MessageState, NoticeLevel, PlanEntry, PlanStatus, ToolStatus, ToolUse,
+    ChatItemBody, DiffStatus, MAX_SUMMARY_BYTES, MessageState, NoticeLevel, PlanEntry, PlanStatus,
+    ToolStatus, ToolUse,
 };
 use serde_json::Value;
 
@@ -82,6 +83,21 @@ fn diff_status(kind: &Value) -> (DiffStatus, Option<String>) {
         (_, Some(moved)) => (DiffStatus::Renamed, Some(moved)),
         _ => (DiffStatus::Modified, None),
     }
+}
+
+/// Appends `delta` to `output` up to [`MAX_SUMMARY_BYTES`], on a character boundary. Whether some of it was dropped.
+fn append_bounded(output: &mut String, delta: &str) -> bool {
+    let room = MAX_SUMMARY_BYTES.saturating_sub(output.len());
+    if delta.len() <= room {
+        output.push_str(delta);
+        return false;
+    }
+    let mut end = room;
+    while !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    output.push_str(&delta[..end]);
+    true
 }
 
 impl CodexAdapter {
@@ -270,7 +286,8 @@ impl CodexAdapter {
             .collect()
     }
 
-    /// `item/commandExecution/outputDelta`: the command's output so far, on its item.
+    /// `item/commandExecution/outputDelta`: the command's output so far, on its item. The kept output stops at the summary
+    /// bound, and a delta that changes nothing the item shows replaces nothing.
     pub(super) fn output_delta(&mut self, params: &Value) -> Vec<JournalOp> {
         let (Some(id), Some(delta)) = (text_of(&params["itemId"]), params["delta"].as_str()) else {
             return Vec::new();
@@ -278,11 +295,14 @@ impl CodexAdapter {
         let Some(tool) = self.tools.get_mut(id) else {
             return Vec::new();
         };
-        tool.output.push_str(delta);
-        let (output, cut) = bounded(&tool.output);
-        tool.tool.output_summary = Some(output);
+        let cut = append_bounded(&mut tool.output, delta);
+        let before = tool.tool.clone();
+        tool.tool.output_summary = Some(tool.output.clone());
         tool.tool.truncated |= cut;
         tool.tool.status = ToolStatus::Updated;
+        if tool.tool == before {
+            return Vec::new();
+        }
         vec![JournalOp::Replace {
             key: item_key(id),
             body: ChatItemBody::ToolUse(tool.tool.clone()),

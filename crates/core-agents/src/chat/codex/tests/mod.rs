@@ -5,10 +5,23 @@ mod launch;
 mod requests;
 mod turns;
 
+use massorca_protocol::methods::chat::{Approval, ChatItemBody};
 use serde_json::{Value, json};
 
 use super::CodexAdapter;
 use crate::chat::adapter::{ChatAdapter, JournalOp};
+
+/// The approval item `ops` add, with its journal key.
+pub(super) fn approval_added(ops: &[JournalOp]) -> Option<(Option<String>, Approval)> {
+    ops.iter().find_map(|op| match op {
+        JournalOp::Add {
+            key,
+            body: ChatItemBody::Approval(approval),
+            ..
+        } => Some((key.clone(), approval.clone())),
+        _ => None,
+    })
+}
 
 pub(super) fn lines(bytes: &[u8]) -> Vec<Value> {
     String::from_utf8(bytes.to_vec())

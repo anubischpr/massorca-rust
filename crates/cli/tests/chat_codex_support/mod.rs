@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::chat_claude_support::{FAKE_AGENT, Logs, VENDOR_HOME_ENV, write_script};
 use crate::harness::{Sandbox, with_json};
+use massorca_protocol::methods::chat::{Approval, ChatItem, ChatItemBody};
 use serde_json::{Value, json};
 
 /// The thread id the fake app-server opens.
@@ -19,6 +20,17 @@ pub fn notify(method: &str, params: Value) -> Value {
 
 pub fn await_method(method: &str) -> Value {
     json!({ "await": method })
+}
+
+/// A script step that keeps the thread's answer back until the file `name` in the script's folder exists (the fake
+/// app-server's `hold_open`): a test sends prompts while the thread still opens, then creates the file with [`open_gate`].
+pub fn hold_open(name: &str) -> Value {
+    json!({ "hold_open": name })
+}
+
+/// The file `hold_open(name)` waits for, in the sandbox's scripts folder.
+pub fn open_gate(sandbox: &Sandbox, name: &str) -> PathBuf {
+    sandbox.home().join("scripts").join(name)
 }
 
 /// `item/started` or `item/completed` of `item` in the running turn.
@@ -170,6 +182,18 @@ pub fn start_chat(sandbox: &Sandbox, prompt: &str) -> String {
     );
     assert_eq!(started["run"], "chat", "{started}");
     started["id"].as_str().expect("a session id").to_owned()
+}
+
+/// The approval item of the tool call `tool_use_id`: a Codex approval names the call it asks about.
+pub fn approval_for<'a>(items: &'a [ChatItem], tool_use_id: &str) -> Option<&'a Approval> {
+    items.iter().find_map(|item| match &item.body {
+        ChatItemBody::Approval(approval)
+            if approval.tool_use_id.as_deref() == Some(tool_use_id) =>
+        {
+            Some(approval)
+        }
+        _ => None,
+    })
 }
 
 /// The lines that reached the fake app-server with `method`.

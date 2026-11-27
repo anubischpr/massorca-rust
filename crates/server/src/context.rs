@@ -62,6 +62,10 @@ pub struct AppState {
     pub(crate) _kind_guard: massorca_core_extensions::hooks::HookHandle,
     /// Keeps the agents' remove cleanup registered: a package removed with its agent homes deletes its kinds' accounts.
     pub(crate) _kind_cleanup: massorca_core_extensions::hooks::HookHandle,
+    /// The tool, skill, view, theme and status-rule points, with what each enabled package registered (decision 0153).
+    pub(crate) extension_points: Arc<crate::extension_points::ExtensionPoints>,
+    /// Keeps the points' remove listener registered: a removed package drops everything it registered on them.
+    pub(crate) _points_listener: massorca_core_extensions::hooks::HookHandle,
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
     /// Every chat journal change (`Change::Chat`) and every forgotten session, for the chat streams (decision 0101). Apart
@@ -73,6 +77,8 @@ pub struct AppState {
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
     pub(crate) activity: Activity,
+    /// Which workspaces the first-prompt rename has decided (decision 0118); held in memory for the service's run.
+    pub(crate) first_prompt_titles: crate::features::first_prompt_rename::TitleBook,
 }
 
 /// The context a handler receives. The principal is read from here only.

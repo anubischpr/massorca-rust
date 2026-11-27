@@ -55,7 +55,7 @@ impl CodexAdapter {
             }
             (Sent::TurnStart, false) => {
                 if let Some(turn) = text_of(&result["turn"]["id"]) {
-                    return self.turn_named(turn);
+                    return self.turn_started_by_answer(turn);
                 }
                 Vec::new()
             }
@@ -107,22 +107,37 @@ impl CodexAdapter {
     /// `turn/started`: the running turn's id.
     pub(super) fn turn_started(&mut self, params: &Value) -> Vec<JournalOp> {
         match text_of(&params["turn"]["id"]).or_else(|| text_of(&params["turnId"])) {
-            Some(turn) => self.turn_named(turn),
+            Some(turn) => self.turn_running(turn),
             None => Vec::new(),
         }
     }
 
-    /// The app-server named the running turn; an interrupt asked for before goes out now.
-    fn turn_named(&mut self, turn: &str) -> Vec<JournalOp> {
-        if self.turn.is_none() {
-            self.turn = Some(turn.to_owned());
+    /// The turn a `turn/start` of ours opened, as its answer names it. It is the running turn only while none is known,
+    /// and not once it ended.
+    fn turn_started_by_answer(&mut self, turn: &str) -> Vec<JournalOp> {
+        if self.turn.is_some() {
+            return Vec::new();
         }
+        self.turn_running(turn)
+    }
+
+    /// The app-server named `turn` as the running one; an interrupt asked for while it started goes out now.
+    fn turn_running(&mut self, turn: &str) -> Vec<JournalOp> {
+        if self.ended.contains(turn) {
+            return Vec::new();
+        }
+        self.turn = Some(turn.to_owned());
         if !std::mem::take(&mut self.interrupt_wanted) {
             return Vec::new();
         }
         vec![JournalOp::Send {
             bytes: self.interrupt_turn(turn),
         }]
+    }
+
+    /// Whether a `turn/start` of ours awaits its answer: the turn it opens is the one an interrupt asked now is for.
+    fn turn_start_in_flight(&self) -> bool {
+        self.sent.values().any(|sent| *sent == Sent::TurnStart)
     }
 
     /// `turn/completed`: the turn's end, then the prompts that waited for it.
@@ -134,6 +149,9 @@ impl CodexAdapter {
         };
         if !ours {
             return Vec::new();
+        }
+        if let Some(turn) = turn {
+            self.ended.insert(turn.to_owned());
         }
         let interrupted = turn.is_some_and(|turn| self.interrupted.remove(turn));
         let shown = self.error_shown;
@@ -222,7 +240,9 @@ impl CodexAdapter {
                 bytes.extend(self.interrupt_turn(&turn));
             }
             Some(_) => {}
-            None if matches!(self.thread, Thread::Open(_)) => self.interrupt_wanted = true,
+            None if matches!(self.thread, Thread::Open(_)) && self.turn_start_in_flight() => {
+                self.interrupt_wanted = true;
+            }
             None => {}
         }
         bytes

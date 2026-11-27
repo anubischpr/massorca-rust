@@ -12,7 +12,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionInstallParams, ExtensionRemoveParams, ExtensionReview,
     ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams,
-    SourceKind, SourceRef,
+    ProgramUpdateParams, SourceKind, SourceRef,
 };
 use serde_json::json;
 
@@ -21,7 +21,7 @@ use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
     UNINSTALL_CLI_WARNING, command_text, doctor_lines, installed_lines, item_lines, item_rows,
-    removed_lines, review_lines, run_lines, state_text,
+    points_lines, removed_lines, review_lines, run_lines, state_text,
 };
 use crate::output::Output;
 use crate::target::Target;
@@ -67,6 +67,12 @@ pub enum ExtensionCommand {
     },
     /// Removes an installed extension, its files and its data.
     Remove(RemoveArgs),
+    /// Updates a host program a tool package installed, such as Git, with the vendor's update command. Without --yes it
+    /// prints what would run and fails with extension.consent_required. A program MassOrca did not install is refused.
+    ProgramUpdate(ProgramUpdateArgs),
+    /// Lists what each owner registered on the tool, skill, view, theme and status-rule points, and the enabled
+    /// extensions that registered nothing.
+    Points,
     /// Lists the recent install, update, rollback and remove runs of an extension, oldest first.
     Log {
         /// Package id, such as massorca.claude.
@@ -141,6 +147,22 @@ pub struct RollbackArgs {
     pub consent: Option<String>,
 }
 
+/// Params of `massorca extension program-update`: the package, its host program, and the accepted update review.
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("accept").args(["yes", "consent"])))]
+pub struct ProgramUpdateArgs {
+    /// Package id, such as massorca.git.
+    pub id: String,
+    /// The host program's id in the package, such as git.
+    pub program: String,
+    /// Accepts the update command this command prints.
+    #[arg(long)]
+    pub yes: bool,
+    /// Accepts the update review an earlier run printed, by its consent fingerprint. The update fails if it changed.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub consent: Option<String>,
+}
+
 /// Runs one `extension` subcommand against the service `target` names.
 pub async fn execute(
     target: &Target,
@@ -184,6 +206,11 @@ pub async fn execute(
         ExtensionCommand::Install(args) => install(&client, target, args, output).await?,
         ExtensionCommand::Update(args) => update(&client, args, output).await?,
         ExtensionCommand::Rollback(args) => rollback(&client, args, output).await?,
+        ExtensionCommand::ProgramUpdate(args) => program_update(&client, args, output).await?,
+        ExtensionCommand::Points => {
+            let points = client.extension_points().await?;
+            output.success(&points, &points_lines(&points));
+        }
         ExtensionCommand::Log { id } => {
             let log = client.extension_log(&id).await?;
             output.success(&log, &run_lines(&log, "no runs yet"));
@@ -361,6 +388,9 @@ fn agent_refusal(command: &ExtensionCommand) -> Option<CliError> {
         ExtensionCommand::Rollback(_) => {
             "an agent cannot roll back an extension; ask the person to run the command"
         }
+        ExtensionCommand::ProgramUpdate(_) => {
+            "an agent cannot update a program; ask the person to run the command"
+        }
         ExtensionCommand::Remove(args) if args.uninstall_cli => {
             "an agent cannot run a vendor uninstaller; ask the person to run the command"
         }
@@ -509,6 +539,56 @@ async fn rollback(client: &Client, args: RollbackArgs, output: Output) -> Result
             }
         }
     }
+}
+
+async fn program_update(
+    client: &Client,
+    args: ProgramUpdateArgs,
+    output: Output,
+) -> Result<(), CliError> {
+    let consent = match args.consent {
+        Some(consent) => consent,
+        None => {
+            let review = client
+                .extension_program_update_review(&args.id, &args.program)
+                .await?;
+            if !args.yes {
+                output.progress(&format!(
+                    "{} of {} updates with: {}",
+                    review.program,
+                    review.id,
+                    command_text(&review.command)
+                ));
+                let mut error = CliError::new(
+                    codes::EXTENSION_CONSENT_REQUIRED,
+                    format!(
+                        "the update was not accepted; re-run with --consent {} (or --yes) to run exactly this command",
+                        review.consent
+                    ),
+                    exit::ERROR,
+                );
+                error.data = serde_json::to_value(&review).ok().map(Box::new);
+                return Err(error);
+            }
+            review.consent
+        }
+    };
+    let updated = client
+        .extension_program_update(&ProgramUpdateParams {
+            id: args.id,
+            program: args.program,
+            consent: Some(consent),
+            agent_token: agent_token(),
+        })
+        .await?;
+    let line = format!(
+        "{} of {} updated: {}",
+        updated.program,
+        updated.id,
+        command_text(&updated.command)
+    );
+    output.success(&updated, &[line]);
+    Ok(())
 }
 
 async fn send_rollback(

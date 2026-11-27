@@ -1,9 +1,11 @@
 //! Requests the app-server sends, which each take exactly one answer.
 //!
 //! - `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` become pending `approval` items keyed
-//!   by the request's JSON-RPC id. An allow answers `accept`, an `always` allow `acceptForSession` (the one change an
+//!   by the request's JSON-RPC id, named by its run. An allow answers `accept`, an `always` allow `acceptForSession` (the one change an
 //!   always writes, listed on the item), a deny `decline`. Codex takes no message with a deny.
 //! - `serverRequest/resolved` for a request still pending (the app-server withdrew it) cancels its item; nothing answers it.
+//! - An approval request of another thread (a sub-agent's) is declined, and one of an interrupted turn is cancelled, at
+//!   once: it never becomes an item.
 //! - An approval request without an item id cannot be shown as asked: it is declined with a notice.
 //! - Every other request is refused or answered so that nothing is granted, with a notice that names its method: a
 //!   question (`item/tool/requestUserInput`) is out of this slice.
@@ -33,6 +35,12 @@ fn error_line(id: &Value, code: i64, message: &str) -> Vec<u8> {
 }
 
 impl CodexAdapter {
+    /// The id a permission request is known by: its JSON-RPC id named by this run. A new run numbers its requests from the
+    /// start again, and the journal keeps an approval's item under its key for the whole session (decision 0173).
+    fn request_id_of(&self, id: &Value) -> Option<String> {
+        id_text(id).map(|text| format!("{}:{text}", self.run))
+    }
+
     /// A request from the app-server: an approval, or one MassOrca answers itself.
     pub(super) fn server_request(&mut self, method: &str, message: &Value) -> Vec<JournalOp> {
         let id = &message["id"];
@@ -69,9 +77,22 @@ impl CodexAdapter {
         ]
     }
 
-    /// A command or file change approval request: a pending item, or a decline when it cannot be read.
+    /// A command or file change approval request: a pending item, or an answer at once when it is nobody's to show (another
+    /// thread's, or one of an interrupted turn), or a decline when it cannot be read.
     fn approval(&mut self, method: &str, id: &Value, params: &Value) -> Vec<JournalOp> {
-        let (Some(request_id), Some(item_id)) = (id_text(id), text_of(&params["itemId"])) else {
+        if self.foreign(params) {
+            let decision = if self.interrupted_turn(params) {
+                "cancel"
+            } else {
+                "decline"
+            };
+            return vec![JournalOp::Send {
+                bytes: result_line(id, json!({ "decision": decision })),
+            }];
+        }
+        let (Some(request_id), Some(item_id)) =
+            (self.request_id_of(id), text_of(&params["itemId"]))
+        else {
             return vec![
                 notice(
                     NoticeLevel::Warning,
@@ -136,7 +157,7 @@ impl CodexAdapter {
 
     /// `serverRequest/resolved`: a request still pending was withdrawn; it is cancelled and never answered.
     pub(super) fn request_resolved(&mut self, params: &Value) -> Vec<JournalOp> {
-        let Some(request_id) = id_text(&params["requestId"]) else {
+        let Some(request_id) = self.request_id_of(&params["requestId"]) else {
             return Vec::new();
         };
         let Some(mut request) = self.requests.remove(&request_id) else {

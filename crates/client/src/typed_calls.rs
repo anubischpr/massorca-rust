@@ -448,6 +448,7 @@ impl Client {
             || params.force
             || params.discard_ignored
             || params.expect_dirty.is_some()
+            || params.allow_failed_archive
         {
             require_offered(
                 self.has_capability(capabilities::AGENT_ARCHIVE),

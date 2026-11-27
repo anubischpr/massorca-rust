@@ -85,10 +85,11 @@ D5 Mapping.
 | `turn/completed` | `completed` success, `failed` failure (with the reason unless an `error` showed it), `interrupted` |
 | `error` | a warning while `willRetry`, else an error notice |
 | `thread/tokenUsage/updated` | the open turn's `usage` |
-| `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` | a pending `approval` keyed by the request's JSON-RPC id |
+| `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` | a pending `approval` keyed by the request's JSON-RPC id, named by its run (a later run's requests never take an earlier run's item) |
 | `serverRequest/resolved` of a pending request | the approval `cancelled`; nothing answers it |
 | other requests | refused or answered granting nothing, with a notice naming the method |
-| messages of another thread (sub-agents) or of an interrupted turn | nothing |
+| approval requests of another thread (sub-agents) or of an interrupted turn | answered at once, never an item: `decline` for another thread, `cancel` for an interrupted turn |
+| other messages of another thread or of an interrupted turn | nothing |
 | known lifecycle and account notifications, `codex/event/*` | nothing |
 | an unknown notification or item type | one warning notice per name per run, never the content (as 0101 says) |
 
@@ -100,7 +101,9 @@ declined with a notice. Cancel never authorizes: an interrupt answers every pend
 interrupts the turn, and a withdrawn request is never answered.
 
 D7 Interrupt and held prompts. The interrupt is `turn/interrupt` of the turn the app-server named (from the
-`turn/start` answer or `turn/started`); one asked before the turn is named goes out when it is. The service already
+`turn/start` answer or `turn/started`). One asked while a `turn/start` of ours is in flight goes out when that turn is
+named, and is dropped if that turn ends first; one asked with no turn starting has nothing to stop and waits for nothing.
+The service already
 ended the turn, so what the interrupted turn still sends, and its `turn/completed`, are skipped; prompts sent until it
 ends wait for it. A forced prompt mid-turn is a `turn/start`, which the app-server steers into the running turn (pv96:
 since 0.148), so the held turn ends with the running one as 0101's D7 says.

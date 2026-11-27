@@ -67,6 +67,8 @@ struct Request {
 #[derive(Debug)]
 pub struct CodexAdapter {
     plan: ThreadPlan,
+    /// This run's id: its permission requests are named with it (see `request_id_of`).
+    run: String,
     thread: Thread,
     next_id: u64,
     sent: HashMap<u64, Sent>,
@@ -74,6 +76,8 @@ pub struct CodexAdapter {
     waiting: Vec<String>,
     /// The turn the app-server runs, once it named it.
     turn: Option<String>,
+    /// The turns the app-server ended: an answer that names one of them names no running turn.
+    ended: HashSet<String>,
     /// Turns MassOrca interrupted: the service already ended them, so what they still send is skipped.
     interrupted: HashSet<String>,
     /// An interrupt asked for before the app-server named the turn.
@@ -98,11 +102,13 @@ impl CodexAdapter {
     pub fn new() -> Self {
         Self {
             plan: ThreadPlan::default(),
+            run: uuid::Uuid::now_v7().simple().to_string(),
             thread: Thread::Opening,
             next_id: 0,
             sent: HashMap::new(),
             waiting: Vec::new(),
             turn: None,
+            ended: HashSet::new(),
             interrupted: HashSet::new(),
             interrupt_wanted: false,
             seen: HashSet::new(),
@@ -155,9 +161,11 @@ impl CodexAdapter {
             .collect()
     }
 
-    /// Forgets what the adapter follows within a turn.
+    /// Forgets what the adapter follows within a turn, and an interrupt still waiting for one: it was asked for the turn
+    /// that just ended.
     fn end_of_turn(&mut self) {
         self.turn = None;
+        self.interrupt_wanted = false;
         self.seen.clear();
         self.tools.clear();
         self.error_shown = false;
@@ -177,12 +185,21 @@ impl CodexAdapter {
 
     /// Whether a message belongs to another thread (a sub-agent's) or to a turn MassOrca interrupted.
     fn foreign(&self, params: &Value) -> bool {
-        let other_thread = match (&self.thread, text_of(&params["threadId"])) {
+        self.other_thread(params) || self.interrupted_turn(params)
+    }
+
+    /// Whether a message names a thread other than the run's (a sub-agent's).
+    fn other_thread(&self, params: &Value) -> bool {
+        match (&self.thread, text_of(&params["threadId"])) {
             (Thread::Open(ours), Some(theirs)) => ours != theirs,
             _ => false,
-        };
+        }
+    }
+
+    /// Whether a message names a turn MassOrca interrupted.
+    fn interrupted_turn(&self, params: &Value) -> bool {
         let turn = text_of(&params["turnId"]).or_else(|| text_of(&params["turn"]["id"]));
-        other_thread || turn.is_some_and(|turn| self.interrupted.contains(turn))
+        turn.is_some_and(|turn| self.interrupted.contains(turn))
     }
 }
 
@@ -303,6 +320,10 @@ impl CodexAdapter {
         if method == "turn/completed" {
             return self.turn_completed(params);
         }
+        // A request we hold is settled by its notice, whatever thread or turn the notice names.
+        if method == "serverRequest/resolved" {
+            return self.request_resolved(params);
+        }
         if self.foreign(params) {
             return Vec::new();
         }
@@ -315,7 +336,6 @@ impl CodexAdapter {
             "item/reasoning/summaryTextDelta" => self.text_delta(params, true),
             "item/commandExecution/outputDelta" => self.output_delta(params),
             "turn/plan/updated" => self.plan_updated(params),
-            "serverRequest/resolved" => self.request_resolved(params),
             "thread/tokenUsage/updated" => self.usage(params),
             "error" => self.error(params),
             "configWarning" | "deprecationNotice" => self.warning(params),

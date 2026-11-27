@@ -18,6 +18,7 @@ use crate::model::source_control_diff::{diff_status, file_status, parse_patch};
 use crate::model::source_control_flow::{
     Answer, CommitForm, DiscardFlow, DiscardStage, DiscardTarget,
 };
+use crate::model::source_control_sync::SyncNote;
 use crate::service::Refusal;
 
 /// The Project sidebar's tabs in their fixed order (ProjectSidebarTabs.md).
@@ -97,6 +98,8 @@ pub(super) struct SourceControl {
     pub busy: bool,
     /// What the last stage or unstage refused, under the panel's header.
     pub error: Option<String>,
+    /// What the last Fetch, Pull or Push left to read under the panel, when it succeeded.
+    pub notice: Option<SyncNote>,
     /// The file whose diff the Canvas shows, and the diff it is showing.
     pub open: Option<OpenFile>,
     pub diff: Option<DiffLoad>,
@@ -120,6 +123,7 @@ impl SourceControl {
             clear_field: false,
             busy: false,
             error: None,
+            notice: None,
             open: None,
             diff: None,
             diff_request: 0,
@@ -160,6 +164,7 @@ impl Shell {
         if self.source_control.workspace != selected {
             self.source_control.workspace = selected.clone();
             self.source_control.error = None;
+            self.source_control.notice = None;
             // A message typed for one workspace is not carried to another; the spec keeps no draft.
             self.source_control.commit = CommitForm::default();
             self.source_control.clear_field = true;
@@ -226,6 +231,7 @@ impl Shell {
         };
         self.source_control.busy = true;
         self.source_control.error = None;
+        self.source_control.notice = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = if staged {

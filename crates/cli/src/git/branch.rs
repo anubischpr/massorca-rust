@@ -2,20 +2,24 @@
 
 use clap::Args;
 use massorca_client::Client;
-use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::branch::{
     GitBranch, GitBranchCreateParams, GitBranchDeleteParams, GitBranchRenameParams,
-    GitBranchSwitchParams,
+    GitBranchSwitchParams, GitBranchesParams,
 };
 
 use super::WorkspaceArg;
+use crate::cwd_path;
 use crate::error::CliError;
 use crate::output::Output;
 
 #[derive(Debug, Args)]
 pub struct BranchesArgs {
-    #[command(flatten)]
-    pub workspace: WorkspaceArg,
+    /// Workspace id, name or path; defaults to the current directory. Not with `--project`.
+    #[arg(short = 'w', long = "workspace", conflicts_with = "project")]
+    pub workspace: Option<String>,
+    /// Project id, name or path: lists the branches of the project's own checkout, with no workspace.
+    #[arg(long, value_name = "PROJECT", conflicts_with = "workspace")]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -63,11 +67,19 @@ pub(super) async fn run_list(
     args: BranchesArgs,
     output: Output,
 ) -> Result<(), CliError> {
-    let listed = client
-        .git_branches(&GitWorkspaceRef {
-            workspace: args.workspace.selector()?,
-        })
-        .await?;
+    let params = match args.project {
+        Some(project) => GitBranchesParams {
+            workspace: None,
+            project: Some(project),
+        },
+        None => GitBranchesParams {
+            workspace: Some(cwd_path::selector(
+                args.workspace.as_deref().unwrap_or("."),
+            )?),
+            project: None,
+        },
+    };
+    let listed = client.git_branches(&params).await?;
     let lines: Vec<String> = if listed.branches.is_empty() {
         vec!["no branches".to_owned()]
     } else {

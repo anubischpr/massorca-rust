@@ -678,7 +678,7 @@ impl Extensions {
     }
 
     /// What a failed command was looked for and where, with the last lines of its log (decision 0092).
-    fn diagnosis(&self, programs: Vec<String>, log: Option<&Path>) -> Box<Diagnosis> {
+    pub(crate) fn diagnosis(&self, programs: Vec<String>, log: Option<&Path>) -> Box<Diagnosis> {
         Box::new(Diagnosis {
             programs,
             search: self.resolver.search(),
@@ -689,12 +689,12 @@ impl Extensions {
     /// Runs the planned installers and their verify commands, and records what was done for each CLI.
     fn run_installers(&self, manifest: &Manifest, plan: &[CliPlan]) -> Result<Vec<LockCli>, Error> {
         let mut out = Vec::new();
-        for (adapter, entry) in manifest.contributes.agent_adapters.iter().zip(plan) {
-            let Some(cli) = &adapter.cli else {
+        for ((id, cli), entry) in crate::review::planned_clis(manifest).into_iter().zip(plan) {
+            let Some(cli) = cli else {
                 continue;
             };
             let mut record = LockCli {
-                agent: adapter.id.clone(),
+                agent: id.to_owned(),
                 binary: cli.binary.clone(),
                 detected_before_install: false,
                 installer: None,
@@ -703,11 +703,11 @@ impl Extensions {
             };
             match &entry.state {
                 PlanState::Detected { .. } => record.detected_before_install = true,
-                PlanState::Unsupported => {}
+                PlanState::Unsupported | PlanState::Manual { .. } => {}
                 PlanState::WillRun { command, .. } => {
                     if !is_vendor_program(command) {
                         return Err(Error::InstallerFailed {
-                            agent: adapter.id.clone(),
+                            agent: id.to_owned(),
                             message: "its program is not on the vendor allowlist".to_owned(),
                             diagnosis: self.diagnosis(program_of(command), None),
                         });
@@ -717,7 +717,7 @@ impl Extensions {
                     let log = self.layout.install_log(&manifest.id);
                     let ran_at_ms = now_ms();
                     let failed = |message: String| Error::InstallerFailed {
-                        agent: adapter.id.clone(),
+                        agent: id.to_owned(),
                         message,
                         diagnosis: self.diagnosis(program_of(command), Some(&log)),
                     };
@@ -731,7 +731,7 @@ impl Extensions {
                     let unverified = |message: String, programs: Vec<String>| {
                         note_remaining_cli(&log, command);
                         Error::VerifyFailed {
-                            agent: adapter.id.clone(),
+                            agent: id.to_owned(),
                             message,
                             installer: Some(command.clone()),
                             diagnosis: self.diagnosis(programs, Some(&log)),

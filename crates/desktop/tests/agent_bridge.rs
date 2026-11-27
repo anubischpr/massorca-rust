@@ -31,6 +31,7 @@ use massorca_protocol::methods::workspaces::{
 use massorca_server::{RunningService, Service, ServiceConfig};
 use massorca_ui::components::terminal_surface::feed::TerminalFeed;
 use tempfile::TempDir;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
@@ -270,15 +271,8 @@ async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_
     let refusal = handle
         .agent_delegate(AgentDelegateParams {
             parent: parent.clone(),
-            prompt: "look".to_owned(),
-            kind: None,
-            name: None,
-            title: None,
-            read_only: true,
-            same_workspace: false,
-            token: None,
             request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
-            permission_mode: None,
+            ..base_agent_delegate_params()
         })
         .await
         .expect_err("a parent the service does not have is refused");
@@ -323,9 +317,7 @@ async fn a_bring_back_the_service_refuses_arrives_with_its_code_and_a_plain_sent
     let refusal = handle
         .agent_bring_back(AgentBringBackParams {
             child: child.clone(),
-            merge: true,
-            prompt: true,
-            token: None,
+            ..base_agent_bring_back_params()
         })
         .await
         .expect_err("a session the service does not have is refused");
@@ -390,6 +382,53 @@ fn declare_fake_kind(home: &Path) {
     std::fs::write(dir.join("fake.json"), kind).expect("the kind file");
 }
 
+/// Declares kind `fast-fake`: the shell again, with a default model that takes fast mode and one that does not. Fast mode
+/// is passed as the `--settings` object a Claude-style kind declares.
+fn declare_fast_kind(home: &Path) {
+    let dir = profile(home).dir().join("agents").join("kinds");
+    std::fs::create_dir_all(&dir).expect("the kinds folder");
+    let program = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let kind = format!(
+        r#"{{"id":"fast-fake","name":"Fast fake agent","program":["{program}"],"model":{{"flag":"--model","choices":[{{"id":"fast-model","label":"Fast model","default":true,"fast":true}},{{"id":"plain-model","label":"Plain model"}}]}},"fast":{{"settings":{{"fastMode":true}}}}}}"#
+    );
+    std::fs::write(dir.join("fast-fake.json"), kind).expect("the kind file");
+}
+
+/// Folds the bridge's updates into `state`, as the store does, until `done` holds.
+async fn fold_until(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    done: impl Fn(&StoreState) -> bool,
+) {
+    let folded = timeout(WAIT, async {
+        while !done(state) {
+            let update = updates.recv().await.expect("the bridge is alive");
+            state.apply(update, Instant::now());
+        }
+    })
+    .await;
+    assert!(folded.is_ok(), "timed out waiting for {what}: {state:?}");
+}
+
+/// A bridge on `home`'s profile, with its updates folded into a store state until kind `kind` is detected.
+async fn bridge_with_detected_kind(
+    home: &Path,
+    kind: &str,
+) -> (ServiceBridge, UnboundedReceiver<StoreUpdate>, StoreState) {
+    let mut bridge =
+        ServiceBridge::start(profile(home), connect_options(None)).expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    let mut state = StoreState::default();
+    fold_until(&mut updates, &mut state, "the declared kind", |s| {
+        s.agent_kinds
+            .iter()
+            .any(|declared| declared.id == kind && declared.detected)
+    })
+    .await;
+    (bridge, updates, state)
+}
+
 #[tokio::test]
 async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_its_terminal() {
     let home = temp_home();
@@ -449,29 +488,20 @@ async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_i
 async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
-            kind: None,
             workspaces_root: repo_dir
                 .parent()
                 .map(|parent| parent.join("demo-worktrees").display().to_string()),
+            ..base_project_add_params()
         })
         .await
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
-            name: "main".to_owned(),
-            branch: None,
-            base: None,
-            existing_branch: false,
-            refresh_base: false,
-            path: None,
-            request_id: None,
-            no_setup: false,
-            unique_name: false,
-            name_generated: false,
+            ..base_workspace_create_params()
         })
         .await
         .expect("the workspace is created")
@@ -481,19 +511,10 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
 fn fake_start_params(workspace: &str) -> AgentStartParams {
     AgentStartParams {
         workspace: Some(workspace.to_owned()),
-        kind: "fake".to_owned(),
-        prompt: None,
-        args: Vec::new(),
         env: BTreeMap::new(),
-        read_only: false,
-        title: None,
         cols: Some(100),
         rows: Some(30),
-        request_id: None,
-        permission_mode: None,
-        model: None,
-        effort: None,
-        fast: None,
+        ..base_agent_start_params()
     }
 }
 
@@ -650,7 +671,7 @@ async fn a_prompt_reaches_the_session_terminal_and_stop_ends_the_run() {
         .agent_prompt(AgentPromptParams {
             session: session.id.clone(),
             text: line.to_owned(),
-            force: false,
+            ..base_agent_prompt_params()
         })
         .await
         .expect("the prompt is typed into the session");
@@ -721,20 +742,10 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
 
     let session = handle
         .agent_start(AgentStartParams {
-            workspace: None,
-            kind: "fake".to_owned(),
-            prompt: None,
-            args: Vec::new(),
             env: BTreeMap::new(),
-            read_only: false,
-            title: None,
             cols: Some(100),
             rows: Some(30),
-            request_id: None,
-            permission_mode: None,
-            model: None,
-            fast: None,
-            effort: None,
+            ..base_agent_start_params()
         })
         .await
         .expect("the service starts a session with no workspace");
@@ -761,7 +772,9 @@ async fn a_session_with_no_project_starts_on_a_real_service_in_the_conversations
         "a session with no project adds no visible project: {projects:?}"
     );
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -824,6 +837,165 @@ async fn a_forget_with_the_archive_options_reaches_the_service_that_offers_the_c
 }
 
 #[tokio::test]
+async fn a_rename_of_a_session_reaches_the_store_through_the_bridge() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) = bridge_with_detected_kind(home.path(), "fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = start_fake(&handle, &workspace.id).await;
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    fold_until(&mut updates, &mut state, "the started session", |s| {
+        s.agents.iter().any(|agent| agent.id == session.id)
+    })
+    .await;
+
+    let renamed = handle
+        .agent_rename(&session.id, "Parser cleanup")
+        .await
+        .expect("the session is renamed");
+    assert_eq!(renamed.title.as_deref(), Some("Parser cleanup"));
+    fold_until(&mut updates, &mut state, "the new title", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.title.as_deref() == Some("Parser cleanup"))
+    })
+    .await;
+
+    handle
+        .close_terminal(&terminal)
+        .await
+        .expect("the session's terminal closes");
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn an_exited_session_archives_and_unarchives_through_the_bridge() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) = bridge_with_detected_kind(home.path(), "fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = start_fake(&handle, &workspace.id).await;
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    handle.send_terminal_input(&terminal, b"exit\r\n".to_vec());
+    fold_until(&mut updates, &mut state, "the exit of the run", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.execution.state == TerminalState::Exited)
+    })
+    .await;
+
+    let archived = handle
+        .agent_archive(&session.id, true)
+        .await
+        .expect("the exited session is archived");
+    assert!(archived.archived);
+    fold_until(&mut updates, &mut state, "the archive", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && agent.archived)
+    })
+    .await;
+
+    let restored = handle
+        .agent_archive(&session.id, false)
+        .await
+        .expect("the archive is cleared");
+    assert!(!restored.archived);
+    fold_until(&mut updates, &mut state, "the cleared archive", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == session.id && !agent.archived)
+    })
+    .await;
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_fast_start_carries_fast_to_the_session_only_when_the_kind_and_model_take_it() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    declare_fast_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) =
+        bridge_with_detected_kind(home.path(), "fast-fake").await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+
+    // The kind's default model takes fast mode, so the start carries it to the session.
+    let fast = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect("the fast start is accepted");
+    assert!(fast.fast.as_ref().is_some_and(|speed| speed.on));
+    fold_until(&mut updates, &mut state, "the fast session", |s| {
+        s.agents
+            .iter()
+            .any(|agent| agent.id == fast.id && agent.fast.as_ref().is_some_and(|speed| speed.on))
+    })
+    .await;
+
+    // A start that does not ask for fast mode carries none.
+    let plain = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            read_only: true,
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect("the plain start is accepted");
+    assert!(plain.fast.is_none());
+
+    // A model that does not take fast mode refuses it, and so does a kind with no fast mode.
+    let refused = handle
+        .agent_start(AgentStartParams {
+            kind: "fast-fake".to_owned(),
+            model: Some("plain-model".to_owned()),
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect_err("a model without fast mode refuses it");
+    assert_eq!(refused.code(), Some(codes::AGENT_OPTION_UNSUPPORTED));
+    let refused = handle
+        .agent_start(AgentStartParams {
+            read_only: true,
+            fast: Some(true),
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect_err("a kind with no fast mode refuses it");
+    assert_eq!(refused.code(), Some(codes::AGENT_OPTION_UNSUPPORTED));
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
 async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     let home = temp_home();
     let folder = home.path().with_file_name("notes");
@@ -848,26 +1020,18 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     .expect("the bridge connects and lists the fake kind");
     let project = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: folder.display().to_string(),
             name: Some("notes".to_owned()),
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the folder project is added");
     let params = WorkspaceCreateParams {
+        in_place: false,
         project: project.id.clone(),
         name: "notes".to_owned(),
-        branch: None,
-        base: None,
-        existing_branch: false,
-        refresh_base: false,
-        path: None,
-        request_id: None,
-        no_setup: false,
-        unique_name: false,
-        name_generated: false,
+        ..base_workspace_create_params()
     };
     let first_workspace = handle
         .create_workspace(params.clone())
@@ -881,7 +1045,9 @@ async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
         .await
         .expect("the client connects");
     let workspaces = client
-        .workspace_list(&WorkspaceListParams { project: None })
+        .workspace_list(&WorkspaceListParams {
+            ..base_workspace_list_params()
+        })
         .await
         .expect("the service lists workspaces")
         .workspaces;
@@ -935,6 +1101,162 @@ async fn a_worktree_keeps_refusing_a_second_writer_while_the_first_runs() {
         .await
         .expect_err("a live writer holds the worktree");
     assert_eq!(beside.code(), Some(codes::AGENT_WORKSPACE_BUSY));
+    drop(bridge);
+    stop_service(service).await;
+}
+
+/// Every `AgentBringBackParams` field at its usual value; tests override the fields they vary.
+fn base_agent_bring_back_params() -> massorca_protocol::methods::agents::AgentBringBackParams {
+    massorca_protocol::methods::agents::AgentBringBackParams {
+        child: String::new(),
+        merge: true,
+        prompt: true,
+        token: None,
+    }
+}
+
+/// Every `AgentDelegateParams` field at its usual value; tests override the fields they vary.
+fn base_agent_delegate_params() -> massorca_protocol::methods::agents::AgentDelegateParams {
+    massorca_protocol::methods::agents::AgentDelegateParams {
+        parent: String::new(),
+        prompt: "look".to_owned(),
+        kind: None,
+        name: None,
+        title: None,
+        read_only: true,
+        same_workspace: false,
+        token: None,
+        request_id: None,
+        permission_mode: None,
+    }
+}
+
+/// Every `AgentPromptParams` field at its usual value; tests override the fields they vary.
+fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPromptParams {
+    massorca_protocol::methods::agents::AgentPromptParams {
+        session: String::new(),
+        text: "again".to_owned(),
+        force: false,
+    }
+}
+
+/// Every `AgentStartParams` field at its usual value; tests override the fields they vary.
+fn base_agent_start_params() -> massorca_protocol::methods::agents::AgentStartParams {
+    massorca_protocol::methods::agents::AgentStartParams {
+        workspace: None,
+        kind: "fake".to_owned(),
+        prompt: None,
+        args: Vec::new(),
+        env: Default::default(),
+        read_only: false,
+        title: None,
+        cols: None,
+        rows: None,
+        request_id: None,
+        permission_mode: None,
+        model: None,
+        effort: None,
+        fast: None,
+    }
+}
+
+/// Every `WorkspaceCreateParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+    massorca_protocol::methods::workspaces::WorkspaceCreateParams {
+        project: String::new(),
+        name: "main".to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+        unique_name: false,
+        name_generated: false,
+        in_place: false,
+    }
+}
+
+/// Every `WorkspaceListParams` field at its usual value; tests override the fields they vary.
+fn base_workspace_list_params() -> massorca_protocol::methods::workspaces::WorkspaceListParams {
+    massorca_protocol::methods::workspaces::WorkspaceListParams { project: None }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
+}
+
+#[tokio::test]
+async fn a_writing_child_in_the_parent_worktree_reaches_the_store_with_its_parent_link() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the declared kind is listed once the bridge connects");
+
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let parent = start_fake(&handle, &workspace.id).await;
+    let delegated = handle
+        .agent_delegate(massorca_protocol::methods::agents::AgentDelegateParams {
+            parent: parent.id.clone(),
+            kind: Some("fake".to_owned()),
+            read_only: false,
+            same_workspace: true,
+            ..base_agent_delegate_params()
+        })
+        .await
+        .expect("the writing child starts in the parent's worktree");
+    let child = delegated.session;
+    assert_eq!(child.workspace_id, parent.workspace_id);
+    assert_eq!(child.parent_id.as_deref(), Some(parent.id.as_str()));
+    assert!(!child.read_only, "a writing child holds the parent");
+
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentChanged(changed) =
+                updates.recv().await.expect("the bridge is alive")
+                && changed.id == child.id
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the child reaches the store with its parent link");
+
+    for terminal in [child.terminal_id.clone(), parent.terminal_id.clone()]
+        .into_iter()
+        .flatten()
+    {
+        handle
+            .close_terminal(&terminal)
+            .await
+            .expect("the session's terminal closes");
+    }
     drop(bridge);
     stop_service(service).await;
 }

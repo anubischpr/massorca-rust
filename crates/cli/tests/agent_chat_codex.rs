@@ -6,9 +6,7 @@ mod chat_claude_support;
 mod chat_codex_support;
 mod harness;
 
-use chat_claude_support::{
-    Transcript, answer, approval_of, connect, remote_code, runtime, tool_status, turns,
-};
+use chat_claude_support::{Transcript, answer, connect, remote_code, runtime, tool_status, turns};
 use chat_codex_support::*;
 use massorca_protocol::methods::agents::Outcome;
 use massorca_protocol::methods::chat::{
@@ -56,7 +54,7 @@ fn a_codex_chat_streams_its_reply_runs_a_command_after_an_allow_and_ends_its_tur
         let mut transcript = Transcript::open(&client, &session).await;
         let pending = transcript
             .until("the permission request", |items| {
-                approval_of(items, "90")
+                approval_for(items, "c1")
                     .filter(|approval| approval.state == ApprovalState::Pending)
                     .cloned()
             })
@@ -68,11 +66,19 @@ fn a_codex_chat_streams_its_reply_runs_a_command_after_an_allow_and_ends_its_tur
         assert_eq!(shown["activity"]["state"], "waiting", "{shown}");
 
         client
-            .agent_chat_answer(&answer(&session, "90", ApprovalDecision::Allow))
+            .agent_chat_answer(&answer(
+                &session,
+                &pending.request_id,
+                ApprovalDecision::Allow,
+            ))
             .await
             .expect("the answer");
         let again = client
-            .agent_chat_answer(&answer(&session, "90", ApprovalDecision::Deny))
+            .agent_chat_answer(&answer(
+                &session,
+                &pending.request_id,
+                ApprovalDecision::Deny,
+            ))
             .await
             .expect_err("a second answer");
         assert_eq!(remote_code(&again), "agent.approval_settled");

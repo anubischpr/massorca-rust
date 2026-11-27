@@ -4,6 +4,7 @@
 
 use super::navigation::{Mode, Page};
 use super::regions::Region;
+use super::shell::SessionRow;
 use super::shell_state::ShellModel;
 use super::teams::TeamPage;
 
@@ -28,6 +29,13 @@ const TOGGLED_REGIONS: [Region; 3] = [
 pub struct RegionToggle {
     pub region: Region,
     pub on: bool,
+}
+
+/// A session's terminal and the workspace it runs in: what "Open in Work panel" reveals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionTerminal {
+    pub workspace: String,
+    pub terminal: String,
 }
 
 /// The Back control at the start of the Title bar, as the artboards draw each kind of page.
@@ -62,6 +70,12 @@ pub struct TitleBarModel {
     pub show_sidebar_toggle: bool,
     /// Empty on full pages.
     pub region_toggles: Vec<RegionToggle>,
+    /// New chat: the start page of the current workspace, or of none. Off on full pages and Bot Teams pages.
+    pub new_chat: bool,
+    /// Terminal: a new terminal in this workspace's Work panel. None without a workspace or a service.
+    pub new_terminal_in: Option<String>,
+    /// Open in Work panel: the open session's terminal. None without a session or for a chat session.
+    pub session_terminal: Option<SessionTerminal>,
 }
 
 /// The Title bar for the shell's current state.
@@ -95,6 +109,8 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
             .collect()
     };
     let sidebar_on = model.region_visible(Region::Sidebar);
+    // The actions sit in the right group with the region toggles: on the Workspaces home and sessions only.
+    let right_group = full_page.is_none() && !bot_teams;
     TitleBarModel {
         full_page,
         back,
@@ -110,7 +126,24 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
         },
         show_sidebar_toggle: full_page.is_none(),
         region_toggles,
+        new_chat: right_group,
+        new_terminal_in: model
+            .current_workspace()
+            .filter(|_| right_group && model.snapshot().service_status.is_some())
+            .map(str::to_owned),
+        session_terminal: model
+            .open_session_row()
+            .filter(|_| right_group)
+            .and_then(session_terminal_of),
     }
+}
+
+/// The terminal of a session the Work panel can show; a chat session has none.
+fn session_terminal_of(session: &SessionRow) -> Option<SessionTerminal> {
+    Some(SessionTerminal {
+        workspace: session.workspace_id.clone(),
+        terminal: session.terminal_id.clone()?,
+    })
 }
 
 /// The Back control of a full page. Tasks and Automations draw a labelled Back; the other full
@@ -158,6 +191,7 @@ mod tests {
     use crate::data::{DataSource, SampleDataSource};
     use crate::model::marketplace::{MarketplaceSource, SampleMarketplaceSource};
     use crate::model::navigation::MarketplacePage;
+    use crate::model::shell::{ServiceStatus, ServiceTone, ShellSnapshot};
     use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell() -> ShellModel {
@@ -303,5 +337,83 @@ mod tests {
         assert_eq!(board.full_page, None);
         assert!(board.show_sidebar_toggle);
         assert!(board.region_toggles.is_empty());
+    }
+
+    fn connected() -> ServiceStatus {
+        ServiceStatus {
+            tone: ServiceTone::Ok,
+            text: "Service".to_owned(),
+            tooltip: "Connected".to_owned(),
+        }
+    }
+
+    /// Gives the sample session `id` a terminal, wherever it sits in the tree.
+    fn with_terminal(snapshot: &mut ShellSnapshot, id: &str, terminal: &str) {
+        fn walk(sessions: &mut [SessionRow], id: &str, terminal: &str) {
+            for session in sessions {
+                if session.id == id {
+                    session.terminal_id = Some(terminal.to_owned());
+                }
+                walk(&mut session.children, id, terminal);
+            }
+        }
+        for project in &mut snapshot.projects {
+            for host in &mut project.hosts {
+                walk(&mut host.sessions, id, terminal);
+            }
+        }
+    }
+
+    #[test]
+    fn new_chat_is_offered_on_the_workspaces_home_and_sessions_only() {
+        let mut model = shell();
+        assert!(title_bar(&model).new_chat, "a session");
+        model.close_session();
+        assert!(
+            title_bar(&model).new_chat,
+            "the start page with no workspace"
+        );
+        model.open_page(Page::Tasks);
+        assert!(!title_bar(&model).new_chat, "a full page");
+        assert!(!title_bar(&bot_teams_shell()).new_chat, "Bot Teams");
+    }
+
+    #[test]
+    fn a_terminal_needs_a_workspace_and_a_service() {
+        let mut model = shell();
+        assert_eq!(title_bar(&model).new_terminal_in, None, "no service");
+        let mut snapshot = SampleDataSource.snapshot();
+        snapshot.service_status = Some(connected());
+        model.set_snapshot(snapshot);
+        assert_eq!(title_bar(&model).new_terminal_in.as_deref(), Some("w1"));
+        model.close_session();
+        model.select_workspace(None);
+        assert_eq!(
+            title_bar(&model).new_terminal_in,
+            None,
+            "the start page with no workspace"
+        );
+    }
+
+    #[test]
+    fn open_in_work_panel_reveals_the_open_sessions_terminal() {
+        let mut model = shell();
+        assert_eq!(
+            title_bar(&model).session_terminal,
+            None,
+            "a session without a terminal"
+        );
+        let mut snapshot = SampleDataSource.snapshot();
+        with_terminal(&mut snapshot, "s1", "t-run");
+        model.set_snapshot(snapshot);
+        assert_eq!(
+            title_bar(&model).session_terminal,
+            Some(SessionTerminal {
+                workspace: "w1".to_owned(),
+                terminal: "t-run".to_owned(),
+            })
+        );
+        model.close_session();
+        assert_eq!(title_bar(&model).session_terminal, None, "no session open");
     }
 }

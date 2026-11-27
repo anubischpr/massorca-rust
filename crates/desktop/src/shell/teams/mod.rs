@@ -3,6 +3,7 @@
 mod access;
 mod board;
 mod bot_advanced;
+mod bot_skills;
 mod card_menu;
 mod conference;
 mod dialogs;

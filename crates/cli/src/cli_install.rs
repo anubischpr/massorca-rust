@@ -10,6 +10,7 @@ pub mod user_path;
 #[cfg(windows)]
 pub mod windows_user_path;
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -17,7 +18,7 @@ use serde::Serialize;
 use crate::args::CliCommand;
 use crate::error::{CliError, exit};
 use crate::output::Output;
-use layout::{Layout, Platform};
+use layout::{Layout, Platform, same_path};
 use plan::{InstallStep, Observed, State, UninstallStep};
 use user_path::{PathValue, UserPath};
 
@@ -145,7 +146,7 @@ pub fn install(environment: &Environment) -> Result<Report, CliError> {
     }
     // Read before anything changes: a PATH that cannot be read stops the install.
     let user_path = environment.user_path()?;
-    let observed = command_file::observe(location)?;
+    let observed = observe_command(location, target)?;
     let step = plan::install_step(&observed, target, location.platform);
     if step == InstallStep::Refuse {
         return Err(conflict(location, Operation::Install));
@@ -170,7 +171,7 @@ pub fn install(environment: &Environment) -> Result<Report, CliError> {
 /// Removes the command this install made, and its PATH entry once nothing else is in its folder.
 pub fn uninstall(environment: &Environment) -> Result<Report, CliError> {
     let location = environment.layout();
-    let observed = command_file::observe(location)?;
+    let observed = observe_command(location, environment.target())?;
     let mut changed = false;
     match plan::uninstall_step(&observed) {
         UninstallStep::Refuse => return Err(conflict(location, Operation::Uninstall)),
@@ -192,6 +193,35 @@ pub fn uninstall(environment: &Environment) -> Result<Report, CliError> {
 /// Reports the command's state without changing anything.
 pub fn status(environment: &Environment) -> Result<Report, CliError> {
     report(environment, false)
+}
+
+/// Points a command whose binary is gone at this binary; returns whether it changed the command. A command that runs
+/// another binary that is still there is left alone, so a development build never takes over an install (decision 0113).
+pub fn repair_gone(environment: &Environment) -> Result<bool, CliError> {
+    let location = environment.layout();
+    let target = environment.target();
+    if !matches!(observe_command(location, target)?, Observed::Gone { .. }) {
+        return Ok(false);
+    }
+    if location.platform == Platform::Windows && layout::command_file_text(target).is_none() {
+        return Err(invalid_target(target));
+    }
+    command_file::place(location, target)?;
+    Ok(true)
+}
+
+/// Runs when the desktop starts this service with `--repair-command`: repoints a stale command at this binary. Best
+/// effort: a failure is logged and never stops the service.
+pub fn repair_on_service_start() {
+    match Environment::from_process().and_then(|environment| repair_gone(&environment)) {
+        Ok(true) => tracing::info!("the massorca command was repointed at this binary"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            code = error.code,
+            error = %error.message,
+            "the massorca command could not be repointed"
+        ),
+    }
 }
 
 /// The text lines of one outcome; JSON output carries the report itself.
@@ -226,6 +256,14 @@ pub fn lines(operation: Operation, report: &Report, platform: Platform) -> Vec<S
             ),
             "Run `massorca cli install` to point it at this binary.".to_owned(),
         ],
+        (_, State::Stale) => vec![
+            format!(
+                "{command} runs {}, which is no longer there.",
+                report.points_to.as_deref().unwrap_or("another program")
+            ),
+            "Starting the app points it at this binary; `massorca cli install` does it now."
+                .to_owned(),
+        ],
         (_, State::NotInstalled) => vec![
             "massorca is not installed. Run `massorca cli install` to put it on your PATH."
                 .to_owned(),
@@ -258,13 +296,28 @@ pub fn run(command: CliCommand, output: Output) -> Result<(), CliError> {
     Ok(())
 }
 
+/// What is at the command path now. A command for a binary that is no longer there is `Gone`; a command for `target`
+/// itself never is, because the binary running now is there.
+fn observe_command(location: &Layout, target: &Path) -> io::Result<Observed> {
+    Ok(match command_file::observe(location)? {
+        Observed::Ours { points_to }
+            if !same_path(location.platform, &points_to, target) && !points_to.exists() =>
+        {
+            Observed::Gone { points_to }
+        }
+        observed => observed,
+    })
+}
+
 /// The state of the command as it is now, and whether this run changed anything.
 fn report(environment: &Environment, changed: bool) -> Result<Report, CliError> {
     let location = environment.layout();
-    let observed = command_file::observe(location)?;
+    let observed = observe_command(location, environment.target())?;
     let on_path = environment.bin_dir_on_path();
     let points_to = match &observed {
-        Observed::Ours { points_to } => Some(points_to.display().to_string()),
+        Observed::Ours { points_to } | Observed::Gone { points_to } => {
+            Some(points_to.display().to_string())
+        }
         Observed::Missing | Observed::Foreign => None,
     };
     Ok(Report {

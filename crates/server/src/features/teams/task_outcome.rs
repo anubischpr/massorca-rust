@@ -1,5 +1,6 @@
 //! Latches a task's outcome from its agent session, and tells the Board when a linked session changes (decision 0072).
-//! Only a Done the host can see latches; loss of contact never does.
+//! Only a Done the host can see latches; loss of contact never does. A Conference room reply run's end posts its answer
+//! (decision 0122).
 
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use tokio::sync::broadcast::{Receiver, error::RecvError};
 use crate::context::AppState;
 use crate::shutdown::ShutdownSignal;
 
+use super::room_reply_end::{ReplyEnd, reply_end, settle_reply};
 use super::task_state::{Session, observed_outcome};
 use super::{blocking_state, store_error};
 
@@ -42,18 +44,33 @@ pub(crate) async fn follow_task_outcomes(
 
 /// Latches what one change shows, then tells the Board about the task its session is linked to.
 async fn react(state: &Arc<AppState>, change: Change) {
-    let (session_id, outcome) = match change {
-        Change::Updated(session) => (session.id.clone(), observed_outcome(&session)),
-        Change::Forgotten(id) => (id, None),
+    let (session_id, outcome, end) = match change {
+        Change::Updated(session) => (
+            session.id.clone(),
+            observed_outcome(&session),
+            reply_end(&session),
+        ),
+        Change::Forgotten(id) => (id, None, Some(ReplyEnd::Forgotten)),
         Change::Account(_) | Change::Queue(_) | Change::Chat(_) => return,
     };
-    let linked = blocking_state(state, move |store, _agents| {
-        latch_linked(store, &session_id, outcome).map_err(store_error)
+    let linked = blocking_state(state, move |store, agents| {
+        let replied = match &end {
+            Some(end) => settle_reply(store, agents, &session_id, end)?,
+            None => None,
+        };
+        let linked = latch_linked(store, &session_id, outcome).map_err(store_error)?;
+        Ok((linked, replied))
     })
     .await;
     match linked {
-        Ok(Some(linked)) => publish_linked(state, &linked),
-        Ok(None) => {}
+        Ok((linked, replied)) => {
+            if let Some(linked) = linked {
+                publish_linked(state, &linked);
+            }
+            if let Some(team) = replied {
+                publish_room(state, team);
+            }
+        }
         Err(error) => report(&error),
     }
 }
@@ -62,19 +79,27 @@ async fn react(state: &Arc<AppState>, change: Change) {
 async fn resync(state: &Arc<AppState>) {
     let linked = blocking_state(state, |store, agents| {
         let sessions = agents.list(None).map_err(ErrorBody::from)?;
-        let mut linked = Vec::new();
+        let (mut linked, mut replied) = (Vec::new(), Vec::new());
         for session in &sessions {
+            if let Some(end) = reply_end(session) {
+                replied.extend(settle_reply(store, agents, &session.id, &end)?);
+            }
             linked.extend(
                 latch_linked(store, &session.id, observed_outcome(session)).map_err(store_error)?,
             );
         }
-        Ok(linked)
+        Ok((linked, replied))
     })
     .await;
     match linked {
-        Ok(linked) => linked
-            .iter()
-            .for_each(|linked| publish_linked(state, linked)),
+        Ok((linked, replied)) => {
+            linked
+                .iter()
+                .for_each(|linked| publish_linked(state, linked));
+            replied
+                .into_iter()
+                .for_each(|team| publish_room(state, team));
+        }
         Err(error) => report(&error),
     }
 }
@@ -124,6 +149,13 @@ fn tell_room(
         bot_id: task.bot_id.clone(),
         text: format!("{}: {}", outcome_word(outcome), task.title),
         task_id: Some(task.id.clone()),
+        routine_id: None,
+        card: None,
+        card_answer: None,
+        reply_to: None,
+        reply_bot_id: None,
+        reply_session: None,
+        reply_state: None,
         created_at: now_ms(),
     })?;
     Ok(Some(task.team_id.clone()))
@@ -142,11 +174,15 @@ fn outcome_word(outcome: TaskOutcome) -> &'static str {
 fn publish_linked(state: &AppState, linked: &Linked) {
     publish_task(state, &linked.task_id);
     if let Some(team) = &linked.room_team {
-        state.events.publish(ChangeEvent {
-            topic: TOPIC_TEAM_ROOM_CHANGED.to_owned(),
-            id: team.clone(),
-        });
+        publish_room(state, team.clone());
     }
+}
+
+fn publish_room(state: &AppState, team: String) {
+    state.events.publish(ChangeEvent {
+        topic: TOPIC_TEAM_ROOM_CHANGED.to_owned(),
+        id: team,
+    });
 }
 
 /// Latches the outcome a loaded session already shows into `task`, which was just linked to it. The listener finds a
