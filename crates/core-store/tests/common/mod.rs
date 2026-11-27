@@ -21,6 +21,7 @@ pub fn project_row(name: &str, path_key: &str) -> ProjectRow {
 /// A ready worktree row with a fresh id, created now.
 pub fn workspace_row(project_id: &str, name: &str, path_key: &str) -> WorkspaceRow {
     WorkspaceRow {
+        in_place: false,
         id: new_id(),
         project_id: project_id.to_owned(),
         kind: WorkspaceKind::Worktree,

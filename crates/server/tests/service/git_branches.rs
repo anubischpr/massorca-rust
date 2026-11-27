@@ -2,9 +2,9 @@
 
 use massorca_client::ClientError;
 use massorca_protocol::codes;
-use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::branch::{
     GitBranchCreateParams, GitBranchDeleteParams, GitBranchRenameParams, GitBranchSwitchParams,
+    GitBranchesParams,
 };
 use serde_json::json;
 
@@ -46,8 +46,9 @@ async fn branches_put_the_workspace_branch_first_and_mark_other_worktrees() {
     let service = GitService::start().await;
     let listed = service
         .client
-        .git_branches(&GitWorkspaceRef {
-            workspace: "feature".to_owned(),
+        .git_branches(&GitBranchesParams {
+            workspace: Some("feature".to_owned()),
+            project: None,
         })
         .await
         .expect("branches");
@@ -59,12 +60,90 @@ async fn branches_put_the_workspace_branch_first_and_mark_other_worktrees() {
     let folder = service.folder_workspace().await;
     let error = service
         .client
-        .git_branches(&GitWorkspaceRef {
-            workspace: folder.id,
+        .git_branches(&GitBranchesParams {
+            workspace: Some(folder.id),
+            project: None,
         })
         .await
         .expect_err("folder");
     assert_eq!(remote_code(&error), codes::GIT_NOT_A_REPOSITORY);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn a_project_lists_its_own_checkout_branches_with_no_workspace() {
+    let service = GitService::start().await;
+    let listed = service
+        .client
+        .git_branches(&GitBranchesParams {
+            workspace: None,
+            project: Some("repo".to_owned()),
+        })
+        .await
+        .expect("branches of the project");
+    let names: Vec<_> = listed.branches.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["main", "feature"]);
+    assert!(listed.branches[0].current && !listed.branches[0].checked_out_elsewhere);
+    assert!(!listed.branches[1].current && listed.branches[1].checked_out_elsewhere);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn a_folder_project_has_no_checkout_to_list() {
+    let service = GitService::start().await;
+    service.folder_workspace().await;
+    let error = service
+        .client
+        .git_branches(&GitBranchesParams {
+            workspace: None,
+            project: Some("plain".to_owned()),
+        })
+        .await
+        .expect_err("a folder project");
+    assert_eq!(remote_code(&error), codes::GIT_NOT_A_REPOSITORY);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn a_project_whose_checkout_is_missing_is_refused_with_its_path() {
+    let service = GitService::start().await;
+    // Renamed rather than deleted: git's read-only object files would make a delete fail on Windows.
+    std::fs::rename(
+        service.home.path().join("repo"),
+        service.home.path().join("repo-moved"),
+    )
+    .expect("move the checkout away");
+    let error = service
+        .client
+        .git_branches(&GitBranchesParams {
+            workspace: None,
+            project: Some("repo".to_owned()),
+        })
+        .await
+        .expect_err("a missing checkout");
+    assert_eq!(remote_code(&error), codes::PATH_NOT_FOUND);
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn git_branches_takes_exactly_one_of_workspace_and_project() {
+    let service = GitService::start().await;
+    let neither = GitBranchesParams {
+        workspace: None,
+        project: None,
+    };
+    let both = GitBranchesParams {
+        workspace: Some("feature".to_owned()),
+        project: Some("repo".to_owned()),
+    };
+    for params in [neither, both] {
+        let error = service
+            .client
+            .git_branches(&params)
+            .await
+            .expect_err("refused");
+        assert_eq!(remote_code(&error), codes::REQUEST_INVALID_PARAMS);
+    }
     service.stop().await;
 }
 

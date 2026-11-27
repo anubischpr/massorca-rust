@@ -130,6 +130,7 @@ async fn workspace(client: &Client, home: &Path) -> Workspace {
         .expect("the project is added");
     client
         .workspace_create(&WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: "feature".to_owned(),
             branch: None,
