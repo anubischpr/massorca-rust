@@ -177,6 +177,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             ..base_workspace_create_params()
         })
@@ -415,6 +416,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 

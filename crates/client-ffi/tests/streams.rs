@@ -61,6 +61,7 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
             .call(
                 workspaces::CREATE,
                 &WorkspaceCreateParams {
+                    in_place: false,
                     project: project.id,
                     name: name.to_owned(),
                     branch: None,
@@ -105,6 +106,7 @@ fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
             .call(
                 workspaces::CREATE,
                 &WorkspaceCreateParams {
+                    in_place: false,
                     project: project.id,
                     name: "feature".to_owned(),
                     branch: None,

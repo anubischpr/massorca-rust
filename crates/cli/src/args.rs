@@ -243,6 +243,9 @@ pub struct RunArgs {
     /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
     #[arg(long)]
     pub allow_all_interfaces: bool,
+    /// Repoints a stale `massorca` command at this binary (decision 0113); set by the desktop, not by people.
+    #[arg(long, hide = true)]
+    pub repair_command: bool,
     /// Where an autostarting client reads why the service did not start; set by the client, not by people.
     #[arg(long, hide = true, value_name = "FILE")]
     pub start_status: Option<PathBuf>,
@@ -309,7 +312,7 @@ pub enum ProjectCommand {
     Update {
         /// Project id, name or path.
         project: String,
-        /// The icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`.
+        /// The icon: `emoji:<emoji>`, `lucide:<name>[:<colour>]` or `image:<PNG file>`.
         #[arg(
             long,
             value_name = "ICON",
@@ -320,6 +323,11 @@ pub enum ProjectCommand {
         /// Removes the icon, so the project shows the default one.
         #[arg(long)]
         clear_icon: bool,
+    },
+    /// Turns a folder project into a git project: `git init` and an empty first commit in its folder. Its folder workspaces stay.
+    InitGit {
+        /// Project id, name or path.
+        project: String,
     },
     /// Shows a project's orca.yaml setup and archive scripts with their hashes and whether each is trusted.
     Scripts {
@@ -366,7 +374,8 @@ pub struct ProjectAddArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
-    /// Creates a worktree on a new branch (git project), or registers a folder (folder project).
+    /// Creates a worktree on a new branch (git project), or registers a folder (folder project). With `--in-place`,
+    /// registers the project's own checkout instead (decision 0112).
     Create(WorkspaceCreateArgs),
     /// Lists every workspace, or only those of one project.
     List(WorkspaceListArgs),
@@ -377,7 +386,8 @@ pub enum WorkspaceCommand {
     },
     /// Shows the workspace that contains the current directory, or the one that contains --path.
     Current(WorkspaceCurrentArgs),
-    /// Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
+    /// Removes a workspace. A worktree is deleted with its directory; a folder and an in-place workspace (the project's
+    /// own checkout) are only forgotten.
     Rm {
         /// Workspace id, name or path.
         workspace: String,
@@ -390,6 +400,9 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+        /// Remove the workspaces of delegated children first, deepest first, with the same checks and flags.
+        #[arg(long)]
+        with_children: bool,
         /// Remove the worktree even when the project's archive script fails or times out.
         #[arg(long)]
         allow_failed_archive: bool,
@@ -430,7 +443,7 @@ pub struct WorkspaceCreateArgs {
     /// Project id, name or path.
     pub project: String,
     /// Name of the workspace, cleaned for its folder and branch (accents folded, other characters
-    /// become `-`). Omit it to generate one.
+    /// become `-`). Omit it to generate one, or with `--in-place` to take the project's name.
     pub name: Option<String>,
     /// Branch to create or check out. Defaults to the workspace name, after the branch prefix
     /// (`workspaces.branch_prefix`) when one is set.
@@ -463,6 +476,11 @@ pub struct WorkspaceCreateArgs {
     /// `--branch` or `--existing-branch`. For scripts and tests.
     #[arg(long)]
     pub name_generated: bool,
+    /// Registers the project's own checkout as its workspace: no worktree or branch is made, and removing the workspace
+    /// only forgets it (decision 0112). NAME defaults to the project's name. Not with `--branch`, `--base`,
+    /// `--existing-branch`, `--refresh-base`, `--path`, `--unique` or `--name-generated`.
+    #[arg(long)]
+    pub in_place: bool,
 }
 
 #[derive(Debug, Args)]

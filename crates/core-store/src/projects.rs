@@ -139,6 +139,16 @@ impl Store {
         Ok(updated > 0)
     }
 
+    /// Turns the folder project `id` into a git project with `workspaces_root`. Returns whether a folder row was
+    /// updated, so a project that is no longer a folder is left alone.
+    pub fn set_project_git(&self, id: &str, workspaces_root: &str) -> Result<bool, StoreError> {
+        let updated = self.lock().execute(
+            "UPDATE projects SET kind = ?2, workspaces_root = ?3 WHERE id = ?1 AND kind = ?4",
+            params![id, ProjectKind::Git, workspaces_root, ProjectKind::Folder],
+        )?;
+        Ok(updated > 0)
+    }
+
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectRow>, StoreError> {
         self.query_optional(
             &format!("{SELECT_PROJECTS} WHERE id = ?1"),

@@ -227,6 +227,7 @@ mod tests {
     fn lucide(name: &str) -> ProjectIcon {
         ProjectIcon::Lucide {
             name: name.to_owned(),
+            color: None,
         }
     }
 

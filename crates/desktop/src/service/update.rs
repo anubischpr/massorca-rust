@@ -851,6 +851,7 @@ pub(crate) mod fixtures {
     pub fn project(id: &str, name: &str) -> Project {
         Project {
             icon: None,
+            remote_owner: None,
             id: id.into(),
             kind: ProjectKind::Git,
             path: format!("/repos/{name}"),
@@ -863,6 +864,7 @@ pub(crate) mod fixtures {
 
     pub fn workspace(id: &str, project_id: &str, name: &str, created: i64) -> Workspace {
         Workspace {
+            in_place: false,
             id: id.into(),
             project_id: project_id.into(),
             kind: WorkspaceKind::Worktree,
@@ -1235,6 +1237,7 @@ pub(crate) mod fixtures {
             added_at_ms: 1,
             base_ref: None,
             icon: None,
+            remote_owner: None,
         }
     }
 
@@ -1253,6 +1256,7 @@ pub(crate) mod fixtures {
             no_setup: false,
             unique_name: false,
             name_generated: false,
+            in_place: false,
         }
     }
 

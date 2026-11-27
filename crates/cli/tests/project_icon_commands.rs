@@ -81,6 +81,57 @@ fn project_update_sets_a_lucide_icon_and_clear_icon_removes_it() {
 }
 
 #[test]
+fn project_update_sets_a_coloured_lucide_icon_and_show_prints_it_back() {
+    let sandbox = Sandbox::new();
+    let repo = repo_in(&sandbox);
+    sandbox
+        .run("default", &["project", "add", repo.as_str()])
+        .success();
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "project",
+                "update",
+                "repo",
+                "--icon",
+                "lucide:folder:usage-3",
+            ],
+        )
+        .success()
+        .stdout(contains("project repo icon is lucide:folder:usage-3"));
+    let shown = sandbox.json_ok("default", &["project", "show", "repo"]);
+    assert_eq!(
+        shown["icon"],
+        json!({ "type": "lucide", "name": "folder", "color": "usage-3" })
+    );
+    sandbox
+        .run("default", &["project", "show", "repo"])
+        .success()
+        .stdout(contains("icon: lucide:folder:usage-3"));
+}
+
+#[test]
+fn a_lucide_colour_that_is_not_a_token_is_refused_before_anything_is_sent() {
+    let sandbox = Sandbox::new();
+    let repo = repo_in(&sandbox);
+    sandbox
+        .run("default", &["project", "add", repo.as_str()])
+        .success();
+
+    sandbox
+        .run(
+            "default",
+            &["project", "update", "repo", "--icon", "lucide:folder:red"],
+        )
+        .failure()
+        .stderr(contains("usage-1 to usage-6 or neutral"));
+    let shown = sandbox.json_ok("default", &["project", "show", "repo"]);
+    assert!(shown.get("icon").is_none(), "no icon was set: {shown}");
+}
+
+#[test]
 fn an_image_icon_is_read_from_a_png_file_and_stored_as_an_upload() {
     let sandbox = Sandbox::new();
     let repo = repo_in(&sandbox);
