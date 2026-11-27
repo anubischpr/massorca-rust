@@ -1,6 +1,6 @@
-//! `massorca host update` (decision 0132) through the real binary: a throwaway server profile listens on localhost, a
-//! client profile pairs with it, and the server's "installed binary" is a file in a temporary folder whose restart is the
-//! fake's `restart`. Nothing reaches a real host or a real install.
+//! `massorca host update` (decision 0132) through the real binary: a throwaway server profile listens on localhost and a
+//! client profile pairs with it. The swap and restart are tested in-process (`crates/server/tests/service/self_update.rs`);
+//! here the host has no supervisor, so nothing is ever replaced. Nothing reaches a real host or a real install.
 
 mod harness;
 
@@ -116,7 +116,6 @@ impl Pair {
             .expect("offer")
             .to_owned();
         let client = Sandbox::new();
-        client.set_env("MASSORCA_TEST_UPDATE_WAIT_MS", "1500");
         let mut accept = client.command("client");
         accept.args([
             "--json",
@@ -170,7 +169,7 @@ fn an_older_host_is_refused_before_any_upload() {
 }
 
 #[test]
-fn an_update_is_confirmed_checked_against_downgrades_then_swapped_and_restarted() {
+fn an_update_is_confirmed_and_checked_and_stray_test_variables_enable_nothing() {
     let pair = Pair::start(false);
     let (binary, sha) = candidate(pair.dir.path(), None);
     let binary = binary.to_str().expect("utf-8");
@@ -201,38 +200,12 @@ fn an_update_is_confirmed_checked_against_downgrades_then_swapped_and_restarted(
     );
     pair.assert_untouched();
 
-    // The fake restart leaves the old service running, so the CLI reports it never came back as 9.9.9.
-    let updated = pair.update(&["--binary", binary, "--sha256", &sha, "--yes"]);
-    assert_eq!(
-        updated["error"]["code"], "update.not_confirmed",
-        "{updated}"
-    );
-    assert_eq!(
-        std::fs::read(&pair.installed).expect("installed"),
-        std::fs::read(binary).expect("binary")
-    );
-    assert_eq!(
-        std::fs::read(pair.sibling("massorca.previous")).expect("previous"),
-        OLD
-    );
-    eventually("the restart marker", || {
-        let mut marker = pair.installed.clone().into_os_string();
-        marker.push(".restarted");
-        PathBuf::from(marker).exists().then_some(())
-    });
-}
-
-#[test]
-fn a_device_without_host_admin_is_refused() {
-    let pair = Pair::start(true);
-    let (binary, sha) = candidate(pair.dir.path(), None);
-    let denied = pair.update(&[
-        "--binary",
-        binary.to_str().expect("utf-8"),
-        "--sha256",
-        &sha,
-        "--yes",
-    ]);
-    assert_eq!(denied["error"]["code"], "permission.denied", "{denied}");
+    // The server was started with the old test variables set: a production service ignores them, so a host with no
+    // supervisor refuses before any upload and the file they named is never touched.
+    let refused = pair.update(&["--binary", binary, "--sha256", &sha, "--yes"]);
+    assert_eq!(refused["error"]["code"], "update.unsupported", "{refused}");
     pair.assert_untouched();
+    let mut marker = pair.installed.clone().into_os_string();
+    marker.push(".restarted");
+    assert!(!PathBuf::from(marker).exists(), "no restart program ran");
 }

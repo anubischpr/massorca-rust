@@ -25,10 +25,6 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-/// Tests only: the binary an update replaces instead of this process's own.
-pub const TEST_TARGET_ENV: &str = "MASSORCA_TEST_SELF_UPDATE_TARGET";
-/// Tests only: a program run as `<program> restart <binary>` instead of systemd.
-pub const TEST_RESTART_ENV: &str = "MASSORCA_TEST_SELF_UPDATE_RESTART";
 /// Lets the answer reach the client before the supervisor stops this process.
 const RESTART_DELAY: Duration = Duration::from_millis(300);
 
@@ -42,16 +38,14 @@ pub struct SelfUpdateOptions {
 }
 
 impl SelfUpdateOptions {
-    /// This process's own binary and the supervisor it runs under, unless the test variables name others.
+    /// This process's own binary and the supervisor it runs under. No variable changes either: tests inject theirs
+    /// through `Service::start_with_self_update`.
     #[must_use]
     pub fn from_env() -> Self {
-        let target = std::env::var_os(TEST_TARGET_ENV)
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_exe().ok());
-        let supervisor = std::env::var_os(TEST_RESTART_ENV)
-            .map(|program| Supervisor::Program(PathBuf::from(program)))
-            .or_else(Supervisor::detect);
-        Self { target, supervisor }
+        Self {
+            target: std::env::current_exe().ok(),
+            supervisor: Supervisor::detect(),
+        }
     }
 }
 

@@ -27,8 +27,6 @@ use crate::output::Output;
 
 /// How long the CLI waits for the restarted service to answer with the new version.
 const RESTART_WAIT: Duration = Duration::from_secs(90);
-/// Tests only: a shorter wait, in milliseconds.
-pub const TEST_WAIT_ENV: &str = "MASSORCA_TEST_UPDATE_WAIT_MS";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What `host update` did.
@@ -331,10 +329,7 @@ fn confirm(
 /// Reconnects until the host answers with `version`. A host that never does is left for `--rollback` or the recovery
 /// steps of decision 0132.
 async fn wait_for_version(hosts: &Hosts, name: &str, version: &str) -> Result<(), CliError> {
-    let wait = std::env::var(TEST_WAIT_ENV)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .map_or(RESTART_WAIT, Duration::from_millis);
+    let wait = RESTART_WAIT;
     let deadline = Instant::now() + wait;
     let mut last = String::from("no answer yet");
     while Instant::now() < deadline {
