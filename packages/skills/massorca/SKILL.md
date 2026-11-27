@@ -52,16 +52,17 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca project rm <PROJECT> [--forget-workspaces]`: Unregisters a project. Refused while it has workspaces, unless their records are forgotten. Its files stay.
 - `massorca project set-base <PROJECT> [BASE] [--clear]`: Sets the base that a project's new workspaces start from, or clears it with --clear.
 - `massorca project update <PROJECT> [--icon <ICON>] [--clear-icon]`: Changes a project's icon: `--icon` sets it, `--clear-icon` removes it so the project shows the default one.
+- `massorca project init-git <PROJECT>`: Turns a folder project into a git project: `git init` and an empty first commit in its folder. Its folder workspaces stay.
 - `massorca project scripts <PROJECT> [--workspace <WORKSPACE>]`: Shows a project's orca.yaml setup and archive scripts with their hashes and whether each is trusted.
 - `massorca project trust-scripts <PROJECT> [--workspace <WORKSPACE>] [--hash <HASH>]...`: Shows a project's orca.yaml setup and archive scripts with their hashes; `--hash` trusts the shown script with that hash. A script runs only once its exact content is trusted, and a changed script needs trust again.
 
 ### workspace
 
-- `massorca workspace create <PROJECT> [NAME] [--branch <BRANCH>] [--base <REF>] [--existing-branch] [--refresh-base] [--path <DIR>] [--request-id <ID>] [--no-setup] [--unique] [--name-generated]`: Creates a worktree on a new branch (git project), or registers a folder (folder project).
+- `massorca workspace create <PROJECT> [NAME] [--branch <BRANCH>] [--base <REF>] [--existing-branch] [--refresh-base] [--path <DIR>] [--request-id <ID>] [--no-setup] [--unique] [--name-generated] [--in-place]`: Creates a worktree on a new branch (git project), or registers a folder (folder project). With `--in-place`, registers the project's own checkout instead (decision 0112).
 - `massorca workspace list [--project <PROJECT>]`: Lists every workspace, or only those of one project.
 - `massorca workspace show <WORKSPACE>`: Shows one workspace, selected by id, name or path.
 - `massorca workspace current [--path <DIR>]`: Shows the workspace that contains the current directory, or the one that contains --path.
-- `massorca workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--allow-failed-archive]`: Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
+- `massorca workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan] [--with-children] [--allow-failed-archive]`: Removes a workspace. A worktree is deleted with its directory; a folder and an in-place workspace (the project's own checkout) are only forgotten.
 - `massorca workspace update <WORKSPACE> [--name <NAME>] [--comment <COMMENT>]`: Renames a workspace or sets its comment. A worktree's directory and branch keep their names.
 - `massorca workspace rename <WORKSPACE> <NEW_NAME> --from-generated [--expected-branch <BRANCH>]`: Renames a workspace whose name the service chose, and its unpublished branch. The folder keeps its name.
 - `massorca workspace check <WORKSPACE>`: Checks that a workspace's folder exists and is readable and, for a worktree, that git still lists it.
@@ -143,7 +144,7 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca agent queue send-now <ID>`: Sends a queued prompt at once, with force, ahead of the queue's order; it leaves the queue. Refused while the agent asks the person something.
 - `massorca agent queue resume <SESSION>`: Lifts the session's queue pauses, after a stop or a service restart, and types its head once the agent is ready.
 - `massorca agent queue remove <ID>`: Removes a waiting or failed queued prompt.
-- `massorca agent forget <SESSION> [--remove-workspace] [--force] [--discard-ignored] [--preview]`: Forgets a session whose run has ended; with --remove-workspace, removes its workspace too, as `workspace rm` would, when no other session uses it.
+- `massorca agent forget <SESSION> [--remove-workspace] [--force] [--discard-ignored] [--allow-failed-archive] [--preview]`: Forgets a session whose run has ended; with --remove-workspace, removes its workspace too, as `workspace rm` would, when no other session uses it.
 - `massorca agent rename <SESSION> <TITLE>`: Sets a session's title, live or exited: 1 to 120 characters once trimmed, without control characters.
 - `massorca agent hide <SESSION> [--off]`: Hides (archives) an exited session from `agent list`, keeping its record, terminal and workspace; --off shows it again. `agent list --archived` lists hidden sessions too.
 - `massorca agent release <SESSION>`: Archives an exited session's output (its newest 256 KiB) and frees its terminal. The record stays. Refused for a live run.
@@ -177,12 +178,14 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca git fetch [REMOTE] [--all] [--workspace <WORKSPACE>]`: Fetches from a remote, pruning branches deleted there.
 - `massorca git pull [--mode <MODE>] [--workspace <WORKSPACE>]`: Brings the branch up to date with its upstream; never merges unless `--mode` says so. `--mode` takes ff-only, merge, rebase.
 - `massorca git push [REMOTE] [--force-with-lease <COMMIT>] [--workspace <WORKSPACE>]`: Pushes the branch to its upstream, creating it on the remote if needed. Never forces.
+- `massorca git remotes [--workspace <WORKSPACE>] [--project <PROJECT>]`: Lists the hosting provider, owner and repository of each network remote, and a fork's upstream.
 - `massorca git abort [--workspace <WORKSPACE>]`: Aborts the merge, rebase, cherry-pick or revert in progress.
 - `massorca git watch [--workspace <WORKSPACE>] [--max-events <MAX_EVENTS>]`: Prints what changes in a workspace (working tree, index, HEAD, refs) until interrupted.
 - `massorca git diff [--workspace <WORKSPACE>] [--staged] [--head] [--from <REV>] [--to <REV>] [--limit <LIMIT>]`: Lists the files a comparison changes, with line counts.
 - `massorca git log [REVISION] [--workspace <WORKSPACE>] [--limit <LIMIT>] [--cursor <CURSOR>]`: Shows the history, newest first, a page at a time.
 - `massorca git patch <PATH> [--workspace <WORKSPACE>] [--staged] [--head] [--from <REV>] [--to <REV>] [--original-path <PATH>] [--max-bytes <MAX_BYTES>]`: Shows the patch of one file.
-- `massorca git branches [--workspace <WORKSPACE>]`: Lists the local branches, the current one first.
+- `massorca git show-file <PATH> [--workspace <WORKSPACE>] [--index] [--rev <REV>] [--out <FILE>]`: Shows one file's bytes on the working tree, the index or a revision; `--out` writes them.
+- `massorca git branches [--workspace <WORKSPACE>] [--project <PROJECT>]`: Lists the local branches, the current one first.
 - `massorca git branch-create <NAME> [--start <START>] [--switch] [--workspace <WORKSPACE>]`: Creates a branch with no upstream, at HEAD or `--start`.
 - `massorca git switch <BRANCH> [--workspace <WORKSPACE>]`: Checks out a local branch; refuses when local changes would be overwritten.
 - `massorca git branch-rename <FROM> <TO> [--workspace <WORKSPACE>]`: Renames a branch; never overwrites another.
@@ -213,9 +216,10 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca team bot add <TEAM> <NAME> --agent <KIND> --job <TEXT> [--lead] [--skills <SKILLS>]`: Adds a bot to a team. Its agent kind and job are required.
 - `massorca team bot rm <TEAM> <BOT> [--unassign]`: Removes a bot. Refused while it owns open tasks, unless --unassign is given.
 - `massorca team project list <TEAM>`: Lists a team's projects, in the order they were added.
-- `massorca team project update <TEAM> <PROJECT> [--name <NAME>] [--goal <TEXT>] [--brief <TEXT>] [--source <PROJECT>] [--code-source <KIND>]`: Changes a team's project. Only the options given change. `--code-source` takes existing-repository, new-folder-with-git.
+- `massorca team project show <TEAM> <PROJECT>`: Shows one project: its goal, its code source and the Workspaces project it links.
+- `massorca team project update <TEAM> <PROJECT> [--name <NAME>] [--goal <TEXT>] [--brief <TEXT>] [--source <PROJECT>] [--code-source <KIND>]`: Changes a team's project. Only the options given change. `--code-source` takes existing-repository, new-folder-with-git, none.
 - `massorca team project rm <TEAM> <PROJECT>`: Removes a project. Its tasks stay on the Board without it.
-- `massorca team project add <TEAM> <NAME> [--goal <TEXT>] [--source <PROJECT>] [--code-source <KIND>]`: Adds a project to a team. Its name is unique within the team. `--code-source` takes existing-repository, new-folder-with-git.
+- `massorca team project add <TEAM> <NAME> [--goal <TEXT>] [--source <PROJECT>] [--code-source <KIND>]`: Adds a project to a team. Its name is unique within the team. `--code-source` takes existing-repository, new-folder-with-git, none.
 - `massorca team memory list <TEAM> [--bot <BOT>]`: Lists a team's memory lines, newest first: all of the team's, or only one bot's with --bot.
 - `massorca team memory add <TEAM> <TEXT> [--bot <BOT>] [--task <TASK>]`: Adds a line of at most 500 characters: to the team's memory, or to one bot's with --bot.
 - `massorca team memory rm <TEAM> <LINE>`: Removes a memory line by its id.
@@ -272,6 +276,7 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca extension disable <ID>`: Disables an installed extension. Its files and data stay.
 - `massorca extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--uninstall-consent <FINGERPRINT>] [--yes]`: Removes an installed extension, its files and its data.
 - `massorca extension program-update <ID> <PROGRAM> [--yes] [--consent <FINGERPRINT>]`: Updates a host program a tool package installed, such as Git, with the vendor's update command. Without --yes it prints what would run and fails with extension.consent_required. A program MassOrca did not install is refused.
+- `massorca extension points`: Lists what each owner registered on the tool, skill, view, theme and status-rule points, and the enabled extensions that registered nothing.
 - `massorca extension log <ID>`: Lists the recent install, update, rollback and remove runs of an extension, oldest first.
 
 ### skills
