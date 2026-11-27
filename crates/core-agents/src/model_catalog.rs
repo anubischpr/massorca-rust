@@ -286,6 +286,45 @@ struct CacheState {
     running: HashMap<ListingKey, Arc<Running>>,
     /// The background listings `agent.kinds` has started and that have not ended yet (decision 0166, amendment).
     background: HashSet<ListingKey>,
+    /// When a background listing was last refused before it could run (no usable home, a kind no longer enabled), so
+    /// none is started again for [`FAILURE_FRESH_MS`]. A refusal is never served as an answer.
+    refused: HashMap<ListingKey, u64>,
+}
+
+/// A background listing marked as started (decision 0166, amendment). Dropping it, as when its thread ends or panics, or
+/// when the thread cannot be spawned, marks it as ended, so the next `agent.kinds` may start another.
+#[derive(Debug)]
+pub struct BackgroundListing {
+    cache: Arc<ModelCache>,
+    key: ListingKey,
+}
+
+impl BackgroundListing {
+    /// The (kind, account) this listing is for.
+    pub fn key(&self) -> &ListingKey {
+        &self.key
+    }
+
+    /// Remembers that the listing was refused before it ran, at `at_ms`, so none is started again for a while.
+    pub fn refused(&self, at_ms: u64) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.refused.insert(self.key.clone(), at_ms);
+    }
+}
+
+impl Drop for BackgroundListing {
+    fn drop(&mut self) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.background.remove(&self.key);
+    }
 }
 
 /// A listing that is running. A call that finds it waits on the listing's condition variable for the answer, so waiting
@@ -392,6 +431,7 @@ impl ModelCache {
     pub fn invalidate(&self, key: &ListingKey) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.entries.remove(key);
+        state.refused.remove(key);
         if let Some(running) = state.running.remove(key) {
             running.superseded.store(true, Ordering::SeqCst);
         }
@@ -421,6 +461,7 @@ impl ModelCache {
     pub fn invalidate_kind(&self, kind: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.entries.retain(|key, _| key.kind != kind);
+        state.refused.retain(|key, _| key.kind != kind);
         state.running.retain(|key, running| {
             let keep = key.kind != kind;
             if !keep {
@@ -431,22 +472,29 @@ impl ModelCache {
     }
 
     /// Marks a background listing for `key` as started, unless the cache holds a fresh answer for it, a listing for it is
-    /// running, or a background listing for it has not ended. Returns whether it was marked, so at most one starts.
-    pub fn start_background(&self, key: &ListingKey, now_ms: u64) -> bool {
+    /// running, a background listing for it has not ended, or one was refused less than [`FAILURE_FRESH_MS`] ago. The
+    /// mark lasts until the returned guard is dropped, so at most one starts.
+    pub fn start_background(
+        self: &Arc<Self>,
+        key: &ListingKey,
+        now_ms: u64,
+    ) -> Option<BackgroundListing> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .refused
+            .retain(|_, at_ms| now_ms.saturating_sub(*at_ms) < FAILURE_FRESH_MS);
         if fresh_entry(state.entries.get(key), now_ms).is_some()
             || state.running.contains_key(key)
             || state.background.contains(key)
+            || state.refused.contains_key(key)
         {
-            return false;
+            return None;
         }
-        state.background.insert(key.clone())
-    }
-
-    /// Marks the background listing for `key` as ended.
-    pub fn end_background(&self, key: &ListingKey) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.background.remove(key);
+        state.background.insert(key.clone());
+        Some(BackgroundListing {
+            cache: Arc::clone(self),
+            key: key.clone(),
+        })
     }
 
     /// The models of the last listing the vendor CLI answered for `key`, however old; `None` when none answered. Reading
@@ -672,7 +720,8 @@ impl Agents {
                         .and_then(|decl| decl.model.as_ref())
                         .is_some_and(|model| model.discover.is_some())
             });
-            if kind.detected && discovers && key.account.is_some() {
+            // An active account with no usable home is refused by the listing anyway, so none is started for it.
+            if kind.detected && kind.credentials.imported && discovers && key.account.is_some() {
                 self.list_in_background(key);
             }
         }
@@ -681,32 +730,30 @@ impl Agents {
     /// Starts one listing for `key` on its own thread, unless one is fresh or under way. It runs as `agent.models` would,
     /// with the account's home, the time limit and the failure rules. Only an answered listing is announced, as an
     /// account change of the kind, so a client reads `agent.kinds` again; a failure is dropped and the label stays.
+    /// A refusal (the listing could not run, as for an account with no usable home) is remembered for the failure window,
+    /// so repeated calls do not start it again; the guard ends the mark however the thread ends, a panic included.
     fn list_in_background(&self, key: ListingKey) {
         let now = u64::try_from(now_ms()).unwrap_or(0);
-        if !self.model_cache().start_background(&key, now) {
+        let Some(listing) = self.model_cache().start_background(&key, now) else {
             return;
-        }
+        };
         let agents = self.clone();
-        let thread_key = key.clone();
-        let spawned = thread::Builder::new()
+        // A thread that cannot be spawned drops its closure, and with it the guard.
+        let _ = thread::Builder::new()
             .name("model-listing".to_owned())
             .spawn(move || {
-                let key = thread_key;
-                let answer = agents.agent_models(&key.kind, key.account.as_deref(), false);
-                agents.model_cache().end_background(&key);
-                match answer {
+                let key = listing.key();
+                match agents.agent_models(&key.kind, key.account.as_deref(), false) {
                     Ok(models) if models.error.is_none() && models.fetched_at_ms.is_some() => {
                         agents.notify(Change::Models(key.kind.clone()));
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        listing.refused(u64::try_from(now_ms()).unwrap_or(0));
                         tracing::debug!(kind = %key.kind, %error, "a background model listing was refused");
                     }
                 }
             });
-        if spawned.is_err() {
-            self.model_cache().end_background(&key);
-        }
     }
 
     /// Drops the cached listings a change to `account` of `kind` can make wrong (decision 0166): the account's own, and the
@@ -1418,6 +1465,65 @@ mod tests {
                 .and_then(|entry| entry.listed)
                 .map(|listing| listing.models[0].id.clone()),
             Some("sonnet".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_background_listing_starts_once_and_its_guard_ends_it_even_when_its_thread_panics() {
+        let cache = Arc::new(ModelCache::default());
+        let key = key("claude", Some("account-a"));
+        let listing = cache
+            .start_background(&key, 1_000)
+            .expect("the first one starts");
+        assert!(
+            cache.start_background(&key, 1_000).is_none(),
+            "no second one starts while the first has not ended"
+        );
+        let ended = thread::spawn(move || {
+            let _listing = listing;
+            panic!("the background listing panicked");
+        })
+        .join();
+        assert!(ended.is_err(), "the thread panicked");
+        assert!(
+            cache.start_background(&key, 1_000).is_some(),
+            "the panic ended the mark, so the next call may start one"
+        );
+    }
+
+    #[test]
+    fn a_refused_background_listing_is_not_started_again_until_the_failure_window_ends() {
+        let cache = Arc::new(ModelCache::default());
+        let key = key("claude", Some("account-a"));
+        let listing = cache
+            .start_background(&key, 1_000)
+            .expect("the first attempt starts");
+        listing.refused(1_000);
+        drop(listing);
+        assert!(
+            cache
+                .start_background(&key, 1_000 + FAILURE_FRESH_MS - 1)
+                .is_none(),
+            "a second call inside the window starts no attempt"
+        );
+        assert!(
+            cache.get(&key).is_none(),
+            "a refusal is never cached as an answer"
+        );
+        assert!(
+            cache
+                .start_background(&key, 1_000 + FAILURE_FRESH_MS)
+                .is_some(),
+            "the window has ended"
+        );
+
+        let listing = cache.start_background(&key, 50_000).expect("an attempt");
+        listing.refused(50_000);
+        drop(listing);
+        cache.invalidate(&key);
+        assert!(
+            cache.start_background(&key, 50_000).is_some(),
+            "an account change drops the refusal"
         );
     }
 

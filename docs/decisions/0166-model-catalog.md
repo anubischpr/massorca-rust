@@ -98,5 +98,11 @@ The desktop shows a model choice's `label` as `agent.kinds` gives it, and the bu
   `imported` mark current. A failed listing is not announced: the label stays declared, and the 30 second failure
   window bounds how often a later `agent.kinds` retries. An answered listing is fresh for 10 minutes, so the re-read
   it causes starts nothing.
+- **Guard and refusals.** The started mark is held by a guard that the listing's thread owns; dropping it ends the mark
+  however the thread ends, a panic included, so an account is never left without a later background listing. A
+  listing refused before it can run (an account with no usable home, a kind no longer enabled) is remembered beside
+  the cache for the 30 second failure window and never served as an answer; `agent.kinds` starts no attempt for it in
+  that window, and an account change drops the refusal. A kind whose active account has no usable home (its
+  `credentials.imported` is false) gets no background listing at all.
 - **No new field.** Nothing in the desktop, the CLI or the tests matches on a model's label, so `label` changes meaning
   in place ("the label the vendor's current model reads as") and no `version` field is added. Wire: no shape change.

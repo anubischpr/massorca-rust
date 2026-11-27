@@ -345,8 +345,9 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
-    /// The model listings the service keeps (decision 0166), held in memory.
-    models: crate::model_catalog::ModelCache,
+    /// The model listings the service keeps (decision 0166), held in memory. Shared, so a background listing's guard can
+    /// hold it on its own thread.
+    models: Arc<crate::model_catalog::ModelCache>,
     /// The fast mode `agent.set_options` chose for each session, which its next resume launches with (decision 0171). The
     /// model and the effort are stored with the session (decision 0168); fast mode has no column, so it is held here, in
     /// memory: the service forgets it when it stops.
@@ -441,7 +442,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Agents {
     /// The model listings the service keeps (decision 0166).
-    pub(crate) fn model_cache(&self) -> &crate::model_catalog::ModelCache {
+    pub(crate) fn model_cache(&self) -> &Arc<crate::model_catalog::ModelCache> {
         &self.inner.models
     }
 
@@ -465,7 +466,7 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
-                models: crate::model_catalog::ModelCache::default(),
+                models: Arc::default(),
                 chosen_fast: Mutex::new(HashMap::new()),
                 started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
