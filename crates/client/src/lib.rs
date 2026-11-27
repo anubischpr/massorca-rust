@@ -27,6 +27,8 @@ mod secret_calls;
 mod skill_calls;
 #[cfg(feature = "local")]
 mod spawn;
+#[cfg(feature = "local")]
+mod ssh_dial;
 mod subscription;
 mod team_calls;
 mod terminal_attach;
@@ -42,7 +44,7 @@ pub use error::ClientError;
 pub use error::profile_refusal;
 pub use handshake::Welcome;
 pub use host_link::{HostDial, LiveHost, LiveState};
-pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
+pub use host_storage::{HostRecord, HostRemoved, HostStorage, SshRoute, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::{DeviceRevocation, Hosts, SshInstall};
 pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
