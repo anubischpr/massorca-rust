@@ -1,4 +1,4 @@
-//! `massorca project add|list|show|inspect|rm|set-base|update|trust-scripts`: registering, unregistering, inspecting and setting the base of projects, and trusting their `orca.yaml` scripts, through the service.
+//! `massorca project add|list|show|inspect|rm|set-base|update|init-git|trust-scripts`: registering, unregistering, inspecting and setting the base of projects, initialising git in folder projects, and trusting their `orca.yaml` scripts, through the service.
 
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
@@ -110,6 +110,19 @@ pub async fn execute(
                 .call(projects::UPDATE, &ProjectUpdateParams { project, icon })
                 .await?;
             output.success(&updated, &[workspace_text::project_icon_line(&updated)]);
+        }
+        ProjectCommand::InitGit { project } => {
+            let project = paths.selector(&project)?;
+            let initialized: Project = client
+                .call(projects::INIT_GIT, &ProjectRef { project })
+                .await?;
+            output.success(
+                &initialized,
+                &[workspace_text::project_line(
+                    &initialized,
+                    "initialized Git for",
+                )],
+            );
         }
         ProjectCommand::Scripts { project, workspace } => {
             let params = scripts_params(&project, workspace.as_deref(), &paths)?;

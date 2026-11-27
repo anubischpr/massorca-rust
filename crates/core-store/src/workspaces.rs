@@ -91,9 +91,11 @@ pub struct WorkspaceRow {
     pub comment: Option<String>,
     /// The service chose the name (a creature name, or one derived for a unique create); only such a name is renamed.
     pub name_generated: bool,
+    /// The project's own checkout (decision 0112): its branch is read from the checkout, and removal only forgets the row.
+    pub in_place: bool,
 }
 
-const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated FROM workspaces";
+const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated, in_place FROM workspaces";
 
 fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
     Ok(WorkspaceRow {
@@ -111,6 +113,7 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
         created_at: row.get("created_at")?,
         comment: row.get("comment")?,
         name_generated: row.get("name_generated")?,
+        in_place: row.get("in_place")?,
     })
 }
 
@@ -118,7 +121,7 @@ impl Store {
     /// Inserts a workspace. Conflicts on id, path key, request id or (project, name) are `StoreError::Conflict`.
     pub fn insert_workspace(&self, row: &WorkspaceRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment, name_generated, in_place) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 row.id,
                 row.project_id,
@@ -133,7 +136,8 @@ impl Store {
                 row.request_id,
                 row.created_at,
                 row.comment,
-                row.name_generated
+                row.name_generated,
+                row.in_place
             ],
         )?;
         Ok(())
@@ -191,6 +195,33 @@ impl Store {
                 "{SELECT_WORKSPACES} WHERE (?1 IS NULL OR project_id = ?1) ORDER BY created_at, id"
             ),
             [project_id],
+            workspace_from_row,
+        )
+    }
+
+    /// The workspaces delegated writers run in below `workspace_id` (0055), a child's child included, deepest first.
+    /// A child session in its parent's workspace (a read-only one) adds none; `workspace_id` itself is never listed.
+    pub fn list_delegated_child_workspaces(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceRow>, StoreError> {
+        // The depth bound ends a cycle of workspaces, which delegation never makes but a store could hold.
+        self.query_all(
+            &format!(
+                "WITH RECURSIVE tree(child_id, depth) AS (
+                    SELECT ?1, 0
+                    UNION
+                    SELECT child.workspace_id, tree.depth + 1 FROM tree
+                    JOIN agent_sessions parent ON parent.workspace_id = tree.child_id
+                    JOIN agent_sessions child ON child.parent_id = parent.id
+                    WHERE child.workspace_id != parent.workspace_id AND tree.depth < 64
+                ), deepest(child_id, depth) AS (
+                    SELECT child_id, MAX(depth) FROM tree WHERE child_id != ?1 GROUP BY child_id
+                )
+                {SELECT_WORKSPACES} JOIN deepest ON deepest.child_id = workspaces.id
+                ORDER BY deepest.depth DESC, created_at, id"
+            ),
+            [workspace_id],
             workspace_from_row,
         )
     }

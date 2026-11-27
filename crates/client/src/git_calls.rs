@@ -4,10 +4,12 @@ use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::branch::{
     self, GitBranch, GitBranchCreateParams, GitBranchDeleteParams, GitBranchDeleted,
     GitBranchRenameParams, GitBranchSwitchParams, GitBranchSwitched, GitBranches,
+    GitBranchesParams,
 };
 use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{
-    self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
+    self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams, GitFileContent,
+    GitFileContentParams,
 };
 use massorca_protocol::methods::git::index::{
     self, GitDiscardParams, GitDiscarded, GitPathsParams,
@@ -17,6 +19,7 @@ use massorca_protocol::methods::git::remote::{
     self, GitAborted, GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams,
     GitPushed,
 };
+use massorca_protocol::methods::git::remotes::{self, GitRemotes, GitRemotesParams};
 use massorca_protocol::methods::git::status::{self, GitStatus, GitStatusParams};
 
 use crate::client::Client;
@@ -27,6 +30,11 @@ impl Client {
     /// `git.status`: the changed files of a workspace and its branch state.
     pub async fn git_status(&self, params: &GitStatusParams) -> Result<GitStatus, ClientError> {
         self.call(status::STATUS, params).await
+    }
+
+    /// `git.remotes`: the hosting identity of each network remote of a workspace or project.
+    pub async fn git_remotes(&self, params: &GitRemotesParams) -> Result<GitRemotes, ClientError> {
+        self.call(remotes::REMOTES, params).await
     }
 
     /// `git.diff`: the files a comparison changes, with line counts and no patch text.
@@ -96,8 +104,19 @@ impl Client {
         self.call(diff::DIFF_FILE, params).await
     }
 
-    /// `git.branches`: the local branches, the current one first.
-    pub async fn git_branches(&self, params: &GitWorkspaceRef) -> Result<GitBranches, ClientError> {
+    /// `git.file_content`: one file's bytes on one side of a comparison, capped in bytes.
+    pub async fn git_file_content(
+        &self,
+        params: &GitFileContentParams,
+    ) -> Result<GitFileContent, ClientError> {
+        self.call(diff::FILE_CONTENT, params).await
+    }
+
+    /// `git.branches`: the local branches of a workspace's checkout or a project's, the current one first.
+    pub async fn git_branches(
+        &self,
+        params: &GitBranchesParams,
+    ) -> Result<GitBranches, ClientError> {
         self.call(branch::BRANCHES, params).await
     }
 

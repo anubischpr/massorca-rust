@@ -38,6 +38,8 @@ enum Standing {
     Worktree,
     /// A directory git does not recognise, kept whole under `forget_orphan`.
     Orphan,
+    /// The project's own checkout, which removal only forgets (decision 0112).
+    InPlace,
 }
 
 impl RemovalWaivers {
@@ -71,6 +73,25 @@ pub struct RemovalPreview {
 }
 
 impl Workspaces {
+    /// The workspace `selector` names and the workspaces its delegated children run in, deepest first (decision
+    /// 0110). Each child is removed through [`Workspaces::begin_remove`] before the workspace itself. When there are
+    /// children, the workspace's own refusals under `waivers` come first, read-only, so a refused workspace loses none.
+    pub fn delegated_child_workspaces(
+        &self,
+        selector: &str,
+        waivers: RemovalWaivers,
+    ) -> Result<(Workspace, Vec<Workspace>), DomainError> {
+        let row = self.resolve_workspace(selector)?;
+        let children = self.store.list_delegated_child_workspaces(&row.id)?;
+        if !children.is_empty() {
+            self.check_removable(&row, waivers)?;
+        }
+        Ok((
+            views::workspace(&row),
+            children.iter().map(views::workspace).collect(),
+        ))
+    }
+
     /// What removing `selector` with `waivers` would meet, without marking or changing anything: the same refusals
     /// [`Workspaces::begin_remove`] runs, and the worktree's changes. A folder workspace has no git state to report.
     pub fn removal_preview(
@@ -83,7 +104,7 @@ impl Workspaces {
         let refusal = self.check_removable(&row, waivers).err();
         let path = Path::new(&row.path);
         let (dirty, untracked, ignored) =
-            if row.kind == StoreWorkspaceKind::Worktree && path.is_dir() {
+            if row.kind == StoreWorkspaceKind::Worktree && !row.in_place && path.is_dir() {
                 match self.git.status_changes(path) {
                     Ok(changes) => (
                         changes.uncommitted > 0,
@@ -96,7 +117,7 @@ impl Workspaces {
                 (false, false, false)
             };
         Ok(RemovalPreview {
-            workspace: views::workspace(&row),
+            workspace: self.view(&row),
             refusal,
             dirty,
             untracked,
@@ -125,9 +146,13 @@ impl Workspaces {
     ) -> Result<Workspace, E> {
         let _guard = self.lock_mutations();
         let row = self.resolve_workspace(selector)?;
-        guard(&views::workspace(&row))?;
+        guard(&self.view(&row))?;
         let path = Path::new(&row.path);
-        if expect_clean && row.kind == StoreWorkspaceKind::Worktree && path.is_dir() {
+        if expect_clean
+            && row.kind == StoreWorkspaceKind::Worktree
+            && !row.in_place
+            && path.is_dir()
+        {
             let changes = self.git.status_changes(path).map_err(DomainError::from)?;
             if changes.uncommitted > 0 || changes.untracked > 0 {
                 return Err(DomainError::new(
@@ -142,7 +167,7 @@ impl Workspaces {
         }
         let row = self.mark_removing(row)?;
         self.settle(&row, |_| self.check_removable(&row, waivers))?;
-        Ok(views::workspace(&row))
+        Ok(self.view(&row))
     }
 
     /// First half of removing `selector`. Marks the row `removing` and runs every refusal
@@ -158,7 +183,7 @@ impl Workspaces {
         let row = self.resolve_workspace(selector)?;
         let row = self.mark_removing(row)?;
         self.settle(&row, |_| self.check_removable(&row, waivers))?;
-        Ok(views::workspace(&row))
+        Ok(self.view(&row))
     }
 
     /// Returns workspace `id` from `removing` to `ready` after [`Workspaces::begin_remove`], when a step before git
@@ -210,6 +235,11 @@ impl Workspaces {
         let standing = self.check_removable(row, waivers)?;
         let project = self.project_of(row)?;
         let (branch_deleted, branch_kept_reason, directory_kept) = match row.kind {
+            // The project's own checkout is only forgotten: no git, file or branch is touched (decision 0112).
+            StoreWorkspaceKind::Worktree if row.in_place => {
+                self.store.delete_workspace(&row.id)?;
+                (false, None, true)
+            }
             StoreWorkspaceKind::Worktree => {
                 // An orphan is kept whole, so its branch stays with it.
                 let orphan = standing == Standing::Orphan;
@@ -236,10 +266,11 @@ impl Workspaces {
             }
         };
         Ok(WorkspaceRemoved {
-            workspace: views::workspace(row),
+            workspace: self.view(row),
             branch_deleted,
             branch_kept_reason,
             directory_kept,
+            removed_children: Vec::new(),
             archive: None,
         })
     }
@@ -287,6 +318,10 @@ impl Workspaces {
     ) -> Result<Standing, DomainError> {
         if row.kind == StoreWorkspaceKind::Folder {
             return Ok(Standing::Folder);
+        }
+        // The project's own checkout is only forgotten, so no git state is read (decision 0112).
+        if row.in_place {
+            return Ok(Standing::InPlace);
         }
         let project = self.project_of(row)?;
         let repo = Path::new(&project.path);

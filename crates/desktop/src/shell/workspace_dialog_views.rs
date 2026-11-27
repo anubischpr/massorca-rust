@@ -61,7 +61,7 @@ pub(super) fn add_project_dialog(
 fn add_project_icon_row(form: &AddProjectForm, shell: &WeakEntity<Shell>) -> impl IntoElement {
     let (on_open, on_choose) = (shell.clone(), shell.clone());
     let current = match &form.icon {
-        Some(ProjectIcon::Lucide { name }) => Some(name.clone()),
+        Some(ProjectIcon::Lucide { name, .. }) => Some(name.clone()),
         _ => None,
     };
     ProjectIconControl::new(
