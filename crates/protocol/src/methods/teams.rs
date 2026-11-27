@@ -34,6 +34,8 @@ pub const PROJECT_ADD: &str = "team.project_add";
 pub const PROJECT_UPDATE: &str = "team.project_update";
 /// Params: [`TeamProjectRemoveParams`]. Result: [`TeamProject`], the removed project.
 pub const PROJECT_REMOVE: &str = "team.project_rm";
+/// Params: [`TeamProjectShowParams`]. Result: [`TeamProject`], the project named by id or exact name.
+pub const PROJECT_SHOW: &str = "team.project_show";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
 /// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
@@ -174,7 +176,13 @@ pub struct Bot {
     pub effort: Option<String>,
     pub lead: bool,
     pub created_at_ms: i64,
+    /// The skills the bot is given, by name, in the order chosen. Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
 }
+
+/// The most skills one bot keeps.
+pub const MAX_BOT_SKILLS: usize = 50;
 
 /// Params of `team.bot_add`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +197,9 @@ pub struct BotAddParams {
     pub effort: Option<String>,
     #[serde(default)]
     pub lead: bool,
+    /// Skill names, at most [`MAX_BOT_SKILLS`]; blanks and repeats are dropped. An older host ignores them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
 }
 
 /// Params of `team.bot_update`. Only the fields given change; an empty `model` or `effort` clears it.
@@ -209,6 +220,9 @@ pub struct BotUpdateParams {
     /// `true` makes the bot the lead, which is refused while another bot leads; `false` clears the lead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead: Option<bool>,
+    /// Replaces the bot's skills; an empty list clears them. An older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 }
 
 /// Params of `team.bot_rm`. `unassign` removes a bot that owns open tasks, which then have no bot.
@@ -251,6 +265,8 @@ pub enum CodeSource {
     ExistingRepository,
     /// A new folder with git.
     NewFolderWithGit,
+    /// No code source. In `team.project_update` it clears the recorded one, which needs no Workspaces.
+    None,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
@@ -262,6 +278,7 @@ impl CodeSource {
         match self {
             Self::ExistingRepository => "Existing repository",
             Self::NewFolderWithGit => "New folder with git",
+            Self::None => "None",
             Self::Unknown => "Unknown",
         }
     }
@@ -276,10 +293,11 @@ pub struct TeamProjectAddParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
-    /// A Workspaces project (id, exact name or path) the code comes from. Unset or blank links none.
+    /// A Workspaces project (id, exact name or path) the code comes from; the team must have Workspaces on, or the call
+    /// fails with `team.workspaces_off`. Unset or blank links none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
-    /// Where the code is, recorded only; the team must have Workspaces on. Unset records none.
+    /// Where the code is, recorded only; the team must have Workspaces on (`team.workspaces_off`). Unset records none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_source: Option<CodeSource>,
 }
@@ -295,10 +313,11 @@ pub struct TeamProjectUpdateParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
-    /// The Workspaces project (id, exact name or path) the code comes from. An empty value clears the link.
+    /// The Workspaces project (id, exact name or path) the code comes from; linking needs the team's Workspaces on
+    /// (`team.workspaces_off`). An empty value clears the link, which a team with Workspaces off may still do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
-    /// Where the code is, recorded only; the team must have Workspaces on.
+    /// Where the code is, recorded only; the team must have Workspaces on (`team.workspaces_off`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_source: Option<CodeSource>,
 }
@@ -306,6 +325,13 @@ pub struct TeamProjectUpdateParams {
 /// Params of `team.project_rm`. The project's tasks stay on the team's Board without a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamProjectRemoveParams {
+    pub team: String,
+    pub project: String,
+}
+
+/// Params of `team.project_show`: one project of a team, named by id, then exact name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamProjectShowParams {
     pub team: String,
     pub project: String,
 }

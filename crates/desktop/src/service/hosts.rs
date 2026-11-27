@@ -1,6 +1,6 @@
 //! The hosts this computer paired with (decision 0046), and the calls that add one: an SSH host (decision 0044) or the
-//! server of an offer (decision 0041). Each call opens its own connection, so the hosts work while this computer's
-//! service is down.
+//! server of an offer (decision 0041). Each paired host is followed by its live link (REM-07), whatever this
+//! computer's service is doing; pairing and an SSH add open their own connection, then hand the host to its link.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 
 use super::bridge::{BRIDGE_STOPPED, Command, ServiceHandle};
-use super::host_sessions::{Followed, connected, follow};
+use super::live_hosts::LiveHosts;
 use super::refusal::{Refusal, sentence};
 use super::update::{HostLink, StoreUpdate};
 
@@ -84,31 +84,38 @@ pub(super) fn spawn(
     profile: Profile,
     command: Command,
     updates: mpsc::UnboundedSender<StoreUpdate>,
-    followed: &Followed,
+    live: &LiveHosts,
 ) {
     match command {
-        Command::RefreshHosts => refresh(&profile, &updates, followed),
+        Command::RefreshHosts => follow_paired(&profile, live, &updates),
+        Command::ReconnectHost { name } => {
+            live.reconnect(&name);
+        }
         Command::AddSshHost { host, reply } => {
+            let live = live.clone();
             tokio::spawn(async move {
-                let result = add_ssh(&profile, host, &updates).await;
+                let result = add_ssh(&profile, host, &updates, &live).await;
                 let _ = reply.send(result);
             });
         }
         Command::AcceptOffer { offer, name, reply } => {
+            let live = live.clone();
             tokio::spawn(async move {
-                let result = accept_offer(&profile, &offer, name, &updates).await;
+                let result = accept_offer(&profile, &offer, name, &updates, &live).await;
                 let _ = reply.send(result);
             });
         }
         Command::RemoveHost { name, reply } => {
+            let live = live.clone();
             tokio::spawn(async move {
-                let result = remove(&profile, &name, &updates).await;
+                let result = remove(&profile, &name, &updates, &live).await;
                 let _ = reply.send(result);
             });
         }
         Command::CountHostLoss { name, reply } => {
+            let live = live.clone();
             tokio::spawn(async move {
-                let _ = reply.send(count_loss(&profile, &name).await);
+                let _ = reply.send(count_loss(&live, &name).await);
             });
         }
         Command::ProbeSshHost {
@@ -126,9 +133,15 @@ pub(super) fn spawn(
 }
 
 impl ServiceHandle {
-    /// Re-reads the paired hosts and checks each one. The store changes through the updates, not this call.
+    /// Re-reads the paired hosts and follows each one live. The store changes through the updates, not this call.
     pub fn refresh_hosts(&self) {
         self.send(Command::RefreshHosts);
+    }
+
+    /// Tries one paired host again at once (Retry now), leaving the other hosts as they are. A connected host is
+    /// connected afresh, which a sleep or a network change may need.
+    pub fn reconnect_host(&self, name: String) {
+        self.send(Command::ReconnectHost { name });
     }
 
     /// Installs the service on an SSH host and pairs with it, as `massorca host add-ssh` does.
@@ -188,18 +201,39 @@ impl ServiceHandle {
     }
 }
 
-/// The device is revoked first and a failed revoke never stops the removal, as in `host remove`.
+/// The device is revoked first and a failed revoke never stops the removal, as in `host remove`. The host's link keeps
+/// running through the revoke, so a refresh meanwhile finds it and starts no second one. Once the record is gone the
+/// hosts still listed are followed, which stops the removed host's link and everything that borrowed it. A removal
+/// that fails leaves the link as it was.
 async fn remove(
     profile: &Profile,
     name: &str,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
+    live: &LiveHosts,
 ) -> Result<HostRemoval, Refusal> {
     let hosts = Hosts::of(profile);
     hosts.get(name).map_err(|error| Refusal::from(&error))?;
     let device = hosts.revoke_this_device(name, &peer()).await;
-    let removed = hosts.remove(name).map_err(|error| Refusal::from(&error))?;
-    if let Ok(records) = hosts.list() {
-        let _ = updates.send(StoreUpdate::HostsResync(records));
+    let removed = match hosts.remove(name) {
+        Ok(removed) => removed,
+        Err(error) => {
+            follow_paired(profile, live, updates);
+            return Err(Refusal::from(&error));
+        }
+    };
+    match hosts.list() {
+        Ok(records) => {
+            let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
+            live.follow(records.into_iter().map(|record| record.name));
+        }
+        Err(_) => {
+            // The hosts cannot be listed to follow, so the removed host's link stops here and its row says so.
+            live.stop(name);
+            let _ = updates.send(StoreUpdate::HostLinkChanged {
+                name: name.to_owned(),
+                link: HostLink::Failed("This computer forgot this host".to_owned()),
+            });
+        }
     }
     Ok(HostRemoval {
         host: name.to_owned(),
@@ -208,11 +242,12 @@ async fn remove(
     })
 }
 
-async fn count_loss(profile: &Profile, name: &str) -> Result<HostLoss, Refusal> {
-    let hosts = Hosts::of(profile);
-    let client = Client::connect_host(&hosts, name, &peer())
+/// Counted on the host's live connection.
+async fn count_loss(live: &LiveHosts, name: &str) -> Result<HostLoss, Refusal> {
+    let client = live
+        .client(name)
         .await
-        .map_err(|error| Refusal::from(&error))?;
+        .map_err(|error| Refusal::from(&*error))?;
     let projects = client
         .project_list()
         .await
@@ -227,58 +262,66 @@ async fn count_loss(profile: &Profile, name: &str) -> Result<HostLoss, Refusal> 
     })
 }
 
-/// Lists the hosts, then checks each one that no task follows at once; each check reports when it finishes. A host
-/// a task follows reports through that task's own connection, so it is not checked again here.
-fn refresh(profile: &Profile, updates: &mpsc::UnboundedSender<StoreUpdate>, followed: &Followed) {
-    let hosts = Hosts::of(profile);
-    let Ok(records) = hosts.list() else {
+/// Lists the hosts and follows each one live: a new host gets its link, a forgotten one loses it, and a link that runs
+/// keeps its state. Each link reports its state as it changes.
+pub(super) fn follow_paired(
+    profile: &Profile,
+    live: &LiveHosts,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let Ok(records) = Hosts::of(profile).list() else {
         return;
     };
     let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
-    for record in records {
-        if let Some(claim) = followed.claim(&record.name) {
-            tokio::spawn(follow(profile.clone(), record.name, claim, updates.clone()));
-        }
-    }
+    live.follow(records.into_iter().map(|record| record.name));
 }
 
-/// Checks the paired hosts again every `HOST_CHECK_EVERY` while the bridge runs. This is the fallback for a host
-/// with no live event subscription: a host that a task follows is left to that task.
-pub(super) fn check_hosts_again(
+/// How often the paired hosts are listed again while the bridge runs, so a host paired or removed through the
+/// `massorca host` CLI while the app runs is followed or dropped without opening Settings.
+const HOST_RELIST_EVERY: Duration = Duration::from_secs(30);
+
+/// Lists the paired hosts again every `HOST_RELIST_EVERY` while the bridge runs, as `follow_paired` does.
+pub(super) fn relist_hosts(
     profile: Profile,
+    live: LiveHosts,
     updates: mpsc::UnboundedSender<StoreUpdate>,
-    followed: Followed,
+) {
+    relist_every(HOST_RELIST_EVERY, profile, live, updates);
+}
+
+/// Lists the paired hosts every `period`, from one period on: the bridge lists them once already at start.
+fn relist_every(
+    period: Duration,
+    profile: Profile,
+    live: LiveHosts,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
 ) {
     tokio::spawn(async move {
-        let mut every = tokio::time::interval(HOST_CHECK_EVERY);
+        let first = tokio::time::Instant::now() + period;
+        let mut every = tokio::time::interval_at(first, period);
         every.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             every.tick().await;
             if updates.is_closed() {
                 return;
             }
-            refresh(&profile, &updates, &followed);
+            follow_paired(&profile, &live, &updates);
         }
     });
 }
 
-/// How often the paired hosts without a live event subscription are checked again (STAT-16, STAT-17).
-const HOST_CHECK_EVERY: Duration = Duration::from_secs(30);
-
-/// Tells the store the hosts as they are now, then what this call found about the host it changed.
+/// Tells the store the hosts as they are now, and has the live link of `name` try again at once: it was just paired,
+/// re-added or upgraded. Its row follows that link alone, so a later loss of contact shows.
 fn announce(
     hosts: &Hosts,
     name: &str,
-    link: HostLink,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
+    live: &LiveHosts,
 ) {
     if let Ok(records) = hosts.list() {
-        let _ = updates.send(StoreUpdate::HostsResync(records));
+        let _ = updates.send(StoreUpdate::HostsResync(records.clone()));
+        live.follow_again(records.into_iter().map(|record| record.name), name);
     }
-    let _ = updates.send(StoreUpdate::HostLinkChanged {
-        name: name.to_owned(),
-        link,
-    });
 }
 
 async fn accept_offer(
@@ -286,6 +329,7 @@ async fn accept_offer(
     text: &str,
     name: Option<String>,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
+    live: &LiveHosts,
 ) -> Result<HostRecord, Refusal> {
     let offer = Offer::decode(text).map_err(|error| Refusal::from(&error))?;
     let name = name.unwrap_or_else(|| offer.server.clone());
@@ -293,9 +337,8 @@ async fn accept_offer(
     let (client, record) = Client::pair(&hosts, &offer, &name, &default_device_name(), &peer())
         .await
         .map_err(|error| Refusal::from(&error))?;
-    let link = connected(&client);
     drop(client);
-    announce(&hosts, &record.name, link, updates);
+    announce(&hosts, &record.name, updates, live);
     Ok(record)
 }
 
@@ -303,6 +346,7 @@ async fn add_ssh(
     profile: &Profile,
     host: SshHost,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
+    live: &LiveHosts,
 ) -> Result<SshAdded, SshFailed> {
     let device_name = host.device_name.clone().unwrap_or_else(default_device_name);
     let plan = BootstrapPlan::for_ssh_host(
@@ -349,13 +393,12 @@ async fn add_ssh(
                 refusal: Refusal::from(&error),
                 log: log.clone(),
             })?;
-        let link = connected(&client);
         drop(client);
         let record = hosts.get(&name).map_err(|error| SshFailed {
             refusal: Refusal::from(&error),
             log: log.clone(),
         })?;
-        announce(&hosts, &name, link, updates);
+        announce(&hosts, &name, updates, live);
         return Ok(SshAdded::Upgraded(record));
     }
 
@@ -365,9 +408,8 @@ async fn add_ssh(
             refusal: after_install(&host.target, &error),
             log: log.clone(),
         })?;
-    let link = connected(&client);
     drop(client);
-    announce(&hosts, &name, link, updates);
+    announce(&hosts, &name, updates, live);
     Ok(SshAdded::Paired(record))
 }
 
@@ -481,5 +523,36 @@ mod tests {
     fn no_bundled_program_is_offered_for_a_machine_massorca_does_not_run_on() {
         let folder = tempfile::tempdir().expect("a temporary folder");
         assert_eq!(bundled_program_in(folder.path(), "armv7l"), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_paired_while_the_app_runs_is_listed_and_followed_at_the_next_relist() {
+        let folder = tempfile::tempdir().expect("a temporary folder");
+        let home = folder.path().join("home");
+        massorca_profile::create_home(&home).expect("a private home");
+        let profile = Profile::resolve_with(Some(home), Some("default".to_owned()), |_| None)
+            .expect("the profile resolves");
+        let (updates, mut received) = mpsc::unbounded_channel();
+        let live = LiveHosts::new(&profile, updates.clone());
+        relist_every(HOST_RELIST_EVERY, profile.clone(), live.clone(), updates);
+
+        // The `massorca host` CLI pairs a host while the app is running.
+        let identity =
+            massorca_net::TlsIdentity::generate("massorca-desktop").expect("a device key");
+        let record = HostRecord {
+            name: "vps".to_owned(),
+            addresses: vec!["127.0.0.1:9".to_owned()],
+            ..crate::service::fixtures::base_host_record()
+        };
+        Hosts::of(&profile)
+            .add(&record, &identity)
+            .expect("the host is paired");
+
+        let relisted = received.recv().await.expect("the hosts are listed again");
+        assert!(
+            matches!(&relisted, StoreUpdate::HostsResync(records) if records.iter().any(|r| r.name == "vps")),
+            "{relisted:?}"
+        );
+        assert!(live.watch("vps").is_some(), "the new host is followed");
     }
 }

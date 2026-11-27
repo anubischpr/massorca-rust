@@ -4,9 +4,9 @@
 use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::tasks::{CardState, Column};
 use massorca_protocol::methods::teams::{
-    Board, BoardCard, BoardColumn, BoardParams, Bot, MemorySource, Team, TeamAccess, TeamCharacter,
-    TeamCreateParams, TeamMemoryAddParams, TeamMemoryLine, TeamProject, TeamProjectAddParams,
-    TeamProjectUpdateParams,
+    Board, BoardCard, BoardColumn, BoardParams, Bot, BotUpdateParams, CodeSource, MemorySource,
+    Team, TeamAccess, TeamCharacter, TeamCreateParams, TeamMemoryAddParams, TeamMemoryLine,
+    TeamProject, TeamProjectAddParams, TeamProjectShowParams, TeamProjectUpdateParams,
 };
 use serde_json::{Value, json};
 
@@ -64,6 +64,7 @@ fn an_unset_bot_model_is_left_out_of_the_document() {
         effort: Some("high".to_owned()),
         lead: true,
         created_at_ms: 2,
+        skills: Vec::new(),
     };
 
     assert_eq!(
@@ -297,4 +298,93 @@ fn unset_source_project_params_are_left_out_and_an_empty_one_is_kept_for_clearin
     )
     .unwrap();
     assert_eq!(cleared.source_project, Some(String::new()));
+}
+
+#[test]
+fn a_cleared_code_source_is_sent_as_none_and_read_back() {
+    let clear = TeamProjectUpdateParams {
+        team: "alpha".to_owned(),
+        project: "parser".to_owned(),
+        name: None,
+        goal: None,
+        brief: None,
+        source_project: None,
+        code_source: Some(CodeSource::None),
+    };
+    assert_eq!(
+        serde_json::to_value(&clear).unwrap(),
+        json!({ "team": "alpha", "project": "parser", "code_source": "none" })
+    );
+
+    let read: TeamProjectUpdateParams = serde_json::from_value(
+        json!({ "team": "alpha", "project": "parser", "code_source": "none" }),
+    )
+    .unwrap();
+    assert_eq!(read.code_source, Some(CodeSource::None));
+    assert_eq!(CodeSource::None.label(), "None");
+}
+
+#[test]
+fn project_show_names_its_team_and_project_under_team_project_show() {
+    assert_eq!(
+        massorca_protocol::methods::teams::PROJECT_SHOW,
+        "team.project_show"
+    );
+    let params = TeamProjectShowParams {
+        team: "alpha".to_owned(),
+        project: "parser".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_value(&params).unwrap(),
+        json!({ "team": "alpha", "project": "parser" })
+    );
+}
+
+#[test]
+fn a_bots_skills_are_sent_in_order_and_an_older_document_without_them_reads_as_none() {
+    let old: Bot = serde_json::from_value(json!({
+        "id": "b1",
+        "team_id": "t1",
+        "name": "mara",
+        "job": "Writes the parser",
+        "kind": "claude",
+        "lead": false,
+        "created_at_ms": 2
+    }))
+    .unwrap();
+    assert!(old.skills.is_empty());
+
+    let bot = Bot {
+        skills: vec!["review".to_owned(), "release-notes".to_owned()],
+        ..old
+    };
+    assert_eq!(
+        serde_json::to_value(&bot).unwrap()["skills"],
+        json!(["review", "release-notes"])
+    );
+}
+
+#[test]
+fn a_bot_update_sends_skills_only_when_given_and_an_empty_list_to_clear_them() {
+    let update = |skills: Option<Vec<String>>| BotUpdateParams {
+        team: "alpha".to_owned(),
+        bot: "mara".to_owned(),
+        name: None,
+        job: None,
+        kind: None,
+        model: None,
+        effort: None,
+        lead: None,
+        skills,
+    };
+    assert!(
+        serde_json::to_value(update(None))
+            .unwrap()
+            .get("skills")
+            .is_none()
+    );
+    assert_eq!(
+        serde_json::to_value(update(Some(Vec::new()))).unwrap()["skills"],
+        json!([])
+    );
 }

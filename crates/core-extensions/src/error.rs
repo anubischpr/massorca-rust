@@ -29,6 +29,7 @@ pub mod codes {
     pub const VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
     pub const UP_TO_DATE: &str = "extension.up_to_date";
     pub const NO_PREVIOUS_VERSION: &str = "extension.no_previous_version";
+    pub const PROGRAM_UPDATE_REFUSED: &str = "extension.program_update_refused";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -126,6 +127,12 @@ pub enum Error {
         installer: Option<Vec<String>>,
         diagnosis: Box<Diagnosis>,
     },
+    #[error("{program} of {id} is not updated: {reason}")]
+    ProgramUpdateRefused {
+        id: String,
+        program: String,
+        reason: String,
+    },
     #[error("removal refused by {owner}: {}", .error.message)]
     Refused { owner: String, error: HookError },
     #[error("{0} is not a file the listing names")]
@@ -170,6 +177,7 @@ impl Error {
             Self::InstallerConsentRequired => codes::INSTALLER_CONSENT_REQUIRED,
             Self::InstallerFailed { .. } => codes::INSTALLER_FAILED,
             Self::VerifyFailed { .. } => codes::VERIFY_FAILED,
+            Self::ProgramUpdateRefused { .. } => codes::PROGRAM_UPDATE_REFUSED,
             Self::Refused { error, .. } => &error.code,
             Self::AssetNotListed(_) => codes::ASSET_NOT_LISTED,
             Self::AssetTooLarge { .. } => codes::ASSET_TOO_LARGE,

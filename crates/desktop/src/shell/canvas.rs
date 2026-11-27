@@ -4,6 +4,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::Shell;
+use super::automations::{self, AutomationsFrame};
+use super::calendar::{self, CalendarFrame};
 use super::home_start::{self, HomeFrame};
 use super::marketplace::{self, MarketplaceFrame};
 use super::pairing::{self, PairingFrame};
@@ -51,6 +53,10 @@ pub(super) struct PageFrames<'a> {
     pub diff: Option<AnyElement>,
     /// The Marketplace page's frame, while a Marketplace view or item page is on screen.
     pub marketplace: Option<MarketplaceFrame>,
+    /// The Automations page's frame, while the Canvas shows that page (decision 0123).
+    pub automations: Option<AutomationsFrame>,
+    /// The Calendar page's frame, while the Canvas shows that page (decision 0124).
+    pub calendar: Option<CalendarFrame>,
     /// The Pairing page's state and fields (D-PR-01).
     pub pairing: PairingFrame,
     /// The open session's view, while the Canvas shows a session.
@@ -236,6 +242,18 @@ fn conversation(
             theme,
         )
         .into_any_element(),
+        Canvas::Page(Page::Automations) => match pages.automations {
+            Some(frame) => automations::page(&frame, cx),
+            None => {
+                placeholder("Automations", "This page is not built yet.", theme).into_any_element()
+            }
+        },
+        Canvas::Page(Page::Calendar) => match pages.calendar {
+            Some(frame) => calendar::page(&frame, cx),
+            None => {
+                placeholder("Calendar", "This page is not built yet.", theme).into_any_element()
+            }
+        },
         Canvas::Page(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }

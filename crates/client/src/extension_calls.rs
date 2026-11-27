@@ -4,8 +4,11 @@ use massorca_protocol::methods::extensions::{
     self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
     ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionLog,
     ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams,
+    ExtensionRollbackParams, ExtensionSetEnabledParams, ExtensionUpdateParams, ProgramUpdateParams,
+    ProgramUpdateReview, ProgramUpdated,
 };
+
+use massorca_protocol::methods::extension_points::{self, ExtensionPointsList};
 
 use crate::client::Client;
 use crate::error::ClientError;
@@ -14,6 +17,11 @@ impl Client {
     /// `extensions.list`: the installed packages, in install order.
     pub async fn extension_list(&self) -> Result<ExtensionList, ClientError> {
         self.call(extensions::LIST, &()).await
+    }
+
+    /// `extensions.points`: what each owner registered on the tool, skill, view, theme and status-rule points (0153).
+    pub async fn extension_points(&self) -> Result<ExtensionPointsList, ClientError> {
+        self.call(extension_points::POINTS, &()).await
     }
 
     /// `extensions.get`: one item, installed or from the catalogue.
@@ -73,6 +81,29 @@ impl Client {
         params: &ExtensionRollbackParams,
     ) -> Result<ExtensionInstalled, ClientError> {
         self.call(extensions::ROLLBACK, params).await
+    }
+
+    /// `extensions.program_update_review`: what updating a host program would run (decision 0151). Changes nothing.
+    pub async fn extension_program_update_review(
+        &self,
+        id: &str,
+        program: &str,
+    ) -> Result<ProgramUpdateReview, ClientError> {
+        let params = ProgramUpdateParams {
+            id: id.to_owned(),
+            program: program.to_owned(),
+            consent: None,
+            agent_token: None,
+        };
+        self.call(extensions::PROGRAM_UPDATE_REVIEW, &params).await
+    }
+
+    /// `extensions.program_update`: runs the reviewed vendor update of a host program the package installed.
+    pub async fn extension_program_update(
+        &self,
+        params: &ProgramUpdateParams,
+    ) -> Result<ProgramUpdated, ClientError> {
+        self.call(extensions::PROGRAM_UPDATE, params).await
     }
 
     /// `extensions.log`: the recent runs of a package, oldest first.

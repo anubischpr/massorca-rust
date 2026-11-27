@@ -95,13 +95,16 @@ pub fn cli_named_by(argv: &[String]) -> Option<&'static str> {
     {
         return Some("gentle-shell");
     }
-    const PACKAGES: [(&str, &str); 6] = [
+    const PACKAGES: [(&str, &str); 9] = [
         ("@openai/codex", "codex"),
         ("@anthropic-ai/claude-code", "claude"),
         ("Anthropic.ClaudeCode", "claude"),
         ("claude-code", "claude"),
         ("antigravity.google", "agy"),
         ("gentle-pi", "gentle-shell"),
+        ("Git.Git", "git"),
+        ("GitHub.cli", "gh"),
+        ("OpenJS.NodeJS.LTS", "node"),
     ];
     PACKAGES
         .iter()

@@ -15,12 +15,12 @@ use massorca_protocol::methods::agents::{
     AgentArchiveSessionParams, AgentBringBackParams, AgentDelegateParams, AgentDelegated,
     AgentForgetParams, AgentForgetPreview, AgentForgotten, AgentForkParams, AgentHookParams,
     AgentKinds, AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentModels, AgentModelsParams,
-    AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
-    AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
-    GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
+    AgentOptionsSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentRenameParams, AgentResumeParams, AgentRetainParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentSetOptionsParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, GenerateTitleParams, GenerateTitleResult, ImportCandidate, ImportCandidates,
     ImportCandidatesParams, PromptAttachment, PromptReceipt, QueuedPrompt, WorkspaceRemovalError,
 };
 use massorca_protocol::methods::git::status::GitOperation;
@@ -70,6 +70,11 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_OPTIONS, Owner::Core)?,
+        // `agent.set_options`: a session's model, effort and fast mode changed while it runs, or at its next resume
+        // (decision 0171).
+        registries
+            .capabilities
+            .register(capabilities::AGENT_OPTIONS_LIVE, Owner::Core)?,
         // Fast mode on a start, a kind, a model and a session (decision 0165).
         registries
             .capabilities
@@ -184,6 +189,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::AGENT_MODES,
             Permission::Workspace,
             set_mode,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::SET_OPTIONS,
+            capabilities::AGENT_OPTIONS_LIVE,
+            Permission::Workspace,
+            set_options,
         )?,
         methods.register(
             Owner::Core,
@@ -632,6 +644,19 @@ async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentMo
 /// The workspace paths of a prompt's attachments, in the order the caller gave them (decision 0172).
 fn attachment_paths(attachments: Vec<PromptAttachment>) -> Vec<String> {
     attachments.into_iter().map(|file| file.path).collect()
+}
+
+/// Changes a session's model, effort or fast mode (decision 0171): typed into a live run where the kind declares a live
+/// command for it, otherwise at the session's next resume. A live change types into the run's terminal, so a run holding
+/// vault secrets needs host-admin scope, as a mode switch does.
+async fn set_options(
+    ctx: RequestCtx,
+    params: AgentSetOptionsParams,
+) -> Result<AgentOptionsSet, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let mut set = on_agents(&ctx, move |agents| agents.set_options(&params)).await?;
+    set.session = for_caller(&ctx, set.session);
+    Ok(set)
 }
 
 /// Types a prompt into a run's terminal (0054), with the files it names (decision 0172). The text is never logged.

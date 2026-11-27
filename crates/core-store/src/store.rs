@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, OptionalExtension, Params, Row};
 
 use crate::error::StoreError;
+use crate::migration_files::FILE_MIGRATIONS;
 use crate::migrations::{self, MIGRATIONS};
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,7 +40,13 @@ impl Store {
         configure(&connection)?;
         step("store file");
         // WAL is switched on only after migration, so a refused newer database is never modified.
-        migrations::migrate_observed(&mut connection, Some(path), MIGRATIONS, &mut step)?;
+        migrations::migrate_observed(
+            &mut connection,
+            Some(path),
+            MIGRATIONS,
+            FILE_MIGRATIONS,
+            &mut step,
+        )?;
         enable_wal(&connection)?;
         step("store wal");
         Ok(Self::from_connection(connection))
@@ -49,7 +56,13 @@ impl Store {
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let mut connection = Connection::open_in_memory()?;
         configure(&connection)?;
-        migrations::migrate(&mut connection, None, MIGRATIONS)?;
+        migrations::migrate_observed(
+            &mut connection,
+            None,
+            MIGRATIONS,
+            FILE_MIGRATIONS,
+            &mut |_| {},
+        )?;
         Ok(Self::from_connection(connection))
     }
 
@@ -162,16 +175,14 @@ mod tests {
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
-        assert_eq!(
-            parts,
-            [
-                "store file",
-                "store migration lock",
-                "store schema",
-                "store wal"
-            ],
-            "a new database is built in one step"
-        );
+        // The frozen list is built in one step; each migration file then reports its own step.
+        let mut expected = vec!["store file", "store migration lock", "store schema"];
+        expected.extend(std::iter::repeat_n(
+            "store schema step",
+            super::FILE_MIGRATIONS.len(),
+        ));
+        expected.push("store wal");
+        assert_eq!(parts, expected, "a new database is built in one step");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
         assert_eq!(parts, ["store file", "store wal"]);

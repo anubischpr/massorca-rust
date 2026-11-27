@@ -192,6 +192,12 @@ directory that does not exist has no kinds.
   mode's `args` and before the caller's `args`. A kind without the option refuses it with
   `agent.option_unsupported`, naming the kind. A value is 1 to 128 letters, digits, `-`, `_`, `.`,
   `:` or `/`, never starting with `-`.
+- `model.live` (decision 0171): optional, the slash command that switches a running session to a
+  model, with `{value}` exactly once, such as `"/model {value}"`. It is a slash, a name of letters,
+  digits and dashes, no control character, at most 64 bytes. `agent.set_options` types it into a
+  live terminal run; a kind without it, and every chat run, applies a model at the session's next
+  resume. The built-in `claude` declares `/model {value}`, which the vendor's slash-command
+  reference does not list: that form is unverified.
 - `model.choices` lists the models the picker shows, in order, each `{ id, label, default?: true,
   efforts? }`. An empty list means the account's models come from the vendor CLI. `efforts`
   absent means every level of the kind; `[]` means the model takes no effort; a listed id must be
@@ -257,7 +263,7 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 | `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
 | `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
 | `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
-| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off, and after a resume, which takes no fast mode. Capability `agent-fast/1` |
+| `fast?` | `{ on, confirmed }` when the current or last run was started with fast mode on (decision 0165); `confirmed` is false until something confirms the vendor took it, and nothing does yet. Absent when off. A resume takes no fast mode (decision 0165) unless `agent.set_options` chose one for the session (decision 0171). Capability `agent-fast/1` |
 | `delegation?` | `{ writing_child: own_worktree|shared_folder|unavailable, read_only_child, reason? }`: the children the session could delegate now (decision 0161). `read_only_child` is false only at the depth limit; `reason` says why a writing child is unavailable |
 | `notes?` | plain-word notes (decision 0161): on a writing child of a plain folder, "This workspace has no Git, so the child works in this folder."; on a writing child in its parent's worktree, "The child works in its parent's worktree, and the parent waits until it finishes." (decision 0170); on a run whose CLI failed the instruction channel's probe, "Delegation instructions were not given: this <kind name> CLI does not support <flag>."; and, for the current run, what a resume or fork left out of the stored model or effort, and a first input the agent never took (decision 0168) |
 | `shared_folder_with?` | the other live writing sessions of the folder workspace this live session writes in, in the store's order (decision 0169); absent when none, and for a worktree, a read-only or an exited session. Older peers omit it |
@@ -289,6 +295,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.fork` | workspace | `session`, `prompt?`, `permission_mode?`, `title?` | `AgentSession`, the new session (capability `agent-fork/1`, decision 0168; the client refuses it before sending when the service does not offer it) |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
+| `agent.set_options` | workspace | `session`, `model?`, `effort?`, `fast?` (at least one) | `{ applied: { model?, effort?, fast? }, session: AgentSession }`, each named option `live` or `next_resume` and left out when it already has the value asked for (capability `agent-options-live/1`, decision 0171) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
 | `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `same_workspace?` (a writing child in the parent's own worktree; not with `name`, decision 0170), `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
@@ -361,6 +368,33 @@ that is a bypass mode: a pending bypass is used only by a resume that names it, 
 the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
 unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
 a new run without being named again.
+
+## Live session options (decision 0171)
+
+`agent.set_options` (capability `agent-options-live/1`) changes a session's `model`, `effort` and `fast`, the options
+`agent.start` takes. The service plans the whole call before it types or stores anything:
+
+- Values are checked as `agent.start` checks them (`option_args`, `fast_for`), against the model the call names, else the
+  model the live run runs with, or the one the next run keeps for a stopped session. A refused value fails with
+  `request.invalid_params` or `agent.option_unsupported`, and nothing changes.
+- A model with a `model.live` command, and the fast toggle (`fast.live`, decision 0165), are typed into the run's
+  terminal, in that order, when the run is ready for input; a busy run refuses the change with `agent.busy` and types
+  nothing. The run is marked as switching while they are typed, as a mode switch
+  is. The fast toggle is typed only when the run's recorded fast mode (`fast-requested` in the run directory) differs
+  from the one asked for. Everything else waits for the next resume: effort always, and a model or fast mode whose kind
+  declares no live command or whose run is not live. A chat run has no terminal, so it always waits. A kind that cannot
+  resume refuses a change that would wait, with `agent.resume_unavailable`.
+- The model and effort a session keeps for its next run are its stored columns (decision 0168). A `next_resume` change
+  writes them, an applied live change writes them too, and a resume launches with them through `kept_options`, where the
+  kind still takes them; their launch arguments go into the mode arguments. Fast mode has no column, so its chosen value
+  is held in memory and dropped on forget, and a resume puts it on the settings. `started` is what the live run runs with,
+  moved by its live changes, and is what a live change is checked against; it stays in memory.
+- The reply's `applied` names each changed option as `live` or `next_resume`. After a live fast toggle the session's
+  `fast` is `{ on, confirmed: false }`; nothing confirms it.
+- A typed live command starts the run's settle window, `TYPED_COMMAND_SETTLE` (2 seconds). Until it ends, non-forced
+  prompts, live changes and the queue wait (`agent.busy`); `force` and `send_now` pass. An accepted hook report ends the
+  window early; otherwise a timer ends it and drains the queue, so no report is needed (decision 0171). A mode switch
+  starts no window.
 
 ## No project (decision 0094)
 
@@ -676,7 +710,7 @@ the stream sends an `append` with the byte offset it starts at; a replay sends t
 
 - `agent.chat.start` (CLI: `massorca agent start KIND --chat`) takes the `agent.start` params; `cols`, `rows` and `args`
   are `request.invalid_params`. The kind needs a `chat` block (`{ "adapter", "min_version", "max_major" }`) whose
-  adapter MassOrca speaks (`claude-stream-json`), and its CLI's probed version in range; otherwise
+  adapter MassOrca speaks (`claude-stream-json`, `codex-app-server`), and its CLI's probed version in range; otherwise
   `agent.chat_unsupported`, with the kind's `KindChat` as `data`.
 - `agent.prompt` on a chat session writes the adapter's user message and answers `sent_to_chat`. While a turn runs or a
   request waits it is `agent.busy`; with `force` the message is written anyway and opens its own running turn at once
@@ -735,6 +769,37 @@ A `result` and an interrupt both make the adapter forget the turn's partial mess
 CLI sends (tools, frame types, subtypes) are cut to 128 characters, paths and plan entries to 16 KiB, a plan to 200
 entries.
 
+### The Codex adapter
+
+`chat/codex/` speaks Codex's app-server dialect (decision 0173), written against Codex 0.172.0, pv96's Codex adapter and
+the app-server's public documentation: JSON-RPC without the `jsonrpc` member, one message per line. A run starts
+`app-server` with the launch plan's `-c`, `--enable` and `--disable`; the plan's `-m` and permission flags become the
+thread's `model`, `sandbox`, `approvalPolicy` and `approvalsReviewer`, its `resume <ref>` a `thread/resume`, and the
+terminal's `notify` hook is dropped. The adapter's opening is `initialize`; its answer sends `initialized` and
+`thread/start` or `thread/resume`; the opened thread's id becomes the session's `agent_ref` when it has none
+(`JournalOp::LearnRef`, under the fork rule of a hook report). Prompts sent before the thread is open, or while an
+interrupted turn is still ending, wait in the adapter and go out as `turn/start`; one sent mid-turn is a `turn/start`
+the app-server steers into the running turn.
+
+| Message | Journal |
+|---|---|
+| `agentMessage` item, `item/agentMessage/delta` | `assistant_message`, appended, then replaced by the completed item's text |
+| `reasoning` summary, `item/reasoning/summaryTextDelta` | `thinking` |
+| `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch` | `tool_use` (`shell`, `apply_patch`, `server/tool`, `web_search`); `outputDelta` makes a command `updated`; a completed file change adds a `diff` per file |
+| `turn/plan/updated` | `plan` |
+| `turn/completed` | the turn `completed` (success or failure) or `interrupted`; an interrupted turn's end is skipped |
+| `error` | a warning while `willRetry`, else an error notice (shown once with the failed turn) |
+| `thread/tokenUsage/updated` | the open turn's `usage` (`JournalOp::Usage`) |
+| command or file change approval request | a pending `approval` keyed by the JSON-RPC id, `can_always` with one `acceptForSession` suggestion |
+| `serverRequest/resolved` | a still pending approval `cancelled` |
+| another request | refused, or answered granting nothing, with a notice |
+| another thread's messages, known lifecycle notifications, `codex/event/*` | nothing |
+| an unknown notification or item type | one warning notice per name per run |
+
+An allow answers `{"decision":"accept"}`, an `always` allow `acceptForSession`, a deny `decline`. The interrupt answers
+every pending request `cancel`, then sends `turn/interrupt` of the named turn (or of the turn the app-server names
+next).
+
 ### Version probing
 
 `agent.kinds` fills `AgentKind.chat` for a kind with a `chat` block: the kind's resolved program is run with `--version`
@@ -742,7 +807,7 @@ entries.
 and the result is kept per program path and modified time in the probe cache the instruction probe shares
 (`probe.rs`); a failed probe is run again after 60 s. A chat resume probes before it takes the start gates. `not_detected` when no program resolves, `version_unknown` when the probe fails or prints no version,
 `version_outside_range` below `min_version` or above `max_major`; `range` reads `>=MIN, <MAX+1.0.0`. The built-in
-`claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
+`claude` kind declares `2.1.258` through `2.x`, the `codex` kind `0.172.0` through `0.x`. A test build probes only the programs
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
 ## Archive and delete (decision 0163)

@@ -119,7 +119,7 @@ pub(crate) fn bounded(text: &str) -> (String, bool) {
 
 /// A name from the CLI (a tool, a frame type or subtype) as an item or a notice carries it: at most [`MAX_NAME_CHARS`]
 /// characters, without control characters.
-fn bounded_name(name: &str) -> String {
+pub(crate) fn bounded_name(name: &str) -> String {
     name.chars()
         .filter(|c| !c.is_control())
         .take(MAX_NAME_CHARS)
@@ -164,7 +164,7 @@ const SKIPPED_TYPES: &[&str] = &[
 ];
 
 impl ChatAdapter for ClaudeAdapter {
-    fn launch_args(&self, planned: Vec<String>) -> Vec<String> {
+    fn launch_args(&mut self, planned: Vec<String>) -> Vec<String> {
         launch::launch_args(planned)
     }
 
@@ -174,6 +174,10 @@ impl ChatAdapter for ClaudeAdapter {
 
     fn encode_prompt_with_images(&mut self, text: &str, images: &[PromptImage]) -> Option<Vec<u8>> {
         Some(launch::user_message_with_images(text, images))
+    }
+
+    fn carries_images(&self) -> bool {
+        true
     }
 
     fn translate(&mut self, line: &str) -> Vec<JournalOp> {

@@ -27,8 +27,9 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
-    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, MAX_PREVIEW_CHARS,
-    ModeApplied, ModeSource, PromptReceipt, ReceiptKind, ResumeState, SessionFast, SessionMeta,
+    AgentOptionsSet, AgentSession, AgentSetOptionsParams, AgentStartParams, Execution,
+    MAX_HOOK_PAYLOAD_BYTES, MAX_PREVIEW_CHARS, ModeApplied, ModeSource, OptionApplied,
+    OptionsApplied, PromptReceipt, ReceiptKind, ResumeState, SessionFast, SessionMeta,
 };
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{
@@ -53,6 +54,7 @@ use crate::provided_env::{
 use crate::resolve::{SearchEnv, VendorSearch, resolve_first};
 use crate::resume_state::{self, ResumeInputs};
 use crate::run_notes;
+use crate::session_options::{self, ChosenOptions};
 use crate::status::{self, HookRules};
 
 mod archive;
@@ -73,6 +75,10 @@ pub use delegation::{
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long a typed live command holds non-forced input and the queue, when no accepted hook report ends the hold first. A
+/// slash command may send no report at all, so the hold must end by itself (decision 0171).
+pub const TYPED_COMMAND_SETTLE: Duration = Duration::from_secs(2);
 
 /// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
 /// agent that never reports idle would otherwise hold the text for as long as its run lives.
@@ -339,6 +345,13 @@ struct Inner {
     found_transcripts: resume_state::FoundTranscripts,
     /// The model listings the service keeps (decision 0166), held in memory.
     models: crate::model_catalog::ModelCache,
+    /// The fast mode `agent.set_options` chose for each session, which its next resume launches with (decision 0171). The
+    /// model and the effort are stored with the session (decision 0168); fast mode has no column, so it is held here, in
+    /// memory: the service forgets it when it stops.
+    chosen_fast: Mutex<HashMap<String, bool>>,
+    /// The options each live run started with, updated by its live changes (decision 0171): a change is checked against them
+    /// while the run is live. A stopped session is checked against what its next run keeps, which is stored instead.
+    started: Mutex<HashMap<String, ChosenOptions>>,
     /// How long a model listing may run before it is stopped (decision 0166).
     listing_timeout: Duration,
     /// The chat runs whose end has not been recorded, by session (decision 0101). Taken after the status lock when both
@@ -367,6 +380,9 @@ pub(crate) struct LiveRun {
     /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
     /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
     typed_since_report: bool,
+    /// A typed live command holds non-forced input (prompts, live changes, the queue) until this instant, unless an accepted
+    /// hook report ends the hold first. A slash command may send no report at all (decision 0171).
+    settle_until: Option<Instant>,
     /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
     /// two writes never interleave in the terminal.
     switching: bool,
@@ -451,6 +467,8 @@ impl Agents {
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
                 models: crate::model_catalog::ModelCache::default(),
+                chosen_fast: Mutex::new(HashMap::new()),
+                started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
                     std::env::var(crate::model_catalog::LISTING_TIMEOUT_ENV)
                         .ok()
@@ -813,6 +831,7 @@ impl Agents {
                     pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -930,6 +949,15 @@ impl Agents {
             }
         };
         session.secrets_withheld = withheld(grant);
+        // Noted only once the start has succeeded, so a start that failed leaves no options behind (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: params.model.clone(),
+                effort: params.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -1088,14 +1116,19 @@ impl Agents {
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
         let access = self.resolve_home(&gate, &decl, &workspace.project_id)?;
-        // The model and the effort the session was started with are kept (decision 0168); one the kind no longer takes
-        // is left out rather than refusing the resume.
+        // What the session records is kept (decision 0168): the model and the effort it names, where the kind still takes
+        // them. The fast mode is the one `agent.set_options` chose for it (decision 0171).
         let origin = self
             .store()
             .agent_session_origin(&row.id)?
             .unwrap_or_default();
         let kept = kept_options(&decl, &origin);
+        let chosen_fast = lock(&self.inner.chosen_fast)
+            .get(&row.id)
+            .copied()
+            .unwrap_or(false);
         let mode_args = [mode.args.clone(), kept.args.clone()].concat();
+        let fast = decl.fast_for(kept.model.as_deref(), chosen_fast)?;
         // Besides those options, a resumed run takes the kind's resume arguments only: the caller's arguments and
         // environment of the first start are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -1117,8 +1150,8 @@ impl Agents {
             caller_env: &no_env,
             instructions,
             inherited_path: inherited_path.as_deref(),
-            // A resume takes no fast mode: the start's choice is not kept with the session (decision 0165).
-            fast: None,
+            // A resume takes the fast mode `agent.set_options` chose for the session, if any (decisions 0165, 0171).
+            fast,
         })?;
         // The record names what the run uses from now on (decision 0168); a plan that fails leaves it as it was.
         if kept.model != origin.model || kept.effort != origin.effort {
@@ -1133,7 +1166,7 @@ impl Agents {
         mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         instructions::record_withheld(&run_dir, instructions_withheld.as_deref());
         run_notes::record(&run_dir, &kept.notes);
-        fast_mode::record(&run_dir, false);
+        fast_mode::record(&run_dir, fast.is_some());
         // The account this run uses, and the ref whose conversation its exit may show missing (decision 0160). The run
         // directory holds the earlier run's files, so it is kept on a failure here.
         resume_state::record_probe(&run_dir, &decl, Some(&agent_ref))?;
@@ -1153,6 +1186,7 @@ impl Agents {
                     pending: None,
                     pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                     typed_since_report: false,
+                    settle_until: None,
                     switching: false,
                     delivering: false,
                     finished: false,
@@ -1249,6 +1283,15 @@ impl Agents {
             }
         }
         session.secrets_withheld = withheld(grant);
+        // Noted only once the resume has succeeded (decision 0171).
+        self.note_started(
+            &session.id,
+            ChosenOptions {
+                model: kept.model.clone(),
+                effort: kept.effort.clone(),
+                fast: Some(fast.is_some()),
+            },
+        );
         Ok(session)
     }
 
@@ -1377,6 +1420,8 @@ impl Agents {
         let mut newly_finished = false;
         if let Some(run) = live.get_mut(&params.session) {
             run.typed_since_report = false;
+            // Any accepted report ends a settle window early (decision 0171).
+            run.settle_until = None;
             match row
                 .activity
                 .as_ref()
@@ -1682,6 +1727,180 @@ impl Agents {
         })
     }
 
+    /// Changes a session's model, effort or fast mode (decision 0171). A model or fast mode the kind declares a live command
+    /// for is typed into a live run once the agent is ready; every other change, and every change to a session whose run is
+    /// not live, waits for the session's next resume. The values are checked before anything is typed or stored.
+    pub fn set_options(
+        &self,
+        request: &AgentSetOptionsParams,
+    ) -> Result<AgentOptionsSet, AgentError> {
+        let row = self.resolve(&request.session)?;
+        let decl = self.declared_kind(&row.kind)?;
+        let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // Planned under the status lock, where the run's liveness and recorded fast mode are read, so two calls never plan
+        // the same toggle. The text is typed outside the lock, as a prompt is, because the write can wait for the agent.
+        let mut live = lock(&self.inner.status);
+        let row = self.reload(&row.id)?;
+        let session = self.view_with(&mut live, row)?;
+        let running = live.contains_key(&session.id) && session.terminal_id.is_some();
+        let recorded_fast = fast_mode::of_run(&run_dir).is_some();
+        let chosen = self.chosen_of(&session.id)?;
+        let started = self.started_of(&session.id);
+        let plan = session_options::plan(
+            &decl,
+            &session.id,
+            request,
+            &started,
+            &chosen,
+            running,
+            recorded_fast,
+        )?;
+        let typing = if plan.typed.is_empty() {
+            None
+        } else {
+            let terminal = session.terminal_id.clone().unwrap_or_default();
+            let Some(run) = live.get_mut(&session.id) else {
+                return Err(not_live(&session.id));
+            };
+            let state = session.activity.as_ref().map(|activity| activity.state);
+            if let Some(refusal) = input_refusal(run, &session.id, state, false) {
+                return Err(refusal);
+            }
+            run.switching = true;
+            let bytes: Vec<Vec<u8>> = plan
+                .typed
+                .iter()
+                .map(|text| prompt::input_bytes(text, PasteMode::Plain, &run.prompt.submit))
+                .collect();
+            Some((terminal, bytes))
+        };
+        drop(live);
+        if let Some((terminal, bytes)) = typing {
+            // The commands are typed in turn. The run stays marked as switching until the writes are done, whatever their
+            // outcome, and the queue may go on after them (decision 0084, D3).
+            let written: Result<(), TerminalError> = bytes
+                .iter()
+                .try_for_each(|bytes| self.inner.config.terminals.input(&terminal, bytes));
+            if written.is_ok() {
+                // Recorded before the run is free again, so the next call and the queue see what was typed.
+                if let Some(on) = plan.fast_typed {
+                    fast_mode::record(&run_dir, on);
+                }
+                self.note_typed(&session.id, &plan, request);
+            }
+            self.end_switching(&session.id);
+            self.drain_queue(&session.id);
+            if let Err(error) = written {
+                return Err(match error {
+                    TerminalError::Exited | TerminalError::NotFound => not_live(&session.id),
+                    other => AgentError::from(other),
+                });
+            }
+        }
+        let changed = plan.applied != OptionsApplied::default();
+        {
+            // One read and one write under the lock, so what another call stored meanwhile survives (decision 0171): the
+            // requested fields are written to the stored columns, and the fast mode is kept in memory.
+            let mut chosen_fast = lock(&self.inner.chosen_fast);
+            let origin = self
+                .store()
+                .agent_session_origin(&session.id)?
+                .unwrap_or_default();
+            let current = ChosenOptions {
+                model: origin.model,
+                effort: origin.effort,
+                fast: chosen_fast.get(&session.id).copied(),
+            };
+            let merged = session_options::merged(current, request, &plan.chosen);
+            self.store().set_agent_session_options(
+                &session.id,
+                merged.model.as_deref(),
+                merged.effort.as_deref(),
+            )?;
+            match merged.fast {
+                Some(on) => chosen_fast.insert(session.id.clone(), on),
+                None => chosen_fast.remove(&session.id),
+            };
+        }
+        let mut live = lock(&self.inner.status);
+        let session = self.view_with(&mut live, self.reload(&session.id)?)?;
+        if changed {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        Ok(AgentOptionsSet {
+            applied: plan.applied,
+            session,
+        })
+    }
+
+    /// Records what a live change typed (decision 0171): its settle window, and the options the run now runs with.
+    fn note_typed(&self, id: &str, plan: &session_options::Plan, request: &AgentSetOptionsParams) {
+        self.settle_after_typed(id);
+        let mut started = lock(&self.inner.started);
+        let entry = started.entry(id.to_owned()).or_default();
+        if plan.applied.model == Some(OptionApplied::Live) {
+            entry.model = request.model.clone();
+        }
+        if let Some(on) = plan.fast_typed {
+            entry.fast = Some(on);
+        }
+    }
+
+    /// Starts the settle window of a typed live command (decision 0171): until it ends, non-forced prompts, live changes and
+    /// the queue wait. A timer ends the window when no report does, and then drains the queue it held.
+    fn settle_after_typed(&self, id: &str) {
+        let until = Instant::now() + TYPED_COMMAND_SETTLE;
+        if let Some(run) = lock(&self.inner.status).get_mut(id) {
+            run.settle_until = Some(until);
+        }
+        let weak = Arc::downgrade(&self.inner);
+        let id = id.to_owned();
+        thread::spawn(move || {
+            thread::sleep(until.saturating_duration_since(Instant::now()));
+            if let Some(inner) = weak.upgrade() {
+                Agents { inner }.end_settle(&id, until);
+            }
+        });
+    }
+
+    /// Ends the settle window `until`, if no report ended it first, and drains the queue it held (decision 0171).
+    fn end_settle(&self, id: &str, until: Instant) {
+        let ended = match lock(&self.inner.status).get_mut(id) {
+            Some(run) if run.settle_until == Some(until) => {
+                run.settle_until = None;
+                true
+            }
+            _ => false,
+        };
+        if ended {
+            self.drain_queue(id);
+        }
+    }
+
+    /// The options session `id`'s live run started with, as its live changes have moved them (decision 0171).
+    fn started_of(&self, id: &str) -> ChosenOptions {
+        lock(&self.inner.started)
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Records the options a run of session `id` started with (decision 0171).
+    fn note_started(&self, id: &str, options: ChosenOptions) {
+        lock(&self.inner.started).insert(id.to_owned(), options);
+    }
+
+    /// What session `id`'s next run keeps (decisions 0168, 0171): the model and effort of its stored columns, and the fast
+    /// mode `agent.set_options` chose for it.
+    fn chosen_of(&self, id: &str) -> Result<ChosenOptions, AgentError> {
+        let origin = self.store().agent_session_origin(id)?.unwrap_or_default();
+        Ok(ChosenOptions {
+            model: origin.model,
+            effort: origin.effort,
+            fast: lock(&self.inner.chosen_fast).get(id).copied(),
+        })
+    }
+
     /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
     /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
     pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
@@ -1891,6 +2110,8 @@ impl Agents {
         }
         self.store().delete_agent_session(&session.id)?;
         live.remove(&session.id);
+        lock(&self.inner.chosen_fast).remove(&session.id);
+        lock(&self.inner.started).remove(&session.id);
         self.forget_chat(&session.id);
         self.notify(Change::Forgotten(session.id.clone()));
         // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -2689,6 +2910,15 @@ fn input_refusal(
             ),
         ));
     }
+    // A typed live command holds non-forced input for its settle window (decision 0171). `force` and `send_now` pass.
+    if !force && run.settle_until.is_some_and(|until| Instant::now() < until) {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "session {session} is settling after a typed command: try again in a moment, or use force"
+            ),
+        ));
+    }
     if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
         return Some(AgentError::new(
             codes::AGENT_BUSY,
@@ -2731,7 +2961,7 @@ fn withheld(grant: SecretGrant) -> Option<String> {
 }
 
 /// The refusal for a resume the session cannot make (0054).
-fn resume_unavailable(session: &str, reason: &str) -> AgentError {
+pub(crate) fn resume_unavailable(session: &str, reason: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_RESUME_UNAVAILABLE,
         format!("session {session} cannot resume: {reason}"),
@@ -3137,6 +3367,7 @@ pub(crate) mod tests {
             pending: None,
             pending_switch: None,
             typed_since_report: false,
+            settle_until: None,
             switching,
             delivering: false,
             finished: false,
@@ -3154,6 +3385,20 @@ pub(crate) mod tests {
         assert!(
             input_refusal(&run(false), "s", working, true).is_none(),
             "force types anyway"
+        );
+        // A typed live command settles the run for its window (decision 0171): unforced input waits, forced input goes
+        // through, and a window that has ended refuses nothing.
+        let mut settling = run(false);
+        settling.settle_until = Some(Instant::now() + Duration::from_secs(3600));
+        assert!(input_refusal(&settling, "s", idle, false).is_some());
+        assert!(
+            input_refusal(&settling, "s", idle, true).is_none(),
+            "force goes through"
+        );
+        settling.settle_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(
+            input_refusal(&settling, "s", idle, false).is_none(),
+            "an ended window refuses nothing"
         );
     }
 
@@ -3178,6 +3423,7 @@ pub(crate) mod tests {
                 due,
             }),
             typed_since_report: false,
+            settle_until: None,
             switching: false,
             delivering: false,
             finished: false,
@@ -3221,6 +3467,7 @@ pub(crate) mod tests {
                 }),
                 pending_switch: None,
                 typed_since_report: false,
+                settle_until: None,
                 switching: false,
                 delivering: false,
                 finished: false,
@@ -3412,6 +3659,7 @@ pub(crate) mod tests {
                 pending: None,
                 pending_switch: None,
                 typed_since_report: false,
+                settle_until: None,
                 switching: false,
                 delivering: false,
                 finished: false,

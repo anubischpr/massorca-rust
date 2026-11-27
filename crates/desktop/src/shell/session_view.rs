@@ -35,12 +35,15 @@ use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use super::remote_session_view::RemoteSessionFrame;
+use super::session_child_wait::{ChildWaitStrip, child_wait_strip};
 use super::sidebar_rows::glyph_state;
 use super::transcript_rows::transcript_rows;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
+use crate::model::pairing::now_ms;
+use crate::model::parent_wait::{child_wait, elapsed_words};
 use crate::model::permission_modes::{SessionModes, mode_to_set, session_modes};
 use crate::model::session_ended::{
     ENDED, ENDED_NOT_RESUMABLE, START_NEW, ended_offer, refusal_says_conversation_gone,
@@ -169,6 +172,8 @@ pub(super) struct SessionFrame {
     pub failure: Option<String>,
     /// Why the last stop or resume of the session was refused.
     pub notice: Option<String>,
+    /// The other sessions that also write in this folder, named under the header (decision 0169).
+    pub shared_folder: Option<String>,
     /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
     pub stop_aside: Option<bool>,
     /// A terminal-arm session has no composer: its header names the arm and carries the mode chip instead.
@@ -179,6 +184,8 @@ pub(super) struct SessionFrame {
     /// The caption after the mode chip, such as "Requested" or "Next resume: Plan".
     pub mode_note: Option<String>,
     pub composer: Entity<Composer>,
+    /// The strip above the composer while a child writes in this session's own worktree (decision 0170).
+    pub child_wait: Option<ChildWaitStrip>,
     /// The session's queue dock, while the service keeps a queue and it holds a prompt.
     pub queue: Option<Entity<QueuedMessages>>,
     pub shell: WeakEntity<Shell>,
@@ -224,6 +231,7 @@ fn transcript_body(
 pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = theme.palette;
+    let wait_shell = frame.shell.clone();
     let ended_bar = frame.ended.map(|ended| {
         let (resume_shell, resume_session) = (frame.shell.clone(), frame.session.clone());
         let (start_shell, start_session) = (frame.shell.clone(), frame.session.clone());
@@ -377,6 +385,17 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .child(header)
+        .when_some(frame.shared_folder, |page, notice| {
+            page.child(
+                div()
+                    .debug_selector(|| "session-shared-folder".to_owned())
+                    .flex_none()
+                    .px(px(SPACE_4))
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.text.tertiary)
+                    .child(notice),
+            )
+        })
         .child(body)
         .when_some(frame.notice, |page, notice| {
             page.child(
@@ -405,6 +424,9 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                             .child(dock),
                     ),
             )
+        })
+        .when_some(frame.child_wait, |page, wait| {
+            page.child(child_wait_strip(&wait, wait_shell, &theme))
         })
         .when(!frame.terminal_arm, |page| {
             page.child(div().flex_none().pb(px(SPACE_3)).child(frame.composer))
@@ -496,7 +518,7 @@ impl Shell {
             return None;
         }
         let id = self.model.snapshot().active_session.clone()?;
-        let (session, kinds, queue) = {
+        let (session, kinds, queue, waiting, shared_folder) = {
             let state = self.store.read(cx).state();
             let session = state
                 .agents
@@ -507,7 +529,15 @@ impl Shell {
                 .agent_queues
                 .as_ref()
                 .and_then(|queues| queues.get(&id).cloned());
-            (session, state.agent_kinds.clone(), queue)
+            let waiting = child_wait(&state.agents, &session);
+            let shared_folder = shared_folder_notice(&session, &state.agents, &state.agent_kinds);
+            (
+                session,
+                state.agent_kinds.clone(),
+                queue,
+                waiting,
+                shared_folder,
+            )
         };
         // A chat session draws its transcript from its first frame, empty until the stream's snapshot arrives; a
         // terminal session draws one only where a test holds a transcript for it.
@@ -610,7 +640,13 @@ impl Shell {
                 busy: call.is_some() || self.service.is_none(),
             }
         });
+        let wait_strip = waiting.map(|wait| ChildWaitStrip {
+            agent: kind_name(&wait.kind, &kinds),
+            elapsed: elapsed_words(wait.started_at_ms, now_ms()),
+            child: wait.child,
+        });
         Some(SessionFrame {
+            child_wait: wait_strip,
             stop_aside: stop_aside.then_some(call.is_some()),
             terminal_arm,
             ended,
@@ -624,6 +660,7 @@ impl Shell {
             surface,
             failure,
             notice: self.session_notices.get(&id).cloned(),
+            shared_folder,
             composer,
             queue,
             shell: cx.entity().downgrade(),
@@ -1317,6 +1354,32 @@ impl QueueCall {
             ),
         }
     }
+}
+
+/// The line naming the other sessions that also write in the session's folder, or `None` when none does (decision
+/// 0169). A writer the store does not hold is named generically.
+pub(super) fn shared_folder_notice(
+    session: &AgentSession,
+    sessions: &[AgentSession],
+    kinds: &[AgentKind],
+) -> Option<String> {
+    if session.shared_folder_with.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = session
+        .shared_folder_with
+        .iter()
+        .map(|id| {
+            sessions.iter().find(|other| &other.id == id).map_or_else(
+                || "another session".to_owned(),
+                |other| session_title(other, kinds),
+            )
+        })
+        .collect();
+    Some(format!(
+        "Also writing in this folder: {}.",
+        names.join(", ")
+    ))
 }
 
 /// The session's name in its header: its title, or its agent's name when it has none.

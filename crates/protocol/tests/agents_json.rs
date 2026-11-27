@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use massorca_protocol::capabilities;
 use massorca_protocol::methods::agents::AgentArchive;
 use massorca_protocol::methods::agents::{
     self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
@@ -18,7 +19,10 @@ use massorca_protocol::methods::agents::{
     AgentListParams, AgentModel, AgentModels, AgentModelsParams, ForgetPreviewWorkspace, ModeTone,
     ModelListingError, ModelListingFailure, ModelSource, WorkspaceRemovalError,
 };
-use massorca_protocol::methods::agents::{AgentPromptParams, PromptAttachment};
+use massorca_protocol::methods::agents::{
+    AgentOptionsSet, AgentPromptParams, AgentSetOptionsParams, OptionApplied, OptionsApplied,
+    PromptAttachment, SessionFast,
+};
 use massorca_protocol::methods::chat::RunType;
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use massorca_protocol::methods::workspaces::WorkspaceKind;
@@ -62,6 +66,7 @@ fn method_names_match_the_wire_table() {
         (agents::FORGET, "agent.forget"),
         (agents::PROMPT, "agent.prompt"),
         (agents::RESUME, "agent.resume"),
+        (agents::SET_OPTIONS, "agent.set_options"),
         (agents::FORK, "agent.fork"),
         (agents::MARK_SEEN, "agent.mark_seen"),
         (agents::HOOK, "agent.hook"),
@@ -1480,6 +1485,85 @@ fn shared_folder_with_lists_the_other_writers_and_is_absent_when_empty() {
     assert!(alone.get("shared_folder_with").is_none(), "{alone}");
     let older: AgentSession = serde_json::from_value(alone).expect("an older record decodes");
     assert!(older.shared_folder_with.is_empty());
+}
+
+#[test]
+fn set_options_names_only_the_options_it_changes() {
+    let fast = AgentSetOptionsParams {
+        session: "s-1".to_owned(),
+        fast: Some(true),
+        ..Default::default()
+    };
+    assert_wire(&fast, &json!({ "session": "s-1", "fast": true }));
+    let all = AgentSetOptionsParams {
+        session: "s-1".to_owned(),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        fast: Some(false),
+    };
+    assert_wire(
+        &all,
+        &json!({ "session": "s-1", "model": "opus", "effort": "high", "fast": false }),
+    );
+    let bare: AgentSetOptionsParams =
+        serde_json::from_value(json!({ "session": "s-1" })).expect("deserializes");
+    assert_eq!(
+        bare,
+        AgentSetOptionsParams {
+            session: "s-1".to_owned(),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn set_options_says_where_each_changed_option_took_effect() {
+    let mut session = live_session();
+    session.fast = Some(SessionFast {
+        on: true,
+        confirmed: false,
+    });
+    let set = AgentOptionsSet {
+        applied: OptionsApplied {
+            model: Some(OptionApplied::Live),
+            effort: Some(OptionApplied::NextResume),
+            fast: Some(OptionApplied::Live),
+        },
+        session: session.clone(),
+    };
+    let value = serde_json::to_value(&set).expect("serializes");
+    assert_eq!(
+        value["applied"],
+        json!({ "model": "live", "effort": "next_resume", "fast": "live" })
+    );
+    assert_eq!(
+        value["session"]["fast"],
+        json!({ "on": true, "confirmed": false })
+    );
+    assert_eq!(
+        serde_json::from_value::<AgentOptionsSet>(value).expect("deserializes"),
+        set
+    );
+
+    // An option that did not change is absent from `applied`.
+    let unchanged = AgentOptionsSet {
+        applied: OptionsApplied::default(),
+        session,
+    };
+    assert_eq!(
+        serde_json::to_value(&unchanged).expect("serializes")["applied"],
+        json!({})
+    );
+    assert_eq!(
+        serde_json::from_value::<OptionApplied>(json!("on_reboot")).expect("decodes"),
+        OptionApplied::Unknown
+    );
+}
+
+#[test]
+fn the_live_options_capability_and_method_have_their_wire_names() {
+    assert_eq!(capabilities::AGENT_OPTIONS_LIVE, "agent-options-live/1");
+    assert_eq!(agents::SET_OPTIONS, "agent.set_options");
 }
 
 /// The metadata of decision 0168 is flat on the wire, and a record from an older peer reads with none of it.

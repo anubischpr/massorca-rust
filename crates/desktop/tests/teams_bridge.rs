@@ -1,7 +1,9 @@
 //! The Bot Teams reads of the bridge against a real service in a temporary profile, driven headlessly: no
 //! window opens. The service runs in this test's runtime; the bridge runs on its own thread, as in the app.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Once, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -22,6 +24,12 @@ use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
 struct TempHome {
@@ -63,12 +71,16 @@ async fn start_service(home: &Path) -> RunningService {
     .expect("the service starts")
 }
 
-async fn stop_service(running: RunningService) {
+/// Stops the service and says how long the stop took.
+async fn stop_service(running: RunningService) -> Duration {
+    record_link_events();
+    let started = Instant::now();
     running.shutdown_handle().shutdown();
     timeout(WAIT, running.wait())
         .await
         .expect("the service stops in time")
         .expect("the service stops cleanly");
+    started.elapsed()
 }
 
 /// A client of the same service, as the CLI would be.
@@ -103,15 +115,75 @@ async fn until(
 async fn until_the_link_stops(
     updates: &mut UnboundedReceiver<StoreUpdate>,
     state: &mut StoreState,
+    stop_took: Duration,
 ) {
     until_within(
         LINK_LOSS_WAIT,
         updates,
         state,
-        "the link to stop",
+        &format!("the link to stop (the service stop returned after {stop_took:?})"),
         |state| !state.connection.is_connected(),
     )
     .await;
+}
+
+/// Debug events of the connection and pump, kept with the time they happened so a stalled link wait can print them.
+static LINK_EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LINK_EVENTS_FROM: OnceLock<Instant> = OnceLock::new();
+
+/// Records the `connection::serve` and client pump timing events; no payloads are in them.
+struct LinkEvents;
+
+struct FieldText(String);
+
+impl Visit for FieldText {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.0.push_str(&format!(" {}={value:?}", field.name()));
+    }
+}
+
+impl<S: Subscriber> Layer<S> for LinkEvents {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let target = event.metadata().target();
+        if !(target.starts_with("massorca_server::connection")
+            || target.starts_with("massorca_client::pump"))
+        {
+            return;
+        }
+        let mut fields = FieldText(String::new());
+        event.record(&mut fields);
+        let from = LINK_EVENTS_FROM.get_or_init(Instant::now);
+        LINK_EVENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("+{:?} {target}{}", from.elapsed(), fields.0));
+    }
+}
+
+/// Starts recording the link events once for this test binary.
+fn record_link_events() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        LINK_EVENTS_FROM.get_or_init(Instant::now);
+        let layer = LinkEvents.with_filter(LevelFilter::DEBUG);
+        // Another subscriber being set already only means the events go unrecorded.
+        let _ = tracing_subscriber::registry().with(layer).try_init();
+    });
+}
+
+fn link_events() -> Vec<String> {
+    LINK_EVENTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// The variant name of a debug-printed update, so a trace never carries its payload.
+fn update_kind(debug: &str) -> &str {
+    debug
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()
+        .unwrap_or_default()
 }
 
 async fn until_within(
@@ -121,14 +193,27 @@ async fn until_within(
     what: &str,
     done: impl Fn(&StoreState) -> bool,
 ) {
+    let started = Instant::now();
+    // Each applied update by kind and time, so a stall names the last step the bridge reached.
+    let mut trace: Vec<String> = Vec::new();
     let folded = timeout(budget, async {
         while !done(state) {
             let update = updates.recv().await.expect("the bridge is alive");
+            trace.push(format!(
+                "+{:?} {}",
+                started.elapsed(),
+                update_kind(&format!("{update:?}"))
+            ));
             state.apply(update, Instant::now());
         }
     })
     .await;
-    assert!(folded.is_ok(), "timed out waiting for {what}: {state:?}");
+    assert!(
+        folded.is_ok(),
+        "timed out waiting for {what} after {:?}; updates applied while waiting: {trace:#?}; connection and pump events (since the first stop, all tests of this binary): {:#?}; {state:?}",
+        started.elapsed(),
+        link_events()
+    );
 }
 
 #[tokio::test]
@@ -239,8 +324,8 @@ async fn the_teams_are_not_claimed_once_the_service_is_gone() {
     .await;
     assert!(teams_view(&state).is_connected());
 
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     assert!(!teams_view(&state).is_connected());
 }
 
@@ -356,8 +441,8 @@ async fn a_write_is_refused_while_the_service_is_down() {
         state.teams.is_some()
     })
     .await;
-    stop_service(service).await;
-    until_the_link_stops(&mut updates, &mut state).await;
+    let stop_took = stop_service(service).await;
+    until_the_link_stops(&mut updates, &mut state, stop_took).await;
     let refusal = handle
         .create_team(TeamCreateParams {
             ..base_team_create_params()
@@ -1307,6 +1392,74 @@ async fn a_card_with_no_run_is_not_stopped_and_the_service_says_so() {
     stop_service(service).await;
 }
 
+fn code_source_of(state: &StoreState, name: &str) -> Option<CodeSource> {
+    teams_view(state)
+        .teams()
+        .iter()
+        .flat_map(|team| team.projects.iter())
+        .find(|project| project.name == name)
+        .and_then(|project| project.code_source)
+}
+
+#[tokio::test]
+async fn a_code_source_set_through_the_bridge_is_read_back_and_none_clears_it() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates, mut state) = team_with_checkout(home.path()).await;
+    let (team_key, project_key) = keys_of(&state, "Checkout");
+
+    let refused = handle
+        .set_project_code_source(
+            team_key.clone(),
+            project_key.clone(),
+            CodeSource::ExistingRepository,
+        )
+        .await
+        .expect_err("a code source needs Workspaces");
+    assert!(refused.message().contains("Workspaces"));
+
+    client_of(home.path())
+        .await
+        .team_update(&TeamUpdateParams {
+            team: team_key.clone(),
+            name: None,
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: Some(true),
+        })
+        .await
+        .expect("Workspaces on");
+    handle
+        .set_project_code_source(
+            team_key.clone(),
+            project_key.clone(),
+            CodeSource::ExistingRepository,
+        )
+        .await
+        .expect("the code source is recorded");
+    until(
+        &mut updates,
+        &mut state,
+        "the code source to be read",
+        |state| code_source_of(state, "Checkout") == Some(CodeSource::ExistingRepository),
+    )
+    .await;
+
+    handle
+        .set_project_code_source(team_key, project_key, CodeSource::None)
+        .await
+        .expect("the code source is cleared");
+    until(
+        &mut updates,
+        &mut state,
+        "the code source to be cleared",
+        |state| code_source_of(state, "Checkout").is_none(),
+    )
+    .await;
+    stop_service(service).await;
+}
+
 /// Every `PeerInfo` field at its usual value; tests override the fields they vary.
 fn base_peer_info() -> massorca_protocol::PeerInfo {
     massorca_protocol::PeerInfo {
@@ -1380,6 +1533,7 @@ fn base_bot_add_params() -> massorca_protocol::methods::teams::BotAddParams {
         model: None,
         effort: None,
         lead: false,
+        skills: Vec::new(),
     }
 }
 
@@ -1403,5 +1557,6 @@ fn base_bot_update_params() -> massorca_protocol::methods::teams::BotUpdateParam
         model: None,
         effort: None,
         lead: None,
+        skills: None,
     }
 }

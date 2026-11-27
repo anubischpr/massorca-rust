@@ -7,6 +7,7 @@ pub mod credential_guard;
 pub mod manager;
 pub mod process_tree;
 pub mod pty;
+pub mod queries;
 pub mod ring;
 pub mod screen;
 pub mod shell;
@@ -17,5 +18,5 @@ pub type EnvValue = zeroize::Zeroizing<String>;
 pub use attach::{AttachItem, AttachMode, Attachment, QueryAnswers};
 pub use manager::{
     CreateSpec, ExitReason, ExitRecord, ExitWait, ManagerConfig, ShellChoice, TerminalError,
-    TerminalInfo, TerminalManager, TerminalMembers, TerminalSample, TerminalState,
+    TerminalInfo, TerminalManager, TerminalMembers, TerminalSample, TerminalState, TerminalTheme,
 };

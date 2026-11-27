@@ -148,6 +148,7 @@
   "default_permission_mode": "auto",
   "model": {
     "flag": "--model",
+    "live": "/model {value}",
     "choices": [
       { "id": "fable", "label": "Fable" },
       { "id": "opus", "label": "Opus", "fast": true },

@@ -3,12 +3,15 @@
 mod agent_chat;
 mod agent_redaction;
 mod agents;
+mod automations;
+mod calendar;
 mod command_schema;
 mod config;
 pub(crate) use config::default_conversations_root;
 mod config_keys;
 mod devices;
 mod events;
+mod extension_points;
 pub(crate) mod extension_process;
 mod extensions;
 pub(crate) mod first_prompt_rename;
@@ -22,6 +25,7 @@ mod secret_params;
 mod secret_refusals;
 mod secrets;
 mod service;
+mod skill_placement;
 pub(crate) mod skills;
 mod teams;
 mod terminal_attach;
@@ -32,7 +36,7 @@ mod workspace_domain;
 mod workspace_setup;
 mod workspaces;
 
-pub(crate) use config::default_workspace_root;
+pub(crate) use config::{default_workspace_root, stored_terminal_theme};
 pub(crate) use service::info_of;
 pub(crate) use teams::{follow_routines, follow_task_outcomes};
 
@@ -72,11 +76,15 @@ pub(crate) fn register_core(
     handles.extend(agents::register(registries)?);
     handles.extend(agent_chat::register(registries)?);
     handles.extend(extensions::register(registries)?);
+    handles.extend(extension_points::register(registries)?);
     handles.extend(skills::register(registries)?);
+    handles.extend(skill_placement::register(registries)?);
     handles.extend(hosted_services::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);
+    handles.extend(automations::register(registries)?);
+    handles.extend(calendar::register(registries)?);
     handles.extend(command_schema::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
