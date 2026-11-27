@@ -79,8 +79,26 @@ impl Host {
         Self::start_with(with_supervisor, |_| {}).await
     }
 
+    /// A host whose uploads are dropped after `idle` without a chunk.
+    async fn start_idle(idle: Duration) -> Self {
+        Self::start_options(true, |_| {}, idle).await
+    }
+
     /// `prepare` gets the binary's folder before the service starts.
     async fn start_with(with_supervisor: bool, prepare: impl FnOnce(&Path)) -> Self {
+        Self::start_options(
+            with_supervisor,
+            prepare,
+            SelfUpdateOptions::default().idle_timeout,
+        )
+        .await
+    }
+
+    async fn start_options(
+        with_supervisor: bool,
+        prepare: impl FnOnce(&Path),
+        idle_timeout: Duration,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("a folder");
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).expect("bin");
@@ -96,6 +114,7 @@ impl Host {
         let options = SelfUpdateOptions {
             target: Some(installed.clone()),
             supervisor: with_supervisor.then(|| Supervisor::Program(fake_update())),
+            idle_timeout,
         };
         let running = Service::start_with_self_update(config, options)
             .await
@@ -482,12 +501,21 @@ async fn another_connection_cannot_take_over_an_upload_until_its_owner_leaves() 
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_staging_files_are_removed_at_start() {
     let suffix = std::env::consts::EXE_SUFFIX;
+    let ours = format!("massorca.update-0123{suffix}");
+    let other = format!("massorca.update{suffix}");
     let host = Host::start_with(true, |bin| {
-        std::fs::write(bin.join(format!("massorca.update{suffix}")), b"old").expect("stale");
-        std::fs::write(bin.join(format!("massorca.update-0123{suffix}")), b"old").expect("stale");
+        std::fs::write(bin.join(&ours), b"old").expect("stale");
+        std::fs::write(bin.join(&other), b"not a staging file").expect("other");
     })
     .await;
-    assert_eq!(host.staged(), Vec::<PathBuf>::new());
+    assert!(
+        !host.installed.with_file_name(&ours).exists(),
+        "a stale staging file is deleted"
+    );
+    assert!(
+        host.installed.with_file_name(&other).exists(),
+        "only <stem>.update-<id> files are deleted"
+    );
     assert_eq!(std::fs::read(&host.installed).expect("installed"), OLD);
     stop(host.running).await;
 }
@@ -505,5 +533,29 @@ async fn a_finish_without_the_confirmed_version_is_refused() {
     .expect_err("refused");
     assert_eq!(remote_code(&error), core_codes::REQUEST_INVALID_PARAMS);
     assert_untouched(&host);
+    stop(host.running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_upload_is_dropped_after_the_timeout() {
+    let host = Host::start_idle(Duration::from_millis(300)).await;
+    let owner = host.client().await;
+    let other = host.client().await;
+    let bytes = fake_bytes(None);
+    begin(&owner, &bytes).await.expect("begun");
+    assert_eq!(host.staged().len(), 1);
+    let mut dropped = false;
+    for _ in 0..100 {
+        if host.staged().is_empty() {
+            dropped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(dropped, "the idle upload's staging file is deleted");
+    begin(&other, &bytes)
+        .await
+        .expect("another connection may begin");
+    drop(owner);
     stop(host.running).await;
 }

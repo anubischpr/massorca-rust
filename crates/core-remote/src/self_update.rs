@@ -100,27 +100,50 @@ impl UpdatePaths {
         sibling(&self.installed, &format!(".update-{upload_id}"))
     }
 
-    /// Deletes every staging file beside the installed binary, `massorca.update*`: none survives a restart.
+    /// Deletes the staging files beside the installed binary, `massorca.update-<id>`: none survives a restart. Other
+    /// files are left alone.
     pub fn remove_stale_staging(&self) {
-        let (Some(folder), Some(stem)) = (self.installed.parent(), self.installed.file_stem())
-        else {
+        let Some(folder) = self.installed.parent() else {
             return;
         };
-        let mut prefix = OsString::from(stem);
-        prefix.push(".update");
         let Ok(entries) = std::fs::read_dir(folder) else {
             return;
         };
         for entry in entries.flatten() {
-            let stale = entry
+            let staging = entry
                 .file_name()
                 .to_str()
-                .zip(prefix.to_str())
-                .is_some_and(|(name, prefix)| name.starts_with(prefix));
-            if stale && entry.file_type().is_ok_and(|kind| !kind.is_dir()) {
+                .is_some_and(|name| self.is_staging_name(name));
+            if staging && entry.file_type().is_ok_and(|kind| kind.is_file()) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+    }
+
+    /// Whether `name` is `<stem>.update-<id>[.<extension>]`, with an id of letters, digits and `-`.
+    fn is_staging_name(&self, name: &str) -> bool {
+        let Some(stem) = self.installed.file_stem().and_then(|stem| stem.to_str()) else {
+            return false;
+        };
+        let rest = name
+            .strip_prefix(stem)
+            .and_then(|rest| rest.strip_prefix(".update-"));
+        let id = match self
+            .installed
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some(extension) => {
+                rest.and_then(|rest| rest.strip_suffix(extension)?.strip_suffix('.'))
+            }
+            None => rest,
+        };
+        id.is_some_and(|id| {
+            !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
     }
 }
 
@@ -252,6 +275,20 @@ mod tests {
             Path::new("bin/massorca.update-01.exe")
         );
         assert_eq!(windows.previous, Path::new("bin/massorca.previous.exe"));
+    }
+
+    #[test]
+    fn only_update_id_files_count_as_staging() {
+        let unix = UpdatePaths::of(Path::new("/opt/bin/massorca"));
+        assert!(unix.is_staging_name("massorca.update-01ab-2c"));
+        assert!(!unix.is_staging_name("massorca.update"));
+        assert!(!unix.is_staging_name("massorca.update-"));
+        assert!(!unix.is_staging_name("massorca.updates"));
+        assert!(!unix.is_staging_name("massorca.previous"));
+        let windows = UpdatePaths::of(Path::new("bin/massorca.exe"));
+        assert!(windows.is_staging_name("massorca.update-01.exe"));
+        assert!(!windows.is_staging_name("massorca.update.exe"));
+        assert!(!windows.is_staging_name("massorca.update-01"));
     }
 
     #[test]

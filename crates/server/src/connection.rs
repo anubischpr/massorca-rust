@@ -72,11 +72,12 @@ pub(crate) async fn serve(
                 max_frame_len,
                 streams: StreamTable::default(),
             });
-            shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
-            session
+            // Dropped with `serving` on every exit, including a writer that ends first or an aborted task.
+            let _release_upload = session
                 .state
                 .self_update
-                .connection_closed(&session.connection_id);
+                .release_on_drop(&session.connection_id);
+            shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
         }
     };
     let writer_ended = tokio::select! {

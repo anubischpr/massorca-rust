@@ -48,9 +48,10 @@ A `host-admin` client can make the host run the uploaded file once, for its `--v
 
 **One upload at a time, owned by its connection.** The upload belongs to the connection that began it and records who
 that is (a device, or the host's owner): only that connection may send its chunks or finish it (`update.unknown_upload`
-for anyone else), and another connection's `begin` is refused with `update.in_progress`. Closing the connection drops
-the upload and deletes its staging file, so an abandoned upload never blocks the next one. A service start deletes any
-staging file a previous run left.
+for anyone else), and another connection's `begin` is refused with `update.in_progress`. However the connection ends
+(the peer leaves, its writer fails first, or its task is aborted), a guard drops the upload and deletes its staging
+file. As a backstop, an upload with no chunk for 10 minutes is dropped the same way, so an abandoned upload never blocks
+the next one for long. A service start deletes the `massorca.update-<id>` files a previous run left, and no other file.
 
 Chunks ride in ordinary requests: no new frame kind or stream opcode, so older peers are unaffected. The new fields
 are all optional.

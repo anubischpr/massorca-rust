@@ -389,7 +389,7 @@ impl Service {
             extensions,
             host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
-            self_update: features::self_update::SelfUpdate::new(self_update),
+            self_update: Arc::new(features::self_update::SelfUpdate::new(self_update)),
             _kind_guard: kind_guard,
             _kind_cleanup: kind_cleanup,
             network: network_state,

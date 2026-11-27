@@ -58,7 +58,7 @@ pub struct AppState {
     /// Skill discovery's inputs and the scan it shares for ten seconds (SKL-01).
     pub(crate) skills: crate::features::skills::SkillScans,
     /// The binary an update replaces, its supervisor, and the upload in progress (decision 0132).
-    pub(crate) self_update: crate::features::self_update::SelfUpdate,
+    pub(crate) self_update: Arc<crate::features::self_update::SelfUpdate>,
     /// Keeps the agents' remove guard registered on `extensions` while the service runs: a package whose kind a live or
     /// resumable session uses is not removed, disabled or updated away.
     pub(crate) _kind_guard: massorca_core_extensions::hooks::HookHandle,

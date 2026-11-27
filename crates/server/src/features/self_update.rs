@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_core_remote::self_update::{self as host_update, Supervisor, UpdatePaths};
 use massorca_core_store::new_id;
@@ -28,13 +28,28 @@ use crate::registry::RegistrationHandle;
 /// Lets the answer reach the client before the supervisor stops this process.
 const RESTART_DELAY: Duration = Duration::from_millis(300);
 
+/// How long an upload may go without a chunk before it is dropped with its staging file.
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// What an update replaces and what restarts the service afterwards.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelfUpdateOptions {
     /// The installed binary. `None` refuses every update.
     pub target: Option<PathBuf>,
     /// `None` refuses every update before anything is uploaded.
     pub supervisor: Option<Supervisor>,
+    /// An upload with no chunk for this long is dropped with its staging file.
+    pub idle_timeout: Duration,
+}
+
+impl Default for SelfUpdateOptions {
+    fn default() -> Self {
+        Self {
+            target: None,
+            supervisor: None,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+        }
+    }
 }
 
 impl SelfUpdateOptions {
@@ -45,6 +60,7 @@ impl SelfUpdateOptions {
         Self {
             target: std::env::current_exe().ok(),
             supervisor: Supervisor::detect(),
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
         }
     }
 }
@@ -66,6 +82,14 @@ impl SelfUpdate {
         Self {
             options,
             ..Self::default()
+        }
+    }
+
+    /// A guard that drops the upload `connection_id` began when the guard drops, on every way a connection ends.
+    pub(crate) fn release_on_drop(self: &Arc<Self>, connection_id: &str) -> UploadRelease {
+        UploadRelease {
+            updates: Arc::clone(self),
+            connection_id: connection_id.to_owned(),
         }
     }
 
@@ -97,6 +121,18 @@ impl SelfUpdate {
     }
 }
 
+/// Releases a connection's upload when dropped; see [`SelfUpdate::release_on_drop`].
+pub(crate) struct UploadRelease {
+    updates: Arc<SelfUpdate>,
+    connection_id: String,
+}
+
+impl Drop for UploadRelease {
+    fn drop(&mut self) {
+        self.updates.connection_closed(&self.connection_id);
+    }
+}
+
 #[derive(Debug)]
 struct Upload {
     id: String,
@@ -104,6 +140,8 @@ struct Upload {
     connection_id: String,
     /// Who began it, for the refusal another caller gets.
     owner: String,
+    /// The last begin or chunk; an upload idle for the timeout is dropped.
+    last_active: Instant,
     size: u64,
     sha256: String,
     received: u64,
@@ -195,6 +233,7 @@ async fn begin(ctx: &RequestCtx, params: UpdateBeginParams) -> Result<UpdateBegu
         id: id.clone(),
         connection_id: ctx.connection_id.clone(),
         owner,
+        last_active: Instant::now(),
         size: params.size,
         sha256: params.sha256,
         received: 0,
@@ -207,6 +246,11 @@ async fn begin(ctx: &RequestCtx, params: UpdateBeginParams) -> Result<UpdateBegu
         drop(replaced.file);
         let _ = std::fs::remove_file(&replaced.staged);
     }
+    drop_when_idle(
+        Arc::clone(&updates.upload),
+        id.clone(),
+        updates.options.idle_timeout,
+    );
     Ok(UpdateBegun {
         upload_id: id,
         max_chunk_bytes: MAX_CHUNK_BYTES as u32,
@@ -249,6 +293,7 @@ async fn chunk(
             .map_err(|error| failed("writing the staging file", &error))?;
         current.hasher.update(&bytes);
         current.received = end;
+        current.last_active = Instant::now();
         Ok(UpdateChunkAccepted { received: end })
     })
     .await?
@@ -484,6 +529,30 @@ fn checked_version(binary: &Path) -> Result<Checked, ErrorBody> {
     })
 }
 
+/// Drops upload `id` with its staging file once it has gone `idle` without a chunk; stops when the upload ends.
+fn drop_when_idle(slot: Arc<Mutex<Option<Upload>>>, id: String, idle: Duration) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(idle).await;
+            let Ok(mut guard) = slot.lock() else {
+                return;
+            };
+            match guard.as_ref() {
+                Some(upload) if upload.id == id && upload.last_active.elapsed() >= idle => {
+                    if let Some(upload) = guard.take() {
+                        drop(upload.file);
+                        let _ = std::fs::remove_file(&upload.staged);
+                        tracing::info!("an idle self-update upload was dropped");
+                    }
+                    return;
+                }
+                Some(upload) if upload.id == id => {}
+                _ => return,
+            }
+        }
+    });
+}
+
 /// The upload `id`, only for the connection that began it.
 fn current<'a>(
     slot: &'a mut Option<Upload>,
@@ -535,4 +604,44 @@ fn poisoned() -> ErrorBody {
         codes::FAILED,
         "the upload state is unusable after a failed step",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_the_release_guard_drops_the_connection_upload_and_its_file() {
+        let dir = tempfile::tempdir().expect("a folder");
+        let installed = dir.path().join("massorca");
+        std::fs::write(&installed, b"old").expect("installed");
+        let updates = Arc::new(SelfUpdate::new(SelfUpdateOptions {
+            target: Some(installed.clone()),
+            ..SelfUpdateOptions::default()
+        }));
+        let staged = UpdatePaths::of(&installed).staged("01");
+        let file = host_update::create_new(&staged).expect("staged");
+        *updates.upload.lock().expect("slot") = Some(Upload {
+            id: "01".to_owned(),
+            connection_id: "c1".to_owned(),
+            owner: "the host's owner".to_owned(),
+            last_active: Instant::now(),
+            size: 1,
+            sha256: String::new(),
+            received: 0,
+            hasher: Sha256::new(),
+            file,
+            staged: staged.clone(),
+        });
+        let other = updates.release_on_drop("c2");
+        drop(other);
+        assert!(
+            updates.upload.lock().expect("slot").is_some(),
+            "another connection's guard keeps it"
+        );
+        let guard = updates.release_on_drop("c1");
+        drop(guard);
+        assert!(updates.upload.lock().expect("slot").is_none());
+        assert!(!staged.exists());
+    }
 }
