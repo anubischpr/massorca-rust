@@ -6,7 +6,6 @@ use massorca_protocol::methods::workspaces::{Workspace, WorkspaceUpdateParams};
 use crate::create::refused_write;
 use crate::error::DomainError;
 use crate::names;
-use crate::views;
 use crate::workspaces::Workspaces;
 
 impl Workspaces {
@@ -40,6 +39,6 @@ impl Workspaces {
         row.name = name;
         row.comment = comment;
         row.name_generated = name_generated;
-        Ok(views::workspace(&row))
+        Ok(self.view(&row))
     }
 }

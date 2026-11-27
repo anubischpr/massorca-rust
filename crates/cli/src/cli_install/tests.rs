@@ -17,6 +17,30 @@ fn windows_env(root: &Path, store: &FakeUserPath) -> Environment {
     }
 }
 
+/// A Windows environment that runs `target`, so tests can stand in for a binary that an update moved.
+fn windows_env_for(root: &Path, store: &FakeUserPath, target: &Path) -> Environment {
+    Environment::Windows {
+        layout: Layout::windows(root),
+        target: target.to_path_buf(),
+        store: Box::new(store.clone()),
+        variables: Vec::new(),
+    }
+}
+
+/// Creates a file standing in for a binary, with its folder.
+fn write_binary(path: &Path) {
+    fs::create_dir_all(path.parent().expect("a folder")).expect("folder");
+    fs::write(path, "").expect("binary");
+}
+
+#[cfg(unix)]
+fn write_program(path: &Path, name: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(path.parent().expect("a folder")).expect("folder");
+    fs::write(path, format!("#!/bin/sh\necho {name}\n")).expect("program");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("executable");
+}
+
 #[test]
 fn windows_install_writes_the_command_file_and_adds_its_folder_to_the_user_path_once() {
     let root = tempdir().expect("temp dir");
@@ -118,23 +142,151 @@ fn windows_uninstall_refuses_a_foreign_command_file_and_leaves_the_user_path_alo
 #[test]
 fn windows_status_reports_not_on_path_then_a_different_binary() {
     let root = tempdir().expect("temp dir");
+    let first = root.path().join("first").join("massorca.exe");
+    let other = root.path().join("other").join("massorca.exe");
+    write_binary(&first);
+    write_binary(&other);
     let store = FakeUserPath::with_text(r"C:\Windows");
-    let env = windows_env(root.path(), &store);
+    let env = windows_env_for(root.path(), &store, &first);
     install(&env).expect("install");
     store.set_text(r"C:\Windows");
     assert_eq!(status(&env).expect("status").state, State::NotOnPath);
-    let other = Environment::Windows {
-        layout: Layout::windows(root.path()),
-        target: PathBuf::from("/opt/other/massorca.exe"),
-        store: Box::new(store.clone()),
-        variables: Vec::new(),
-    };
-    let report = status(&other).expect("status");
+    let report = status(&windows_env_for(root.path(), &store, &other)).expect("status");
     assert_eq!(report.state, State::DifferentBinary);
     assert_eq!(
         report.points_to.as_deref(),
-        Some("/opt/massorca/massorca.exe")
+        Some(first.to_str().expect("a UTF-8 path"))
     );
+}
+
+#[test]
+fn a_command_whose_binary_an_update_moved_is_stale_until_repair_points_it_at_the_new_binary() {
+    let root = tempdir().expect("temp dir");
+    let old = root.path().join("old").join("massorca.exe");
+    let new = root.path().join("new").join("massorca.exe");
+    write_binary(&old);
+    let store = FakeUserPath::with_text(r"C:\Windows");
+    install(&windows_env_for(root.path(), &store, &old)).expect("install");
+    // The update moves the binary: the old copy goes and the new one is in place.
+    fs::remove_dir_all(old.parent().expect("a folder")).expect("old folder");
+    write_binary(&new);
+    let current = windows_env_for(root.path(), &store, &new);
+    assert_eq!(status(&current).expect("status").state, State::Stale);
+    assert!(repair_gone(&current).expect("repair"));
+    assert_eq!(status(&current).expect("status").state, State::Installed);
+    assert!(!repair_gone(&current).expect("second repair"));
+}
+
+#[test]
+fn repair_leaves_a_command_for_a_binary_that_is_still_there_alone() {
+    let root = tempdir().expect("temp dir");
+    let first = root.path().join("first").join("massorca.exe");
+    let other = root.path().join("other").join("massorca.exe");
+    write_binary(&first);
+    write_binary(&other);
+    let store = FakeUserPath::with_text(r"C:\Windows");
+    install(&windows_env_for(root.path(), &store, &first)).expect("install");
+    let current = windows_env_for(root.path(), &store, &other);
+    assert!(!repair_gone(&current).expect("repair"));
+    assert_eq!(
+        status(&current).expect("status").state,
+        State::DifferentBinary
+    );
+}
+
+#[test]
+fn repair_leaves_a_foreign_command_file_alone() {
+    let root = tempdir().expect("temp dir");
+    let layout = Layout::windows(root.path());
+    fs::create_dir_all(&layout.bin_dir).expect("folder");
+    fs::write(&layout.command_path, "@echo off\r\ncall other.bat\r\n").expect("foreign");
+    let store = FakeUserPath::with_text(r"C:\Windows");
+    let env = windows_env_for(root.path(), &store, &root.path().join("massorca.exe"));
+    assert!(!repair_gone(&env).expect("repair"));
+    assert_eq!(
+        fs::read_to_string(&layout.command_path).expect("foreign"),
+        "@echo off\r\ncall other.bat\r\n"
+    );
+}
+
+#[test]
+fn uninstall_removes_a_stale_command_its_folder_and_its_path_entry() {
+    let root = tempdir().expect("temp dir");
+    let old = root.path().join("old").join("massorca.exe");
+    let new = root.path().join("new").join("massorca.exe");
+    write_binary(&old);
+    let store = FakeUserPath::with_text(r"C:\Windows");
+    install(&windows_env_for(root.path(), &store, &old)).expect("install");
+    fs::remove_dir_all(old.parent().expect("a folder")).expect("old folder");
+    write_binary(&new);
+    let current = windows_env_for(root.path(), &store, &new);
+    assert_eq!(status(&current).expect("status").state, State::Stale);
+    let removed = uninstall(&current).expect("uninstall");
+    assert!(removed.changed);
+    assert_eq!(removed.state, State::NotInstalled);
+    assert!(!Layout::windows(root.path()).bin_dir.exists());
+    assert_eq!(store.text(), r"C:\Windows");
+}
+
+#[test]
+fn the_text_for_a_stale_command_names_the_missing_binary_and_the_fix() {
+    let report = Report {
+        state: State::Stale,
+        method: "symlink",
+        command: "/home/ana/.local/bin/massorca".to_owned(),
+        target: "/opt/new/massorca".to_owned(),
+        points_to: Some("/opt/old/massorca".to_owned()),
+        bin_dir: "/home/ana/.local/bin".to_owned(),
+        bin_dir_on_path: Some(true),
+        changed: false,
+    };
+    let lines = lines(Operation::Status, &report, Platform::Unix);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("/opt/old/massorca") && line.contains("no longer there")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("massorca cli install")),
+        "{lines:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_installed_command_runs_the_binary_an_update_put_in_place_of_the_moved_one() {
+    let root = tempdir().expect("temp dir");
+    let layout = Layout::unix(root.path());
+    let old = root.path().join("old").join("massorca");
+    let new = root.path().join("new").join("massorca");
+    write_program(&old, "old");
+    let path = format!("/usr/bin:{}", layout.bin_dir.display());
+    let installed = Environment::Unix {
+        layout: layout.clone(),
+        target: old.clone(),
+        path: path.clone(),
+    };
+    assert_eq!(
+        install(&installed).expect("install").state,
+        State::Installed
+    );
+    fs::remove_dir_all(old.parent().expect("a folder")).expect("old folder");
+    write_program(&new, "new");
+    let current = Environment::Unix {
+        layout: layout.clone(),
+        target: new,
+        path,
+    };
+    assert_eq!(status(&current).expect("status").state, State::Stale);
+    assert!(repair_gone(&current).expect("repair"));
+    assert_eq!(status(&current).expect("status").state, State::Installed);
+    let output = massorca_process::command(&layout.command_path)
+        .output()
+        .expect("the command runs");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "new\n");
 }
 
 #[test]

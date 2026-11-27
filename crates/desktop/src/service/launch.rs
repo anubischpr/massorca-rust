@@ -75,7 +75,8 @@ pub fn autostart_next_to(desktop_exe: &Path) -> Option<Autostart> {
     let exe = desktop_exe.parent()?.join(CLI_NAME);
     exe.is_file().then(|| Autostart {
         exe,
-        args_extra: Vec::new(),
+        // Lets the service repoint a stale `massorca` command at itself after an update (decision 0113).
+        args_extra: vec!["--repair-command".to_owned()],
     })
 }
 
@@ -185,6 +186,7 @@ mod tests {
         std::fs::write(dir.path().join(CLI_NAME), b"").expect("a stand-in executable");
         let autostart = options.autostart(&desktop).expect("found it");
         assert_eq!(autostart.exe, dir.path().join(CLI_NAME));
+        assert_eq!(autostart.args_extra, ["--repair-command"]);
         let off = LaunchOptions {
             no_autostart: true,
             ..LaunchOptions::default()
