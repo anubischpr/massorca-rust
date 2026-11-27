@@ -27,6 +27,8 @@ pub mod codes {
     pub const UNSUPPORTED: &str = "update.unsupported";
     /// The announced size is zero or above [`super::MAX_BINARY_BYTES`].
     pub const TOO_LARGE: &str = "update.too_large";
+    /// Another connection's upload is in progress; it ends when that connection closes.
+    pub const IN_PROGRESS: &str = "update.in_progress";
     /// The upload id is not the current upload's (another upload replaced it, or the service restarted).
     pub const UNKNOWN_UPLOAD: &str = "update.unknown_upload";
     /// A chunk does not start where the received bytes end, or runs past the announced size.
@@ -102,7 +104,8 @@ pub struct UpdateChunkAccepted {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateFinishParams {
     pub upload_id: String,
-    /// The version the person confirmed; the binary must report exactly this one.
+    /// The version the person confirmed; the binary must report exactly this one. Optional on the wire, but the host
+    /// refuses a finish without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
     /// Accepts a binary older than the running service.

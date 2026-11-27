@@ -76,11 +76,17 @@ struct Host {
 
 impl Host {
     async fn start(with_supervisor: bool) -> Self {
+        Self::start_with(with_supervisor, |_| {}).await
+    }
+
+    /// `prepare` gets the binary's folder before the service starts.
+    async fn start_with(with_supervisor: bool, prepare: impl FnOnce(&Path)) -> Self {
         let dir = tempfile::tempdir().expect("a folder");
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).expect("bin");
         let installed = bin.join(format!("massorca{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&installed, OLD).expect("the installed binary");
+        prepare(&bin);
         let home = temp_home();
         let config = ServiceConfig {
             profile: profile(home.path(), "default"),
@@ -117,9 +123,18 @@ impl Host {
         self.installed.with_file_name(name)
     }
 
-    fn staged(&self) -> PathBuf {
-        self.installed
-            .with_file_name(format!("massorca.update{}", std::env::consts::EXE_SUFFIX))
+    /// Every staging file beside the installed binary.
+    fn staged(&self) -> Vec<PathBuf> {
+        let folder = self.installed.parent().expect("the bin folder");
+        std::fs::read_dir(folder)
+            .expect("the bin folder")
+            .map(|entry| entry.expect("an entry").path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("massorca.update"))
+            })
+            .collect()
     }
 }
 
@@ -153,13 +168,30 @@ async fn upload(
         .await
 }
 
+/// Finishes expecting the fake's default version.
 fn plain(upload_id: String) -> UpdateFinishParams {
     UpdateFinishParams {
         upload_id,
-        expected_version: None,
+        expected_version: Some("9.9.9".to_owned()),
         allow_downgrade: false,
         force: false,
     }
+}
+
+fn expecting(version: &str) -> impl FnOnce(String) -> UpdateFinishParams {
+    let version = version.to_owned();
+    move |id| UpdateFinishParams {
+        expected_version: Some(version),
+        ..plain(id)
+    }
+}
+
+async fn begin(client: &Client, bytes: &[u8]) -> Result<UpdateBegun, ClientError> {
+    let params = UpdateBeginParams {
+        size: bytes.len() as u64,
+        sha256: sha256(bytes),
+    };
+    client.call(update::UPDATE_BEGIN, &params).await
 }
 
 async fn wait_for(path: &Path) {
@@ -175,7 +207,11 @@ async fn wait_for(path: &Path) {
 fn assert_untouched(host: &Host) {
     assert_eq!(std::fs::read(&host.installed).expect("installed"), OLD);
     assert!(!host.previous().exists(), "no backup is made");
-    assert!(!host.staged().exists(), "the staged file is removed");
+    assert_eq!(
+        host.staged(),
+        Vec::<PathBuf>::new(),
+        "the staged file is removed"
+    );
     assert!(!host.sibling(".restarted").exists(), "no restart");
 }
 
@@ -265,7 +301,7 @@ async fn the_host_refuses_a_downgrade_or_the_same_version_unless_asked() {
         "massorca 0.9.0 (protocol 1..{})",
         massorca_protocol::PROTOCOL_VERSION
     )));
-    let error = upload(&client, &older, &sha256(&older), plain)
+    let error = upload(&client, &older, &sha256(&older), expecting("0.9.0"))
         .await
         .expect_err("older");
     assert_eq!(remote_code(&error), codes::DOWNGRADE);
@@ -273,7 +309,7 @@ async fn the_host_refuses_a_downgrade_or_the_same_version_unless_asked() {
         "massorca {RUNNING} (protocol 1..{})",
         massorca_protocol::PROTOCOL_VERSION
     )));
-    let error = upload(&client, &same, &sha256(&same), plain)
+    let error = upload(&client, &same, &sha256(&same), expecting(RUNNING))
         .await
         .expect_err("same");
     assert_eq!(remote_code(&error), codes::SAME_VERSION);
@@ -289,7 +325,7 @@ async fn the_host_refuses_a_downgrade_or_the_same_version_unless_asked() {
 
     let installed = upload(&client, &older, &sha256(&older), |id| UpdateFinishParams {
         allow_downgrade: true,
-        ..plain(id)
+        ..expecting("0.9.0")(id)
     })
     .await
     .expect("an explicit downgrade");
@@ -354,7 +390,7 @@ async fn a_host_with_no_supervisor_refuses_before_any_upload() {
         .await
         .expect_err("refused");
     assert_eq!(remote_code(&error), codes::UNSUPPORTED);
-    assert!(!host.staged().exists());
+    assert_eq!(host.staged(), Vec::<PathBuf>::new());
     stop(host.running).await;
 }
 
@@ -378,4 +414,96 @@ async fn a_device_without_host_admin_is_refused() {
         .expect_err("denied");
     assert_eq!(remote_code(&error), core_codes::PERMISSION_DENIED);
     stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_staged_file_changed_after_its_chunks_is_refused() {
+    let host = Host::start(true).await;
+    let client = host.client().await;
+    let bytes = fake_bytes(None);
+    let begun = begin(&client, &bytes).await.expect("begun");
+    let _: UpdateChunkAccepted = client
+        .call(
+            update::UPDATE_CHUNK,
+            &UpdateChunkParams::new(&begun.upload_id, 0, &bytes),
+        )
+        .await
+        .expect("the chunk");
+    for staged in host.staged() {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&staged)
+            .expect("the staged file");
+        std::io::Write::write_all(&mut file, b"trailing bytes nobody hashed").expect("appended");
+    }
+    let error = client
+        .call::<_, UpdateInstalled>(update::UPDATE_FINISH, &plain(begun.upload_id))
+        .await
+        .expect_err("refused");
+    assert_eq!(remote_code(&error), codes::CHECKSUM_MISMATCH);
+    assert_untouched(&host);
+    stop(host.running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_connection_cannot_take_over_an_upload_until_its_owner_leaves() {
+    let host = Host::start(true).await;
+    let first = host.client().await;
+    let second = host.client().await;
+    let bytes = fake_bytes(None);
+    let begun = begin(&first, &bytes).await.expect("begun");
+    let error = begin(&second, &bytes).await.expect_err("in progress");
+    assert_eq!(remote_code(&error), "update.in_progress");
+    let error = second
+        .call::<_, UpdateChunkAccepted>(
+            update::UPDATE_CHUNK,
+            &UpdateChunkParams::new(&begun.upload_id, 0, &bytes),
+        )
+        .await
+        .expect_err("not its upload");
+    assert_eq!(remote_code(&error), codes::UNKNOWN_UPLOAD);
+
+    drop(first);
+    let mut taken = None;
+    for _ in 0..100 {
+        if host.staged().is_empty()
+            && let Ok(begun) = begin(&second, &bytes).await
+        {
+            taken = Some(begun);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let taken = taken.expect("the upload ends with its connection");
+    assert_ne!(taken.upload_id, begun.upload_id);
+    stop(host.running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_staging_files_are_removed_at_start() {
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let host = Host::start_with(true, |bin| {
+        std::fs::write(bin.join(format!("massorca.update{suffix}")), b"old").expect("stale");
+        std::fs::write(bin.join(format!("massorca.update-0123{suffix}")), b"old").expect("stale");
+    })
+    .await;
+    assert_eq!(host.staged(), Vec::<PathBuf>::new());
+    assert_eq!(std::fs::read(&host.installed).expect("installed"), OLD);
+    stop(host.running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finish_without_the_confirmed_version_is_refused() {
+    let host = Host::start(true).await;
+    let client = host.client().await;
+    let bytes = fake_bytes(None);
+    let error = upload(&client, &bytes, &sha256(&bytes), |id| UpdateFinishParams {
+        expected_version: None,
+        ..plain(id)
+    })
+    .await
+    .expect_err("refused");
+    assert_eq!(remote_code(&error), core_codes::REQUEST_INVALID_PARAMS);
+    assert_untouched(&host);
+    stop(host.running).await;
 }

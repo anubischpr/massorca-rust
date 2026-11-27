@@ -73,6 +73,10 @@ pub(crate) async fn serve(
                 streams: StreamTable::default(),
             });
             shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
+            session
+                .state
+                .self_update
+                .connection_closed(&session.connection_id);
         }
     };
     let writer_ended = tokio::select! {

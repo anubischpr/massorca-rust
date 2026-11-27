@@ -2,8 +2,8 @@
 //! service checks its length, sha256 and `--version`, swaps it in keeping `.previous`, and asks its supervisor to restart.
 
 use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -64,10 +64,29 @@ pub(crate) struct SelfUpdate {
 }
 
 impl SelfUpdate {
+    /// Deletes the staging files a previous run left: no upload survives a restart.
     pub(crate) fn new(options: SelfUpdateOptions) -> Self {
+        if let Some(target) = &options.target {
+            UpdatePaths::of(target).remove_stale_staging();
+        }
         Self {
             options,
             ..Self::default()
+        }
+    }
+
+    /// Drops the upload the closed connection began, with its staging file.
+    pub(crate) fn connection_closed(&self, connection_id: &str) {
+        let Ok(mut slot) = self.upload.lock() else {
+            return;
+        };
+        if slot
+            .as_ref()
+            .is_some_and(|upload| upload.connection_id == connection_id)
+            && let Some(upload) = slot.take()
+        {
+            drop(upload.file);
+            let _ = std::fs::remove_file(&upload.staged);
         }
     }
 
@@ -87,6 +106,10 @@ impl SelfUpdate {
 #[derive(Debug)]
 struct Upload {
     id: String,
+    /// The connection that began it: only it may add chunks or finish, and closing it drops the upload.
+    connection_id: String,
+    /// Who began it, for the refusal another caller gets.
+    owner: String,
     size: u64,
     sha256: String,
     received: u64,
@@ -130,7 +153,8 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     ])
 }
 
-/// Starts an upload, replacing any unfinished one. Refused before any byte when nothing would restart the service.
+/// Starts an upload. Refused before any byte when nothing would restart the service, or while another connection's upload
+/// is in progress; the same connection's unfinished upload is replaced.
 async fn begin(ctx: &RequestCtx, params: UpdateBeginParams) -> Result<UpdateBegun, ErrorBody> {
     let updates = &ctx.state.self_update;
     let (paths, supervisor) = updates.ready()?;
@@ -152,25 +176,43 @@ async fn begin(ctx: &RequestCtx, params: UpdateBeginParams) -> Result<UpdateBegu
         return Err(invalid("sha256 is 64 lowercase hex digits"));
     }
     let _swap = updates.swap.lock().await;
-    let staged = paths.staged.clone();
-    let file = blocking(move || create_staged(&staged))
-        .await?
-        .map_err(|error| failed("creating the staging file", &error))?;
     let id = new_id();
-    // A replaced upload's file is closed here; its staging path is reused by this one.
-    let _replaced = updates
-        .upload
-        .lock()
-        .map_err(|_| poisoned())?
-        .replace(Upload {
-            id: id.clone(),
-            size: params.size,
-            sha256: params.sha256,
-            received: 0,
-            hasher: Sha256::new(),
-            file,
-            staged: paths.staged,
-        });
+    let staged = paths.staged(&id);
+    let mut slot = updates.upload.lock().map_err(|_| poisoned())?;
+    if let Some(other) = slot
+        .as_ref()
+        .filter(|upload| upload.connection_id != ctx.connection_id)
+    {
+        return Err(ErrorBody::new(
+            codes::IN_PROGRESS,
+            format!(
+                "an update from {} is already in progress on this host; try again when it ends",
+                other.owner
+            ),
+        ));
+    }
+    let file = host_update::create_new(&staged)
+        .map_err(|error| failed("creating the staging file", &error))?;
+    let owner = ctx.principal.device_id().map_or_else(
+        || "the host's owner".to_owned(),
+        |id| format!("device {id}"),
+    );
+    let replaced = slot.replace(Upload {
+        id: id.clone(),
+        connection_id: ctx.connection_id.clone(),
+        owner,
+        size: params.size,
+        sha256: params.sha256,
+        received: 0,
+        hasher: Sha256::new(),
+        file,
+        staged,
+    });
+    drop(slot);
+    if let Some(replaced) = replaced {
+        drop(replaced.file);
+        let _ = std::fs::remove_file(&replaced.staged);
+    }
     Ok(UpdateBegun {
         upload_id: id,
         max_chunk_bytes: MAX_CHUNK_BYTES as u32,
@@ -187,9 +229,10 @@ async fn chunk(
         .filter(|bytes| bytes.len() <= MAX_CHUNK_BYTES)
         .ok_or_else(|| invalid("data is padded standard base64 of at most 512 KiB"))?;
     let upload = Arc::clone(&ctx.state.self_update.upload);
+    let connection_id = ctx.connection_id.clone();
     blocking(move || {
         let mut guard = upload.lock().map_err(|_| poisoned())?;
-        let current = current(&mut guard, &params.upload_id)?;
+        let current = current(&mut guard, &params.upload_id, &connection_id)?;
         if params.offset != current.received {
             return Err(bad_chunk(format!(
                 "the chunk starts at {}, the upload has {} bytes",
@@ -225,20 +268,27 @@ async fn finish(
 ) -> Result<UpdateInstalled, ErrorBody> {
     let updates = &ctx.state.self_update;
     let (paths, supervisor) = updates.ready()?;
-    // Taken before the upload, so no new upload can rewrite the staging file while it is checked.
     let _swap = updates.swap.lock().await;
     let upload = {
         let mut guard = updates.upload.lock().map_err(|_| poisoned())?;
-        current(&mut guard, &params.upload_id)?;
+        current(&mut guard, &params.upload_id, &ctx.connection_id)?;
         guard.take().ok_or_else(unknown_upload)?
     };
+    // Like every refusal of a finish, this one ends the upload.
+    if params.expected_version.is_none() {
+        drop(upload.file);
+        let _ = std::fs::remove_file(&upload.staged);
+        return Err(invalid(
+            "expected_version is required: the version the person confirmed",
+        ));
+    }
     let checked = paths.clone();
     let running = ctx.state.server.version.clone();
     let installed = blocking(move || {
         let staged = upload.staged.clone();
-        let outcome = verify(upload, &checked).and_then(|version| {
+        let outcome = verify(upload).and_then(|version| {
             version_policy(&running, &version, &params)?;
-            host_update::swap_in(&checked)
+            host_update::swap_in(&checked, &staged)
                 .map_err(|error| failed("replacing the binary", &error))?;
             Ok(version)
         });
@@ -260,6 +310,11 @@ async fn rollback(
 ) -> Result<UpdateInstalled, ErrorBody> {
     let updates = &ctx.state.self_update;
     let (paths, supervisor) = updates.ready()?;
+    if !params.dry_run && params.expected_version.is_none() {
+        return Err(invalid(
+            "expected_version is required: the version a dry run named",
+        ));
+    }
     let _swap = updates.swap.lock().await;
     let checked = paths.clone();
     let dry_run = params.dry_run;
@@ -367,28 +422,53 @@ struct Checked {
     protocol: ProtocolRange,
 }
 
-/// Length, sha256, then `--version` of the staged file.
-fn verify(mut upload: Upload, paths: &UpdatePaths) -> Result<Checked, ErrorBody> {
-    let sha = hex(&upload.hasher.finalize_reset());
-    if upload.received != upload.size || sha != upload.sha256 {
-        return Err(ErrorBody::new(
+/// Length and sha256 of the received stream, then of the file on disk, which is what gets installed; then `--version`.
+fn verify(mut upload: Upload) -> Result<Checked, ErrorBody> {
+    let streamed = hex(&upload.hasher.finalize_reset());
+    let (announced_size, announced_sha) = (upload.size, upload.sha256.clone());
+    let mismatch = |what: &str, size: u64, sha: &str| {
+        ErrorBody::new(
             codes::CHECKSUM_MISMATCH,
             format!(
-                "the upload has {} of {} bytes and sha256 {sha}, not {}; the installed binary is unchanged",
-                upload.received, upload.size, upload.sha256
+                "the {what} has {size} of {announced_size} bytes and sha256 {sha}, not {announced_sha}; the installed \
+                 binary is unchanged"
             ),
-        ));
+        )
+    };
+    if upload.received != upload.size || streamed != upload.sha256 {
+        return Err(mismatch("upload", upload.received, &streamed));
     }
     upload
         .file
         .sync_all()
         .map_err(|error| failed("writing the staging file", &error))?;
     drop(upload.file);
-    checked_version(&paths.staged)
+    let (size, on_disk) =
+        file_digest(&upload.staged).map_err(|error| failed("reading the staging file", &error))?;
+    if size != upload.size || on_disk != upload.sha256 {
+        return Err(mismatch("staged file", size, &on_disk));
+    }
+    checked_version(&upload.staged)
+}
+
+/// Length and sha256 of the file at `path`.
+fn file_digest(path: &Path) -> std::io::Result<(u64, String)> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    let mut size = 0;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok((size, hex(&hasher.finalize())));
+        }
+        hasher.update(&buffer[..read]);
+        size += read as u64;
+    }
 }
 
 /// Runs `binary --version` and requires a protocol range that overlaps this service's.
-fn checked_version(binary: &std::path::Path) -> Result<Checked, ErrorBody> {
+fn checked_version(binary: &Path) -> Result<Checked, ErrorBody> {
     let line = host_update::probe_version(binary)
         .map_err(|why| incompatible(format!("the binary was refused: {why}")))?;
     let parsed = parse_version_line(&line).ok_or_else(|| {
@@ -410,27 +490,14 @@ fn checked_version(binary: &std::path::Path) -> Result<Checked, ErrorBody> {
     })
 }
 
-/// A new staging file, owner-only and executable on Unix.
-fn create_staged(path: &std::path::Path) -> std::io::Result<File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o700);
-    }
-    let file = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(file)
-}
-
-fn current<'a>(slot: &'a mut Option<Upload>, id: &str) -> Result<&'a mut Upload, ErrorBody> {
+/// The upload `id`, only for the connection that began it.
+fn current<'a>(
+    slot: &'a mut Option<Upload>,
+    id: &str,
+    connection_id: &str,
+) -> Result<&'a mut Upload, ErrorBody> {
     slot.as_mut()
-        .filter(|upload| upload.id == id)
+        .filter(|upload| upload.id == id && upload.connection_id == connection_id)
         .ok_or_else(unknown_upload)
 }
 

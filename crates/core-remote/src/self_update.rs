@@ -82,39 +82,85 @@ pub fn runs_under_unit(cgroup: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdatePaths {
     pub installed: PathBuf,
-    /// Where an upload is written until it is checked.
-    pub staged: PathBuf,
     /// The binary an update replaced, kept for a rollback.
     pub previous: PathBuf,
 }
 
 impl UpdatePaths {
-    /// `massorca` gives `massorca.update` and `massorca.previous`; `massorca.exe` gives `massorca.update.exe` and so on, so
-    /// Windows still runs them.
+    /// `massorca` gives `massorca.previous`; `massorca.exe` gives `massorca.previous.exe`, so Windows still runs it.
     pub fn of(installed: &Path) -> Self {
-        let stem = installed.file_stem().unwrap_or_default();
-        let sibling = |middle: &str| {
-            let mut name = OsString::from(stem);
-            name.push(middle);
-            if let Some(extension) = installed.extension() {
-                name.push(".");
-                name.push(extension);
-            }
-            installed.with_file_name(name)
-        };
         Self {
             installed: installed.to_path_buf(),
-            staged: sibling(".update"),
-            previous: sibling(".previous"),
+            previous: sibling(installed, ".previous"),
         }
     }
+
+    /// The staging file of one upload, `massorca.update-<id>`: each upload has its own.
+    pub fn staged(&self, upload_id: &str) -> PathBuf {
+        sibling(&self.installed, &format!(".update-{upload_id}"))
+    }
+
+    /// Deletes every staging file beside the installed binary, `massorca.update*`: none survives a restart.
+    pub fn remove_stale_staging(&self) {
+        let (Some(folder), Some(stem)) = (self.installed.parent(), self.installed.file_stem())
+        else {
+            return;
+        };
+        let mut prefix = OsString::from(stem);
+        prefix.push(".update");
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let stale = entry
+                .file_name()
+                .to_str()
+                .zip(prefix.to_str())
+                .is_some_and(|(name, prefix)| name.starts_with(prefix));
+            if stale && entry.file_type().is_ok_and(|kind| !kind.is_dir()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// `<stem><middle>[.<extension>]` beside `installed`.
+fn sibling(installed: &Path, middle: &str) -> PathBuf {
+    let mut name = OsString::from(installed.file_stem().unwrap_or_default());
+    name.push(middle);
+    if let Some(extension) = installed.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    installed.with_file_name(name)
+}
+
+/// Creates a new file that must not exist yet, so a planted file or link is never written through.
+pub fn create_new(path: &Path) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o700);
+    }
+    options.open(path)
 }
 
 /// Runs `binary --version` and returns its first stdout line. Fails when it does not start, times out or exits non-zero.
 pub fn probe_version(binary: &Path) -> Result<String, String> {
     let captured = spawn_settled(|| {
         let mut command = massorca_process::command(binary);
-        command.arg("--version");
+        // Nothing of the service's environment reaches the binary; Windows needs SystemRoot to load its libraries.
+        command
+            .arg("--version")
+            .env_clear()
+            .current_dir(std::env::temp_dir());
+        for name in ["SystemRoot", "windir"] {
+            if let Some(value) = std::env::var_os(name).filter(|_| cfg!(windows)) {
+                command.env(name, value);
+            }
+        }
         run_captured(command, None, VERSION_TIMEOUT)
     })
     .map_err(|error| describe(&error))?;
@@ -130,15 +176,16 @@ pub fn probe_version(binary: &Path) -> Result<String, String> {
 
 /// Puts `staged` in place of the installed binary. The installed one is first linked (or copied) to `.previous`, then
 /// the staged file is renamed over it, so the installed path never goes missing.
-pub fn swap_in(paths: &UpdatePaths) -> io::Result<()> {
+pub fn swap_in(paths: &UpdatePaths, staged: &Path) -> io::Result<()> {
     match std::fs::remove_file(&paths.previous) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}
     }
     if std::fs::hard_link(&paths.installed, &paths.previous).is_err() {
-        std::fs::copy(&paths.installed, &paths.previous)?;
+        let mut source = std::fs::File::open(&paths.installed)?;
+        io::copy(&mut source, &mut create_new(&paths.previous)?)?;
     }
-    std::fs::rename(&paths.staged, &paths.installed)
+    std::fs::rename(staged, &paths.installed)
 }
 
 /// Puts `.previous` back in place of the installed binary, which is discarded.
@@ -192,15 +239,18 @@ mod tests {
     fn update_paths_sit_beside_the_binary_and_keep_its_extension() {
         let unix = UpdatePaths::of(Path::new("/home/deploy/.massorca/bin/massorca"));
         assert_eq!(
-            unix.staged,
-            Path::new("/home/deploy/.massorca/bin/massorca.update")
+            unix.staged("01"),
+            Path::new("/home/deploy/.massorca/bin/massorca.update-01")
         );
         assert_eq!(
             unix.previous,
             Path::new("/home/deploy/.massorca/bin/massorca.previous")
         );
         let windows = UpdatePaths::of(Path::new("bin/massorca.exe"));
-        assert_eq!(windows.staged, Path::new("bin/massorca.update.exe"));
+        assert_eq!(
+            windows.staged("01"),
+            Path::new("bin/massorca.update-01.exe")
+        );
         assert_eq!(windows.previous, Path::new("bin/massorca.previous.exe"));
     }
 
@@ -209,11 +259,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("a folder");
         let paths = UpdatePaths::of(&dir.path().join("massorca"));
         std::fs::write(&paths.installed, b"old").expect("old");
-        std::fs::write(&paths.staged, b"new").expect("new");
-        swap_in(&paths).expect("swap");
+        let staged = paths.staged("01");
+        std::fs::write(&staged, b"new").expect("new");
+        swap_in(&paths, &staged).expect("swap");
         assert_eq!(std::fs::read(&paths.installed).expect("installed"), b"new");
         assert_eq!(std::fs::read(&paths.previous).expect("previous"), b"old");
-        assert!(!paths.staged.exists());
+        assert!(!staged.exists());
         roll_back(&paths).expect("rollback");
         assert_eq!(std::fs::read(&paths.installed).expect("installed"), b"old");
         assert!(!paths.previous.exists());
