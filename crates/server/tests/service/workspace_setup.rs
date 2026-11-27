@@ -77,6 +77,7 @@ async fn create(client: &Client, project: &str, name: &str, no_setup: bool) -> W
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.to_owned(),
                 name: name.to_owned(),
                 branch: None,
@@ -198,6 +199,32 @@ async fn a_setup_script_runs_in_a_listed_terminal_in_the_workspace_with_its_vari
 }
 
 #[tokio::test]
+async fn an_in_place_workspace_runs_no_setup_script_because_it_makes_no_worktree() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, Some(env_script()));
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    trust(&client, &project.id, ScriptKind::Setup).await;
+
+    let mut in_place = params(&project.id, "");
+    in_place.in_place = true;
+    let created = client
+        .workspace_create(&in_place)
+        .await
+        .expect("create in place");
+    assert!(created.in_place);
+    assert!(created.setup.is_none(), "no setup for the checkout");
+    assert!(terminals_of(&client, &created.id).await.is_empty());
+    assert!(
+        !repo.join(OUTPUT).exists(),
+        "the setup script did not run in the checkout"
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_project_without_a_setup_script_reports_no_setup_and_starts_no_terminal() {
     let home = temp_home();
     let repo = home.path().join("repo");
@@ -273,6 +300,7 @@ async fn a_shebang_script_on_windows_runs_through_git_bash_with_posix_paths() {
 
 fn params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         branch: None,

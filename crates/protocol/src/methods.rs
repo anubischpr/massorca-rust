@@ -11,6 +11,7 @@ pub mod commands;
 pub mod config;
 pub mod devices;
 pub mod events;
+pub mod extension_points;
 pub mod extensions;
 pub mod git;
 pub mod host;

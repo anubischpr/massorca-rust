@@ -112,6 +112,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
         .expect("the project is added");
     handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             ..base_workspace_create_params()
         })
@@ -172,6 +173,7 @@ async fn sessions_and_a_delegated_child_are_rows_under_their_host_with_no_worksp
     // The service lets one session write in a workspace at a time, so the second session gets its own.
     let other = handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: workspace.project_id.clone(),
             name: "second".to_owned(),
             ..base_workspace_create_params()
@@ -318,6 +320,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 

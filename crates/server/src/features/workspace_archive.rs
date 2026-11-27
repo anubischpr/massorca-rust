@@ -38,7 +38,11 @@ pub(crate) async fn run(
     workspace: &Workspace,
     allow_failed: bool,
 ) -> Result<Option<WorkspaceArchive>, ErrorBody> {
-    if workspace.kind != WorkspaceKind::Worktree || !Path::new(&workspace.path).is_dir() {
+    // The project's own checkout is the person's and is only forgotten, so nothing runs in it (decision 0112).
+    if workspace.kind != WorkspaceKind::Worktree
+        || workspace.in_place
+        || !Path::new(&workspace.path).is_dir()
+    {
         return Ok(None);
     }
     let domain = Arc::clone(&ctx.state.workspaces);

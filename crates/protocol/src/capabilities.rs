@@ -4,8 +4,12 @@ pub const SERVICE: &str = "service/1";
 /// Developer tools on the service's host: `service.tools` (PLAT-08, decision 0116).
 pub const SERVICE_TOOLS: &str = "service-tools/1";
 pub const PROJECTS: &str = "projects/1";
+/// `project.init_git` (decision 0115): turning a folder project into a git project.
+pub const PROJECT_INIT_GIT: &str = "project-init-git/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
+/// The colour of a Lucide project icon (`ProjectIcon::Lucide` `color`): an older service would drop it silently.
+pub const PROJECT_ICON_COLOR: &str = "project-icon-color/1";
 /// Per-script trust of a project's `orca.yaml` scripts (`project.scripts`, `project.trust_script`, decision 0095).
 pub const SCRIPT_TRUST: &str = "script-trust/1";
 pub const WORKSPACES: &str = "workspaces/1";
@@ -19,6 +23,8 @@ pub const WORKSPACE_CURRENT: &str = "workspace-current/1";
 pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
 /// `workspace.rename` (decision 0111): replacing a name the service chose, and its branch.
 pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
+/// `in_place` on `workspace.create` (decision 0112): the project's own checkout becomes its workspace, and removal only forgets it.
+pub const WORKSPACE_IN_PLACE: &str = "workspace-in-place/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).
@@ -75,6 +81,10 @@ pub const AGENT_MODELS: &str = "agent-models/1";
 /// one-shot run of the kind.
 pub const AGENT_TITLE: &str = "agent-title/1";
 pub const GIT: &str = "git/1";
+/// `project` on `git.branches`: a git project's own checkout, listed with no workspace.
+pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
+/// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
+pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
@@ -94,6 +104,8 @@ pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
 /// Updating a host program a tool package installed (`extensions.program_update_review`, `extensions.program_update`,
 /// decision 0151).
 pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
+/// What each owner registered on the tool, skill, view, theme and status-rule points (`extensions.points`, decision 0153).
+pub const EXTENSION_POINTS: &str = "extension-points/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.

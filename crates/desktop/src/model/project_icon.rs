@@ -58,7 +58,7 @@ impl ProjectGlyph {
         match icon {
             None => Self::Folder,
             Some(ProjectIcon::Emoji { emoji }) => Self::Emoji(emoji.clone()),
-            Some(ProjectIcon::Lucide { name }) => Self::Lucide(name.clone()),
+            Some(ProjectIcon::Lucide { name, .. }) => Self::Lucide(name.clone()),
             Some(ProjectIcon::Image { src, label, .. }) => {
                 image_glyph(src, label.as_deref()).unwrap_or(Self::Folder)
             }
@@ -132,6 +132,7 @@ mod tests {
         };
         let lucide = ProjectIcon::Lucide {
             name: "code".into(),
+            color: None,
         };
         assert_eq!(
             ProjectGlyph::of(Some(&emoji)),
@@ -192,6 +193,7 @@ mod tests {
         assert_eq!(reset, serde_json::json!({"project": "oppm", "icon": null}));
         let set = ProjectIcon::Lucide {
             name: "star".into(),
+            color: None,
         };
         let set = serde_json::to_value(update_params("oppm", Some(set))).expect("json");
         assert_eq!(
