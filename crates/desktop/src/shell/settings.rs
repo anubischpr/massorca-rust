@@ -286,18 +286,41 @@ fn host_row(name: &str, state: &HostState, theme: &Theme, frame: &SettingsFrame<
         Some(detail) => row.helper(detail.clone()),
         None => row,
     };
+    let mut control = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(value_box(state.word, theme));
+    if state.offers_retry() {
+        control = control.child(retry_button(name, &frame.shell));
+    }
     div()
         .debug_selector(move || selector.clone())
-        .child(
-            row.control(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .child(value_box(state.word, theme))
-                    .child(super::host_remove::remove_button(name, &frame.shell)),
-            ),
-        )
+        .child(row.control(control.child(super::host_remove::remove_button(name, &frame.shell))))
+        .into_any_element()
+}
+
+/// "Retry now" on a host out of reach (X-CN-01): tries that host at once, and no other.
+fn retry_button(name: &str, shell: &WeakEntity<Shell>) -> AnyElement {
+    let shell = shell.clone();
+    let selector = format!("settings-host-retry-{name}");
+    let owned = name.to_owned();
+    let button = Button::new(
+        SharedString::from(format!("settings-host-retry-button-{name}")),
+        "Retry now",
+    )
+    .variant(ButtonVariant::Ghost)
+    .on_click(move |_, cx| {
+        let name = owned.clone();
+        let _ = shell.update(cx, |shell, _| {
+            if let Some(service) = &shell.service {
+                service.reconnect_host(name);
+            }
+        });
+    });
+    div()
+        .debug_selector(move || selector.clone())
+        .child(button)
         .into_any_element()
 }
 

@@ -18,7 +18,6 @@ use crate::error::DomainError;
 use crate::generated_names;
 use crate::names;
 use crate::paths;
-use crate::views;
 use crate::workspaces::Workspaces;
 
 /// Where a new workspace's name comes from: the caller's, or a generated creature name.
@@ -85,12 +84,15 @@ impl Workspaces {
             }
             if let Some(row) = self.store.find_workspace_by_request_id(request_id)? {
                 return Ok(Created {
-                    workspace: views::workspace(&row),
+                    workspace: self.view(&row),
                     repeated: true,
                 });
             }
         }
         let project = self.resolve_project(&params.project)?;
+        if params.in_place {
+            return self.create_in_place(&project, &params);
+        }
         // A named or existing branch is the person's, whoever chose the workspace name.
         let name_generated = (matches!(naming, Naming::Generated) || params.name_generated)
             && params.branch.is_none()
@@ -280,6 +282,7 @@ impl Workspaces {
         self.git.worktree_add(repo, &target, add)?;
 
         let row = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id.clone(),
             kind: StoreWorkspaceKind::Worktree,
@@ -302,7 +305,7 @@ impl Workspaces {
         }
         Ok(Workspace {
             base_refresh: refresh,
-            ..views::workspace(&row)
+            ..self.view(&row)
         })
     }
 
@@ -333,6 +336,7 @@ impl Workspaces {
             return Ok(None);
         }
         let row = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id.clone(),
             kind: StoreWorkspaceKind::Worktree,
@@ -349,7 +353,7 @@ impl Workspaces {
             name_generated,
         };
         self.store.insert_workspace(&row).map_err(refused_write)?;
-        Ok(Some(views::workspace(&row)))
+        Ok(Some(self.view(&row)))
     }
 
     /// Registers an existing directory: the project's by default. Creates no files.
@@ -373,6 +377,7 @@ impl Workspaces {
             None => paths::existing_directory(Path::new(&project.path))?,
         };
         let row = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id.clone(),
             kind: StoreWorkspaceKind::Folder,
@@ -389,7 +394,7 @@ impl Workspaces {
             name_generated,
         };
         self.store.insert_workspace(&row).map_err(refused_write)?;
-        Ok(views::workspace(&row))
+        Ok(self.view(&row))
     }
 
     /// `target` must be absent or an empty directory, and no workspace may own its path key.

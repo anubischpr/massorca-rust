@@ -175,16 +175,14 @@ mod tests {
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
-        assert_eq!(
-            parts,
-            [
-                "store file",
-                "store migration lock",
-                "store schema",
-                "store wal"
-            ],
-            "a new database is built in one step"
-        );
+        // The frozen list is built in one step; each migration file then reports its own step.
+        let mut expected = vec!["store file", "store migration lock", "store schema"];
+        expected.extend(std::iter::repeat_n(
+            "store schema step",
+            super::FILE_MIGRATIONS.len(),
+        ));
+        expected.push("store wal");
+        assert_eq!(parts, expected, "a new database is built in one step");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
         assert_eq!(parts, ["store file", "store wal"]);

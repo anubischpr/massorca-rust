@@ -61,6 +61,7 @@ impl Workspaces {
         let folder = root.join(name);
         std::fs::create_dir_all(&folder).map_err(|error| made_no_folder(&folder, &error))?;
         let params = WorkspaceCreateParams {
+            in_place: false,
             project: project.id.clone(),
             name: name.to_owned(),
             branch: None,
