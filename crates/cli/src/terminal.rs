@@ -415,7 +415,7 @@ pub fn terminal_details(terminal: &Terminal) -> Vec<String> {
     lines
 }
 
-fn terminal_table(terminals: &[Terminal]) -> Vec<String> {
+pub fn terminal_table(terminals: &[Terminal]) -> Vec<String> {
     let rows = terminals
         .iter()
         .map(|terminal| {

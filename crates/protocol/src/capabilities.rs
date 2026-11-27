@@ -25,6 +25,8 @@ pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
 pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
 /// `in_place` on `workspace.create` (decision 0112): the project's own checkout becomes its workspace, and removal only forgets it.
 pub const WORKSPACE_IN_PLACE: &str = "workspace-in-place/1";
+/// `workspace.stop_runs`: stopping every agent run and terminal of a workspace while the workspace stays.
+pub const WORKSPACE_STOP_RUNS: &str = "workspace-stop-runs/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).

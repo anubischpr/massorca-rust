@@ -195,6 +195,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
     assert_eq!(capabilities::WORKSPACE_RENAME, "workspace-rename/1");
+    assert_eq!(capabilities::WORKSPACE_STOP_RUNS, "workspace-stop-runs/1");
     assert_eq!(capabilities::GIT, "git/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
