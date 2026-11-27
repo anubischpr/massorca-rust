@@ -11,6 +11,7 @@ mod context;
 mod dispatch;
 mod error;
 mod event_bus;
+mod extension_points;
 mod features;
 mod handshake;
 mod instance_lock;
@@ -20,6 +21,7 @@ mod names;
 mod network;
 mod owner;
 mod permission;
+mod readiness;
 mod registry;
 mod service;
 mod service_json;
@@ -43,6 +45,7 @@ pub use method::{
 pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, identity_paths};
 pub use owner::Owner;
 pub use permission::{Permission, Principal, Scopes, authorize};
+pub use readiness::{Health, NetworkReadiness, PendingOffer, Readiness};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 pub use service::{
     DiscoveryOptions, RunningService, SKILL_HOME_ENV, Service, ServiceConfig, VAULT_PROTECTION_ENV,

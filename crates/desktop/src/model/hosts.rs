@@ -44,6 +44,27 @@ pub fn host_state(entry: &HostEntry, now: Instant) -> HostState {
                 None => reason.clone(),
             }),
         ),
+        HostLink::Reconnecting {
+            reason,
+            attempt,
+            retry_at,
+        } => {
+            let known = match entry.last_connected {
+                Some(at) => last_known(now.saturating_duration_since(at)),
+                None => reason.trim_end_matches('.').to_owned(),
+            };
+            let wait = retry_at.saturating_duration_since(now);
+            let next = if wait.is_zero() {
+                "retrying now".to_owned()
+            } else {
+                format!("retrying in {} s", wait.as_secs_f64().ceil())
+            };
+            (
+                "Unreachable",
+                HostTone::Unreachable,
+                Some(format!("{known}. Attempt {attempt}, {next}.")),
+            )
+        }
         HostLink::SignInNeeded(reason) => {
             ("Sign-in needed", HostTone::Warning, Some(reason.clone()))
         }
@@ -53,6 +74,13 @@ pub fn host_state(entry: &HostEntry, now: Instant) -> HostState {
         HostLink::Failed(reason) => ("Failed", HostTone::Failed, Some(reason.clone())),
     };
     HostState { word, tone, detail }
+}
+
+impl HostState {
+    /// Whether the row offers "Retry now": the host is out of reach, or failed in a way a later try may fix.
+    pub fn offers_retry(&self) -> bool {
+        matches!(self.tone, HostTone::Unreachable | HostTone::Failed)
+    }
 }
 
 /// "Last known state, 5 min ago": the age in whole minutes, and at least one minute.
@@ -121,14 +149,9 @@ mod tests {
     fn entry(link: HostLink, last_connected: Option<Instant>) -> HostEntry {
         HostEntry {
             record: HostRecord {
-                name: "vps".into(),
-                server: "vps-server".into(),
                 addresses: vec!["100.64.0.10:7347".into()],
-                pin: "sha256:test".into(),
-                device_id: "dev-1".into(),
-                device_name: "laptop".into(),
                 scopes: vec!["read".into()],
-                paired_at_ms: 1,
+                ..crate::service::fixtures::base_host_record()
             },
             link,
             last_connected,
@@ -175,6 +198,58 @@ mod tests {
         let state = host_state(&entry(link, None), Instant::now());
         assert_eq!(state.word, "Unreachable");
         assert_eq!(state.detail.as_deref(), Some(reason));
+    }
+
+    #[test]
+    fn a_reconnecting_host_is_unreachable_with_its_age_and_the_next_attempt() {
+        let now = Instant::now();
+        let answered = now
+            .checked_sub(Duration::from_secs(5 * 60))
+            .expect("five minutes back");
+        let link = HostLink::Reconnecting {
+            reason: "The host is unreachable: refused".into(),
+            attempt: 3,
+            retry_at: now + Duration::from_millis(7_200),
+        };
+        let state = host_state(&entry(link.clone(), Some(answered)), now);
+        assert_eq!(state.word, "Unreachable");
+        assert_eq!(state.tone, HostTone::Unreachable);
+        assert_eq!(
+            state.detail.as_deref(),
+            Some("Last known state, 5 min ago. Attempt 3, retrying in 8 s.")
+        );
+        assert!(state.offers_retry());
+
+        let never = host_state(&entry(link, None), now);
+        assert_eq!(
+            never.detail.as_deref(),
+            Some("The host is unreachable: refused. Attempt 3, retrying in 8 s.")
+        );
+        let due = HostLink::Reconnecting {
+            reason: "The host is unreachable: refused.".into(),
+            attempt: 4,
+            retry_at: now,
+        };
+        assert_eq!(
+            host_state(&entry(due, None), now).detail.as_deref(),
+            Some("The host is unreachable: refused. Attempt 4, retrying now.")
+        );
+    }
+
+    #[test]
+    fn retry_now_is_offered_only_to_a_host_out_of_reach_or_failed() {
+        let now = Instant::now();
+        let offered = |link: HostLink| host_state(&entry(link, None), now).offers_retry();
+        assert!(offered(HostLink::Unreachable("x".into())));
+        assert!(offered(HostLink::Failed(
+            "The host's identity changed.".into()
+        )));
+        assert!(!offered(HostLink::Checking));
+        assert!(!offered(HostLink::Connected {
+            server: "vps-server".into(),
+            version: "0.1.0".into(),
+        }));
+        assert!(!offered(HostLink::SignInNeeded("Pair again.".into())));
     }
 
     #[test]
@@ -235,6 +310,11 @@ mod tests {
                 version: "v".into(),
             },
             HostLink::Unreachable("x".into()),
+            HostLink::Reconnecting {
+                reason: "x".into(),
+                attempt: 1,
+                retry_at: now,
+            },
             HostLink::SignInNeeded("x".into()),
             HostLink::UpdateNeeded("x".into()),
             HostLink::Failed("x".into()),

@@ -240,9 +240,7 @@ async fn install_claude(handle: &ServiceHandle) -> ExtensionInstalled {
         .install_extension(ExtensionInstallParams {
             source: SOURCE.to_owned(),
             consent: Some(review.consent),
-            run_installer: false,
-            sha256: None,
-            agent_token: None,
+            ..base_extension_install_params()
         })
         .await
         .expect("the package installs")
@@ -275,10 +273,7 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
         .await;
     let client = Client::connect(
         &profile(&fixture.profile),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
@@ -303,8 +298,8 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
     let imported = handle
         .accounts_import(AccountsImportParams {
             kind: KIND.to_owned(),
-            from: None,
             label: Some("work".to_owned()),
+            ..base_accounts_import_params()
         })
         .await
         .expect("the import answers");
@@ -391,4 +386,33 @@ async fn removing_a_package_takes_its_accounts_through_the_bridge_and_leaves_the
     drop(client);
     drop(bridge);
     child.stop();
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ExtensionInstallParams` field at its usual value; tests override the fields they vary.
+fn base_extension_install_params() -> massorca_protocol::methods::extensions::ExtensionInstallParams
+{
+    massorca_protocol::methods::extensions::ExtensionInstallParams {
+        source: String::new(),
+        consent: None,
+        run_installer: false,
+        sha256: None,
+        agent_token: None,
+    }
+}
+
+/// Every `AccountsImportParams` field at its usual value; tests override the fields they vary.
+fn base_accounts_import_params() -> massorca_protocol::methods::agents::AccountsImportParams {
+    massorca_protocol::methods::agents::AccountsImportParams {
+        kind: String::new(),
+        from: None,
+        label: None,
+    }
 }

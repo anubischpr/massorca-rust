@@ -23,6 +23,7 @@ use gpui::{
     Styled, Task, Toggled, Window, anchored, deferred, div, point, px, transparent_black,
 };
 use std::fmt;
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Pointer rest time before a submenu opens or closes on hover (handoff 2.7).
@@ -45,11 +46,22 @@ impl From<MenuItem> for MenuEntry {
     }
 }
 
+/// An element a row draws where its icon goes. The row builds it again each time it is drawn.
+#[derive(Clone)]
+pub struct MenuElement(Rc<dyn Fn() -> gpui::AnyElement>);
+
+impl fmt::Debug for MenuElement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MenuElement")
+    }
+}
+
 /// An action row. A disabled row stays visible and shows its reason under the label.
 #[derive(Clone, Debug)]
 pub struct MenuItem {
     label: SharedString,
     icon: Option<IconName>,
+    leading_element: Option<MenuElement>,
     shortcut: Option<SharedString>,
     disabled_reason: Option<SharedString>,
     secondary: Option<SharedString>,
@@ -66,6 +78,7 @@ impl MenuItem {
         Self {
             label: label.into(),
             icon: None,
+            leading_element: None,
             shortcut: None,
             disabled_reason: None,
             secondary: None,
@@ -102,6 +115,18 @@ impl MenuItem {
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = Some(icon);
         self
+    }
+
+    /// Draws `element` where the icon goes, such as a project's own mark (decision 0091). It takes the
+    /// place of an icon set too, so a row draws one or the other.
+    pub fn leading_element(mut self, element: impl Fn() -> gpui::AnyElement + 'static) -> Self {
+        self.leading_element = Some(MenuElement(Rc::new(element)));
+        self
+    }
+
+    /// Whether the row draws an element in place of its icon.
+    pub fn has_leading_element(&self) -> bool {
+        self.leading_element.is_some()
     }
 
     /// A shortcut shown as a Kbd on the right, for example `Mod+R`.
@@ -811,7 +836,9 @@ impl MenuView {
             .text_style(TYPE_BODY)
             .text_color(label_colour)
             .child(leading);
-        if let Some(name) = item.icon {
+        if let Some(element) = &item.leading_element {
+            row = row.child((element.0)());
+        } else if let Some(name) = item.icon {
             row = row.child(Icon::new(name).size(IconSize::Small).color(icon_colour));
         }
         // A destructive label wraps rather than truncates, so the loss it names stays visible (Menu.md, Copy).
@@ -1410,5 +1437,43 @@ mod a11y_tests {
         .expect("the row is reported");
         assert_eq!(node.role(), Role::MenuItem);
         assert_eq!(node.is_expanded(), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod leading_element_tests {
+    use super::*;
+    use gpui::{TestAppContext, div, px};
+
+    #[gpui::test]
+    fn a_row_with_a_leading_element_draws_it_where_its_icon_goes(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|window, cx| {
+            MenuView::new(
+                vec![
+                    MenuItem::new("Star")
+                        .leading_element(|| {
+                            div()
+                                .id("leading-mark")
+                                .debug_selector(|| "leading-mark".to_owned())
+                                .size(px(16.0))
+                                .into_any_element()
+                        })
+                        .into(),
+                ],
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("leading-mark").is_some());
+        assert!(cx.debug_bounds("menu-item-0").is_some());
+    }
+
+    #[test]
+    fn a_row_keeps_its_icon_when_it_has_no_leading_element() {
+        let row = MenuItem::new("Rename").icon(IconName::Pencil);
+        assert!(!row.has_leading_element());
     }
 }

@@ -98,10 +98,7 @@ fn repo(dir: &Path) {
 async fn listed_projects(home: &Path) -> Vec<Project> {
     let client = Client::connect(
         &profile(home),
-        ConnectOptions::new(PeerInfo {
-            name: "massorca-test-client".to_owned(),
-            version: "0.0.0-test".to_owned(),
-        }),
+        ConnectOptions::new(PeerInfo { ..base_peer_info() }),
     )
     .await
     .expect("a client connects");
@@ -174,11 +171,9 @@ async fn inspecting_a_path_adds_nothing_and_a_plain_folder_is_added_as_a_folder(
     // Continue without Git: the folder is registered as a folder, and inspecting it again says so.
     let added = handle
         .add_project(ProjectAddParams {
-            icon: None,
             path: notes.display().to_string(),
-            name: None,
             kind: Some(ProjectKind::Folder),
-            workspaces_root: None,
+            ..base_project_add_params()
         })
         .await
         .expect("the folder is added as a folder");
@@ -201,4 +196,23 @@ async fn inspecting_a_path_adds_nothing_and_a_plain_folder_is_added_as_a_folder(
 
     drop(bridge);
     stop_service(service).await;
+}
+
+/// Every `PeerInfo` field at its usual value; tests override the fields they vary.
+fn base_peer_info() -> massorca_protocol::PeerInfo {
+    massorca_protocol::PeerInfo {
+        name: "massorca-test-client".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    }
+}
+
+/// Every `ProjectAddParams` field at its usual value; tests override the fields they vary.
+fn base_project_add_params() -> massorca_protocol::methods::projects::ProjectAddParams {
+    massorca_protocol::methods::projects::ProjectAddParams {
+        path: String::new(),
+        name: None,
+        kind: None,
+        workspaces_root: None,
+        icon: None,
+    }
 }

@@ -29,6 +29,7 @@ fn wire_bot() -> WireBot {
         effort: None,
         lead: false,
         created_at_ms: 1,
+        skills: Vec::new(),
     }
 }
 
@@ -252,13 +253,9 @@ fn the_run_history_asks_the_service_and_lists_each_run(cx: &mut TestAppContext) 
     assert_eq!((team.as_str(), routine.as_str()), ("t1", "r1"));
     reply
         .send(Ok(vec![RoutineRun {
-            id: "run-1".into(),
-            routine_id: "r1".into(),
             scheduled_for_ms: NEXT_RUN_MS,
             task_id: Some("k9".into()),
-            error: None,
-            error_code: None,
-            created_at_ms: 1,
+            ..crate::service::fixtures::base_routine_run()
         }]))
         .expect("the history listens");
     cx.run_until_parked();

@@ -12,6 +12,8 @@
 //! form that names a chat (decision 0167): it prints one reply, as its `--fake-mode` argument says, and reports its
 //! working folder and run identity variables when asked. Otherwise, as the Claude adapter starts a chat run, it plays a
 //! hand-written script of stream-json frames ([`claude_stream`]), and `--version` prints a Claude-style version line.
+//! Started as `app-server`, it is a stand-in for Codex's app-server (decision 0173): it answers the handshake, the thread
+//! and the turn requests itself and plays a script of JSON-RPC messages ([`codex_app_server`]).
 
 use std::env;
 use std::ffi::OsString;
@@ -94,6 +96,10 @@ const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// A stdin line starting with this switches the permission mode; the rest of the line is the mode.
 const MODE_SWITCH: &str = "/mode ";
+/// A stdin line starting with this switches the model; the rest of the line is the model (decision 0171).
+const MODEL_SWITCH: &str = "/model ";
+/// A stdin line of exactly this text toggles fast mode (decision 0171).
+const FAST_TOGGLE: &str = "/fast";
 /// Names a file the `chat` mode waits for after the first part of each reply, so a test can subscribe in between.
 const CHAT_GO_FILE_ENV: &str = "FAKE_CHAT_GO_FILE";
 /// Set to `1`, the `chat` mode never reads its input, as a CLI that is stuck.
@@ -111,6 +117,17 @@ const CLAUDE_STDIN_LOG_ENV: &str = "FAKE_CLAUDE_STDIN_LOG";
 /// A file the `-p` mode appends its arguments to, as one JSON array per run.
 const CLAUDE_ARGS_LOG_ENV: &str = "FAKE_CLAUDE_ARGS_LOG";
 
+/// The script of messages the `app-server` mode plays after a `thread/start`: one JSON value per line.
+const CODEX_SCRIPT_ENV: &str = "FAKE_CODEX_SCRIPT";
+/// The script the `app-server` mode plays after a `thread/resume` instead.
+const CODEX_RESUME_SCRIPT_ENV: &str = "FAKE_CODEX_RESUME_SCRIPT";
+/// A file the `app-server` mode appends each line of its standard input to.
+const CODEX_STDIN_LOG_ENV: &str = "FAKE_CODEX_STDIN_LOG";
+/// A file the `app-server` mode appends its arguments to, as one JSON array per run.
+const CODEX_ARGS_LOG_ENV: &str = "FAKE_CODEX_ARGS_LOG";
+/// The id of the thread a `thread/start` opens; `thr-fake` when unset.
+const CODEX_THREAD_ENV: &str = "FAKE_CODEX_THREAD";
+
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
 
@@ -124,6 +141,7 @@ fn main() -> ExitCode {
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
+        Some("app-server") => return codex_app_server(),
         Some("models") => return models(),
         // Print mode is the title one-shot (it asks for text output), a chat run (it asks for partial messages) or the
         // model listing (decision 0166).
@@ -143,7 +161,9 @@ fn main() -> ExitCode {
         say(&format!("No conversation found with session ID: {id}"));
         return ExitCode::from(1);
     }
+    read_keys_as_typed();
     let agent = Agent::new(&arguments);
+    let mut fast = arguments.settings.as_deref().is_some_and(fast_mode_on);
     let mut input: Input = io::stdin().lock().lines();
     agent.start(&arguments);
     if let Some(prompt) = &arguments.prompt
@@ -165,6 +185,16 @@ fn main() -> ExitCode {
                     text[MODE_SWITCH.len()..].trim()
                 ));
             }
+            text if text.starts_with(MODEL_SWITCH) => {
+                say(&format!(
+                    "model switched {}",
+                    text[MODEL_SWITCH.len()..].trim()
+                ));
+            }
+            FAST_TOGGLE => {
+                fast = !fast;
+                say(&format!("fast toggled {}", if fast { "on" } else { "off" }));
+            }
             text => {
                 if let Flow::Finish(code) = agent.handle_prompt(text, &mut input) {
                     return code;
@@ -175,14 +205,16 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>]
-/// [PROMPT WORDS...]`. The flags
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--fork <ID>] [--prompt <TEXT>] [--mode <ID>]
+/// [--model <ID>] [--effort <LEVEL>] [--query=<TEXT>] [PROMPT WORDS...]`. The flags
 /// count only before the first prompt word; every later word belongs to the prompt. `--query=<TEXT>` is the startup
 /// query of a kind with the `startup-query` prompt mode (0054): the agent takes it as its prompt, as if it were typed.
 #[derive(Debug, Default)]
 struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
+    /// `--fork <ID>`: a copy of conversation `ID` under a new id (decision 0168), which the run's reports carry.
+    fork: Option<String>,
     mode: Option<String>,
     /// `--model <ID>` and `--effort <LEVEL>`, the flags a kind declares for a session's model and effort (decision 0094).
     model: Option<String>,
@@ -209,6 +241,9 @@ impl Arguments {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
+                "--fork" if words.is_empty() => parsed.fork = args.next(),
+                // The `flag` prompt mode of a test kind (0054): the next argument is the whole prompt.
+                "--prompt" if words.is_empty() => query = args.next(),
                 "--mode" | "--permission-mode" if words.is_empty() => parsed.mode = args.next(),
                 "--model" if words.is_empty() => parsed.model = args.next(),
                 "--effort" if words.is_empty() => parsed.effort = args.next(),
@@ -269,6 +304,7 @@ impl Agent {
             session: arguments
                 .resume
                 .clone()
+                .or_else(|| arguments.fork.as_deref().map(forked_id))
                 .or_else(|| arguments.session_id.clone()),
             hook_program: env::var_os(HOOK_PROGRAM_ENV).filter(|program| !program.is_empty()),
             cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -283,6 +319,9 @@ impl Agent {
         }
         if let Some(id) = &arguments.resume {
             say(&format!("resumed {id}"));
+        }
+        if let Some(id) = &arguments.fork {
+            say(&format!("forked {id} as {}", forked_id(id)));
         }
         if let Some(mode) = &arguments.mode {
             say(&format!("mode {mode}"));
@@ -338,6 +377,10 @@ impl Agent {
         for name in listed_env(SHOW_ENV) {
             say(&format!("value {name} {}", env_value(&name)));
         }
+        // Whether the first prompt came on the command line, so a test can tell it from one typed after start.
+        if arguments.prompt.is_some() {
+            say("prompt at launch");
+        }
         for (name, foreign) in probed_foreign() {
             let held = env::var_os(&name).is_some_and(|value| value == foreign.as_str());
             say(&format!(
@@ -351,7 +394,7 @@ impl Agent {
     /// Handles one prompt, reading the further lines it needs from `input`.
     fn handle_prompt(&self, text: &str, input: &mut Input) -> Flow {
         self.hook("prompt", None);
-        say(&format!("working on {text}"));
+        say(&format!("working on {}", shown(text)));
         if text.contains("hold") {
             say("holding");
             loop {
@@ -456,6 +499,24 @@ impl Agent {
     }
 }
 
+/// The id a fork of conversation `source` gets (decision 0168): new, and unique per run.
+fn forked_id(source: &str) -> String {
+    format!("{source}-fork-{}", std::process::id())
+}
+
+/// The longest prompt `working on` prints whole, lines and all, so a multi-line prompt shows its lines on the screen.
+const SHOWN_PROMPT_CHARS: usize = 1000;
+
+/// A prompt as `working on` prints it: whole when short, else its first characters and its byte length, so a long
+/// prompt keeps the screen readable.
+fn shown(text: &str) -> String {
+    if text.chars().count() <= SHOWN_PROMPT_CHARS {
+        return text.to_owned();
+    }
+    let start: String = text.chars().take(40).collect();
+    format!("{start}... ({} bytes)", text.len())
+}
+
 /// Prints one line with the agent prefix and flushes it.
 fn say(text: &str) {
     let mut out = io::stdout().lock();
@@ -482,15 +543,27 @@ fn prints_text() -> bool {
 
 /// The one-shot form of a chat title (decision 0167): `-p <prompt> [--fake-mode <mode>]` prints one reply and exits. The
 /// mode says what it prints: `say:<text>` prints `<text>`, `exit:<code>` exits with that code and prints nothing, `empty`
-/// prints nothing and exits 0, `hang` never ends. Without a mode it prints `Fake title`. It writes the report first.
+/// prints nothing and exits 0, `hang` never ends, `fail-then-say:<text>` exits 1 on the first run and prints `<text>` on a
+/// later one (a run is later when its report already exists). Without a mode it prints `Fake title`. It writes the report first.
 fn oneshot() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let mode = args
         .windows(2)
         .find(|pair| pair[0] == "--fake-mode")
         .map_or("say:Fake title", |pair| pair[1].as_str());
-    if let Some(report) = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty()) {
+    let report = env::var_os(ONESHOT_REPORT_ENV).filter(|path| !path.is_empty());
+    let later_run = report
+        .as_deref()
+        .is_some_and(|path| Path::new(path).exists());
+    if let Some(report) = report {
         write_oneshot_report(Path::new(&report), &args);
+    }
+    if let Some(text) = mode.strip_prefix("fail-then-say:") {
+        if !later_run {
+            return ExitCode::from(1);
+        }
+        reply(text);
+        return ExitCode::SUCCESS;
     }
     if let Some(text) = mode.strip_prefix("say:") {
         reply(text);
@@ -887,10 +960,44 @@ fn is_file_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// The next input line, cleaned. `None` at the end of input, or when a line cannot be read.
+/// The next input line, cleaned. A bracketed paste over several lines is one input, its lines joined with ` / `, as a
+/// TUI composer takes a pasted text. `None` at the end of input, or when a line cannot be read.
 fn next_line(input: &mut Input) -> Option<String> {
-    input.next()?.ok().map(|line| clean(&line))
+    let first = input.next()?.ok()?;
+    if !first.contains(PASTE_START) || first.contains(PASTE_END) {
+        return Some(clean(&first));
+    }
+    let mut lines = vec![clean(&first)];
+    while let Some(Ok(line)) = input.next() {
+        let last = line.contains(PASTE_END);
+        lines.push(clean(&line));
+        if last {
+            break;
+        }
+    }
+    Some(lines.join(" / "))
 }
+
+/// Reads standard input as a TUI does: each line is handed over as its keys arrive. A Unix terminal in line mode holds a
+/// line until its end and drops what a line holds past its limit (4095 bytes on Linux), which cut off the end marker of a
+/// long bracketed paste (AG-05). Where standard input is not a terminal, or there is no `stty`, nothing changes.
+#[cfg(unix)]
+fn read_keys_as_typed() {
+    let _ = massorca_process::command("stty")
+        .args(["-icanon", "min", "1", "time", "0"])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// The Windows console keeps its line mode, which drops a pasted line feed; AG-05 accepts the lines joined either way.
+#[cfg(not(unix))]
+fn read_keys_as_typed() {}
+
+/// The markers of a bracketed paste (xterm mode 2004).
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
 
 /// Removes a trailing carriage return, the bracketed-paste markers and surrounding whitespace.
 fn clean(line: &str) -> String {
@@ -1107,4 +1214,146 @@ fn hang_child() -> ExitCode {
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
+}
+
+/// The state of the `app-server` mode: the open thread and the last turn it started.
+#[derive(Default)]
+struct FakeCodex {
+    thread: String,
+    turns: u64,
+    /// `thread/resume` opened the thread.
+    resumed: bool,
+}
+
+impl FakeCodex {
+    /// Answers a request the mode serves itself: the handshake, the thread, a turn and an interrupt.
+    fn serve(&mut self, message: &Value) {
+        let id = &message["id"];
+        let result = match message["method"].as_str() {
+            Some("initialize") => serde_json::json!({ "userAgent": "fake-codex" }),
+            Some("thread/start") => {
+                self.thread = env::var(CODEX_THREAD_ENV).unwrap_or_else(|_| "thr-fake".to_owned());
+                serde_json::json!({ "thread": { "id": self.thread } })
+            }
+            Some("thread/resume") => {
+                self.resumed = true;
+                self.thread = message["params"]["threadId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                serde_json::json!({ "thread": { "id": self.thread } })
+            }
+            Some("turn/start") => {
+                self.turns += 1;
+                serde_json::json!({ "turn": { "id": format!("turn-{}", self.turns), "status": "inProgress" } })
+            }
+            Some("turn/interrupt") => serde_json::json!({}),
+            _ => return,
+        };
+        if !id.is_null() {
+            emit(&serde_json::json!({ "id": id, "result": result }));
+        }
+    }
+
+    /// A script step with `$THREAD` and `$TURN` replaced by the open thread and the last turn.
+    fn fill(&self, step: &str) -> String {
+        step.replace("$THREAD", &self.thread)
+            .replace("$TURN", &format!("turn-{}", self.turns))
+    }
+}
+
+/// Whether a line of standard input is what an `app-server` script's `await` waits for: a message with that method, or
+/// `response` (an answer to a request the script sent).
+fn codex_awaited(wanted: &str, message: &Value) -> bool {
+    match wanted {
+        "response" => message.get("method").is_none() && !message["id"].is_null(),
+        method => message["method"] == method,
+    }
+}
+
+/// The file a script's `{"hold_open":"<name>"}` step names, in the script's folder: the thread's answer waits for it.
+fn held_open_gate(script: &str, folder: &Path) -> Option<PathBuf> {
+    script.lines().find_map(|line| {
+        let step: Value = serde_json::from_str(line).ok()?;
+        Some(folder.join(step["hold_open"].as_str()?))
+    })
+}
+
+/// The app-server mode (decision 0173): a stand-in for `codex app-server`. It answers `initialize`, `thread/start` (with
+/// [`CODEX_THREAD_ENV`]'s thread), `thread/resume`, `turn/start` (turns `turn-1`, `turn-2`, ...) and `turn/interrupt`
+/// itself as they arrive. Once a thread is open it plays [`CODEX_SCRIPT_ENV`]'s script, or
+/// [`CODEX_RESUME_SCRIPT_ENV`]'s after a resume: `{"await":"<method>"|"response"}` waits for such a line,
+/// `{"sleep_ms":N}` waits, and any other line is written as it is, with `$THREAD` and `$TURN` filled in. Every input line
+/// is appended to [`CODEX_STDIN_LOG_ENV`]'s file and the arguments to [`CODEX_ARGS_LOG_ENV`]'s. After the script it
+/// serves requests until its input ends, then exits 0. A `{"hold_open":"<name>"}` step keeps the `thread/start` answer
+/// back until the file `<name>` in the script's folder exists, so a test can act while the thread still opens.
+fn codex_app_server() -> ExitCode {
+    let args: Vec<Value> = env::args().skip(1).map(Value::from).collect();
+    append_to(CODEX_ARGS_LOG_ENV, &Value::from(args).to_string());
+    let (lines, input) = std::sync::mpsc::channel::<Value>();
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            append_to(CODEX_STDIN_LOG_ENV, &line);
+            let message = serde_json::from_str(&line).unwrap_or(Value::Null);
+            if lines.send(message).is_err() {
+                break;
+            }
+        }
+    });
+    let mut codex = FakeCodex::default();
+    let next = || input.recv().ok();
+    // A script's `hold_open` step keeps the thread's answer back until its file exists, so a test can act while it opens.
+    let gate = env::var_os(CODEX_SCRIPT_ENV).and_then(|path| {
+        let path = PathBuf::from(path);
+        let text = fs::read_to_string(&path).ok()?;
+        held_open_gate(&text, path.parent()?)
+    });
+    // The script starts once a thread is open.
+    while codex.thread.is_empty() {
+        let Some(message) = next() else {
+            return ExitCode::SUCCESS;
+        };
+        if let Some(gate) = gate
+            .as_deref()
+            .filter(|_| message["method"] == "thread/start")
+        {
+            wait_for_file(gate);
+        }
+        codex.serve(&message);
+    }
+    let script = (codex.resumed)
+        .then(|| env::var_os(CODEX_RESUME_SCRIPT_ENV))
+        .flatten()
+        .or_else(|| env::var_os(CODEX_SCRIPT_ENV));
+    let Some(script) = script.and_then(|path| fs::read_to_string(path).ok()) else {
+        let _ = writeln!(io::stderr(), "fake-codex: no script");
+        return ExitCode::from(2);
+    };
+    for step in script.lines().filter(|line| !line.trim().is_empty()) {
+        let parsed: Value = serde_json::from_str(step).unwrap_or(Value::Null);
+        if let Some(wanted) = parsed["await"].as_str() {
+            loop {
+                let Some(message) = next() else {
+                    return ExitCode::SUCCESS;
+                };
+                codex.serve(&message);
+                if codex_awaited(wanted, &message) {
+                    break;
+                }
+            }
+        } else if let Some(wait) = parsed["sleep_ms"].as_u64() {
+            thread::sleep(Duration::from_millis(wait));
+        } else if parsed["hold_open"].is_string() {
+            // Read before the thread opened, above: nothing to play here.
+        } else {
+            let mut stdout = io::stdout().lock();
+            let _ = writeln!(stdout, "{}", codex.fill(step));
+            let _ = stdout.flush();
+        }
+    }
+    while let Some(message) = next() {
+        codex.serve(&message);
+    }
+    ExitCode::SUCCESS
 }

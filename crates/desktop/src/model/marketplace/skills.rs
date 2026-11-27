@@ -15,6 +15,8 @@ pub struct SkillRow {
     pub agents: Vec<&'static str>,
     /// The label of the root the skill was read from.
     pub source: String,
+    /// Whether MassOrca may place this skill: only a skill in an agent tool's home folder is copied.
+    pub placeable: bool,
     /// Whether a copy of the skill is installed in an agent folder.
     pub installed: bool,
 }
@@ -46,6 +48,7 @@ fn skill_row(skill: &DiscoveredSkill) -> SkillRow {
         description: skill.description.clone(),
         agents: agent_labels(&skill.providers),
         source: skill.source_label.clone(),
+        placeable: skill.source_kind == SkillSourceKind::Home,
         installed: skill.installed,
     }
 }
@@ -142,15 +145,8 @@ mod tests {
             name: name.to_owned(),
             description: description.map(str::to_owned),
             providers: providers.to_vec(),
-            source_kind: SkillSourceKind::Home,
             source_label: source.to_owned(),
-            root_path: None,
-            root_paths: Vec::new(),
-            directory_path: None,
-            skill_file_path: None,
-            installed: true,
-            updated_at: None,
-            disable_slash_command: false,
+            ..crate::service::fixtures::base_discovered_skill()
         }
     }
 
@@ -164,12 +160,11 @@ mod tests {
         SkillSource {
             id: label.to_owned(),
             label: label.to_owned(),
-            path: None,
             source_kind: kind,
             providers: providers.to_vec(),
-            owner: None,
             exists,
             skipped_reason: skipped,
+            ..crate::service::fixtures::base_skill_source()
         }
     }
 
@@ -177,7 +172,7 @@ mod tests {
         SkillDiscovery {
             skills,
             sources,
-            scanned_at: 1,
+            ..crate::service::fixtures::base_skill_discovery()
         }
     }
 

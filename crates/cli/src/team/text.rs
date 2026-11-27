@@ -1,6 +1,6 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
-use massorca_protocol::methods::team_room::{RoomAuthor, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, RoomTyping, TeamRoomMessage};
 use massorca_protocol::methods::teams::{
     Board, Bot, CodeSource, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday,
     Team, TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
@@ -57,18 +57,31 @@ pub fn access_notice(team: &Team) -> Option<String> {
 
 pub fn bot_line(bot: &Bot, verb: &str) -> String {
     let lead = if bot.lead { " (lead)" } else { "" };
+    let skills = if bot.skills.is_empty() {
+        String::new()
+    } else {
+        format!(" with skills {}", bot.skills.join(", "))
+    };
     format!(
-        "{verb} bot {}{lead} in team {} ({})",
+        "{verb} bot {}{lead} in team {} ({}){skills}",
         bot.name, bot.team_id, bot.id
     )
 }
 
-/// One bot per line: name, agent kind, lead, job, id.
+/// One bot per line: name, agent kind, lead, job, id, and its skills joined by commas or `-`.
 pub fn bot_table(bots: &[Bot]) -> Vec<String> {
     bots.iter()
         .map(|bot| {
             let lead = if bot.lead { "lead" } else { "-" };
-            format!("{}	{}	{lead}	{}	{}", bot.name, bot.kind, bot.job, bot.id)
+            let skills = if bot.skills.is_empty() {
+                "-".to_owned()
+            } else {
+                bot.skills.join(",")
+            };
+            format!(
+                "{}	{}	{lead}	{}	{}	{skills}",
+                bot.name, bot.kind, bot.job, bot.id
+            )
         })
         .collect()
 }
@@ -94,6 +107,27 @@ pub fn project_line(project: &TeamProject, verb: &str) -> String {
         "{verb} project {} in team {} ({})",
         project.name, project.team_id, project.id
     )
+}
+
+/// A project's details, one per line. The brief is shown only when it is set.
+pub fn project_details(project: &TeamProject) -> Vec<String> {
+    let mut lines = vec![
+        format!("name: {}", project.name),
+        format!("goal: {}", project.goal),
+    ];
+    if !project.brief.is_empty() {
+        lines.push(format!("brief: {}", project.brief));
+    }
+    lines.push(format!(
+        "code source: {}",
+        project.code_source.map_or("-", CodeSource::label)
+    ));
+    lines.push(format!(
+        "workspaces project: {}",
+        project.source_project_name.as_deref().unwrap_or("-")
+    ));
+    lines.push(format!("id: {}", project.id));
+    lines
 }
 
 /// The Board as text: each column with its count, then its cards, oldest first.
@@ -269,16 +303,28 @@ fn weekday_word(day: RoutineWeekday) -> &'static str {
 }
 
 /// One room line per row: its author (`you` or the bot's name), its text, then the task it is about and its Board
-/// column.
+/// column, or the one-time routine it scheduled and when that runs, or a choice card's id and choices, or the line it
+/// replies to.
 pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
     messages
         .iter()
         .map(|line| {
             let author = match line.author {
                 RoomAuthor::Person => "you",
+                RoomAuthor::Bot if line.card.is_some() => "room",
                 RoomAuthor::Bot => line.bot_name.as_deref().unwrap_or("a removed bot"),
                 RoomAuthor::Unknown => "unknown",
             };
+            if let Some(card) = &line.card {
+                return card_line(&line.id, author, &line.text, card);
+            }
+            let quoted = line.quoted.as_ref().map_or_else(String::new, |quote| {
+                let who = match quote.author {
+                    RoomAuthor::Person => "you",
+                    _ => quote.bot_name.as_deref().unwrap_or("a bot"),
+                };
+                format!("\treplying to {who}: {}", quote.text)
+            });
             match &line.task {
                 Some(task) => format!(
                     "{author}	{}	{} ({})",
@@ -286,8 +332,48 @@ pub fn room_lines(messages: &[TeamRoomMessage]) -> Vec<String> {
                     task.id,
                     task.column.label()
                 ),
-                None => format!("{author}	{}", line.text),
+                None => match &line.routine {
+                    Some(routine) => format!(
+                        "{author}	{}	routine {} ({} {})",
+                        line.text,
+                        routine.id,
+                        routine.run_date.as_deref().unwrap_or("-"),
+                        routine.time
+                    ),
+                    None => format!("{author}	{}{quoted}", line.text),
+                },
             }
         })
         .collect()
+}
+
+/// The room's typing line, "Mara is typing…", when a bot works on a reply or a room task.
+pub fn typing_line(typing: &[RoomTyping]) -> Option<String> {
+    let names: Vec<&str> = typing.iter().map(|bot| bot.bot_name.as_str()).collect();
+    match names.as_slice() {
+        [] => None,
+        [one] => Some(format!("{one} is typing…")),
+        [rest @ .., last] => Some(format!("{} and {last} are typing…", rest.join(", "))),
+    }
+}
+
+/// A choice card's line: its id to answer it with, its text, then its choices, or the one it was answered with.
+fn card_line(id: &str, author: &str, text: &str, card: &RoomCard) -> String {
+    let label = |choice: &str| {
+        card.options
+            .iter()
+            .find(|option| option.choice == choice)
+            .map_or_else(|| choice.to_owned(), |option| option.label.clone())
+    };
+    match &card.answer {
+        Some(answer) => format!("{author}\t{text}\tcard {id}: answered {}", label(answer)),
+        None => {
+            let choices: Vec<String> = card
+                .options
+                .iter()
+                .map(|option| format!("{} ({})", option.choice, option.label))
+                .collect();
+            format!("{author}\t{text}\tcard {id}: {}", choices.join(", "))
+        }
+    }
 }

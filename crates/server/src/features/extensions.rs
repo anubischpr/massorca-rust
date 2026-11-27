@@ -21,7 +21,7 @@ use massorca_protocol::methods::extensions::{
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
     ExtensionList, ExtensionLog, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved,
     ExtensionReview, ExtensionRollbackParams, ExtensionRun, ExtensionSetEnabledParams,
-    ExtensionUpdateParams,
+    ExtensionUpdateParams, ProgramUpdateParams, ProgramUpdateReview, ProgramUpdated,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -29,6 +29,7 @@ use serde::de::DeserializeOwned;
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
+use crate::extension_points::sync_extension_points;
 use crate::features::NoParams;
 use crate::features::workspace_domain::publish;
 use crate::owner::Owner;
@@ -94,6 +95,24 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::EXTENSIONS_ROLLBACK,
             Permission::HostAdmin,
             rollback,
+        )?,
+        // Its own capability: an update of a host program runs the vendor's command, so only the run needs administration.
+        registries
+            .capabilities
+            .register(capabilities::EXTENSIONS_PROGRAMS, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            extensions::PROGRAM_UPDATE_REVIEW,
+            capabilities::EXTENSIONS_PROGRAMS,
+            Permission::Read,
+            program_update_review,
+        )?,
+        methods.register(
+            Owner::Core,
+            extensions::PROGRAM_UPDATE,
+            capabilities::EXTENSIONS_PROGRAMS,
+            Permission::HostAdmin,
+            program_update,
         )?,
         methods.register(
             Owner::Core,
@@ -184,7 +203,7 @@ async fn install(
             "an agent cannot run a vendor installer; ask the person to run the command",
         )?;
     }
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.install(
             &Source::parse(&params.source)?,
             params.consent.as_deref(),
@@ -206,7 +225,7 @@ async fn update(
         params.agent_token.as_deref(),
         "an agent cannot update an extension; ask the person to run the command",
     )?;
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.update(
             &params.id,
             params.consent.as_deref(),
@@ -245,7 +264,7 @@ async fn rollback(
         params.agent_token.as_deref(),
         "an agent cannot roll back an extension; ask the person to run the command",
     )?;
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.rollback(&params.id, params.consent.as_deref())
     })
     .await?;
@@ -253,11 +272,37 @@ async fn rollback(
     wire(&entry)
 }
 
+async fn program_update_review(
+    ctx: RequestCtx,
+    params: ProgramUpdateParams,
+) -> Result<ProgramUpdateReview, ErrorBody> {
+    let review = on_extensions(&ctx, move |extensions| {
+        extensions.review_program_update(&params.id, &params.program)
+    })
+    .await?;
+    wire(&review)
+}
+
+async fn program_update(
+    ctx: RequestCtx,
+    params: ProgramUpdateParams,
+) -> Result<ProgramUpdated, ErrorBody> {
+    refuse_agent_run(
+        params.agent_token.as_deref(),
+        "an agent cannot update a program; ask the person to run the command",
+    )?;
+    let updated = on_extensions(&ctx, move |extensions| {
+        extensions.update_program(&params.id, &params.program, params.consent.as_deref())
+    })
+    .await?;
+    wire(&updated)
+}
+
 async fn set_enabled(
     ctx: RequestCtx,
     params: ExtensionSetEnabledParams,
 ) -> Result<ExtensionEnabled, ErrorBody> {
-    let outcome = on_extensions(&ctx, move |extensions| {
+    let outcome = changing_extensions(&ctx, move |extensions| {
         extensions.set_enabled(&params.id, params.enabled)
     })
     .await?;
@@ -282,7 +327,7 @@ async fn remove(
             "an agent cannot run a vendor uninstaller; ask the person to run the command",
         )?;
     }
-    let removed = on_extensions(&ctx, move |extensions| {
+    let removed = changing_extensions(&ctx, move |extensions| {
         extensions.remove(
             &params.id,
             params.delete_agent_homes,
@@ -316,7 +361,7 @@ fn hide_item_path(ctx: &RequestCtx, item: &mut Item) {
 }
 
 fn strip_program_paths(item: &mut Item) {
-    for agent in &mut item.agents {
+    for agent in item.agents.iter_mut().chain(&mut item.programs) {
         agent.program_path = None;
     }
 }
@@ -346,6 +391,22 @@ where
             format!("the extensions task failed: {error}"),
         )),
     }
+}
+
+/// [`on_extensions`] for a call that can change which packages are enabled: the extension points follow, whether the
+/// call succeeded or not (decision 0153).
+async fn changing_extensions<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: FnOnce(&Extensions) -> Result<T, Error> + Send + 'static,
+{
+    let points = Arc::clone(&ctx.state.extension_points);
+    on_extensions(ctx, move |extensions| {
+        let result = call(extensions);
+        sync_extension_points(&points, extensions);
+        result
+    })
+    .await
 }
 
 /// The protocol error of a refusal: its own code, which for a guard is the guard's (`agent.busy`).

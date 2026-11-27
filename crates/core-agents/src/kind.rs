@@ -39,6 +39,10 @@ pub struct KindDecl {
     /// Arguments of a new run of an exited session, with `{ref}`; absent means not resumable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<Vec<String>>,
+    /// Arguments of a new session that continues a copy of an exited session's conversation, with `{ref}` (decision
+    /// 0168); absent means not forkable. The new run's own ref is learned as a first start learns it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<Vec<String>>,
     #[serde(default)]
     pub status: StatusDecl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,7 +95,10 @@ pub struct KindDecl {
 }
 
 /// The structured dialects MassOrca speaks, by the name a kind's `chat.adapter` gives.
-pub const CHAT_ADAPTERS: &[&str] = &[crate::chat::claude::ADAPTER_NAME];
+pub const CHAT_ADAPTERS: &[&str] = &[
+    crate::chat::claude::ADAPTER_NAME,
+    crate::chat::codex::ADAPTER_NAME,
+];
 
 /// A kind's structured chat support (decision 0101, D10): the dialect its CLI speaks, and the CLI versions whose
 /// dialect the adapter was written against. The service probes `<program> --version`; a version below `min_version`, or
@@ -196,6 +203,10 @@ pub struct ModelDecl {
     /// Launch arguments with `{value}` exactly once, as `["-m", "{value}"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
+    /// The slash command that switches a running session to a model, with `{value}` once, such as `/model {value}`
+    /// (decision 0171). Absent, a model change waits for the session's next resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
     /// The models the picker shows, in order. Empty when the list is account-scoped and the vendor CLI reports it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<ModelChoiceDecl>,
@@ -230,6 +241,15 @@ pub enum ListingFormat {
     Lines,
     /// A stream-json `control_response` whose `models` lists the CLI's picker rows.
     ClaudeControl,
+}
+
+impl ModelDecl {
+    /// The live command that switches a running session to `value`, when the kind declares one (decision 0171).
+    pub(crate) fn live_text(&self, value: &str) -> Option<String> {
+        self.live
+            .as_deref()
+            .map(|live| live.replace(VALUE_PLACEHOLDER, value))
+    }
 }
 
 /// One model a kind's picker offers.
@@ -478,6 +498,24 @@ fn launch_args(flag: Option<&str>, args: Option<&[String]>, value: &str) -> Vec<
             .collect(),
         (None, None) => Vec::new(),
     }
+}
+
+/// Longest `live` command a `model` may declare.
+const MAX_LIVE_COMMAND_LEN: usize = 64;
+
+/// Whether `live` is a slash command that takes a model's value once, such as `/model {value}` (decision 0171): a slash
+/// and a name of letters, digits and dashes, one [`VALUE_PLACEHOLDER`], no control character, at most
+/// [`MAX_LIVE_COMMAND_LEN`] bytes.
+fn live_command_ok(live: &str) -> bool {
+    let name = live.split(' ').next().unwrap_or_default();
+    live.len() <= MAX_LIVE_COMMAND_LEN
+        && name.len() >= 2
+        && name.starts_with('/')
+        && name[1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && live.matches(VALUE_PLACEHOLDER).count() == 1
+        && !live.chars().any(char::is_control)
 }
 
 /// Refuses a `model` or an `effort` value the format rule does not accept (decision 0094).
@@ -742,6 +780,15 @@ impl KindDecl {
         serde_json::from_str(text).map_err(|error| format!("not a valid kind declaration: {error}"))
     }
 
+    /// Whether a fork of an exited session can be started (decision 0168): a fork form, and a ref learned from the run.
+    pub fn forkable(&self) -> bool {
+        self.fork.is_some()
+            && self
+                .session_ref
+                .as_ref()
+                .is_some_and(|session_ref| session_ref.learn.is_some())
+    }
+
     /// Whether a new run of an exited session can be started: a resume form, and a way to know the ref.
     pub fn resumable(&self) -> bool {
         self.resume.is_some()
@@ -817,6 +864,16 @@ impl KindDecl {
         }
         if let Some(resume) = &self.resume {
             needs_placeholder("resume", resume, &mut problems);
+        }
+        if let Some(fork) = &self.fork {
+            needs_placeholder("fork", fork, &mut problems);
+            if !self
+                .session_ref
+                .as_ref()
+                .is_some_and(|session_ref| session_ref.learn.is_some())
+            {
+                problems.push("fork needs session_ref.learn".to_owned());
+            }
         }
         self.status_problems(&mut problems);
         if let Some(credentials) = &self.credentials {
@@ -1095,6 +1152,15 @@ impl KindDecl {
         )
     }
 
+    /// Whether the kind still takes `model`, a model a session stored (decision 0168): its `model` flag accepts the value,
+    /// and, when the kind lists choices, one of them has that id. A resume or a fork passes it again only then.
+    pub(crate) fn takes_model(&self, model: &str) -> bool {
+        self.option_args(Some(model), None).is_ok()
+            && self.model.as_ref().is_some_and(|decl| {
+                decl.choices.is_empty() || decl.choices.iter().any(|choice| choice.id == model)
+            })
+    }
+
     /// The declared choice `id` of the `model` option.
     fn model_choice(&self, id: &str) -> Option<&ModelChoiceDecl> {
         self.model
@@ -1148,6 +1214,13 @@ impl KindDecl {
     /// and at most one default.
     fn model_problems(&self, problems: &mut Vec<String>) {
         let Some(model) = &self.model else { return };
+        if let Some(live) = &model.live
+            && !live_command_ok(live)
+        {
+            problems.push(format!(
+                "model.live {live:?} must be a slash command that takes {VALUE_PLACEHOLDER} once, such as /model {VALUE_PLACEHOLDER}"
+            ));
+        }
         launch_problems(
             "model",
             model.flag.as_deref(),
@@ -1821,7 +1894,7 @@ mod tests {
         for (chat, expected) in [
             (
                 serde_json::json!({ "adapter": "acp", "min_version": "1.0.0", "max_major": 1 }),
-                "chat.adapter \"acp\" must be one of claude-stream-json",
+                "chat.adapter \"acp\" must be one of claude-stream-json, codex-app-server",
             ),
             (
                 serde_json::json!({ "adapter": "claude-stream-json", "min_version": "2.1", "max_major": 2 }),
@@ -1983,6 +2056,33 @@ mod tests {
         assert!(!parse(value.clone()).resumable());
         value["session_ref"] = serde_json::json!({ "learn": "session_id" });
         assert!(parse(value).resumable());
+    }
+
+    /// A fork form needs `{ref}`, and a ref learned from the run, since the fork's own id is never assigned (decision 0168).
+    #[test]
+    fn a_fork_form_needs_the_ref_placeholder_and_a_learned_ref() {
+        let no_ref = problems_of(|value| value["fork"] = serde_json::json!(["--fork"]));
+        assert!(
+            no_ref
+                .iter()
+                .any(|problem| problem == "fork must contain {ref}"),
+            "{no_ref:?}"
+        );
+        assert!(
+            no_ref
+                .iter()
+                .any(|problem| problem == "fork needs session_ref.learn"),
+            "{no_ref:?}"
+        );
+        let mut value = minimal();
+        value["fork"] = serde_json::json!(["--fork", "{ref}"]);
+        value["session_ref"] = serde_json::json!({ "assign": ["--session-id", "{ref}"] });
+        assert!(!parse(value.clone()).forkable(), "an assigned ref alone");
+        value["session_ref"] = serde_json::json!({ "learn": "session_id" });
+        let decl = parse(value);
+        assert!(decl.forkable());
+        assert!(decl.problems().is_empty(), "{:?}", decl.problems());
+        assert!(!parse(minimal()).forkable(), "no fork form");
     }
 
     #[test]
@@ -3488,6 +3588,45 @@ mod fast_tests {
                 ("haiku", false)
             ]
         );
+    }
+
+    #[test]
+    fn claude_declares_the_live_model_command_with_the_value_once() {
+        let claude = claude();
+        assert!(claude.problems().is_empty(), "{:?}", claude.problems());
+        let model = claude.model.as_ref().expect("claude takes a model");
+        assert_eq!(model.live.as_deref(), Some("/model {value}"));
+    }
+
+    #[test]
+    fn a_live_model_command_is_a_slash_command_that_takes_the_value_once() {
+        let model = |live: &str| {
+            json!({
+                "flag": "--model", "live": live,
+                "choices": [{ "id": "opus", "label": "Opus" }]
+            })
+        };
+        assert!(
+            problems_with(serde_json::Value::Null, model("/model {value}"))
+                .iter()
+                .all(|problem| !problem.contains("model.live")),
+            "a slash command with the value once is accepted"
+        );
+        for live in [
+            "model {value}",
+            "/model",
+            "/model {value} {value}",
+            "/ {value}",
+            "/mo\u{7}del {value}",
+        ] {
+            let problems = problems_with(serde_json::Value::Null, model(live));
+            assert!(
+                problems
+                    .iter()
+                    .any(|problem| problem.contains("model.live")),
+                "{live:?} is refused: {problems:?}"
+            );
+        }
     }
 
     #[test]

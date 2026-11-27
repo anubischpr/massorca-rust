@@ -5,6 +5,7 @@
 
 pub mod agents;
 pub mod catalogue;
+pub mod contributions;
 mod error;
 pub mod hooks;
 pub mod host;
@@ -12,6 +13,7 @@ mod install_log_tail;
 pub mod item;
 pub mod layout;
 pub mod lockfile;
+pub mod program_update;
 pub mod removal;
 pub mod review;
 mod rollback;

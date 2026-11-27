@@ -11,7 +11,9 @@ use gpui::{
 };
 
 use super::ModelPicker;
-use super::reasoning_slider::effects::{clock_seconds, move_progress};
+use super::reasoning_slider::effects::{
+    clock_seconds, effects_fade_seconds, fade_progress, halo_fade_seconds, move_progress,
+};
 use super::reasoning_slider::{
     ReasoningSlider, brand_colours, has_slider, is_top_level, name_colour,
 };
@@ -39,8 +41,8 @@ const REASONING_COLUMN_HEIGHT: f32 = 304.0;
 /// The sparkles glyph that marks the top level, in px.
 const SPARKLE_SIZE: f32 = 14.0;
 
-/// Why Fast is off for a model that offers none, when the service gave no reason of its own.
-const NO_FAST_MODEL: &str = "This model has no Fast mode.";
+/// Why Fast is off for a model that offers none, when neither the service nor its agent gave a reason.
+const NO_FAST_MODEL: &str = "This model does not support fast mode.";
 
 /// What one model row shows.
 struct ModelRow {
@@ -66,7 +68,8 @@ impl ModelPicker {
         cx.notify();
     }
 
-    pub(super) fn set_speed(&mut self, fast: bool, cx: &mut Context<Self>) {
+    /// Chooses Standard or Fast speed; Fast takes effect only on a model that offers it.
+    pub fn set_speed(&mut self, fast: bool, cx: &mut Context<Self>) {
         if self.state.set_fast(fast) {
             self.emit_change(cx);
         }
@@ -504,6 +507,11 @@ impl ModelPicker {
         let name = name_colour(brand, p.surface.overlay);
         let agent = self.state.current_kind().label();
         let reduced = cx.reduce_motion();
+        // The top effects fade in from when the top level was first shown with the popover open.
+        let shown_for = self
+            .top_since
+            .map_or(0.0, |since| since.elapsed().as_secs_f32());
+        let effects_fade = fade_progress(shown_for, effects_fade_seconds(), reduced);
         let picker = cx.entity();
         let slider = ReasoningSlider {
             id: "model-picker-reasoning-slider".into(),
@@ -522,6 +530,8 @@ impl ModelPicker {
             progress: self.effort_move.map_or(1.0, |moved| {
                 move_progress(moved.started.elapsed().as_secs_f32(), reduced)
             }),
+            effects_fade,
+            halo_fade: fade_progress(shown_for, halo_fade_seconds(), reduced),
         };
         let level = div()
             .flex()
@@ -539,6 +549,7 @@ impl ModelPicker {
                     svg()
                         .path(IconName::Sparkles.path())
                         .size(px(SPARKLE_SIZE))
+                        .opacity(effects_fade)
                         .flex_none()
                         .text_color(name),
                 )
@@ -571,9 +582,16 @@ impl ModelPicker {
         let supports_fast = self.state.current_model().is_some_and(|model| model.fast);
         let mut fast_segment = Segment::icon_text(IconName::Zap, "Fast").disabled(!supports_fast);
         if !supports_fast {
+            // The service's reason for every model wins, then the model's own (its agent's), then the default.
             let reason = self
                 .state
                 .fast_reason()
+                .cloned()
+                .or_else(|| {
+                    self.state
+                        .current_model()
+                        .and_then(|model| model.fast_reason.clone())
+                })
                 .map_or_else(|| NO_FAST_MODEL.to_owned(), |reason| reason.to_string());
             fast_segment = fast_segment.tooltip(reason);
         }

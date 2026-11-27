@@ -55,9 +55,14 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
+/// where its kind declares a live command for them, and kept for the session's next resume otherwise.
+pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
 /// `fast` on `agent.start` and `fast` on the kinds, models and sessions (decision 0165): fast mode passed to the settings the
 /// kind declares for it.
 pub const AGENT_FAST: &str = "agent-fast/1";
+/// `agent.fork` (decision 0168): a new session from a copy of an exited session's conversation, by the kind's fork form.
+pub const AGENT_FORK: &str = "agent-fork/1";
 /// Structured chat sessions (`agent.chat.*`, decision 0101): `agent.chat.start`, the transcript stream, history paging,
 /// approvals and interrupt, and `chat` on `agent.kinds`. Not offered until the service runs chat sessions.
 pub const AGENT_CHAT: &str = "agent-chat/1";
@@ -76,17 +81,34 @@ pub const SECRETS: &str = "secrets/1";
 pub const TEAMS: &str = "teams/1";
 /// A team's Conference room (`team.room_list`, `team.room_post`) and the `team.room_changed` topic (decision 0102).
 pub const TEAM_ROOM: &str = "team-room/1";
+/// Choice cards in a team's room: the optional `card` field of a room line and `team.room_answer` (decision 0121). A
+/// host that has it also keeps `team-room/1`.
+pub const TEAM_ROOM_CARDS: &str = "team-room/2";
+/// Conversation replies in a team's room: `ask` and `reply_to` of `team.room_post`, and the `quoted` and `typing` fields
+/// of `team.room_list` (decision 0122). A host that has it also keeps `team-room/1` and `team-room/2`.
+pub const TEAM_ROOM_REPLIES: &str = "team-room/3";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).
 pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
+/// Updating a host program a tool package installed (`extensions.program_update_review`, `extensions.program_update`,
+/// decision 0151).
+pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
+/// What each owner registered on the tool, skill, view, theme and status-rule points (`extensions.points`, decision 0153).
+pub const EXTENSION_POINTS: &str = "extension-points/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
+/// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
+pub const SKILLS_PLACE: &str = "skills-place/1";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
+/// Scheduled automation definitions (`automation.*`, decision 0123). Not offered by a service that predates them.
+pub const AUTOMATIONS: &str = "automations/1";
+/// The Calendar (`calendar.occurrences`, decision 0124). Not offered by a service that predates it.
+pub const CALENDAR: &str = "calendar/1";

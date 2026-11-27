@@ -4,6 +4,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use massorca_ext_package::manifest::agent::AgentCli;
 use massorca_ext_package::manifest::settings::{SettingSection, SettingType};
 use massorca_ext_package::manifest::{self, Manifest};
 use massorca_ext_package::risk;
@@ -35,7 +36,10 @@ pub struct Item {
     pub risk: RiskView,
     pub readme: Option<String>,
     pub agents: Vec<AgentItem>,
-    /// For an agent package: whether every agent's CLI resolves on this host.
+    /// For a tool package: each host program, with where it resolves on this host (decision 0151).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub programs: Vec<AgentItem>,
+    /// For an agent or tool package: whether every agent's CLI and every host program resolves on this host.
     pub detected: Option<bool>,
     /// Settings with their section (`basic` or `advanced`).
     pub settings: Vec<SettingItem>,
@@ -218,28 +222,35 @@ impl Extensions {
                     .any(|cli| cli.agent == agent && cli.installed_by_package)
             })
         };
+        let program = |id: &str, cli: Option<&AgentCli>| {
+            let program_path = cli.and_then(|cli| self.resolver.resolve(&cli.binary));
+            AgentItem {
+                id: id.to_owned(),
+                detected: program_path.is_some(),
+                program_path,
+                path_source: cli.is_some().then(|| self.resolver.search().source),
+                cli_installed_by_package: installed_by_package(id),
+                cli: cli.map(CliSpec::of),
+            }
+        };
         let agents: Vec<AgentItem> = manifest
             .contributes
             .agent_adapters
             .iter()
-            .map(|adapter| {
-                let program_path = adapter
-                    .cli
-                    .as_ref()
-                    .and_then(|cli| self.resolver.resolve(&cli.binary));
-                AgentItem {
-                    id: adapter.id.clone(),
-                    detected: program_path.is_some(),
-                    program_path,
-                    path_source: adapter.cli.is_some().then(|| self.resolver.search().source),
-                    cli_installed_by_package: installed_by_package(&adapter.id),
-                    cli: adapter.cli.as_ref().map(CliSpec::of),
-                }
-            })
+            .map(|adapter| program(&adapter.id, adapter.cli.as_ref()))
+            .collect();
+        let programs: Vec<AgentItem> = manifest
+            .contributes
+            .host_programs
+            .iter()
+            .map(|host| program(&host.id, Some(&host.cli)))
             .collect();
         let effects = uninstall_effects(
             manifest,
-            agents.iter().any(|agent| agent.cli_installed_by_package),
+            agents
+                .iter()
+                .chain(&programs)
+                .any(|agent| agent.cli_installed_by_package),
         );
         Item {
             id: manifest.id.clone(),
@@ -257,8 +268,10 @@ impl Extensions {
                 .collect(),
             risk: RiskView::of(&risk::assess(manifest)),
             readme: manifest.readme.clone(),
-            detected: (!agents.is_empty()).then(|| agents.iter().all(|agent| agent.detected)),
+            detected: (!agents.is_empty() || !programs.is_empty())
+                .then(|| agents.iter().chain(&programs).all(|agent| agent.detected)),
             agents,
+            programs,
             settings: manifest
                 .contributes
                 .settings
@@ -347,6 +360,7 @@ fn lockfile_item(entry: &LockEntry, error: &Error) -> Item {
         },
         readme: None,
         agents: Vec::new(),
+        programs: Vec::new(),
         detected: None,
         settings: Vec::new(),
         uninstall: UninstallItem {

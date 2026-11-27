@@ -391,6 +391,16 @@ CSP. Nothing above changes.
   seconds. Read only, nothing is persisted, and host paths reach host
   administrators only. `massorca skills installed` lists the skills and
   `massorca skills roots` lists the roots.
+- **Capability `skills-place/1` (SKL-02).** `skills.place-preview` and `skills.managed` read; `skills.place` and
+  `skills.unplace` need host administration. They place a home skill that discovery lists into the folders of the chosen agent tools (global scope): one
+  canonical copy under `.agents/skills`, then an alias to it in each agent folder, or a verified copy where an alias is
+  refused. Removal takes away only what MassOrca placed and left unchanged. Decision 0150. `massorca skills preview|place|unplace|managed` lists them.
+- **Capability `extensions-programs/1` (SKL-30).** `extensions.program_update_review` reads; `extensions.program_update`
+  needs host administration. They update a host program a tool package installed (Git, GitHub CLI, Node.js), with the
+  reviewed vendor command. Decision 0151. `massorca extension program-update <id> <program>` runs them.
+- **Capability `extension-points/1` (CUS-08).** `extensions.points` reads what each owner registered on the tool,
+  skill, view, theme and status-rule points, and the enabled packages that registered nothing. Decision 0153.
+  `massorca extension points` prints it.
 - **Per extension.** Each enabled extension adds the capability
   `ext/<id>@<major>` and the methods `ext.<id>.*`, such as `view-data`,
   `view-action` and `command`.
@@ -444,6 +454,9 @@ refactor later.
      test checks that every CLI subcommand has a descriptor. The CLI stays an
      ordinary argument parser; it is not generated from the table. The
      palette and extension commands later read the same registry.
+   - Tools, skills, views, themes and status rules are registries of the
+     same kind, filled from enabled packages with their handles kept per
+     owner, so a removal drops everything a package registered (decision 0153).
 6. **Settings keyed by owner.** The settings table key is `(owner, key)`, and
    each setting is declared with a type and default in a settings registry.
    `massorca config get/set` validates against the declaration. Core uses

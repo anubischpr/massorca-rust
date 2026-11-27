@@ -159,13 +159,10 @@ mod tests {
     fn device(id: &str, revoked: bool, current: bool) -> DeviceInfo {
         DeviceInfo {
             id: id.into(),
-            name: "Pixel 8".into(),
             scopes: vec!["read".into()],
-            key_pin: "sha256:test".into(),
-            paired_at_ms: 0,
-            last_seen_ms: None,
             revoked_at_ms: revoked.then_some(1),
             current,
+            ..crate::service::fixtures::base_device_info()
         }
     }
 

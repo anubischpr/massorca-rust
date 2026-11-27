@@ -182,7 +182,7 @@ impl Shell {
     }
 
     /// Disconnects a service; a refusal, such as GitLab's, is shown under the section.
-    fn disconnect_service(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(super) fn disconnect_service(&mut self, id: String, cx: &mut Context<Self>) {
         let (host, request) = (self.services_host(), self.marketplace_services.request());
         let Some(service) = self.service.clone() else {
             return;

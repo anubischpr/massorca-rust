@@ -106,6 +106,33 @@ pub struct AgentSessionRow {
     pub released_at: Option<i64>,
 }
 
+/// What a session was started with, written once with its row (decision 0168).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionOrigin {
+    /// The model the start named.
+    pub model: Option<String>,
+    /// The reasoning effort the start named.
+    pub effort: Option<String>,
+    /// The session this one was forked from.
+    pub forked_from: Option<String>,
+}
+
+/// The details a session view shows beside its row (decision 0168), read in one statement.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionDetails {
+    pub origin: SessionOrigin,
+    /// The branch of the session's workspace now.
+    pub branch: Option<String>,
+    /// The start of the newest user or assistant message of the session's chat journal, at most
+    /// [`PREVIEW_SOURCE_CHARS`] characters. `None` for a session without a journal or without a message.
+    pub last_message: Option<String>,
+}
+
+/// Most characters of a message [`Store::agent_session_details`] returns, and most of its chunks the statement reads: every
+/// chunk holds at least one character, so the chunks read always cover the characters returned. The caller trims it
+/// further.
+pub const PREVIEW_SOURCE_CHARS: u32 = 400;
+
 /// The archived tail of a released session's terminal output (decision 0090).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionArchive {
@@ -216,6 +243,82 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Inserts a session with what it was started with (decision 0168), and the id of its chat run when it is one
+    /// (decision 0101), in one transaction.
+    pub fn insert_agent_session_with_origin(
+        &self,
+        row: &AgentSessionRow,
+        origin: &SessionOrigin,
+        chat_run: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let connection = self.lock();
+        let transaction = connection.unchecked_transaction()?;
+        Self::insert_agent_session_in(&transaction, row)?;
+        transaction.execute(
+            "UPDATE agent_sessions SET model = ?2, effort = ?3, forked_from = ?4 WHERE id = ?1",
+            params![row.id, origin.model, origin.effort, origin.forked_from],
+        )?;
+        if let Some(run_id) = chat_run {
+            transaction.execute(
+                "UPDATE agent_sessions SET run_type = 'chat', run_id = ?2 WHERE id = ?1",
+                params![row.id, run_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Sets the model and effort a session records (decision 0168), so they name what its latest run used: a resume or a
+    /// fork that leaves out one the kind no longer takes stores the rest.
+    pub fn set_agent_session_options(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.lock().execute(
+            "UPDATE agent_sessions SET model = ?2, effort = ?3 WHERE id = ?1",
+            params![id, model, effort],
+        )?;
+        Ok(())
+    }
+
+    /// What a session was started with (decision 0168); `None` when there is no such session.
+    pub fn agent_session_origin(&self, id: &str) -> Result<Option<SessionOrigin>, StoreError> {
+        self.query_optional(
+            "SELECT model, effort, forked_from FROM agent_sessions WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(SessionOrigin {
+                    model: row.get(0)?,
+                    effort: row.get(1)?,
+                    forked_from: row.get(2)?,
+                })
+            },
+        )
+    }
+
+    /// A session's origin, its workspace's branch and the start of its newest chat message (decision 0168), in one
+    /// statement that reads no file; `None` when there is no such session. The statement reads at most
+    /// [`PREVIEW_SOURCE_CHARS`] chunks of that message, which holds the characters it returns.
+    pub fn agent_session_details(&self, id: &str) -> Result<Option<SessionDetails>, StoreError> {
+        self.query_optional(
+            "SELECT session.model, session.effort, session.forked_from, workspace.branch, (SELECT substr(substr(item.text, 1, ?2) || COALESCE((SELECT group_concat(head.text, '' ORDER BY head.start_byte) FROM (SELECT chunk.text, chunk.start_byte FROM agent_chat_text_chunks AS chunk WHERE chunk.session_id = item.session_id AND chunk.item_id = item.id ORDER BY chunk.start_byte LIMIT ?2) AS head), ''), 1, ?2) FROM agent_chat_items AS item WHERE item.session_id = session.id AND item.type IN ('user_message', 'assistant_message') AND item.text_len > 0 ORDER BY item.position DESC LIMIT 1) FROM agent_sessions AS session LEFT JOIN workspaces AS workspace ON workspace.id = session.workspace_id WHERE session.id = ?1",
+            params![id, PREVIEW_SOURCE_CHARS],
+            |row| {
+                Ok(SessionDetails {
+                    origin: SessionOrigin {
+                        model: row.get(0)?,
+                        effort: row.get(1)?,
+                        forked_from: row.get(2)?,
+                    },
+                    branch: row.get(3)?,
+                    last_message: row.get(4)?,
+                })
+            },
+        )
     }
 
     pub fn get_agent_session(&self, id: &str) -> Result<Option<AgentSessionRow>, StoreError> {
@@ -504,6 +607,20 @@ impl Store {
                 result,
                 agent_ref_if_unset
             ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Sets a session's agent ref when it has none, leaving every other field alone (decision 0173: the conversation id a
+    /// chat run names). Returns whether it was set.
+    pub fn set_agent_session_ref_if_unset(
+        &self,
+        id: &str,
+        agent_ref: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET agent_ref = ?2 WHERE id = ?1 AND agent_ref IS NULL",
+            params![id, agent_ref],
         )?;
         Ok(changed > 0)
     }
