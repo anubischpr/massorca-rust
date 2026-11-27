@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use massorca_protocol::methods::config::ConfigList;
 use massorca_protocol::methods::skill_placement as placement;
 use massorca_protocol::methods::{
-    config, events, extensions, hosted_services, projects, service, skills, workspaces,
+    config, events, extension_points, extensions, hosted_services, projects, service, skills,
+    workspaces,
 };
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
@@ -141,6 +142,11 @@ const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
         extensions::PROGRAM_UPDATE,
         capabilities::EXTENSIONS_PROGRAMS,
         Permission::HostAdmin,
+    ),
+    (
+        extension_points::POINTS,
+        capabilities::EXTENSION_POINTS,
+        Permission::Read,
     ),
 ];
 

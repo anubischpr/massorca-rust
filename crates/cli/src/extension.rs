@@ -21,7 +21,7 @@ use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
     UNINSTALL_CLI_WARNING, command_text, doctor_lines, installed_lines, item_lines, item_rows,
-    removed_lines, review_lines, run_lines, state_text,
+    points_lines, removed_lines, review_lines, run_lines, state_text,
 };
 use crate::output::Output;
 use crate::target::Target;
@@ -70,6 +70,9 @@ pub enum ExtensionCommand {
     /// Updates a host program a tool package installed, such as Git, with the vendor's update command. Without --yes it
     /// prints what would run and fails with extension.consent_required. A program MassOrca did not install is refused.
     ProgramUpdate(ProgramUpdateArgs),
+    /// Lists what each owner registered on the tool, skill, view, theme and status-rule points, and the enabled
+    /// extensions that registered nothing.
+    Points,
     /// Lists the recent install, update, rollback and remove runs of an extension, oldest first.
     Log {
         /// Package id, such as massorca.claude.
@@ -204,6 +207,10 @@ pub async fn execute(
         ExtensionCommand::Update(args) => update(&client, args, output).await?,
         ExtensionCommand::Rollback(args) => rollback(&client, args, output).await?,
         ExtensionCommand::ProgramUpdate(args) => program_update(&client, args, output).await?,
+        ExtensionCommand::Points => {
+            let points = client.extension_points().await?;
+            output.success(&points, &points_lines(&points));
+        }
         ExtensionCommand::Log { id } => {
             let log = client.extension_log(&id).await?;
             output.success(&log, &run_lines(&log, "no runs yet"));

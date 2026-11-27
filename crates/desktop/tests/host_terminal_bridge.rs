@@ -1,14 +1,14 @@
 //! A paired host's terminal through the bridge (STAT-16), against two real services on loopback: one computer runs a
 //! service with a session, and a second computer, which has no service of its own, pairs with it and attaches to the
-//! session's terminal over the host's own connection. Each computer is a temporary profile; nothing reaches a real
+//! session's terminal over the connection of the host's live link. Each computer is a temporary profile; nothing reaches a real
 //! service or a real host.
 
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use massorca_client::AttachUpdate;
+use massorca_client::{AttachUpdate, Hosts};
 use massorca_desktop::service::{
     HostTerminal, HostTerminalItem, ServiceBridge, ServiceHandle, StoreState, StoreUpdate,
     connect_options,
@@ -22,6 +22,10 @@ use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service, Servic
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, timeout};
+
+#[path = "support/host_proxy.rs"]
+mod host_proxy;
+use host_proxy::HostProxy;
 
 struct TempHome {
     _temp: TempDir,
@@ -253,7 +257,6 @@ async fn pair() -> Pair {
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
         .await
         .expect("the offer pairs");
-    client.refresh_hosts();
     let mut state = StoreState::default();
     let session_id = session.id.clone();
     until(&mut updates, &mut state, "the host's terminal", |s| {
@@ -434,4 +437,84 @@ fn base_pairing_create_params() -> massorca_protocol::methods::devices::PairingC
         standard: false,
         addresses: Vec::new(),
     }
+}
+
+/// Sends this computer's connections to the paired host `name` through a relay that counts them, and has its link
+/// reconnect there.
+async fn relay_host(home: &Path, client: &ServiceHandle, name: &str) -> HostProxy {
+    let hosts = Hosts::of(&profile(home));
+    let mut record = hosts.get(name).expect("the host is paired");
+    let target = record
+        .addresses
+        .iter()
+        .find_map(|address| address.to_socket_addrs().ok()?.next())
+        .expect("the host has an address");
+    let relay = HostProxy::start(target).await;
+    let identity = hosts.identity(name).expect("its device key");
+    hosts.remove(name).expect("the old record goes");
+    record.addresses = vec![relay.address.to_string()];
+    hosts
+        .add(&record, &identity)
+        .expect("the new record is stored");
+    client.reconnect_host(name.to_owned());
+    let reached = timeout(WAIT, async {
+        while relay.open() == 0 {
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "the link reconnects through the relay");
+    relay
+}
+
+#[tokio::test]
+async fn an_attach_borrows_the_hosts_link_and_comes_back_after_retry_now() {
+    let mut pair = pair().await;
+    let relay = relay_host(&pair._client_home.path, &pair.client, "vps").await;
+    let mut attach = pair
+        .client
+        .attach_host_terminal("vps", &pair.terminal, 100, 30);
+    let writer = attach.writer();
+    let mut screen = Vec::new();
+    read_until(&mut attach, &mut screen, "the host's screen", |screen| {
+        !screen.is_empty()
+    })
+    .await;
+    writer.input(b"first-91c2".to_vec());
+    read_until(&mut attach, &mut screen, "the first echo", |screen| {
+        shows(screen, b"first-91c2")
+    })
+    .await;
+    assert_eq!(
+        relay.accepted(),
+        1,
+        "the attach opened no connection of its own"
+    );
+
+    // Retry now closes the host's connection and opens a new one; the attach follows the link onto it.
+    pair.client.reconnect_host("vps".to_owned());
+    let others = read_until(&mut attach, &mut Vec::new(), "the screen again", |screen| {
+        !screen.is_empty()
+    })
+    .await;
+    assert_eq!(
+        others,
+        vec![HostTerminalItem::Unreachable],
+        "the attach was out of contact while the link reconnected, and never ended"
+    );
+    writer.input(b"second-4d7e".to_vec());
+    let mut again = Vec::new();
+    read_until(&mut attach, &mut again, "the second echo", |screen| {
+        shows(screen, b"second-4d7e")
+    })
+    .await;
+    assert_eq!(
+        relay.accepted(),
+        2,
+        "one connection after the reconnect, still shared"
+    );
+
+    drop(attach);
+    pair.stop_host().await;
+    drop(pair.client_bridge);
 }
