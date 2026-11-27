@@ -26,24 +26,30 @@ Status: accepted, 2026-11-26.
   unknown and is refused as invalid. `priority` is `normal` (default), `high` or `urgent`. The subject is one line of at
   most 200 characters; the body is at most 6000 bytes and holds no control character other than tab and line breaks,
   so a delivered message fits one agent prompt and can never drive the terminal. A message opens a thread named by its
-  id unless it names a thread; `reply_to` keeps the answered message's thread, and must name a message the sender sent
-  or received (`team.message_unknown` otherwise). Bodies are never logged; `Debug` of every params type redacts the
-  body and the token.
+  id. It joins an existing thread only through `reply_to` or `thread`, and both must name a message, or a thread, that
+  the sender and the recipient already share (`team.message_unknown` otherwise), so a bot cannot plant a message in a
+  conversation it is not part of. Bodies are never logged; `Debug` of every params type redacts the body and the token.
 - **worker_done.** It needs an outcome, `succeeded` or `failed`; any other type carrying one is invalid. It settles the
   task it names, by default the sender's own task, which must be the sender's own task and a child of the recipient
   (`team.message_unknown_task`, `team.message_not_your_child`). The message is stored and the task's outcome latched
-  (succeeded is Done, failed is Stuck) in one transaction. A second `worker_done` for the same task is a duplicate:
-  nothing changes and the first message comes back with `duplicate: true`. A task whose own run already ended it with
-  the same outcome takes the message without a second latch; one that ended with another outcome refuses with
+  (succeeded is Done, failed is Stuck) in one transaction. Every message records the agent session of the run that
+  sent it (`from_session_id`), and a settlement is unique per task and sending run. A second `worker_done` from the same
+  run is a duplicate: nothing changes and the first message comes back with `duplicate: true`. A reopened task clears
+  its outcome and starts a new run, so that run's `worker_done` settles it again, wakes the lead and posts its line. A
+  task whose own run already ended it with the same outcome takes the message without a second latch and without a
+  second room line, since that latch already posted one; one that ended with another outcome refuses with
   `team.message_already_settled`, whose data names that outcome.
 - **Waking the lead.** A `worker_done`, or a `high` or `urgent` message, sent up to a parent is queued into the
   parent's run when that run is live or unverifiable (loss of contact is never an ended run). It goes through the
   agent's own prompt queue (decision 0084) under the request id `team-message-<id>`, so it reaches the agent at its next
-  idle, once. A kind without a queue gets the prompt typed when it is ready. The queued prompt is not a host-admin
-  one, so a parent run holding vault secrets does not take it. The prompt frames the message as a teammate's
-  information, not the person's instruction, and ends with the reply command. Any refusal leaves the message in the
-  inbox; a send never fails because the parent cannot be woken. Messages down the tree and normal ones wait in the
-  inbox.
+  idle, once. A kind without a queue gets it typed when it is ready, as a system prompt: like a bring-back's, it does
+  not lift the lead's queue pauses and is not announced as the person's prompt. The queued prompt is not a host-admin
+  one, so a parent run holding vault secrets does not take it. The prompt is one line, so every paste mode types it as
+  one block (a plain-paste kind such as Codex would submit at each line break); the body's line breaks show as `↵`. It
+  opens with `[MassOrca team message <id> …]` and closes with `[End of team message <id>. …]`: the sender cannot know
+  the id before sending, so a body cannot forge the closing line. It frames the message as a teammate's information,
+  not the person's instruction, and ends with the reply command. Any refusal leaves the message in the inbox; a send
+  never fails because the parent cannot be woken. Messages down the tree and normal ones wait in the inbox.
 - **Room.** A `worker_done` posts one line by the child's bot in the parent's team room: `Done: <title> (reported to
   <lead>)`, or `(waits in <lead>'s inbox)` when the parent run was not woken. A high or urgent message that waits posts
   `<Priority> <type> for <lead> waits in its inbox: <subject>`. Every message publishes the parent team's room change,
@@ -51,9 +57,9 @@ Status: accepted, 2026-11-26.
 - **Inbox.** `team.inbox` lists the run's unread messages, oldest first; `mark_read` marks exactly those read after
   listing them. `team.message_reply` answers a message sent to the caller's task, back to its sender, on its thread,
   with the subject `Re: <subject>` and the type `status` unless one is given.
-- **Tree.** `team.delegation_tree` and `team.delegation_list` give each child a `report`: the subject of its latest
-  `status` message to its parent and the outcome of its `worker_done` (an optional field, absent when empty and from
-  older hosts). The desktop's room task card lists each child as `title · state · reported <outcome> · <status>`.
+- **Tree.** `team.delegation_tree` and `team.delegation_list` give each child a `report`: the subject of the latest
+  `status` message its current run sent its parent and that run's `worker_done` outcome (an optional field, absent when
+  empty and from older hosts). A reopened child that has not started again shows none. The desktop's room task card lists each child as `title · state · reported <outcome> · <status>`.
 - **Surfaces.** CLI, only inside a bot's run (refused before any connection otherwise): `massorca team message send
   --to parent|<child task> --type <t> [--priority p] --subject s --body b [--outcome succeeded|failed] [--reply-to id]`,
   `massorca team inbox [--mark-read]`, `massorca team message reply <id> --body b [--type t] [--priority p]`.
@@ -80,15 +86,20 @@ Status: accepted, 2026-11-26.
 - A message waiting in the inbox of a parent whose run ended is not delivered when that run is resumed; the lead reads
   it with `team inbox` or in the room.
 - The desktop shows reports on the room task card only, not on the Board card, and has no inbox view.
+- A failure after the message is stored (marking it delivered, or posting the room line) returns an error although
+  the message is kept; a retried `worker_done` is then a duplicate and does not wake the lead again.
+- No test pairs a live run's valid token with another task's session: service tests start no run, and the fake agent
+  never exposes its token. The token check compares against the caller's own session (`run_token_matches`), the same
+  code path `team.delegate` uses; a test needs a fake-agent verb that runs `massorca team inbox` inside its run.
 - No end-to-end test runs a live bot that calls `team message`: the fake agent cannot run the CLI with its token. The
   edges, settlement, duplicates, inbox, replies, the wake decision (live, unverifiable, ended) and the room lines are
   unit tests of the service module, with the wake call stubbed; the refusals run over the wire and through the CLI.
 
 ## Migration
 
-- One step: `team_messages` (sender and recipient task, their bots, type, priority, subject, body, thread, reply-to,
-  outcome, settled task, delivery, read time, creation time), with indexes by recipient and by sender, and a unique
-  index on the settled task. Removing either task removes the message; removing a bot keeps it without the bot. No
+- One step, the file `0120-202611271400_team_messages.sql`: `team_messages` (sender and recipient task, their bots,
+  type, priority, subject, body, thread, reply-to, outcome, settled task, sending run's session, delivery, read time,
+  creation time), with indexes by recipient and by sender, and a unique index on the settled task and sending run. Removing either task removes the message; removing a bot keeps it without the bot. No
   existing row changes.
 
 ## Consequences
