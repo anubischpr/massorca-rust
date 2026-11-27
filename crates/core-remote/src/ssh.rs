@@ -97,6 +97,41 @@ impl RemoteShell for SystemSsh {
     }
 }
 
+/// The arguments of `ssh -W <forward> <destination>`, OpenSSH's stdio forward, which a client dials a paired host
+/// through (decision 0133): batch mode, the route's own options such as `-J bastion`, then the forward. `-W` implies
+/// no TTY, no remote command and no other forwardings. Each value stays one argument, so no shell reads it.
+pub fn stdio_forward_arguments(
+    destination: &str,
+    extra_args: &[String],
+    forward: &str,
+) -> Result<Vec<String>, SshError> {
+    check_destination(destination)?;
+    check_forward(forward)?;
+    let mut args: Vec<String> = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+        .map(str::to_owned)
+        .to_vec();
+    args.extend(extra_args.iter().cloned());
+    args.extend([
+        "-W".to_owned(),
+        forward.to_owned(),
+        "--".to_owned(),
+        destination.to_owned(),
+    ]);
+    Ok(args)
+}
+
+/// The `ssh` a client dials a host through: the absolute path in `MASSORCA_SSH` when set, as `MASSORCA_GIT` names
+/// git, else the system `ssh` as `SystemSsh` finds it.
+pub fn find_system_ssh() -> Option<PathBuf> {
+    match std::env::var_os(SSH_PROGRAM_ENV).map(PathBuf::from) {
+        Some(program) if program.is_absolute() => Some(program),
+        _ => find_ssh(),
+    }
+}
+
+/// Names the ssh program of `find_system_ssh`.
+pub const SSH_PROGRAM_ENV: &str = "MASSORCA_SSH";
+
 /// Quotes `value` as one POSIX shell word, so the remote shell reads it literally.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
@@ -121,6 +156,22 @@ fn check_destination(destination: &str) -> Result<(), SshError> {
         )));
     }
     Ok(())
+}
+
+/// Refuses a forward that is not one `host:port` word ssh would read as such.
+fn check_forward(forward: &str) -> Result<(), SshError> {
+    let well_formed = !forward.starts_with('-')
+        && !forward.chars().any(|c| c.is_whitespace() || c.is_control())
+        && forward
+            .rsplit_once(':')
+            .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok());
+    if well_formed {
+        Ok(())
+    } else {
+        Err(SshError::Refused(format!(
+            "the forward {forward:?} is not host:port"
+        )))
+    }
 }
 
 /// `ssh` on `PATH`, then the Windows OpenSSH feature location.
@@ -159,6 +210,64 @@ mod tests {
                 "uname -sm",
             ]
         );
+    }
+
+    #[test]
+    fn a_stdio_forward_is_batch_mode_then_the_route_options_then_the_forward_and_the_destination() {
+        let route_args = ["-J", "bastion", "-o", "User=$(id) x"].map(str::to_owned);
+        let args =
+            stdio_forward_arguments("deploy@vps.example.ts.net", &route_args, "100.64.0.10:7347")
+                .expect("a valid route");
+        assert_eq!(
+            args,
+            [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                "-J",
+                "bastion",
+                "-o",
+                "User=$(id) x",
+                "-W",
+                "100.64.0.10:7347",
+                "--",
+                "deploy@vps.example.ts.net",
+            ],
+            "every value stays one argument, unquoted and unexpanded"
+        );
+        let bracketed = stdio_forward_arguments("vps", &[], "[::1]:7347").expect("an IPv6 forward");
+        assert_eq!(bracketed[bracketed.len() - 3], "[::1]:7347");
+    }
+
+    #[test]
+    fn a_destination_or_forward_ssh_could_misread_is_refused() {
+        for destination in ["", "-oProxyCommand=evil", "vps extra", "vps\tx"] {
+            assert!(
+                matches!(
+                    stdio_forward_arguments(destination, &[], "127.0.0.1:7347"),
+                    Err(SshError::Refused(_))
+                ),
+                "{destination:?}"
+            );
+        }
+        for forward in [
+            "",
+            "-W",
+            "127.0.0.1",
+            "127.0.0.1:port",
+            ":7347",
+            "a b:7347",
+            "127.0.0.1:99999",
+        ] {
+            assert!(
+                matches!(
+                    stdio_forward_arguments("vps", &[], forward),
+                    Err(SshError::Refused(_))
+                ),
+                "{forward:?}"
+            );
+        }
     }
 
     #[cfg(unix)]
