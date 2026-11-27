@@ -57,3 +57,5 @@ that hands a credential out yet.
   that vendor's official endpoint over TLS; results are cached with backoff and respect the vendor's rate limits; nothing
   is sent anywhere else and each host queries only its own accounts; no query runs while the switch is off; tests use a
   fake vendor endpoint.
+- A byte budget per refresh: the walks bound files and line length, not the total bytes one refresh reads across an
+  account's logs.

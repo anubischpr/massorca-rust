@@ -283,6 +283,9 @@ async fn fetch(state: &AppState, row: &AgentAccountRow, gap: i64) {
     if state.usage.fetched_within(&key, now_ms(), gap) {
         return;
     }
+    if !enabled(state).await.unwrap_or(false) {
+        return;
+    }
     let home = valid_account_home(state.profile.dir(), &row.kind, &row.id);
     let kind = row.kind.clone();
     let work = state.activity.enter();
@@ -296,7 +299,11 @@ async fn fetch(state: &AppState, row: &AgentAccountRow, gap: i64) {
             .map_err(|error| format!("the account's logs could not be read: {}", error.kind()))
     })
     .await
-    .unwrap_or_else(|error| Err(format!("the usage read did not finish: {error}")));
+    .unwrap_or_else(|_| Err("the usage read did not finish".to_owned()));
+    // Checked again, so a reading taken while the switch was turned off is not kept.
+    if !enabled(state).await.unwrap_or(false) {
+        return;
+    }
     if state.usage.record(row, outcome, now_ms()) {
         publish(state, format!("{}/{}", row.kind, row.id));
     }
@@ -310,34 +317,37 @@ fn publish(state: &AppState, id: String) {
 }
 
 /// The refresher: while usage is on, fetches each account when it is due, one at a time; while it is off, keeps nothing.
-/// Wakes on its tick, on a newly seen account and on a change of the setting.
+/// Wakes on its tick, on a newly seen account and on a change of the setting; while off, only on a change of the setting.
 pub(crate) async fn follow_usage(state: Arc<AppState>, mut signal: ShutdownSignal) {
     let mut events = state.events.subscribe();
     let mut ticks = tokio::time::interval(TICK);
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let setting_id = format!("{}/{SETTING_ENABLED}", Owner::Core);
+    let mut on = true;
     loop {
         tokio::select! {
             biased;
             () = signal.wait() => return,
-            _ = ticks.tick() => {}
-            () = state.usage.wake.notified() => {}
+            _ = ticks.tick() => if !on { continue },
+            () = state.usage.wake.notified() => if !on { continue },
             event = events.next() => match event {
                 Some(event) if event.topic == TOPIC_CONFIG_CHANGED && event.id == setting_id => {}
                 Some(_) => continue,
                 None => return,
             },
         }
-        sweep(&state).await;
+        on = sweep(&state).await;
     }
 }
 
-async fn sweep(state: &AppState) {
+/// One pass of the refresher. Returns whether usage is on; a setting or list that cannot be read counts as on, so the
+/// next tick tries again.
+async fn sweep(state: &AppState) -> bool {
     let on = match enabled(state).await {
         Ok(on) => on,
         Err(error) => {
             tracing::warn!(code = %error.code, "the usage setting could not be read: {}", error.message);
-            return;
+            return true;
         }
     };
     let rows = if on {
@@ -345,7 +355,7 @@ async fn sweep(state: &AppState) {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(code = %error.code, "the accounts could not be listed for usage: {}", error.message);
-                return;
+                return true;
             }
         }
     } else {
@@ -364,6 +374,7 @@ async fn sweep(state: &AppState) {
             fetch(state, row, 0).await;
         }
     }
+    on
 }
 
 #[cfg(test)]

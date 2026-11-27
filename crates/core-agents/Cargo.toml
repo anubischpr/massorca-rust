@@ -36,6 +36,9 @@ windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
 # test fails when a normal or build dependency enables it.
 test-hooks = []
 
+[target.'cfg(windows)'.dev-dependencies]
+junction = "=2.1.0"
+
 [dev-dependencies]
 massorca-process = { workspace = true, features = ["test-support"] }
 massorca-core-git.workspace = true

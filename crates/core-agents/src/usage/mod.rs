@@ -7,7 +7,7 @@ mod claude;
 mod codex;
 
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -73,8 +73,16 @@ pub fn read(kind: &str, home: &Path, now_ms: i64) -> io::Result<Option<UsageRead
 }
 
 /// The `.jsonl` files under `root`, at most `depth` folders down, modified since `LOOKBACK` before `now_ms`, newest
-/// first and at most `MAX_FILES`. Links are not followed. `None` when `root` does not exist.
+/// first and at most `MAX_FILES`. Links are not followed, `root` included. `None` when `root` does not exist or is not a
+/// plain folder.
 fn recent_logs(root: &Path, depth: usize, now_ms: i64) -> io::Result<Option<Vec<PathBuf>>> {
+    // A link or junction at the root could point anywhere: it counts as no data.
+    match fs::symlink_metadata(root) {
+        Ok(meta) if meta.is_dir() && !meta.is_symlink() => {}
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    }
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -123,15 +131,23 @@ fn scan(path: &Path, needle: &str, mut line: impl FnMut(serde_json::Value)) {
     let Ok(file) = fs::File::open(path) else {
         return;
     };
+    // Checked on the open handle, so a file swapped for a pipe or device after the walk is not read.
+    if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+        return;
+    }
     let mut reader = BufReader::new(file);
     let mut buffer = Vec::new();
+    let cap = u64::try_from(MAX_LINE_BYTES + 1).unwrap_or(u64::MAX);
     loop {
         buffer.clear();
-        match reader.read_until(b'\n', &mut buffer) {
+        match reader.by_ref().take(cap).read_until(b'\n', &mut buffer) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
         if buffer.len() > MAX_LINE_BYTES {
+            if buffer.last() != Some(&b'\n') && !skip_line(&mut reader) {
+                return;
+            }
             continue;
         }
         let Ok(text) = std::str::from_utf8(&buffer) else {
@@ -143,6 +159,22 @@ fn scan(path: &Path, needle: &str, mut line: impl FnMut(serde_json::Value)) {
         if let Ok(value) = serde_json::from_str(text) {
             line(value);
         }
+    }
+}
+
+/// Skips the rest of the current line without storing it. Returns whether a newline was found before the end.
+fn skip_line(reader: &mut impl BufRead) -> bool {
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) if !chunk.is_empty() => chunk,
+            _ => return false,
+        };
+        if let Some(at) = chunk.iter().position(|byte| *byte == b'\n') {
+            reader.consume(at + 1);
+            return true;
+        }
+        let read = chunk.len();
+        reader.consume(read);
     }
 }
 
