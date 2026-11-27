@@ -20,8 +20,10 @@ pub struct TeamMessageRow {
     pub thread_id: String,
     pub reply_to: Option<String>,
     pub outcome: Option<String>,
-    /// The task a `worker_done` settled; one per task.
+    /// The task a `worker_done` settled; one per task and sending run.
     pub settles_task_id: Option<String>,
+    /// The agent session of the run that sent it: a reopened task's new run is a new settlement and a new report.
+    pub from_session_id: Option<String>,
     /// `inbox`, or `run` once it was handed to the recipient's live run.
     pub delivery: String,
     pub read_at: Option<i64>,
@@ -41,9 +43,9 @@ pub enum WorkerDoneStored {
     Conflict(Option<TaskOutcome>),
 }
 
-const SELECT_MESSAGE: &str = "SELECT id, from_task_id, to_task_id, from_bot_id, to_bot_id, kind, priority, subject, body, thread_id, reply_to, outcome, settles_task_id, delivery, read_at, created_at FROM team_messages";
+const SELECT_MESSAGE: &str = "SELECT id, from_task_id, to_task_id, from_bot_id, to_bot_id, kind, priority, subject, body, thread_id, reply_to, outcome, settles_task_id, from_session_id, delivery, read_at, created_at FROM team_messages";
 
-const INSERT_MESSAGE: &str = "INSERT INTO team_messages (id, from_task_id, to_task_id, from_bot_id, to_bot_id, kind, priority, subject, body, thread_id, reply_to, outcome, settles_task_id, delivery, read_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+const INSERT_MESSAGE: &str = "INSERT INTO team_messages (id, from_task_id, to_task_id, from_bot_id, to_bot_id, kind, priority, subject, body, thread_id, reply_to, outcome, settles_task_id, from_session_id, delivery, read_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
 
 fn message_from_row(row: &Row<'_>) -> rusqlite::Result<TeamMessageRow> {
     Ok(TeamMessageRow {
@@ -60,6 +62,7 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<TeamMessageRow> {
         reply_to: row.get("reply_to")?,
         outcome: row.get("outcome")?,
         settles_task_id: row.get("settles_task_id")?,
+        from_session_id: row.get("from_session_id")?,
         delivery: row.get("delivery")?,
         read_at: row.get("read_at")?,
         created_at: row.get("created_at")?,
@@ -83,6 +86,7 @@ fn insert(connection: &rusqlite::Connection, row: &TeamMessageRow) -> rusqlite::
             row.reply_to,
             row.outcome,
             row.settles_task_id,
+            row.from_session_id,
             row.delivery,
             row.read_at,
             row.created_at
@@ -97,24 +101,22 @@ impl Store {
         Ok(())
     }
 
-    /// Stores a `worker_done` for `row.settles_task_id` and latches `outcome` into that task when its run `session_id`
-    /// has not ended it yet, in one transaction, so two reports racing settle the task once.
+    /// Stores a `worker_done` that settles `task` for its run `session`, and latches `outcome` into the task when that run
+    /// has not ended it yet, in one transaction, so two reports racing settle the run once. `row` must name `task` and
+    /// `session` as its settled task and sending run. A reopened task has a new run, so its next report settles again.
     pub fn insert_worker_done(
         &self,
         row: &TeamMessageRow,
-        session_id: &str,
+        task: &str,
+        session: &str,
         outcome: TaskOutcome,
     ) -> Result<WorkerDoneStored, StoreError> {
-        let Some(task) = row.settles_task_id.as_deref() else {
-            insert(&self.lock(), row)?;
-            return Ok(WorkerDoneStored::Matched);
-        };
         let mut connection = self.lock();
         let transaction = connection.transaction()?;
         let first = transaction
             .query_row(
-                &format!("{SELECT_MESSAGE} WHERE settles_task_id = ?1"),
-                [task],
+                &format!("{SELECT_MESSAGE} WHERE settles_task_id = ?1 AND from_session_id = ?2"),
+                params![task, session],
                 message_from_row,
             )
             .optional()?;
@@ -123,7 +125,7 @@ impl Store {
         }
         let latched = transaction.execute(
             "UPDATE tasks SET outcome = ?3, updated_at = ?4 WHERE id = ?1 AND session_id = ?2 AND outcome IS NULL",
-            params![task, session_id, outcome, row.created_at],
+            params![task, session, outcome, row.created_at],
         )?;
         let stored = if latched > 0 {
             WorkerDoneStored::Settled
@@ -191,6 +193,17 @@ impl Store {
         Ok(changed)
     }
 
+    /// Whether `thread` holds a message between tasks `a` and `b`, in either direction.
+    pub fn team_thread_between(&self, thread: &str, a: &str, b: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT 1 FROM team_messages WHERE thread_id = ?1 AND ((from_task_id = ?2 AND to_task_id = ?3) OR (from_task_id = ?3 AND to_task_id = ?2)) LIMIT 1",
+                params![thread, a, b],
+                |row| row.get::<_, i64>(0),
+            )?
+            .is_some())
+    }
+
     /// Records where a message went (`inbox` or `run`).
     pub fn set_team_message_delivery(&self, id: &str, delivery: &str) -> Result<(), StoreError> {
         self.lock().execute(
@@ -200,18 +213,19 @@ impl Store {
         Ok(())
     }
 
-    /// The newest message of `kind` that `from` sent to `to`.
+    /// The newest message of `kind` that `from`'s run `session` sent to `to`.
     pub fn latest_team_message(
         &self,
         from: &str,
+        session: &str,
         to: &str,
         kind: &str,
     ) -> Result<Option<TeamMessageRow>, StoreError> {
         self.query_optional(
             &format!(
-                "{SELECT_MESSAGE} WHERE from_task_id = ?1 AND to_task_id = ?2 AND kind = ?3 ORDER BY created_at DESC, id DESC LIMIT 1"
+                "{SELECT_MESSAGE} WHERE from_task_id = ?1 AND from_session_id = ?2 AND to_task_id = ?3 AND kind = ?4 ORDER BY created_at DESC, id DESC LIMIT 1"
             ),
-            params![from, to, kind],
+            params![from, session, to, kind],
             message_from_row,
         )
     }

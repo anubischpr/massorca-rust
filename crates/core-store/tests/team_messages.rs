@@ -59,14 +59,16 @@ fn message(from: &str, to: &str, kind: &str, at: i64) -> TeamMessageRow {
         reply_to: None,
         outcome: None,
         settles_task_id: None,
+        from_session_id: Some(format!("{from}-run")),
         delivery: "inbox".to_owned(),
         read_at: None,
         created_at: at,
     }
 }
 
-fn worker_done(child: &str, parent: &str, outcome: &str) -> TeamMessageRow {
+fn worker_done(child: &str, parent: &str, outcome: &str, session: &str) -> TeamMessageRow {
     let mut row = message(child, parent, "worker_done", now_ms());
+    row.from_session_id = Some(session.to_owned());
     row.outcome = Some(outcome.to_owned());
     row.settles_task_id = Some(child.to_owned());
     row
@@ -108,17 +110,17 @@ fn a_worker_done_settles_its_task_once_and_a_repeat_is_a_duplicate() {
     let team = team(&store);
     let parent = task(&store, &team, None);
     let child = task(&store, &team, Some("child-run"));
-    let first = worker_done(&child, &parent, "succeeded");
+    let first = worker_done(&child, &parent, "succeeded", "child-run");
     let stored = store
-        .insert_worker_done(&first, "child-run", TaskOutcome::Success)
+        .insert_worker_done(&first, &child, "child-run", TaskOutcome::Success)
         .expect("settle");
     assert_eq!(stored, WorkerDoneStored::Settled);
     let row = store.get_task(&child).expect("read").expect("task");
     assert_eq!(row.outcome, Some(TaskOutcome::Success));
 
-    let again = worker_done(&child, &parent, "succeeded");
+    let again = worker_done(&child, &parent, "succeeded", "child-run");
     match store
-        .insert_worker_done(&again, "child-run", TaskOutcome::Success)
+        .insert_worker_done(&again, &child, "child-run", TaskOutcome::Success)
         .expect("repeat")
     {
         WorkerDoneStored::Duplicate(found) => assert_eq!(found.id, first.id),
@@ -139,9 +141,9 @@ fn a_worker_done_for_a_task_already_ended_keeps_its_outcome() {
             .expect("latch")
     );
 
-    let contradicting = worker_done(&child, &parent, "failed");
+    let contradicting = worker_done(&child, &parent, "failed", "child-run");
     let stored = store
-        .insert_worker_done(&contradicting, "child-run", TaskOutcome::Failure)
+        .insert_worker_done(&contradicting, &child, "child-run", TaskOutcome::Failure)
         .expect("conflict");
     assert_eq!(
         stored,
@@ -154,9 +156,9 @@ fn a_worker_done_for_a_task_already_ended_keeps_its_outcome() {
             .is_none()
     );
 
-    let matching = worker_done(&child, &parent, "succeeded");
+    let matching = worker_done(&child, &parent, "succeeded", "child-run");
     let stored = store
-        .insert_worker_done(&matching, "child-run", TaskOutcome::Success)
+        .insert_worker_done(&matching, &child, "child-run", TaskOutcome::Success)
         .expect("match");
     assert_eq!(stored, WorkerDoneStored::Matched);
     assert!(
@@ -181,13 +183,13 @@ fn the_latest_status_is_the_newest_of_its_kind_between_the_two_tasks() {
         store.insert_team_message(row).expect("message");
     }
     let latest = store
-        .latest_team_message(&child, &parent, "status")
+        .latest_team_message(&child, &format!("{child}-run"), &parent, "status")
         .expect("latest")
         .expect("a status");
     assert_eq!(latest.subject, "Halfway");
     assert!(
         store
-            .latest_team_message(&parent, &child, "status")
+            .latest_team_message(&parent, &format!("{parent}-run"), &child, "status")
             .expect("latest")
             .is_none()
     );
@@ -202,4 +204,35 @@ fn removing_a_task_removes_its_messages() {
     store.insert_team_message(&row).expect("message");
     assert!(store.delete_task(&child).expect("delete"));
     assert!(store.get_team_message(&row.id).expect("read").is_none());
+}
+
+#[test]
+fn a_reopened_task_is_settled_again_by_its_new_run() {
+    let store = Store::open_in_memory().expect("store");
+    let team = team(&store);
+    let parent = task(&store, &team, None);
+    let child = task(&store, &team, Some("child-run"));
+    let failed = worker_done(&child, &parent, "failed", "child-run");
+    let stored = store
+        .insert_worker_done(&failed, &child, "child-run", TaskOutcome::Failure)
+        .expect("fail");
+    assert_eq!(stored, WorkerDoneStored::Settled);
+
+    assert!(
+        store
+            .reopen_task(&child, Some("child-run"), now_ms())
+            .expect("reopen")
+    );
+    assert!(
+        store
+            .link_task_session(&child, "second-run", now_ms())
+            .expect("link")
+    );
+    let succeeded = worker_done(&child, &parent, "succeeded", "second-run");
+    let stored = store
+        .insert_worker_done(&succeeded, &child, "second-run", TaskOutcome::Success)
+        .expect("succeed");
+    assert_eq!(stored, WorkerDoneStored::Settled);
+    let row = store.get_task(&child).expect("read").expect("task");
+    assert_eq!(row.outcome, Some(TaskOutcome::Success));
 }

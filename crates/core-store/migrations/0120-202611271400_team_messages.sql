@@ -13,10 +13,12 @@ CREATE TABLE team_messages (
     reply_to TEXT,
     outcome TEXT,
     settles_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    from_session_id TEXT,
     delivery TEXT NOT NULL DEFAULT 'inbox',
     read_at INTEGER,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX team_messages_by_recipient ON team_messages (to_task_id, read_at, created_at);
 CREATE INDEX team_messages_by_sender ON team_messages (from_task_id, to_task_id, kind, created_at);
-CREATE UNIQUE INDEX team_messages_settles ON team_messages (settles_task_id) WHERE settles_task_id IS NOT NULL;
+-- One settlement per run: a reopened task's new run settles it again.
+CREATE UNIQUE INDEX team_messages_settles ON team_messages (settles_task_id, from_session_id) WHERE settles_task_id IS NOT NULL;

@@ -453,7 +453,7 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "message": { "type": "string" },
                     "body": { "type": "string" },
-                    "type": { "enum": ["status", "question", "worker_done", "handoff", "escalation"] },
+                    "type": { "enum": ["status", "question", "handoff", "escalation"] },
                     "priority": { "enum": ["normal", "high", "urgent"] }
                 }
             }),
