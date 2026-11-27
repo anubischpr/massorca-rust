@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use massorca_protocol::{MAX_FRAME_LEN_LOCAL, PeerInfo};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Notify, oneshot, watch};
 
 use super::*;
 use crate::handshake::Welcome;
@@ -200,5 +200,165 @@ async fn dropping_the_link_stops_its_attempts() {
         script.attempts(),
         stopped_at,
         "no attempt runs after the link is dropped"
+    );
+}
+
+#[tokio::test]
+async fn dropping_the_link_closes_the_connection_its_borrowers_hold() {
+    let script = Script::default();
+    let (first, _keep) = connection();
+    let probe = first.clone();
+    script.push(Ok(first));
+    let link = LiveHost::start(script.clone(), fast());
+    let mut states = link.subscribe();
+    until(&mut states, "connected", LiveState::is_connected).await;
+    let mut borrower = link.watch();
+    drop(link);
+
+    tokio::time::timeout(WAIT, probe.closed())
+        .await
+        .expect("the connection ends with its link");
+    let stopped = borrower.client().await.expect_err("the link is gone");
+    assert!(matches!(*stopped, ClientError::Disconnected), "{stopped:?}");
+}
+
+#[tokio::test]
+async fn an_open_connection_is_lent_whatever_state_the_link_reads() {
+    let (client, _keep) = connection();
+    let (_state_tx, state) = watch::channel(LiveState::Unreachable {
+        error: Arc::new(ClientError::Disconnected),
+        attempt: 1,
+        retry_in: Duration::from_secs(1),
+    });
+    let (_connection_tx, connection) = watch::channel(Some(client));
+    let mut watch = LiveWatch { state, connection };
+    watch
+        .client()
+        .await
+        .expect("the open connection is lent, not the state read before a reconnect");
+}
+
+#[tokio::test]
+async fn a_closed_connection_is_not_lent() {
+    let (closed, _keep) = connection();
+    closed.close();
+    tokio::time::timeout(WAIT, closed.closed())
+        .await
+        .expect("the connection ends");
+    let (_state_tx, state) = watch::channel(LiveState::Connected {
+        server: "massorca-test".to_owned(),
+        version: "0.0.0-test".to_owned(),
+    });
+    let (_connection_tx, connection) = watch::channel(Some(closed));
+    let mut watch = LiveWatch { state, connection };
+    let stopped = watch
+        .client()
+        .await
+        .expect_err("a closed connection is not lent");
+    assert!(matches!(*stopped, ClientError::Disconnected), "{stopped:?}");
+}
+
+#[tokio::test]
+async fn ending_the_lending_closes_the_connection_it_lent() {
+    let (client, _keep) = connection();
+    let probe = client.clone();
+    let (sender, held) = watch::channel(None);
+    let lending = Lending(sender);
+    lending.lend(Some(client));
+    drop(lending);
+
+    assert!(held.has_changed().is_err(), "the link no longer lends");
+    tokio::time::timeout(WAIT, probe.closed())
+        .await
+        .expect("the lent connection is closed");
+}
+
+#[tokio::test]
+async fn a_stopped_link_without_a_connection_says_so_without_a_change() {
+    let script = Script::default();
+    let link = LiveHost::start(script.clone(), fast());
+    let mut borrower = link.watch();
+    let mut states = link.subscribe();
+    until(&mut states, "unreachable", |state| {
+        matches!(state, LiveState::Unreachable { .. })
+    })
+    .await;
+
+    drop(link);
+    let ended = tokio::time::timeout(WAIT, borrower.changed())
+        .await
+        .expect("the borrower hears of it");
+    assert!(!ended, "a stopped link is not a change of its connection");
+}
+
+#[tokio::test]
+async fn retry_now_shows_connecting_at_once_not_unreachable() {
+    let script = Script::default();
+    let slow = Backoff::new(Duration::from_secs(3600), Duration::from_secs(3600));
+    let link = LiveHost::start(script.clone(), slow);
+    let mut states = link.subscribe();
+    until(&mut states, "unreachable", |state| {
+        matches!(state, LiveState::Unreachable { .. })
+    })
+    .await;
+
+    link.reconnect();
+    assert!(
+        matches!(link.state(), LiveState::Connecting),
+        "{:?}",
+        link.state()
+    );
+}
+
+/// Fails its first attempt once `gate` opens, then connects with `next`.
+#[derive(Clone)]
+struct Gated {
+    gate: Arc<Notify>,
+    attempts: Arc<AtomicU32>,
+    next: Arc<Mutex<Option<Client>>>,
+}
+
+impl Connect for Gated {
+    async fn connect(&mut self) -> Result<Client, ClientError> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.gate.notified().await;
+            return Err(ClientError::HostUnreachable("refused".to_owned()));
+        }
+        self.next
+            .lock()
+            .expect("the slot")
+            .take()
+            .ok_or_else(|| ClientError::HostUnreachable("refused".to_owned()))
+    }
+}
+
+#[tokio::test]
+async fn a_retry_asked_during_a_failed_attempt_runs_at_once() {
+    let (client, _keep) = connection();
+    let gate = Arc::new(Notify::new());
+    let connect = Gated {
+        gate: Arc::clone(&gate),
+        attempts: Arc::default(),
+        next: Arc::new(Mutex::new(Some(client))),
+    };
+    let attempts = Arc::clone(&connect.attempts);
+    let hour = Duration::from_secs(3600);
+    let link = LiveHost::start(connect, Backoff::new(hour, hour));
+    let mut states = link.subscribe();
+    tokio::time::timeout(WAIT, async {
+        while attempts.load(Ordering::SeqCst) < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the first attempt runs");
+
+    link.reconnect();
+    gate.notify_one();
+    until(&mut states, "connected", LiveState::is_connected).await;
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        2,
+        "the retry did not wait for the backoff"
     );
 }

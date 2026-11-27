@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use massorca_core_store::{Store, StoreError};
+use massorca_core_terminal::TerminalTheme;
 use massorca_core_workspace::WorkspaceLayout;
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{self, ChangeEvent};
@@ -28,6 +29,8 @@ pub(crate) const WORKSPACES_BRANCH_PREFIX_CUSTOM: &str = "workspaces.branch_pref
 pub(crate) const WORKSPACES_LAYOUT: &str = "workspaces.layout";
 const LAYOUT_NESTED: &str = "nested";
 const LAYOUT_FLAT: &str = "flat";
+/// The app theme; terminals answer colour queries from its palette.
+const APPEARANCE_THEME: &str = "appearance.theme";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = Vec::new();
@@ -188,6 +191,7 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     .await?;
     let before = before.as_deref().map(stored_json).transpose()?;
     let after = view(&decl, Some(params.value));
+    follow_theme(&ctx, &decl, &after);
     publish_if_changed(&ctx, &decl, before, &after);
     Ok(after)
 }
@@ -212,6 +216,7 @@ async fn reset(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorB
     .await?;
     let before = before.as_deref().map(stored_json).transpose()?;
     let after = view(&decl, None);
+    follow_theme(&ctx, &decl, &after);
     publish_if_changed(&ctx, &decl, before, &after);
     Ok(after)
 }
@@ -331,5 +336,48 @@ fn view(decl: &SettingDecl, stored: Option<Value>) -> ConfigValue {
             .map(|list| list.iter().map(|&choice| choice.to_owned()).collect()),
         min: decl.kind.range().map(|(min, _)| min),
         max: decl.kind.range().map(|(_, max)| max),
+    }
+}
+
+/// The palette terminals answer colour queries with: light for `light`, else dark, since the service cannot see the
+/// operating system's theme behind `system`.
+pub(crate) fn terminal_theme(value: Option<&Value>) -> TerminalTheme {
+    match value.and_then(Value::as_str) {
+        Some("light") => TerminalTheme::Light,
+        _ => TerminalTheme::Dark,
+    }
+}
+
+/// The terminal palette of the stored `appearance.theme`; an unreadable value counts as unset.
+pub(crate) fn stored_terminal_theme(store: &Store) -> TerminalTheme {
+    let stored = store
+        .get_setting(config::DEFAULT_OWNER, APPEARANCE_THEME)
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<Value>(&json).ok());
+    terminal_theme(stored.as_ref())
+}
+
+/// Keeps the terminals' palette in step when `appearance.theme` changes.
+fn follow_theme(ctx: &RequestCtx, decl: &SettingDecl, after: &ConfigValue) {
+    if decl.owner.to_string() == config::DEFAULT_OWNER && decl.key == APPEARANCE_THEME {
+        ctx.state
+            .terminals
+            .set_theme(terminal_theme(Some(&after.value)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_theme;
+    use massorca_core_terminal::TerminalTheme;
+    use serde_json::json;
+
+    #[test]
+    fn only_light_picks_the_light_terminal_palette() {
+        assert_eq!(terminal_theme(Some(&json!("light"))), TerminalTheme::Light);
+        assert_eq!(terminal_theme(Some(&json!("dark"))), TerminalTheme::Dark);
+        assert_eq!(terminal_theme(Some(&json!("system"))), TerminalTheme::Dark);
+        assert_eq!(terminal_theme(None), TerminalTheme::Dark);
     }
 }

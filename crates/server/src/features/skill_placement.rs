@@ -109,9 +109,10 @@ struct Target {
     agents: Vec<core::PlacementAgent>,
 }
 
-/// Finds the skill the request names among those discovery lists on this host. Only a skill in an agent tool's own home
-/// folder is placed: bundled, repository and plugin skills are not copied. Only a placement forces a fresh scan; a
-/// preview, which any reader may ask for, reuses the shared one.
+/// Finds the skill the request names: an extension's skill by its point key (`<package id>/<skill id>`), else among
+/// those discovery lists on this host. Of the discovered skills, only one in an agent tool's own home folder is placed:
+/// bundled, repository and plugin skills are not copied. Only a placement forces a fresh scan; a preview, which any
+/// reader may ask for, reuses the shared one.
 async fn resolve(
     ctx: &RequestCtx,
     params: &wire::SkillPlaceParams,
@@ -119,6 +120,14 @@ async fn resolve(
 ) -> Result<Target, ErrorBody> {
     let agents = core_agents(&params.agents)?;
     let home = ctx.state.skills.home()?;
+    // A skill an enabled package contributes is placed from its trusted package folder (decision 0153).
+    if let Some(entry) = ctx.state.extension_points.skills.get(&params.skill_id) {
+        return Ok(Target {
+            home,
+            source: entry.value.directory.clone(),
+            agents,
+        });
+    }
     let request = discovery_request(ctx, Vec::new()).await?;
     let scan = ctx.state.skills.scan(request, refresh).await?;
     let skill = scan

@@ -3,6 +3,7 @@
 
 use super::super::Shell;
 use super::dialogs::{TeamDialog, watched_field};
+use super::project::{CODE_CHOICES, code_index};
 use crate::model::teams::{NewProject, ProjectDraft, TeamError, TeamId};
 use crate::service::ServiceHandle;
 use gpui::{
@@ -18,10 +19,6 @@ use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
-
-/// The code sources a team with Workspaces offers, in the order the form lists them (pv96).
-const CODE_SOURCES: [CodeSource; 2] =
-    [CodeSource::ExistingRepository, CodeSource::NewFolderWithGit];
 
 /// The New project form: a name and a goal, and the code source when the team has Workspaces on.
 #[derive(Debug)]
@@ -63,9 +60,9 @@ impl Shell {
         let (goal, goal_events) =
             watched_field("Goal", "What the project is for (optional)", window, cx);
         let source_select = cx.new(|cx| {
-            SelectView::new(CODE_SOURCES.map(CodeSource::label), cx)
+            SelectView::new(CODE_CHOICES.map(CodeSource::label), cx)
                 .label("Code source")
-                .selected(Some(0))
+                .selected(Some(code_index(Some(CodeSource::ExistingRepository))))
                 .layer(OverlayLayer::Dialog)
         });
         let source_events = cx.subscribe_in(
@@ -91,7 +88,7 @@ impl Shell {
     /// Chooses the code source at `index`; an index the form does not offer keeps the choice.
     fn set_new_project_source(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(TeamDialog::NewProject(dialog)) = &mut self.team_dialog
-            && let Some(source) = CODE_SOURCES.get(index)
+            && let Some(source) = CODE_CHOICES.get(index)
         {
             dialog.source = *source;
         }
