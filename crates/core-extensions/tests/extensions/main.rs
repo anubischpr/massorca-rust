@@ -3,6 +3,7 @@
 mod agents;
 mod builtin_refresh;
 mod busy;
+mod contributions;
 mod fakes;
 mod first_party;
 mod fixture;

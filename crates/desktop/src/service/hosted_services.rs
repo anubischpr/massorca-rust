@@ -1,15 +1,15 @@
 //! The hosted services of a host (SKL-35, decision 0097): `marketplace.service.status`, `connect` and `disconnect`,
-//! on this computer's service or on a paired host's own connection. A token goes out once, in `connect`; no answer
+//! on this computer's service or on a paired host's live connection. A token goes out once, in `connect`; no answer
 //! carries it, and nothing here keeps it.
 
-use massorca_client::{Client, Hosts};
-use massorca_profile::Profile;
+use massorca_client::Client;
 use massorca_protocol::methods::hosted_services::{
     ServiceConnect, ServiceList, ServiceName, ServiceStatus, ServiceStatusParams,
 };
 use tokio::sync::oneshot;
 
 use super::bridge::{Command, ServiceHandle};
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 
 /// One hosted-service call, answered on its oneshot. `Debug` of the connect params never prints the token.
@@ -74,12 +74,12 @@ pub(super) fn spawn_local(client: &Client, command: ServicesCommand) {
     tokio::spawn(async move { answer(&client, command).await });
 }
 
-/// Runs one call on a paired host's own connection; a host that cannot be reached refuses it.
-pub(super) fn spawn_host(profile: Profile, host: String, command: ServicesCommand) {
+/// Runs one call on a paired host's live connection; a host that cannot be reached refuses it.
+pub(super) fn spawn_host(live: LiveHosts, host: String, command: ServicesCommand) {
     tokio::spawn(async move {
-        match Client::connect_host(&Hosts::of(&profile), &host, &super::hosts::peer()).await {
+        match live.client(&host).await {
             Ok(client) => answer(&client, command).await,
-            Err(error) => refuse_while_down(command, Refusal::from(&error)),
+            Err(error) => refuse_while_down(command, Refusal::from(&*error)),
         }
     });
 }

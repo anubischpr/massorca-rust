@@ -1,5 +1,6 @@
-//! Remove guards and remove cleanups that other features register, such as the agents' live-session check and the
-//! credential-home deletion. Each registration returns a handle that unregisters it when dropped.
+//! Remove guards, remove cleanups and remove listeners that other features register, such as the agents' live-session
+//! check, the credential-home deletion and the extension points' owner drop. Each registration returns a handle that
+//! unregisters it when dropped.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,9 @@ pub type HookFn = dyn Fn(&str) -> Result<(), HookError> + Send + Sync;
 
 /// A cleanup, called with the package that was removed. Its files are gone by then, so what it provided is passed in.
 pub type CleanupFn = dyn Fn(&RemovedPackage) -> Result<(), HookError> + Send + Sync;
+
+/// A listener, told of every committed removal. It cannot fail or refuse.
+pub type ListenerFn = dyn Fn(&RemovedPackage) + Send + Sync;
 
 /// A package a removal has just deleted, as its cleanups see it (decision 0098).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,13 +32,15 @@ pub struct RemovedPackage {
 pub(crate) enum HookKind {
     Guard,
     Cleanup,
+    Listener,
 }
 
-/// What a hook runs: a guard takes the package id, a cleanup the removed package.
+/// What a hook runs: a guard takes the package id, a cleanup and a listener the removed package.
 #[derive(Clone)]
 pub(crate) enum HookRun {
     Guard(Arc<HookFn>),
     Cleanup(Arc<CleanupFn>),
+    Listener(Arc<ListenerFn>),
 }
 
 impl HookRun {
@@ -42,6 +48,7 @@ impl HookRun {
         match self {
             Self::Guard(_) => HookKind::Guard,
             Self::Cleanup(_) => HookKind::Cleanup,
+            Self::Listener(_) => HookKind::Listener,
         }
     }
 }
