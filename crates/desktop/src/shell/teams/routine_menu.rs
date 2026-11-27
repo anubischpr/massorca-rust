@@ -1,4 +1,4 @@
-//! The menu of a routine card, opened by its More button: History, Edit, Pause or Resume, and Delete, which asks first.
+//! The menu of a routine card, opened by its More button: History, Run now, Edit, Pause or Resume, and Delete, which asks first.
 
 use super::super::Shell;
 use crate::model::teams::{RoutineId, TeamId, TeamPage};
@@ -11,6 +11,7 @@ use massorca_ui::components::popover::OverlayLayer;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RoutineMenuRow {
     History,
+    RunNow,
     Edit,
     Pause,
     Resume,
@@ -26,6 +27,7 @@ fn routine_menu_rows(enabled: bool) -> Vec<RoutineMenuRow> {
     };
     vec![
         RoutineMenuRow::History,
+        RoutineMenuRow::RunNow,
         RoutineMenuRow::Edit,
         pause,
         RoutineMenuRow::Delete,
@@ -79,6 +81,7 @@ impl Shell {
         let (team, routine) = (open.team, open.routine);
         match open.rows.get(row) {
             Some(RoutineMenuRow::History) => self.open_routine_history(team, routine, cx),
+            Some(RoutineMenuRow::RunNow) => self.run_routine_now(team, routine, cx),
             Some(RoutineMenuRow::Edit) => {
                 self.open_routine_form(TeamPage::EditRoutine(team, routine), cx);
             }
@@ -94,6 +97,7 @@ impl Shell {
 fn menu_entry(row: RoutineMenuRow) -> MenuEntry {
     match row {
         RoutineMenuRow::History => MenuItem::new("History").icon(IconName::Clock).into(),
+        RoutineMenuRow::RunNow => MenuItem::new("Run now").icon(IconName::Play).into(),
         RoutineMenuRow::Edit => MenuItem::new("Edit").icon(IconName::Pencil).into(),
         RoutineMenuRow::Pause => MenuItem::new("Pause").into(),
         RoutineMenuRow::Resume => MenuItem::new("Resume").into(),
@@ -114,11 +118,12 @@ mod tests {
             routine_menu_rows(true),
             [
                 RoutineMenuRow::History,
+                RoutineMenuRow::RunNow,
                 RoutineMenuRow::Edit,
                 RoutineMenuRow::Pause,
                 RoutineMenuRow::Delete
             ]
         );
-        assert_eq!(routine_menu_rows(false)[2], RoutineMenuRow::Resume);
+        assert_eq!(routine_menu_rows(false)[3], RoutineMenuRow::Resume);
     }
 }
