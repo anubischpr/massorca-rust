@@ -25,7 +25,7 @@ use crate::credentials;
 use crate::kind::{DiscoverDecl, KindDecl, ListingFormat, ModelChoiceDecl, valid_option_value};
 use crate::process_tree;
 use crate::resolve::{SearchEnv, resolve_first};
-use crate::sessions::{AgentError, Agents};
+use crate::sessions::{AgentError, Agents, Change};
 
 /// The most output a listing may print that is read; a longer one is cut off.
 const LISTING_OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
@@ -284,6 +284,8 @@ pub struct ModelCache {
 struct CacheState {
     entries: HashMap<ListingKey, Entry>,
     running: HashMap<ListingKey, Arc<Running>>,
+    /// The background listings `agent.kinds` has started and that have not ended yet (decision 0166, amendment).
+    background: HashSet<ListingKey>,
 }
 
 /// A listing that is running. A call that finds it waits on the listing's condition variable for the answer, so waiting
@@ -426,6 +428,25 @@ impl ModelCache {
             }
             keep
         });
+    }
+
+    /// Marks a background listing for `key` as started, unless the cache holds a fresh answer for it, a listing for it is
+    /// running, or a background listing for it has not ended. Returns whether it was marked, so at most one starts.
+    pub fn start_background(&self, key: &ListingKey, now_ms: u64) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if fresh_entry(state.entries.get(key), now_ms).is_some()
+            || state.running.contains_key(key)
+            || state.background.contains(key)
+        {
+            return false;
+        }
+        state.background.insert(key.clone())
+    }
+
+    /// Marks the background listing for `key` as ended.
+    pub fn end_background(&self, key: &ListingKey) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.background.remove(key);
     }
 
     /// The models of the last listing the vendor CLI answered for `key`, however old; `None` when none answered. Reading
@@ -623,8 +644,9 @@ impl Agents {
 
     /// Gives each kind's model choices the versioned labels of the catalog's last listing for the kind's default request
     /// (decision 0166, amendment): its active account, else the vendor's usual home when the kind has never had an
-    /// account. Nothing is listed here, so a label turns versioned once a listing has answered and follows each refresh.
-    pub(crate) fn version_kind_labels(&self, kinds: &mut [AgentKind]) {
+    /// account. A detected, enabled kind that discovers and has an active account whose listing is missing or stale gets
+    /// one listing started in the background; the answer never waits for it, and its labels show on a later call.
+    pub(crate) fn version_kind_labels(&self, catalog: &Catalog, kinds: &mut [AgentKind]) {
         for kind in kinds {
             let Some(model) = kind.model.as_mut() else {
                 continue;
@@ -643,6 +665,47 @@ impl Agents {
             if let Some(listed) = self.model_cache().last_listing(&key) {
                 version_choices(&mut model.choices, &listed);
             }
+            let discovers = catalog.find(&kind.id).is_some_and(|entry| {
+                entry.enabled()
+                    && entry
+                        .valid()
+                        .and_then(|decl| decl.model.as_ref())
+                        .is_some_and(|model| model.discover.is_some())
+            });
+            if kind.detected && discovers && key.account.is_some() {
+                self.list_in_background(key);
+            }
+        }
+    }
+
+    /// Starts one listing for `key` on its own thread, unless one is fresh or under way. It runs as `agent.models` would,
+    /// with the account's home, the time limit and the failure rules. Only an answered listing is announced, as an
+    /// account change of the kind, so a client reads `agent.kinds` again; a failure is dropped and the label stays.
+    fn list_in_background(&self, key: ListingKey) {
+        let now = u64::try_from(now_ms()).unwrap_or(0);
+        if !self.model_cache().start_background(&key, now) {
+            return;
+        }
+        let agents = self.clone();
+        let thread_key = key.clone();
+        let spawned = thread::Builder::new()
+            .name("model-listing".to_owned())
+            .spawn(move || {
+                let key = thread_key;
+                let answer = agents.agent_models(&key.kind, key.account.as_deref(), false);
+                agents.model_cache().end_background(&key);
+                match answer {
+                    Ok(models) if models.error.is_none() && models.fetched_at_ms.is_some() => {
+                        agents.notify(Change::Models(key.kind.clone()));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!(kind = %key.kind, %error, "a background model listing was refused");
+                    }
+                }
+            });
+        if spawned.is_err() {
+            self.model_cache().end_background(&key);
         }
     }
 

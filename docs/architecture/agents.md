@@ -248,8 +248,14 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
   numbers joined by dots, so `claude-opus-5-5` reads as `Opus 5.5`. A trailing eight-digit date and a bracketed variant
   are dropped. Any other shape, or no resolved id, keeps the declared label. `agent.models` shows it on the declared row,
   and `agent.kinds` shows it on `model.choices[].label` from the last listing of the kind's active account (or of the
-  usual home when the kind has never had an account). `agent.kinds` never starts a listing, so the label turns
-  versioned once one has answered and changes with each refresh. A discovered row keeps the vendor's own label.
+  usual home when the kind has never had an account). A discovered row keeps the vendor's own label.
+- Background listing (decision 0166, amendment): when a detected, enabled kind that declares `model.discover` has an
+  active account whose listing is missing or stale (the cache would not answer it fresh), `agent.kinds` starts one
+  listing for that account on its own thread and answers at once with the labels it has. A second call while that
+  listing is under way starts none. The listing runs as `agent.models` runs it (account home, time limit, failure
+  rules). An answered listing is announced as `agent.accounts_changed` for the kind, so a client reads `agent.kinds`
+  again and gets the versioned label; a failure is not announced and the label stays declared. The usual home is never
+  listed in the background.
 
 ## Session record (`AgentSession`)
 
@@ -1172,7 +1178,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   left undecided, or refused and deleted); a check that changes the state; an import (kept, or
   refused and deleted); an activation (the account made active, or chosen by a project); a removal
   (the removed account, with the state it had); and a migration or adoption. A refused sign-in or
-  import is announced with the state its check found. An import that creates no account announces
+  import is announced with the state its check found. A background model listing that `agent.kinds` started is
+  announced under this topic too (decision 0166, amendment), and the desktop reads the kinds again on it. An import that creates no account announces
   nothing.
 - **Origin**: `origin` is `sign_in`, `import` or `migrated`, from the row's origin column. A value
   this build does not know, or a summary from a peer that omits the field, reads as `unknown`.

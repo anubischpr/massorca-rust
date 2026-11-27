@@ -7,7 +7,8 @@ mod harness;
 use std::fs;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use harness::{ChildGuard, Sandbox, massorca_in, stdout_text};
 use serde_json::{Value, json};
@@ -271,6 +272,74 @@ fn a_model_the_vendor_resolves_reads_as_its_version_in_the_models_and_the_kinds(
         kinds_label(&sandbox, "claude-like", "declared"),
         "Opus 5.5",
         "agent kinds reads the catalog's last listing for the active account"
+    );
+}
+
+/// Waits until `check` holds, asking again every 200 ms for at most 30 seconds.
+fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !check() {
+        assert!(Instant::now() < deadline, "{what} did not happen in time");
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn agent_kinds_lists_the_active_account_in_the_background_and_reads_as_its_version_later() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox);
+    let counter = sandbox.home().join("background-calls.txt");
+    let _service = start_service(
+        &sandbox,
+        &[("FAKE_AGENT_MODELS_COUNT", path_text(&counter))],
+    );
+    import(&sandbox, "claude-like", "resolved", RESOLVED_TOKEN);
+
+    assert_eq!(
+        kinds_label(&sandbox, "claude-like", "declared"),
+        "Declared",
+        "the first answer does not wait for the listing it starts"
+    );
+    eventually("the versioned label", || {
+        kinds_label(&sandbox, "claude-like", "declared") == "Opus 5.5"
+    });
+    assert_eq!(
+        calls(&counter),
+        1,
+        "one background listing, and none once its answer is fresh"
+    );
+}
+
+#[test]
+fn two_agent_kinds_calls_in_a_row_start_one_background_listing() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox);
+    let counter = sandbox.home().join("dedupe-calls.txt");
+    // The listing hangs under a one-minute limit, so it is still running when the second call comes, and a call that
+    // waited for it would take that minute.
+    let _service = start_service(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_MODELS_COUNT", path_text(&counter)),
+            ("FAKE_AGENT_MODELS_HANG", "1"),
+            ("MASSORCA_MODEL_LISTING_TIMEOUT_MS", "60000"),
+        ],
+    );
+    import(&sandbox, "claude-like", "resolved", RESOLVED_TOKEN);
+
+    let started = Instant::now();
+    kinds_label(&sandbox, "claude-like", "declared");
+    kinds_label(&sandbox, "claude-like", "declared");
+    assert!(
+        started.elapsed() < Duration::from_secs(45),
+        "agent kinds never waits for a hung listing"
+    );
+    eventually("the background listing", || calls(&counter) >= 1);
+    thread::sleep(Duration::from_secs(1));
+    assert_eq!(
+        calls(&counter),
+        1,
+        "the second call joins the listing in flight"
     );
 }
 

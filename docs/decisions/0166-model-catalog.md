@@ -83,7 +83,20 @@ The desktop shows a model choice's `label` as `agent.kinds` gives it, and the bu
 - **Where it shows.** `agent.models` gives the declared row the derived label. `agent.kinds` gives
   `model.choices[].label` the derived label from the catalog's last answered listing for the kind's default request
   (its active account, else the usual home when the kind has never had an account). `agent.kinds` never starts a
-  listing: the label follows the catalog when a listing answers or is refreshed, and stays declared until then.
-  A discovered row keeps the vendor's own label.
+  listing for the usual home. A discovered row keeps the vendor's own label.
+- **`agent.kinds` lists in the background.** The owner must see the version without running anything, and the desktop
+  reads only `agent.kinds`. So when a detected, enabled kind that declares `model.discover` has an active account and
+  the cache holds no fresh answer for it, `agent.kinds` starts one listing on its own thread and answers at once. The
+  cache marks a background listing per (kind, account) until it ends, so repeated calls start no second one, and a
+  listing already running (from `agent.models`) is joined, not repeated. The listing runs as `agent.models` runs it:
+  the account's own home, the time limit, `not_signed_in` and the other failure rules. Only the active account is
+  listed this way, never the usual home, so a service whose `PATH` finds a vendor CLI never lists a home no account
+  names (the test harness runs the service on the developer's `PATH`, and its kinds with accounts are fake agents).
+- **The event.** No event announces a change to the kinds; the desktop reads them on connect and on extension events.
+  The narrowest agents event is `agent.accounts_changed` (id: the kind), so an answered background listing is
+  announced under it, and the desktop now reads the kinds again on that event too, which also keeps a kind's
+  `imported` mark current. A failed listing is not announced: the label stays declared, and the 30 second failure
+  window bounds how often a later `agent.kinds` retries. An answered listing is fresh for 10 minutes, so the re-read
+  it causes starts nothing.
 - **No new field.** Nothing in the desktop, the CLI or the tests matches on a model's label, so `label` changes meaning
   in place ("the label the vendor's current model reads as") and no `version` field is added. Wire: no shape change.

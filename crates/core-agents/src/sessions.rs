@@ -122,6 +122,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
+    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment); the kind id. Announced
+    /// as an account change of the kind, so a client reads the kinds again. Watchers do not get it.
+    Models(String),
     /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
     /// of the session do.
     Chat(Box<crate::chat::ChatChanged>),
@@ -560,14 +563,14 @@ impl Agents {
     /// Every declared kind, read again from the profile, with programs resolved on the program search (decision 0164).
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
-        let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
-            .views(profile_dir, &self.program_search());
+        let catalog = Catalog::load(self.kind_packages(), profile_dir);
+        let mut kinds = catalog.views(profile_dir, &self.program_search());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
         }
         // A model the catalog's last listing resolves reads as its version (decision 0166, amendment).
-        self.version_kind_labels(&mut kinds);
+        self.version_kind_labels(&catalog, &mut kinds);
         AgentKinds { kinds }
     }
 
