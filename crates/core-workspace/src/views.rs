@@ -18,6 +18,7 @@ pub(crate) fn project(row: &ProjectRow) -> Project {
         added_at_ms: row.added_at,
         base_ref: row.base_ref.clone(),
         icon: row.icon.as_deref().and_then(ProjectIcon::from_stored),
+        remote_owner: None,
     }
 }
 
@@ -50,6 +51,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         comment: row.comment.clone(),
         setup: None,
         name_generated: row.name_generated,
+        in_place: row.in_place,
     }
 }
 

@@ -137,6 +137,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
         .expect("the project is added");
     let workspace = client
         .workspace_create(&WorkspaceCreateParams {
+            in_place: false,
             project: project.id.clone(),
             name: "feature".to_owned(),
             ..base_workspace_create_params()
@@ -591,6 +592,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 

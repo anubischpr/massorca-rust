@@ -1,11 +1,12 @@
 //! The `--icon` values of `project add` and `project update` (decision 0091): `emoji:<emoji>`, `lucide:<name>` or
-//! `image:<PNG file>`. An image file is read here, within the size limit, and sent to the service as an upload.
+//! `lucide:<name>:<colour>`, or `image:<PNG file>`. An image file is read here, within the size limit, and sent to the
+//! service as an upload.
 
 use std::path::Path;
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
-    MAX_PROJECT_ICON_IMAGE_BYTES, ProjectIcon, ProjectIconSource,
+    IconColor, MAX_PROJECT_ICON_IMAGE_BYTES, ProjectIcon, ProjectIconSource,
 };
 
 use crate::cwd_path::PathRules;
@@ -18,12 +19,29 @@ pub fn parse(spec: &str, paths: &PathRules) -> Result<ProjectIcon, CliError> {
         "emoji" => Ok(ProjectIcon::Emoji {
             emoji: value.to_owned(),
         }),
-        "lucide" => Ok(ProjectIcon::Lucide {
-            name: value.to_owned(),
-        }),
+        "lucide" => lucide(value),
         "image" => upload(&paths.path(Path::new(value))?),
         _ => Err(usage(spec)),
     }
+}
+
+/// A Lucide icon `name`, optionally `:<colour>` with a usage colour token or `neutral`.
+fn lucide(value: &str) -> Result<ProjectIcon, CliError> {
+    let (name, color) = match value.split_once(':') {
+        Some((name, token)) => {
+            let color = IconColor::from_token(token).ok_or_else(|| {
+                invalid(&format!(
+                    "{token:?} is not an icon colour: use usage-1 to usage-6 or neutral"
+                ))
+            })?;
+            (name, Some(color))
+        }
+        None => (value, None),
+    };
+    Ok(ProjectIcon::Lucide {
+        name: name.to_owned(),
+        color,
+    })
 }
 
 fn usage(spec: &str) -> CliError {

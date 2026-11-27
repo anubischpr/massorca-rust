@@ -153,6 +153,7 @@ fn bridge_for(home: &Path) -> (ServiceBridge, ServiceHandle, UnboundedReceiver<S
 
 fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         ..base_workspace_create_params()
@@ -541,6 +542,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 
@@ -551,6 +553,7 @@ fn base_workspace_remove_params() -> massorca_protocol::methods::workspaces::Wor
         force: false,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
         allow_failed_archive: false,
     }
 }
