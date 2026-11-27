@@ -51,6 +51,7 @@ impl GitService {
             .call(
                 workspaces::CREATE,
                 &WorkspaceCreateParams {
+                    in_place: false,
                     project: project.id,
                     name: "feature".to_owned(),
                     branch: None,
@@ -100,6 +101,7 @@ impl GitService {
             .call(
                 workspaces::CREATE,
                 &WorkspaceCreateParams {
+                    in_place: false,
                     project: project.id,
                     name: "notes".to_owned(),
                     branch: None,

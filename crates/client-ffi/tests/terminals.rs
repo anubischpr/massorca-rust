@@ -390,6 +390,7 @@ async fn terminal_in_folder(home: &Path) -> String {
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id,
                 name: "folder".to_owned(),
                 branch: None,
