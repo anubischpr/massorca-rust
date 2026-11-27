@@ -20,6 +20,10 @@ fn webp_bytes() -> Vec<u8> {
     bytes
 }
 
+fn svg_bytes() -> Vec<u8> {
+    br#"<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>"#.to_vec()
+}
+
 fn write(path: &Path, contents: &[u8]) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("create dirs");
     fs::write(path, contents).expect("write file");
@@ -186,4 +190,310 @@ fn a_folder_takes_its_icon_from_its_files_too() {
         .expect("add project");
 
     assert_eq!(detected(project.icon), detected_from("favicon.png"));
+}
+
+#[test]
+fn a_package_json_icon_inside_the_repository_becomes_the_icon() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("package.json"),
+        br#"{"name":"app","icon":"assets/app-mark.png"}"#,
+    );
+    write(&fx.repo().join("assets/app-mark.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(detected(project.icon), detected_from("assets/app-mark.png"));
+}
+
+#[test]
+fn a_package_json_icon_may_be_a_png_data_uri() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("package.json"),
+        br#"{"icon":"data:image/png;base64,iVBORw0KGgpmaWxsZXI="}"#,
+    );
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(
+        project.icon,
+        Some(ProjectIcon::Image {
+            src: "data:image/png;base64,iVBORw0KGgpmaWxsZXI=".to_owned(),
+            source: ProjectIconSource::File,
+            label: Some("package.json".to_owned()),
+        })
+    );
+}
+
+#[test]
+fn a_package_json_icon_outside_the_repository_is_refused() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("package.json"),
+        br#"{"icon":"../outside.png"}"#,
+    );
+    write(&fx.path("outside.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn an_absolute_package_json_icon_path_is_refused() {
+    let fx = Fixture::new();
+    let outside = fx.path("outside.png");
+    write(&outside, &png_bytes());
+    let manifest = serde_json::json!({ "icon": outside.display().to_string() });
+    write(
+        &fx.repo().join("package.json"),
+        manifest.to_string().as_bytes(),
+    );
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn a_package_json_icon_image_over_the_size_limit_is_refused() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("package.json"),
+        br#"{"icon":"assets/big.png"}"#,
+    );
+    let mut oversized = png_bytes();
+    oversized.resize(256 * 1024 + 1, 0);
+    write(&fx.repo().join("assets/big.png"), &oversized);
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn a_package_json_over_the_size_limit_is_not_read() {
+    let fx = Fixture::new();
+    let padding = "x".repeat(128 * 1024);
+    write(
+        &fx.repo().join("package.json"),
+        format!(r#"{{"icon":"assets/app-mark.png","padding":"{padding}"}}"#).as_bytes(),
+    );
+    write(&fx.repo().join("assets/app-mark.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn a_conventional_file_wins_over_the_package_json_icon() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("package.json"),
+        br#"{"icon":"assets/app-mark.png"}"#,
+    );
+    write(&fx.repo().join("assets/app-mark.png"), &png_bytes());
+    write(&fx.repo().join("favicon.webp"), &webp_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(detected(project.icon), detected_from("favicon.webp"));
+}
+
+#[test]
+fn a_declared_icon_in_a_jsx_route_root_is_used() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"export function Head() { return <link rel="icon" href="/brand/mark.png" />; }"#,
+    );
+    write(&fx.repo().join("public/brand/mark.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(
+        detected(project.icon),
+        detected_from("public/brand/mark.png")
+    );
+}
+
+#[test]
+fn a_links_entry_in_a_jsx_route_root_declares_the_icon() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"export const links = () => [{ rel: 'shortcut icon', href: '/brand/mark.png', type: 'image/png' }];"#,
+    );
+    write(&fx.repo().join("public/brand/mark.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(
+        detected(project.icon),
+        detected_from("public/brand/mark.png")
+    );
+}
+
+#[test]
+fn a_jsx_route_icon_with_a_computed_href_is_not_followed() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"<link rel="icon" href={markUrl} />"#,
+    );
+    write(
+        &fx.repo().join("src/root.tsx"),
+        br#"export const links = () => [{ rel: "icon", href: markUrl }];"#,
+    );
+    write(&fx.repo().join("public/brand/mark.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn a_jsx_route_that_declares_only_an_svg_icon_gives_no_icon() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"<link rel="icon" href="/logo.svg" />"#,
+    );
+    write(&fx.repo().join("public/logo.svg"), &svg_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn an_inline_svg_logo_in_a_jsx_route_is_not_rendered() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("src/root.tsx"),
+        br#"export const Logo = () => <svg viewBox="0 0 8 8"><circle r="4" /></svg>;"#,
+    );
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn a_jsx_route_icon_cannot_leave_the_repository() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"<link rel="icon" href="../../outside.png" />"#,
+    );
+    write(&fx.path("outside.png"), &png_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[test]
+fn an_entry_page_icon_wins_over_a_jsx_route_icon() {
+    let fx = Fixture::new();
+    write(
+        &fx.repo().join("index.html"),
+        br#"<link rel="icon" href="/brand.png">"#,
+    );
+    write(&fx.repo().join("public/brand.png"), &png_bytes());
+    write(
+        &fx.repo().join("app/root.tsx"),
+        br#"<link rel="icon" href="/other.png" />"#,
+    );
+    write(&fx.repo().join("public/other.png"), &webp_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(detected(project.icon), detected_from("public/brand.png"));
+}
+
+#[test]
+fn a_public_logo_in_webp_becomes_the_icon() {
+    let fx = Fixture::new();
+    write(&fx.repo().join("public/logo.webp"), &webp_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(detected(project.icon), detected_from("public/logo.webp"));
+}
+
+#[test]
+fn an_svg_logo_is_not_an_icon() {
+    let fx = Fixture::new();
+    write(&fx.repo().join("public/logo.svg"), &svg_bytes());
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_an_icon_outside_the_repository_is_not_read() {
+    let fx = Fixture::new();
+    write(&fx.path("outside.png"), &png_bytes());
+    std::os::unix::fs::symlink(fx.path("outside.png"), fx.repo().join("favicon.png"))
+        .expect("create symlink");
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(project.icon, None);
 }

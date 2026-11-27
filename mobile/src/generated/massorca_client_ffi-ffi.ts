@@ -251,10 +251,42 @@ interface NativeModuleInterface {
     uniffiSelf: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): Uint8Array;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_pause_routine(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+    routine: Uint8Array,
+  ): bigint;
   ubrn_uniffi_massorca_client_ffi_fn_method_host_protocol(
     uniffiSelf: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): Uint8Array;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_resume_routine(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+    routine: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_routine_runs(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+    routine: Uint8Array,
+    limit: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_run_routine(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+    routine: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_team_bots(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_team_routines(
+    uniffiSelf: bigint,
+    team: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_teams(
+    uniffiSelf: bigint,
+  ): bigint;
   ubrn_uniffi_massorca_client_ffi_fn_method_host_terminals(
     uniffiSelf: bigint,
     workspace: Uint8Array,
@@ -355,7 +387,14 @@ interface NativeModuleInterface {
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_attach_terminal(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_git_status(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_name(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_pause_routine(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_protocol(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_resume_routine(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_routine_runs(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_run_routine(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_team_bots(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_team_routines(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_teams(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_terminals(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_watch_agents(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_watch_git(): number;

@@ -11,9 +11,9 @@ use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectIcon, ProjectInspectParams, ProjectInspection,
-    ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
-    ProjectUpdateParams,
+    self, IconColor, Project, ProjectAddParams, ProjectIcon, ProjectInspectParams,
+    ProjectInspection, ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams, ProjectUpdateParams,
 };
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
@@ -491,6 +491,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id.clone(),
                 name: "main".to_owned(),
                 branch: None,
@@ -660,5 +661,164 @@ async fn project_update_sets_keeps_and_clears_the_icon_and_publishes_project_cha
         .await
         .expect("project.show");
     assert_eq!(shown.icon, None);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn project_update_keeps_a_lucide_colour_and_project_show_returns_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("project.add");
+    let icon = ProjectIcon::Lucide {
+        name: "Folder".to_owned(),
+        color: Some(IconColor::Usage3),
+    };
+
+    let set: Project = client
+        .call(
+            projects::UPDATE,
+            &ProjectUpdateParams {
+                project: project.id.clone(),
+                icon: Some(Some(icon.clone())),
+            },
+        )
+        .await
+        .expect("project.update sets a coloured icon");
+    assert_eq!(set.icon, Some(icon.clone()));
+    let shown: Project = client
+        .call(
+            projects::SHOW,
+            &ProjectRef {
+                project: project.id.clone(),
+            },
+        )
+        .await
+        .expect("project.show");
+    assert_eq!(shown.icon, Some(icon));
+
+    let refused = client
+        .call::<_, Project>(
+            projects::UPDATE,
+            &ProjectUpdateParams {
+                project: project.id.clone(),
+                icon: Some(Some(ProjectIcon::Lucide {
+                    name: "Folder".to_owned(),
+                    color: Some(IconColor::Unknown),
+                })),
+            },
+        )
+        .await;
+    assert_eq!(
+        remote_code(&refused.expect_err("an unknown colour is refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn init_git_turns_a_folder_project_into_a_git_project_and_publishes_project_changed() {
+    let home = temp_home();
+    let folder = home.path().join("notes");
+    std::fs::create_dir_all(&folder).expect("create folder");
+    std::fs::write(folder.join("notes.txt"), "keep me").expect("write notes");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut params = add_params(&folder);
+    params.kind = Some(ProjectKind::Folder);
+    let added: Project = client
+        .call(projects::ADD, &params)
+        .await
+        .expect("add the folder");
+    let mut events = client.subscribe_events().await.expect("subscribe");
+
+    let initialized: Project = client
+        .call(
+            projects::INIT_GIT,
+            &ProjectRef {
+                project: "notes".to_owned(),
+            },
+        )
+        .await
+        .expect("project.init_git");
+
+    assert_eq!(initialized.id, added.id);
+    assert_eq!(initialized.kind, ProjectKind::Git);
+    assert!(folder.join(".git").is_dir());
+    assert!(
+        folder.join("notes.txt").is_file(),
+        "the folder's files stay"
+    );
+    let event = timeout(super::common::REPLY_WAIT, events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes");
+    assert_eq!(
+        event,
+        ChangeEvent {
+            topic: TOPIC_PROJECT_CHANGED.to_owned(),
+            id: initialized.id.clone()
+        }
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn init_git_refuses_a_repository_a_git_project_and_an_unknown_project_with_typed_codes() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let plain = home.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("create folder");
+    run_git(&plain, &["init", "-q"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut folder_params = add_params(&plain);
+    folder_params.kind = Some(ProjectKind::Folder);
+    let _: Project = client
+        .call(projects::ADD, &folder_params)
+        .await
+        .expect("add the folder that is a repository");
+    let _: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("add the repository");
+
+    let already_repository = client
+        .call::<_, Project>(
+            projects::INIT_GIT,
+            &ProjectRef {
+                project: "plain".to_owned(),
+            },
+        )
+        .await
+        .expect_err("a folder that is a repository");
+    assert_eq!(remote_code(&already_repository), codes::PROJECT_ALREADY_GIT);
+    let git_project = client
+        .call::<_, Project>(
+            projects::INIT_GIT,
+            &ProjectRef {
+                project: "repo".to_owned(),
+            },
+        )
+        .await
+        .expect_err("a git project");
+    assert_eq!(remote_code(&git_project), codes::PROJECT_ALREADY_GIT);
+    let unknown = client
+        .call::<_, Project>(
+            projects::INIT_GIT,
+            &ProjectRef {
+                project: "nothing".to_owned(),
+            },
+        )
+        .await
+        .expect_err("an unknown project");
+    assert_eq!(remote_code(&unknown), codes::PROJECT_NOT_FOUND);
     stop(running).await;
 }
