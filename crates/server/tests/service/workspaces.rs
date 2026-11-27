@@ -19,9 +19,13 @@ use massorca_protocol::methods::workspaces::{
 use massorca_protocol::{capabilities, codes};
 use tokio::time::timeout;
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use massorca_core_store::{
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, new_id, now_ms,
+};
 
-fn git_repo(dir: &Path) {
+use super::common::{connect, profile, remote_code, start, stop, temp_home};
+
+pub(super) fn git_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create repository dir");
     git(dir, &["init", "-q"]);
     std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
@@ -29,7 +33,7 @@ fn git_repo(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
-fn git(dir: &Path, args: &[&str]) {
+pub(super) fn git(dir: &Path, args: &[&str]) {
     let output = massorca_process::command("git")
         .args([
             "-c",
@@ -50,8 +54,9 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
+pub(super) fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         branch: None,
@@ -66,17 +71,18 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     }
 }
 
-fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
+pub(super) fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
     WorkspaceRemoveParams {
         workspace: workspace.to_owned(),
         force,
         discard_ignored: false,
         forget_orphan: false,
+        with_children: false,
         allow_failed_archive: false,
     }
 }
 
-async fn next_event(events: &mut Subscription) -> ChangeEvent {
+pub(super) async fn next_event(events: &mut Subscription) -> ChangeEvent {
     timeout(Duration::from_secs(10), events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
@@ -85,7 +91,11 @@ async fn next_event(events: &mut Subscription) -> ChangeEvent {
 }
 
 /// A git project at `repo` whose workspaces go under `<home>/ws`.
-async fn add_repo_project(client: &massorca_client::Client, home: &Path, repo: &Path) -> Project {
+pub(super) async fn add_repo_project(
+    client: &massorca_client::Client,
+    home: &Path,
+    repo: &Path,
+) -> Project {
     client
         .call(
             projects::ADD,
@@ -516,6 +526,7 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
                 force: true,
                 discard_ignored: true,
                 forget_orphan: false,
+                with_children: false,
                 allow_failed_archive: false,
             },
         )
@@ -569,12 +580,94 @@ async fn removing_a_workspace_stops_its_terminals_first() {
         .call(terminals::LIST, &TerminalListParams { workspace: None })
         .await
         .expect("list");
-    let after = listed
-        .terminals
-        .iter()
-        .find(|listed| listed.id == terminal.id)
-        .expect("the stopped terminal stays listed as exited");
-    assert_eq!(after.state, TerminalState::Exited);
+    assert!(
+        listed
+            .terminals
+            .iter()
+            .all(|listed| listed.id != terminal.id),
+        "the stopped terminal and its output are forgotten with the workspace: {listed:?}"
+    );
+    stop(running).await;
+}
+
+/// An ended session of `workspace`, written to the store directly, released with archived output `text`.
+fn released_session(store: &Store, workspace: &str, text: &str) -> String {
+    let row = AgentSessionRow {
+        id: new_id(),
+        kind: "fake".to_owned(),
+        workspace_id: workspace.to_owned(),
+        parent_id: None,
+        title: None,
+        read_only: true,
+        agent_ref: None,
+        terminal_id: None,
+        request_id: None,
+        created_at: now_ms(),
+        exit: Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: now_ms(),
+        }),
+        activity: None,
+        result: None,
+        brought_back_at: None,
+        holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
+        retained: false,
+        released_at: None,
+    };
+    store.insert_agent_session(&row).expect("session");
+    assert!(
+        store
+            .release_agent_session(&row.id, text, false, now_ms())
+            .expect("the release is recorded")
+    );
+    row.id
+}
+
+#[tokio::test]
+async fn removing_a_workspace_deletes_the_archived_output_of_its_sessions_only() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let mut ids = Vec::new();
+    for name in ["gone", "kept"] {
+        let created: Workspace = client
+            .call(workspaces::CREATE, &create_params(&project.name, name))
+            .await
+            .expect("create");
+        ids.push(created.id);
+    }
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let gone = released_session(&store, &ids[0], "output of the removed workspace");
+    let kept = released_session(&store, &ids[1], "output of the other workspace");
+
+    let _: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&ids[0], false))
+        .await
+        .expect("remove");
+
+    assert!(
+        store
+            .get_agent_session_archive(&gone)
+            .expect("read")
+            .is_none(),
+        "the removed workspace's archived output is deleted"
+    );
+    assert!(
+        store.get_agent_session(&gone).expect("read").is_none(),
+        "its session rows go with the workspace row"
+    );
+    let other = store
+        .get_agent_session_archive(&kept)
+        .expect("read")
+        .expect("the other workspace's archive stays");
+    assert_eq!(other.text, "output of the other workspace");
     stop(running).await;
 }
 
@@ -628,5 +721,71 @@ async fn current_names_the_workspace_that_holds_a_directory_and_refuses_one_outs
         remote_code(&refused.expect_err("outside")),
         codes::WORKSPACE_NOT_FOUND
     );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_in_place_workspace_is_the_project_checkout_and_removing_it_only_forgets_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    git(&repo, &["checkout", "-q", "-b", "main"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(
+        client
+            .welcome()
+            .capabilities
+            .iter()
+            .any(|name| name == capabilities::WORKSPACE_IN_PLACE),
+        "the service offers workspace-in-place/1"
+    );
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let mut params = create_params(&project.name, "");
+    params.in_place = true;
+
+    let created = client
+        .workspace_create(&params)
+        .await
+        .expect("create in place");
+    assert!(created.in_place);
+    assert_eq!(created.kind, WorkspaceKind::Worktree);
+    assert_eq!(created.branch.as_deref(), Some("main"));
+    assert!(created.setup.is_none(), "no worktree, so no setup script");
+    assert_eq!(
+        next_event(&mut events).await,
+        ChangeEvent {
+            topic: TOPIC_WORKSPACE_CREATED.to_owned(),
+            id: created.id.clone()
+        }
+    );
+    let again = client
+        .workspace_create(&params)
+        .await
+        .expect("a repeat returns the same workspace");
+    assert_eq!(again.id, created.id);
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_CREATED);
+
+    let mut with_branch = params.clone();
+    with_branch.branch = Some("topic".to_owned());
+    let refused = client.workspace_create(&with_branch).await;
+    assert_eq!(
+        remote_code(&refused.expect_err("refused")),
+        codes::REQUEST_INVALID_PARAMS
+    );
+
+    let removed: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, false))
+        .await
+        .expect("remove");
+    assert!(removed.directory_kept);
+    assert!(!removed.branch_deleted);
+    assert!(repo.join("README.md").is_file());
+    assert_eq!(
+        next_event(&mut events).await.topic,
+        TOPIC_WORKSPACE_REMOVING
+    );
+    assert_eq!(next_event(&mut events).await.topic, TOPIC_WORKSPACE_REMOVED);
     stop(running).await;
 }

@@ -98,6 +98,12 @@ pub(super) fn extension_commands() -> Vec<CommandDescriptor> {
             ),
         ),
         command(
+            "extension.points",
+            "List what each owner registered on the tool, skill, view, theme and status-rule points",
+            "extensions.points",
+            no_args(),
+        ),
+        command(
             "extension.log",
             "Show the recent install, update, rollback and remove runs of an extension",
             "extensions.log",

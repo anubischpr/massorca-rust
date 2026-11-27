@@ -21,6 +21,8 @@ use crate::attach::{
 };
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
+pub use crate::queries::TerminalTheme;
+use crate::queries::{Query, QueryScanner, ThemeCell, colour_reply};
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, SCROLLBACK_ROWS, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
@@ -47,8 +49,6 @@ const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_secs(2);
 /// `WAIT_RETRY_MAX`; a kill wakes it at once.
 const WAIT_RETRY_FIRST: Duration = Duration::from_millis(250);
 const WAIT_RETRY_MAX: Duration = Duration::from_secs(5);
-/// The cursor position query (DSR 6). ConPTY renders nothing until it is answered.
-const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -264,6 +264,8 @@ struct Inner {
     /// Serializes creates that carry a request id, so a retry racing the first finds it.
     request_gate: Mutex<()>,
     waits: AtomicUsize,
+    /// The palette colour queries are answered from.
+    theme: Arc<ThemeCell>,
 }
 
 #[derive(Default)]
@@ -361,8 +363,19 @@ impl TerminalManager {
                 registry: Mutex::new(Registry::default()),
                 request_gate: Mutex::new(()),
                 waits: AtomicUsize::new(0),
+                theme: Arc::default(),
             }),
         }
+    }
+
+    /// The palette the service answers colour queries with when no emulator is attached.
+    pub fn theme(&self) -> TerminalTheme {
+        self.inner.theme.get()
+    }
+
+    /// Changes the palette of every terminal's later colour answers.
+    pub fn set_theme(&self, theme: TerminalTheme) {
+        self.inner.theme.set(theme);
     }
 
     /// Starts a terminal. Blocks while the program is spawned.
@@ -451,19 +464,10 @@ impl TerminalManager {
             pid: spawned.master.pid(),
             master: Arc::new(spawned.master),
             tree: spawned.tree,
-            core: Mutex::new(Core {
-                screen: Screen::new(spec.size.cols, spec.size.rows),
-                ring: ByteRing::new(RING_CAPACITY),
-                size: spec.size,
-                status: Status::Live,
-                kill_reason: None,
-                attachments: Vec::new(),
-                query_match: 0,
-                held: VecDeque::new(),
-                closing: false,
-            }),
+            core: Mutex::new(Core::new(spec.size)),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
+            theme: Arc::clone(&self.inner.theme),
         });
         {
             // Registered before the waiter starts, so its `retire` finds the terminal.
@@ -894,8 +898,8 @@ struct Core {
     /// Set by the first kill, read when the exit is recorded.
     kill_reason: Option<ExitReason>,
     attachments: Vec<Arc<AttachShared>>,
-    /// Bytes of a cursor query matched at the end of the previous read.
-    query_match: usize,
+    /// Finds queries, including one split across reads.
+    queries: QueryScanner,
     /// Cursor queries that arrived while an emulator was attached, oldest first. A client's
     /// reply takes the oldest off. The service answers them itself when a client attaches
     /// (its snapshot cannot show the query) and when every emulator that received one has
@@ -916,6 +920,20 @@ struct HeldQuery {
 }
 
 impl Core {
+    fn new(size: PtySize) -> Self {
+        Self {
+            screen: Screen::new(size.cols, size.rows),
+            ring: ByteRing::new(RING_CAPACITY),
+            size,
+            status: Status::Live,
+            kill_reason: None,
+            attachments: Vec::new(),
+            queries: QueryScanner::default(),
+            held: VecDeque::new(),
+            closing: false,
+        }
+    }
+
     /// Sets the model's size and tells every attachment. Never blocks.
     fn set_size(&mut self, size: PtySize) {
         self.screen.resize(size.cols, size.rows);
@@ -939,40 +957,47 @@ impl Core {
     }
 
     /// Applies one PTY read to the screen, the ring and the attachments. Returns the
-    /// replies to cursor queries no attached emulator can answer; they are written after
-    /// the lock is released.
-    fn ingest(&mut self, chunk: &[u8]) -> Vec<u8> {
+    /// replies to queries no attached emulator can answer, colours from `theme`; they are
+    /// written after the lock is released.
+    fn ingest(&mut self, chunk: &[u8], theme: TerminalTheme) -> Vec<u8> {
         let mut replies = Vec::new();
         let mut fed = 0;
         for (index, &byte) in chunk.iter().enumerate() {
-            self.query_match = if byte == CURSOR_QUERY[self.query_match] {
-                self.query_match + 1
-            } else {
-                usize::from(byte == CURSOR_QUERY[0])
+            let Some(query) = self.queries.feed(byte) else {
+                continue;
             };
-            if self.query_match == CURSOR_QUERY.len() {
-                self.query_match = 0;
-                // The answer is the cursor as of the query, not as of the end of the read.
-                self.screen.process(&chunk[fed..=index]);
-                fed = index + 1;
-                let (row, col) = self.screen.cursor_position();
-                let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
-                // Only an emulator attached now can reply, so only it is a witness (0036).
-                let witnesses: Vec<usize> = self
+            if let Query::Colour { slot, st } = query {
+                // Never held: the desktop emulator does not answer colours, and the program
+                // must not wait on it. An attached emulator answers, or the program guesses.
+                if !self
                     .attachments
                     .iter()
-                    .filter(|attachment| attachment.answers == QueryAnswers::Client)
-                    .map(attachment_key)
-                    .collect();
-                if witnesses.is_empty() {
-                    replies.extend_from_slice(reply.as_bytes());
-                } else {
-                    self.held.push_back(HeldQuery {
-                        reply: reply.into_bytes(),
-                        answered: false,
-                        witnesses,
-                    });
+                    .any(|attachment| attachment.answers == QueryAnswers::Client)
+                {
+                    replies.extend_from_slice(&colour_reply(slot, st, theme));
                 }
+                continue;
+            }
+            // The answer is the cursor as of the query, not as of the end of the read.
+            self.screen.process(&chunk[fed..=index]);
+            fed = index + 1;
+            let (row, col) = self.screen.cursor_position();
+            let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
+            // Only an emulator attached now can reply, so only it is a witness (0036).
+            let witnesses: Vec<usize> = self
+                .attachments
+                .iter()
+                .filter(|attachment| attachment.answers == QueryAnswers::Client)
+                .map(attachment_key)
+                .collect();
+            if witnesses.is_empty() {
+                replies.extend_from_slice(reply.as_bytes());
+            } else {
+                self.held.push_back(HeldQuery {
+                    reply: reply.into_bytes(),
+                    answered: false,
+                    witnesses,
+                });
             }
         }
         self.screen.process(&chunk[fed..]);
@@ -1040,6 +1065,8 @@ pub(crate) struct Terminal {
     changed: Condvar,
     /// Keeps the PTY and the screen sizes in the same order.
     resize_gate: Mutex<()>,
+    /// The manager's palette for colour answers.
+    theme: Arc<ThemeCell>,
 }
 
 impl Terminal {
@@ -1307,7 +1334,8 @@ fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<(
             // On Windows a read fails once the pseudoconsole is closed: end of output.
             Err(_) => break,
         };
-        let replies = lock(&terminal.core).ingest(&buffer[..read]);
+        let theme = terminal.theme.get();
+        let replies = lock(&terminal.core).ingest(&buffer[..read], theme);
         if !replies.is_empty() {
             // A failed reply means the terminal is closing; the waiter records that.
             let _ = terminal.master.write_all(&replies);
@@ -1388,6 +1416,74 @@ mod tests {
         assert_eq!(cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), vec![1..7, 8..14]);
         // Arrow keys, a bare `R` and a report without a column are not answers.
         assert!(cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R").is_empty());
+    }
+
+    fn core_with(answers: &[super::QueryAnswers]) -> super::Core {
+        let mut core = super::Core::new(crate::pty::PtySize { cols: 80, rows: 24 });
+        for answer in answers {
+            core.attachments
+                .push(std::sync::Arc::new(crate::attach::AttachShared::new(
+                    *answer,
+                )));
+        }
+        core
+    }
+
+    #[test]
+    fn the_service_answers_colour_queries_when_no_emulator_is_attached() {
+        use super::{QueryAnswers, TerminalTheme};
+        let mut core = core_with(&[]);
+        assert_eq!(
+            core.ingest(b"\x1b]11;?\x07", TerminalTheme::Dark),
+            b"\x1b]11;rgb:1010/1010/1212\x07"
+        );
+        assert_eq!(
+            core.ingest(b"x\x1b]10;?\x1b\\", TerminalTheme::Light),
+            b"\x1b]10;rgb:1f1f/1f1f/2626\x1b\\"
+        );
+        // Split across reads, the reply follows the read that completes the query.
+        assert!(core.ingest(b"\x1b]12;", TerminalTheme::Dark).is_empty());
+        assert_eq!(
+            core.ingest(b"?\x07", TerminalTheme::Dark),
+            b"\x1b]12;rgb:e8e8/e8e8/ecec\x07"
+        );
+        // A log tail answers nothing, so the service still does.
+        let mut core = core_with(&[QueryAnswers::Service]);
+        assert_eq!(
+            core.ingest(b"\x1b]11;?\x1b\\", TerminalTheme::Dark),
+            b"\x1b]11;rgb:1010/1010/1212\x1b\\"
+        );
+        assert!(core.held.is_empty());
+    }
+
+    #[test]
+    fn an_attached_emulator_answers_colour_queries_itself() {
+        use super::{QueryAnswers, TerminalTheme};
+        let mut core = core_with(&[QueryAnswers::Client]);
+        assert!(
+            core.ingest(b"\x1b]11;?\x07", TerminalTheme::Dark)
+                .is_empty()
+        );
+        assert!(
+            core.ingest(b"\x1b]10;?\x1b\\", TerminalTheme::Dark)
+                .is_empty()
+        );
+        // Not held: an emulator that ignores colour queries must not stall the program.
+        assert!(core.held.is_empty());
+        // The cursor query is still held for it.
+        assert!(core.ingest(b"\x1b[6n", TerminalTheme::Dark).is_empty());
+        assert_eq!(core.held.len(), 1);
+    }
+
+    #[test]
+    fn the_manager_theme_picks_the_palette() {
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "test",
+        ));
+        assert_eq!(manager.theme(), super::TerminalTheme::Dark);
+        manager.set_theme(super::TerminalTheme::Light);
+        assert_eq!(manager.theme(), super::TerminalTheme::Light);
     }
 
     #[test]
