@@ -180,6 +180,10 @@ project) at the time the project is added.
   anyway and prints `archive failed, removed anyway: <reason>`. An untrusted script does not run
   (`archive skipped: <reason>`) and the removal goes ahead. Folder workspaces have no archive
   script (decision 0095).
+- Removing any workspace, worktree or folder, also deletes what the service kept of what ran
+  in it: its sessions with their archived output, and its terminals with their scrollback,
+  ended ones and those a retained session kept included. The archive script's terminal stays,
+  so `archive script ran in terminal <ID>` can still be read. Files on disk are not touched.
 
 Settings that affect workspace names are changed with `config set` (`config list` shows every setting).
 `workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt the person
@@ -210,6 +214,12 @@ connect and disconnect on their own.
   still detaches. A refusal, such as a revoked device, ends the attach with its reason.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
+- A program that asks for the foreground, background or cursor colour (OSC 10, 11 or 12)
+  while no answering emulator is attached gets the service's answer in the xterm form
+  (`rgb:RRRR/GGGG/BBBB`, with the query's terminator). The colours are the desktop's
+  terminal defaults, light when `appearance.theme` is `light` and dark otherwise, `system`
+  included. While an emulator is attached (`terminal attach`, the desktop), the service
+  leaves colour queries to it and never waits for its reply.
 
 ### Agents
 
@@ -228,8 +238,9 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   piped streams, keeps its transcript, and answers its permission requests through `agent.chat.approval.answer`.
   Only a kind with a `chat` block whose CLI version is in range can: `agent kinds --json` shows each kind's `chat`
   (`supported`, and otherwise `reason`: `not_detected`, `version_unknown` or `version_outside_range`, with the probed
-  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x. Any other
-  kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
+  `version` and the supported `range`). The built-in `claude` kind supports Claude Code 2.1.258 through 2.x, and the
+  built-in `codex` kind Codex 0.172.0 through 0.x (`codex app-server`, decision 0173; its `--model` and `--effort` apply,
+  and a resume reopens the conversation the first run named). Any other kind, or a version outside the range, fails with `agent.chat_unsupported`, whose `data` is that `chat` block; start it
   without `--chat` instead. `agent resume` of a chat session resumes it as a chat, `agent stop`, `agent status` and the
   queue work as for a terminal session.
 - `agent start` without `--workspace` starts a session with no project (decision 0094). It
