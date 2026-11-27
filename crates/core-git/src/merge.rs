@@ -59,7 +59,7 @@ impl Git {
     }
 
     /// The commit HEAD points to in `dir`; an unborn HEAD has nothing to merge into.
-    fn head(&self, dir: &Path) -> Result<String, GitError> {
+    pub(crate) fn head(&self, dir: &Path) -> Result<String, GitError> {
         self.resolve_commit(dir, "HEAD")?
             .ok_or_else(|| GitError::InvalidOutput {
                 args: vec!["rev-parse".to_owned(), "HEAD".to_owned()],
@@ -68,7 +68,7 @@ impl Git {
     }
 
     /// The paths git reports as unmerged in `dir`, read NUL-separated so no path is quoted.
-    fn unmerged_paths(&self, dir: &Path) -> Result<Vec<String>, GitError> {
+    pub(crate) fn unmerged_paths(&self, dir: &Path) -> Result<Vec<String>, GitError> {
         let captured = self.run(Some(dir), ["diff", "--name-only", "-z", "--diff-filter=U"])?;
         captured.require_success()?;
         Ok(captured

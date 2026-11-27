@@ -87,6 +87,8 @@ pub const GIT: &str = "git/1";
 pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
 /// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
 pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
+/// `git.rebase_base`: rebasing a worktree's branch onto its base branch (decision 0181).
+pub const GIT_REBASE_BASE: &str = "git-rebase-base/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).

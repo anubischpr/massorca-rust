@@ -139,7 +139,12 @@ impl Git {
     }
 
     /// Whether `ancestor` is reachable from `descendant`, by `merge-base --is-ancestor`.
-    fn is_ancestor(&self, repo: &Path, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+    pub(crate) fn is_ancestor(
+        &self,
+        repo: &Path,
+        ancestor: &str,
+        descendant: &str,
+    ) -> Result<bool, GitError> {
         let captured = self.run_mutation(
             Some(repo),
             ["merge-base", "--is-ancestor", ancestor, descendant],

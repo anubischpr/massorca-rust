@@ -28,7 +28,7 @@ enum Naming {
 }
 
 // Held under the mutation lock, so far below decision 0013's five-minute remote cap.
-const BASE_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const BASE_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A workspace from `create_workspace_once`.
 #[derive(Debug, Clone)]
@@ -235,10 +235,7 @@ impl Workspaces {
             }
             // Unnamed: the project's base (WS-04), else the default branch (decision 0008), else HEAD.
             let named = params.base.as_deref().or(project.base_ref.as_deref());
-            if let Some(found) = match named {
-                Some(name) => Some(self.git.qualify_base(repo, name)?),
-                None => self.git.default_base(repo)?,
-            } {
+            if let Some(found) = self.git.base_or_default(repo, named)? {
                 base = found;
             }
             if params.refresh_base {

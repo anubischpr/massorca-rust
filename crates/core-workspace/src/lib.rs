@@ -17,6 +17,7 @@ mod names;
 mod paths;
 mod project_icon_detection;
 mod projects;
+mod rebase;
 mod remove;
 mod rename;
 mod selectors;
