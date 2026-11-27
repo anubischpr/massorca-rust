@@ -51,7 +51,7 @@ async fn react(state: &Arc<AppState>, change: Change) {
             reply_end(&session),
         ),
         Change::Forgotten(id) => (id, None, Some(ReplyEnd::Forgotten)),
-        Change::Account(_) | Change::Queue(_) | Change::Chat(_) => return,
+        Change::Account(_) | Change::Models(_) | Change::Queue(_) | Change::Chat(_) => return,
     };
     let linked = blocking_state(state, move |store, agents| {
         let replied = match &end {
