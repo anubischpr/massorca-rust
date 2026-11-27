@@ -32,6 +32,7 @@ pub mod sources;
 mod state_file;
 pub mod status;
 pub mod title;
+pub mod vendor_endpoint;
 
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
 pub use event::{DoneOutcome, EventTarget};
