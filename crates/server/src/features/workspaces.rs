@@ -2,7 +2,8 @@
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
 //! `workspace.current` (`workspace-current/1`), `workspace.rename` (`workspace-rename/1`, decision 0111). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086); a removal runs the project's
-//! archive script in the worktree first (decision 0095).
+//! archive script in the worktree first (decision 0095). With `with_children`, the workspaces of delegated children are
+//! removed first, each the same way (decision 0110).
 
 use std::sync::Arc;
 
@@ -12,13 +13,14 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
-    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceRenameParams, WorkspaceUpdateParams,
+    self, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceCreateParams,
+    WorkspaceCurrentParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
+    WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
+use serde_json::json;
 
-use massorca_core_workspace::RemovalWaivers;
+use massorca_core_workspace::{RemovalWaivers, Workspaces};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
@@ -104,6 +106,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             rename,
         )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_IN_PLACE, Owner::Core)?,
     ])
 }
 
@@ -114,8 +119,9 @@ async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Worksp
     let created = blocking(move || domain.create_workspace_once(params)).await?;
     let mut workspace = created.workspace;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
-    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again.
-    if !created.repeated {
+    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again. An in-place
+    // workspace has no new worktree to set up (decision 0112).
+    if !created.repeated && !workspace.in_place {
         workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
     }
     Ok(workspace)
@@ -196,6 +202,26 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
     })
 }
 
+/// Forgets the terminals of the removed workspace `id` with their output, exited ones and those a retained session kept
+/// included; the workspace's session rows and their archived output go with its row. `keep` is the archive script's
+/// terminal, whose output the removal names. Files on disk are not touched.
+async fn forget_terminals(ctx: &RequestCtx, id: &str, keep: Option<String>) {
+    let terminals = ctx.state.terminals.clone();
+    let id = id.to_owned();
+    let forgotten = tokio::task::spawn_blocking(move || {
+        for terminal in terminals.list(Some(&id)) {
+            if keep.as_deref() != Some(terminal.id.as_str()) {
+                // Already exited after `stop_runs`; one gone meanwhile needs nothing more.
+                let _ = terminals.close(&terminal.id);
+            }
+        }
+    })
+    .await;
+    if let Err(error) = forgotten {
+        tracing::warn!(%error, "forgetting a removed workspace's terminals failed");
+    }
+}
+
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_workspace_with_git_state(&params.workspace)).await
@@ -215,22 +241,77 @@ async fn remove(
         discard_ignored: params.discard_ignored,
         forget_orphan: params.forget_orphan,
     };
-    remove_workspace(&ctx, params.workspace, waivers, params.allow_failed_archive).await
+    let domain = Arc::new(for_mutation(&ctx).await?);
+    let (target, children) = {
+        let domain = Arc::clone(&domain);
+        let selector = params.workspace.clone();
+        blocking(move || domain.delegated_child_workspaces(&selector, waivers)).await?
+    };
+    if !children.is_empty() && !params.with_children {
+        return Err(has_children(&target, &children));
+    }
+    let mut removed_children = Vec::new();
+    for child in &children {
+        match remove_workspace(&ctx, child.id.clone(), waivers, params.allow_failed_archive).await {
+            Ok(removed) => removed_children.push(removed),
+            // A child removed or forgotten since the list was read is skipped.
+            Err(error) if error.code == codes::WORKSPACE_NOT_FOUND => {}
+            Err(error) => return Err(child_refused(error, &target, child, &removed_children)),
+        }
+    }
+    let mut removed =
+        remove_workspace(&ctx, target.id, waivers, params.allow_failed_archive).await?;
+    removed.removed_children = removed_children;
+    Ok(removed)
 }
 
-/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, then the removal and
-/// `workspace.removed`. Nothing is stopped: the caller checked under the mutation lock that nothing runs in it, and a
-/// `removing` workspace takes no new start, resume or terminal (decision 0163).
+/// Finishes a removal that `begun` (marked `removing`) started elsewhere: `workspace.removing`, the archive script
+/// (decision 0095), then the removal and `workspace.removed`. Nothing is stopped: the caller checked under the mutation
+/// lock that nothing runs in it, and a `removing` workspace takes no new start, resume or terminal (decision 0163).
 pub(crate) async fn finish_begun_removal(
     ctx: &RequestCtx,
-    begun: String,
+    begun: Workspace,
     waivers: RemovalWaivers,
+    allow_failed_archive: bool,
 ) -> Result<WorkspaceRemoved, ErrorBody> {
-    let domain = for_mutation(ctx).await?;
-    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun);
-    let removed = blocking(move || domain.finish_remove(&begun, waivers)).await?;
+    let domain = Arc::new(for_mutation(ctx).await?);
+    publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    let archive = archive_before_removal(ctx, &domain, &begun, allow_failed_archive).await?;
+    let id = begun.id.clone();
+    let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    let archive_terminal = match &archive {
+        Some(WorkspaceArchive::Succeeded { terminal })
+        | Some(WorkspaceArchive::Failed {
+            terminal: Some(terminal),
+            ..
+        }) => Some(terminal.clone()),
+        _ => None,
+    };
+    forget_terminals(ctx, &begun.id, archive_terminal).await;
+    removed.archive = archive;
     publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
+}
+
+/// Runs the archive script of the `removing` workspace `begun`. A refusal returns the row to `ready` before the
+/// refusal is returned, so nothing is removed or stopped (decision 0095).
+async fn archive_before_removal(
+    ctx: &RequestCtx,
+    domain: &Arc<Workspaces>,
+    begun: &Workspace,
+    allow_failed_archive: bool,
+) -> Result<Option<WorkspaceArchive>, ErrorBody> {
+    match workspace_archive::run(ctx, begun, allow_failed_archive).await {
+        Ok(archive) => Ok(archive),
+        Err(refusal) => {
+            let id = begun.id.clone();
+            let cancel = Arc::clone(domain);
+            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
+                publish(ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
+            }
+            Err(refusal)
+        }
+    }
 }
 
 /// Removes workspace `selector` with `waivers`: the refusals, `workspace.removing`, every run in it stopped, then the
@@ -249,23 +330,68 @@ pub(crate) async fn remove_workspace(
     };
     publish(ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
     // Before anything is stopped: the archive may save work from the running checkout.
-    let archive = match workspace_archive::run(ctx, &begun, allow_failed_archive).await {
-        Ok(archive) => archive,
-        Err(refusal) => {
-            let id = begun.id.clone();
-            let cancel = Arc::clone(&domain);
-            if blocking(move || cancel.cancel_remove(&id)).await.is_ok() {
-                publish(ctx, TOPIC_WORKSPACE_UPDATED, &begun.id);
-            }
-            return Err(refusal);
-        }
-    };
+    let archive = archive_before_removal(ctx, &domain, &begun, allow_failed_archive).await?;
     stop_runs(ctx, &begun.id).await?;
     let id = begun.id.clone();
     let mut removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
+    let archive_terminal = match &archive {
+        Some(WorkspaceArchive::Succeeded { terminal })
+        | Some(WorkspaceArchive::Failed {
+            terminal: Some(terminal),
+            ..
+        }) => Some(terminal.clone()),
+        _ => None,
+    };
+    forget_terminals(ctx, &begun.id, archive_terminal).await;
     removed.archive = archive;
     publish(ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
+}
+
+/// `workspace.has_children`: the message and `data.children` name the child workspaces, deepest first.
+fn has_children(target: &Workspace, children: &[Workspace]) -> ErrorBody {
+    let names: Vec<&str> = children.iter().map(|child| child.name.as_str()).collect();
+    ErrorBody {
+        data: Some(json!({ "children": names })),
+        ..ErrorBody::new(
+            codes::WORKSPACE_HAS_CHILDREN,
+            format!(
+                "{} has workspaces of delegated children: {}; remove with with_children to remove them first",
+                target.name,
+                names.join(", ")
+            ),
+        )
+    }
+}
+
+/// A child's refusal keeps its code; the message and data say which child refused and which were removed before it.
+fn child_refused(
+    error: ErrorBody,
+    target: &Workspace,
+    child: &Workspace,
+    removed: &[WorkspaceRemoved],
+) -> ErrorBody {
+    let removed: Vec<&str> = removed
+        .iter()
+        .map(|done| done.workspace.name.as_str())
+        .collect();
+    let before = if removed.is_empty() {
+        String::new()
+    } else {
+        format!("; removed before it: {}", removed.join(", "))
+    };
+    let mut data = json!({ "child": child.name, "removed_children": removed });
+    if let Some(cause) = error.data {
+        data["cause"] = cause;
+    }
+    ErrorBody {
+        code: error.code,
+        message: format!(
+            "child workspace {}: {}; {} is kept{before}",
+            child.name, error.message, target.name
+        ),
+        data: Some(data),
+    }
 }
 
 async fn update(ctx: RequestCtx, params: WorkspaceUpdateParams) -> Result<Workspace, ErrorBody> {

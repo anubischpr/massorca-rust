@@ -13,6 +13,18 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             workspace_args(json!({ "limit": { "type": "integer", "minimum": 1 } })),
         ),
         command(
+            "git.remotes",
+            "List the hosting provider, owner and repository of each network remote",
+            "git.remotes",
+            json!({
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "git.diff",
             "List the files a comparison changes",
             "git.diff",
@@ -108,6 +120,17 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
                 "from": { "type": "string" },
                 "to": { "type": "string" },
                 "original_path": { "type": "string" },
+                "max_bytes": { "type": "integer", "minimum": 1 }
+            })),
+        ),
+        command(
+            "git.show-file",
+            "Show the bytes of one file on the working tree, the index or a revision",
+            "git.file_content",
+            workspace_args(json!({
+                "path": { "type": "string" },
+                "side": { "enum": ["worktree", "index", "revision"] },
+                "rev": { "type": "string" },
                 "max_bytes": { "type": "integer", "minimum": 1 }
             })),
         ),

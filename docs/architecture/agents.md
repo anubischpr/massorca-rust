@@ -689,7 +689,7 @@ the stream sends an `append` with the byte offset it starts at; a replay sends t
 
 - `agent.chat.start` (CLI: `massorca agent start KIND --chat`) takes the `agent.start` params; `cols`, `rows` and `args`
   are `request.invalid_params`. The kind needs a `chat` block (`{ "adapter", "min_version", "max_major" }`) whose
-  adapter MassOrca speaks (`claude-stream-json`), and its CLI's probed version in range; otherwise
+  adapter MassOrca speaks (`claude-stream-json`, `codex-app-server`), and its CLI's probed version in range; otherwise
   `agent.chat_unsupported`, with the kind's `KindChat` as `data`.
 - `agent.prompt` on a chat session writes the adapter's user message and answers `sent_to_chat`. While a turn runs or a
   request waits it is `agent.busy`; with `force` the message is written anyway and opens its own running turn at once
@@ -748,6 +748,37 @@ A `result` and an interrupt both make the adapter forget the turn's partial mess
 CLI sends (tools, frame types, subtypes) are cut to 128 characters, paths and plan entries to 16 KiB, a plan to 200
 entries.
 
+### The Codex adapter
+
+`chat/codex/` speaks Codex's app-server dialect (decision 0173), written against Codex 0.172.0, pv96's Codex adapter and
+the app-server's public documentation: JSON-RPC without the `jsonrpc` member, one message per line. A run starts
+`app-server` with the launch plan's `-c`, `--enable` and `--disable`; the plan's `-m` and permission flags become the
+thread's `model`, `sandbox`, `approvalPolicy` and `approvalsReviewer`, its `resume <ref>` a `thread/resume`, and the
+terminal's `notify` hook is dropped. The adapter's opening is `initialize`; its answer sends `initialized` and
+`thread/start` or `thread/resume`; the opened thread's id becomes the session's `agent_ref` when it has none
+(`JournalOp::LearnRef`, under the fork rule of a hook report). Prompts sent before the thread is open, or while an
+interrupted turn is still ending, wait in the adapter and go out as `turn/start`; one sent mid-turn is a `turn/start`
+the app-server steers into the running turn.
+
+| Message | Journal |
+|---|---|
+| `agentMessage` item, `item/agentMessage/delta` | `assistant_message`, appended, then replaced by the completed item's text |
+| `reasoning` summary, `item/reasoning/summaryTextDelta` | `thinking` |
+| `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch` | `tool_use` (`shell`, `apply_patch`, `server/tool`, `web_search`); `outputDelta` makes a command `updated`; a completed file change adds a `diff` per file |
+| `turn/plan/updated` | `plan` |
+| `turn/completed` | the turn `completed` (success or failure) or `interrupted`; an interrupted turn's end is skipped |
+| `error` | a warning while `willRetry`, else an error notice (shown once with the failed turn) |
+| `thread/tokenUsage/updated` | the open turn's `usage` (`JournalOp::Usage`) |
+| command or file change approval request | a pending `approval` keyed by the JSON-RPC id, `can_always` with one `acceptForSession` suggestion |
+| `serverRequest/resolved` | a still pending approval `cancelled` |
+| another request | refused, or answered granting nothing, with a notice |
+| another thread's messages, known lifecycle notifications, `codex/event/*` | nothing |
+| an unknown notification or item type | one warning notice per name per run |
+
+An allow answers `{"decision":"accept"}`, an `always` allow `acceptForSession`, a deny `decline`. The interrupt answers
+every pending request `cancel`, then sends `turn/interrupt` of the named turn (or of the turn the app-server names
+next).
+
 ### Version probing
 
 `agent.kinds` fills `AgentKind.chat` for a kind with a `chat` block: the kind's resolved program is run with `--version`
@@ -755,7 +786,7 @@ entries.
 and the result is kept per program path and modified time in the probe cache the instruction probe shares
 (`probe.rs`); a failed probe is run again after 60 s. A chat resume probes before it takes the start gates. `not_detected` when no program resolves, `version_unknown` when the probe fails or prints no version,
 `version_outside_range` below `min_version` or above `max_major`; `range` reads `>=MIN, <MAX+1.0.0`. The built-in
-`claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
+`claude` kind declares `2.1.258` through `2.x`, the `codex` kind `0.172.0` through `0.x`. A test build probes only the programs
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
 ## Archive and delete (decision 0163)

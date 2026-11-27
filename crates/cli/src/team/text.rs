@@ -109,6 +109,27 @@ pub fn project_line(project: &TeamProject, verb: &str) -> String {
     )
 }
 
+/// A project's details, one per line. The brief is shown only when it is set.
+pub fn project_details(project: &TeamProject) -> Vec<String> {
+    let mut lines = vec![
+        format!("name: {}", project.name),
+        format!("goal: {}", project.goal),
+    ];
+    if !project.brief.is_empty() {
+        lines.push(format!("brief: {}", project.brief));
+    }
+    lines.push(format!(
+        "code source: {}",
+        project.code_source.map_or("-", CodeSource::label)
+    ));
+    lines.push(format!(
+        "workspaces project: {}",
+        project.source_project_name.as_deref().unwrap_or("-")
+    ));
+    lines.push(format!("id: {}", project.id));
+    lines
+}
+
 /// The Board as text: each column with its count, then its cards, oldest first.
 pub fn board_lines(board: &Board) -> Vec<String> {
     let mut lines = Vec::new();

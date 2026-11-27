@@ -133,6 +133,9 @@ pub enum AgentCommand {
         /// With --remove-workspace: delete the worktree's ignored files (build output), which refuse removal otherwise.
         #[arg(long, requires = "remove_workspace")]
         discard_ignored: bool,
+        /// With --remove-workspace: remove the worktree even when the project's archive script fails or times out.
+        #[arg(long, requires = "remove_workspace")]
+        allow_failed_archive: bool,
         /// Print what forgetting the session with its workspace would meet, and change nothing.
         #[arg(long)]
         preview: bool,
@@ -722,6 +725,7 @@ pub async fn execute(
             remove_workspace,
             force,
             discard_ignored,
+            allow_failed_archive,
             preview: false,
         } => {
             let forgotten = client
@@ -731,6 +735,7 @@ pub async fn execute(
                     force,
                     discard_ignored,
                     expect_dirty: None,
+                    allow_failed_archive,
                 })
                 .await?;
             let mut lines = vec![format!("forgot agent session {}", forgotten.session.id)];

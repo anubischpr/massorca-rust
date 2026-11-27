@@ -875,6 +875,7 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id,
                 name: "feature".to_owned(),
                 branch: None,
