@@ -1,6 +1,6 @@
 //! Views: view documents placed in a UI slot. The view-schema major is declared on the manifest (`views`).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::Manifest;
 use super::check_path;
@@ -19,7 +19,7 @@ pub struct View {
 }
 
 /// The UI slots of `extensions.md` §7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Slot {
     ProjectSidebarTab,

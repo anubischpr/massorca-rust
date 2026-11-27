@@ -17,6 +17,7 @@ mod config_aliases;
 mod config_keys;
 mod core_methods;
 mod events;
+mod extension_points;
 mod extensions;
 mod frames;
 mod git_branches;

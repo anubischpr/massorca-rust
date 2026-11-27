@@ -98,6 +98,19 @@ store follows a service through the bridge (0028).
   strip, and "Stop process" calls `terminal.close`. An unverifiable terminal
   shows a banner that says it may still run. The status bar counts the
   terminals that may still run.
+- **Paired hosts.** The bridge keeps one live link per paired host (REM-07,
+  `service/live_hosts.rs`, over `massorca_client::LiveHost`), started for every
+  paired host when the bridge starts and stopped when the host is removed. It
+  is the only connection to that host: the session follower
+  (`service/host_sessions.rs`, re-reads on `agent.changed`), terminal attaches
+  (`service/host_terminal.rs`) and one-off calls (stop, remove counts,
+  Marketplace, skills, hosted services) borrow it through a `LiveWatch`. The
+  link's state alone sets the host row, including `Reconnecting {reason,
+  attempt, retry_at}`; Settings → Hosts offers "Retry now" on an unreachable or
+  failed host, which reconnects that host only and closes its old connection
+  for every borrower. While the link is down the host's sessions stay listed,
+  unverifiable, and its attaches wait for the next connection. Pairing or an
+  SSH re-add asks the link to reconnect; there is no poll.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.
@@ -206,7 +219,7 @@ Linux only. No automated run opens a visible window.
   with "Not available yet": installing, the default agent and item settings.
 - The host picker (`shell/marketplace/host_pick.rs`) aims the Marketplace at This computer or a connected paired host.
   Items carry a stable host key (`local`, `runtime:<name>`, `model/marketplace/host_target.rs`). A paired host's lists
-  are read on its own connection, and each request carries its number: only the newest answer for the picked host is
+  are read on its live link's connection, and each request carries its number: only the newest answer for the picked host is
   shown, so a late answer never replaces a newer pick. A pick whose host is not connected shows This computer and
   returns when the host connects. A pick is saved by its stable key in the UI state store (SET-02, `ui_state.rs`) and
   restored at start; a saved host that is gone shows This computer without being overwritten. Accounts and update
@@ -214,7 +227,7 @@ Linux only. No automated run opens a visible window.
 - The Skills section (`shell/marketplace/skills.rs`) sits on the Skills category under the toolbar and lists the skills
   `skills.discover` finds on the shown host, with the roots they came from (`model/marketplace/skills.rs`, SKL-01). On This computer a home skill offers Place, and placed skills list with Remove (`model/marketplace/skill_placement.rs`, SKL-02, decision 0150); each change is confirmed by one sentence first. It
   reads when the page opens, when the picked host changes, and on Refresh with `refresh: true`. This computer reads
-  through its own service; a paired host through its own connection (`service/skills.rs`). The store keeps the newest
+  through its own service; a paired host through its live link (`service/skills.rs`). The store keeps the newest
   answer per host and nothing is persisted. A host that predates skills shows "Update MassOrca on <host> first." The
   "Where MassOrca looked" report under the list shows each root with its agents, its kind and why it was skipped.
 - Settings lists the installed agents from the same snapshot, each linking to its
@@ -276,7 +289,7 @@ Linux only. No automated run opens a visible window.
   output shows it under Show details; Copy details copies the whole log. No runs says "No runs recorded yet."
 - Hosted services (SKL-35, decision 0097): the Services category draws a Hosted services section
   (`shell/marketplace/services.rs`) below its packages. It reads `marketplace.service.status` of the picked host
-  (`service/hosted_services.rs`, on a paired host's own connection), numbered in `HostedServicesView` so a late answer
+  (`service/hosted_services.rs`, on a paired host's live link), numbered in `HostedServicesView` so a late answer
   is dropped. Each row shows Connected, Not connected or Unknown, the account or base URL when the host shows them, and
   Connect, Replace token or Disconnect. Linear and Jira are status-only, GitLab without `glab` cannot connect, and a
   refused GitLab disconnect shows the service's sentence under its row. The connect dialog takes the token in a masked

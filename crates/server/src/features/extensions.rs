@@ -29,6 +29,7 @@ use serde::de::DeserializeOwned;
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
+use crate::extension_points::sync_extension_points;
 use crate::features::NoParams;
 use crate::features::workspace_domain::publish;
 use crate::owner::Owner;
@@ -202,7 +203,7 @@ async fn install(
             "an agent cannot run a vendor installer; ask the person to run the command",
         )?;
     }
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.install(
             &Source::parse(&params.source)?,
             params.consent.as_deref(),
@@ -224,7 +225,7 @@ async fn update(
         params.agent_token.as_deref(),
         "an agent cannot update an extension; ask the person to run the command",
     )?;
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.update(
             &params.id,
             params.consent.as_deref(),
@@ -263,7 +264,7 @@ async fn rollback(
         params.agent_token.as_deref(),
         "an agent cannot roll back an extension; ask the person to run the command",
     )?;
-    let entry = on_extensions(&ctx, move |extensions| {
+    let entry = changing_extensions(&ctx, move |extensions| {
         extensions.rollback(&params.id, params.consent.as_deref())
     })
     .await?;
@@ -301,7 +302,7 @@ async fn set_enabled(
     ctx: RequestCtx,
     params: ExtensionSetEnabledParams,
 ) -> Result<ExtensionEnabled, ErrorBody> {
-    let outcome = on_extensions(&ctx, move |extensions| {
+    let outcome = changing_extensions(&ctx, move |extensions| {
         extensions.set_enabled(&params.id, params.enabled)
     })
     .await?;
@@ -326,7 +327,7 @@ async fn remove(
             "an agent cannot run a vendor uninstaller; ask the person to run the command",
         )?;
     }
-    let removed = on_extensions(&ctx, move |extensions| {
+    let removed = changing_extensions(&ctx, move |extensions| {
         extensions.remove(
             &params.id,
             params.delete_agent_homes,
@@ -390,6 +391,22 @@ where
             format!("the extensions task failed: {error}"),
         )),
     }
+}
+
+/// [`on_extensions`] for a call that can change which packages are enabled: the extension points follow, whether the
+/// call succeeded or not (decision 0153).
+async fn changing_extensions<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: FnOnce(&Extensions) -> Result<T, Error> + Send + 'static,
+{
+    let points = Arc::clone(&ctx.state.extension_points);
+    on_extensions(ctx, move |extensions| {
+        let result = call(extensions);
+        sync_extension_points(&points, extensions);
+        result
+    })
+    .await
 }
 
 /// The protocol error of a refusal: its own code, which for a guard is the guard's (`agent.busy`).
