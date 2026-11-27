@@ -768,6 +768,7 @@ async fn a_removed_destination_workspace_refuses_its_runs_with_its_sentence() {
             discard_ignored: false,
             forget_orphan: false,
             allow_failed_archive: false,
+            with_children: false,
         })
         .await
         .expect("workspace.rm");

@@ -152,6 +152,7 @@ fn run_worktree(
         no_setup: false,
         unique_name: true,
         name_generated: false,
+        in_place: false,
     })?;
     Ok((created.workspace, !created.repeated))
 }
