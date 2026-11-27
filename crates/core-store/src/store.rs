@@ -178,12 +178,19 @@ mod tests {
         // The frozen list and the migration files are built in one step, with one commit.
         assert_eq!(
             parts,
-            ["store file", "store migration lock", "store schema", "store wal"],
+            [
+                "store file",
+                "store migration lock",
+                "store schema",
+                "store wal"
+            ],
             "a new database is built in one step"
         );
         let recorded: i64 = Connection::open(&path)
             .unwrap()
-            .query_row("SELECT COUNT(*) FROM store_migrations", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM store_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(
             usize::try_from(recorded).unwrap(),
