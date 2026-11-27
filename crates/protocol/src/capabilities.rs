@@ -96,6 +96,8 @@ pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
 /// Updating a host program a tool package installed (`extensions.program_update_review`, `extensions.program_update`,
 /// decision 0151).
 pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
+/// What each owner registered on the tool, skill, view, theme and status-rule points (`extensions.points`, decision 0153).
+pub const EXTENSION_POINTS: &str = "extension-points/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
