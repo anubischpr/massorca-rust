@@ -425,5 +425,20 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command("task.rm", "Remove a task", "task.rm", selector("task")),
+        command(
+            "team.delegate",
+            "Hand a task to a teammate from inside a bot's run",
+            "team.delegate",
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "team": { "type": "string" },
+                    "read_only": { "type": "boolean" }
+                }
+            }),
+        ),
     ]
 }
