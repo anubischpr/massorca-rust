@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use massorca_client::{
-    Client, HostRecord, Hosts, SshInstall, default_device_name, validate_host_name,
+    Client, HostRecord, Hosts, SshInstall, SshRoute, default_device_name, validate_host_name,
 };
 use massorca_core_remote::bootstrap::{BootstrapPlan, BootstrapReport, install_over_ssh};
 use massorca_profile::Profile;
@@ -60,7 +60,16 @@ pub async fn execute(
     if hosts.exists(&name) {
         return upgrade(&hosts, &name, args, &installed, output).await;
     }
-    let paired = Client::pair(&hosts, &offer, &name, &device_name, &peer()).await;
+    let tunnel = tunnel_route(args);
+    let paired = Client::pair_through(
+        &hosts,
+        &offer,
+        &name,
+        &device_name,
+        &peer(),
+        tunnel.as_ref(),
+    )
+    .await;
     let (client, record) = paired.map_err(|error| {
         let mut error = CliError::from(error);
         error.message = format!(
@@ -71,6 +80,14 @@ pub async fn execute(
     })?;
     drop(client);
     note_install(&hosts, &name, args, output);
+    if let Some(route) = &tunnel
+        && let Err(error) = hosts.set_route(&name, Some(route))
+    {
+        output.progress(&format!(
+            "warning: the SSH route of host {name} was not saved, so it is dialed directly: {error}; run `massorca host route {name} --ssh {}`",
+            args.target
+        ));
+    }
     let mut lines = install_lines(&installed, &args.target);
     lines.extend(record_lines(&record));
     let report = install_report(&args.target, &installed, "paired", Some(record), None);
@@ -86,6 +103,9 @@ async fn upgrade(
     installed: &BootstrapReport,
     output: Output,
 ) -> Result<(), CliError> {
+    if let Some(route) = tunnel_route(args) {
+        hosts.set_route(name, Some(&route))?;
+    }
     match status::check(hosts, name).await {
         Ok(connected) => {
             note_install(hosts, name, args, output);
@@ -108,6 +128,15 @@ async fn upgrade(
             Err(error)
         }
     }
+}
+
+/// The route `--tunnel` asks for: the install's own ssh target and options.
+fn tunnel_route(args: &HostAddSshArgs) -> Option<SshRoute> {
+    args.tunnel.then(|| SshRoute {
+        ssh_target: args.target.clone(),
+        ssh_args: args.ssh_arg.clone(),
+        forward: None,
+    })
 }
 
 /// Records how host `name` was installed, for the self-test's log hint. A note that cannot be written is only a warning:
