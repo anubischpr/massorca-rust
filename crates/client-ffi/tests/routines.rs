@@ -37,6 +37,7 @@ fn seed(test: &Runtime, home: &Path) -> (String, String, String) {
                 model: None,
                 effort: None,
                 lead: true,
+                skills: Vec::new(),
             })
             .await
             .expect("a bot");
