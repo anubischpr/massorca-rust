@@ -51,6 +51,7 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
         .call(
             workspaces::CREATE,
             &WorkspaceCreateParams {
+                in_place: false,
                 project: project.id,
                 name: "notes".to_owned(),
                 branch: None,
