@@ -31,7 +31,7 @@ fn workspaces_team(name: &str) -> TeamCreateParams {
     }
 }
 
-fn create_params(name: &str) -> TeamCreateParams {
+pub(super) fn create_params(name: &str) -> TeamCreateParams {
     TeamCreateParams {
         name: name.to_owned(),
         purpose: None,
@@ -1022,7 +1022,11 @@ fn git_repo(dir: &Path) {
 }
 
 /// Registers `path` as a Workspaces project: git, unless `kind` says folder.
-async fn register_project(client: &Client, path: &Path, kind: Option<ProjectKind>) -> Project {
+pub(super) async fn register_project(
+    client: &Client,
+    path: &Path,
+    kind: Option<ProjectKind>,
+) -> Project {
     let params = ProjectAddParams {
         icon: None,
         path: path.to_str().expect("utf-8 path").to_owned(),
@@ -1037,7 +1041,7 @@ async fn register_project(client: &Client, path: &Path, kind: Option<ProjectKind
 }
 
 /// Adds `name` to team "alpha", linked to the Workspaces project `source` when given.
-fn project_add(name: &str, source: Option<&str>) -> TeamProjectAddParams {
+pub(super) fn project_add(name: &str, source: Option<&str>) -> TeamProjectAddParams {
     TeamProjectAddParams {
         team: "alpha".to_owned(),
         name: name.to_owned(),
@@ -1049,7 +1053,10 @@ fn project_add(name: &str, source: Option<&str>) -> TeamProjectAddParams {
 }
 
 /// Changes the source of `project` in team "alpha": `Some("")` clears it, `None` leaves it as it is.
-fn project_update_source(project: &str, source: Option<&str>) -> TeamProjectUpdateParams {
+pub(super) fn project_update_source(
+    project: &str,
+    source: Option<&str>,
+) -> TeamProjectUpdateParams {
     TeamProjectUpdateParams {
         team: "alpha".to_owned(),
         project: project.to_owned(),
@@ -1332,7 +1339,7 @@ async fn a_bot_keeps_its_skills_in_order_and_an_update_replaces_or_clears_them()
     stop(running).await;
 }
 
-fn workspaces_switch(on: bool) -> TeamUpdateParams {
+pub(super) fn workspaces_switch(on: bool) -> TeamUpdateParams {
     TeamUpdateParams {
         team: "alpha".to_owned(),
         name: None,

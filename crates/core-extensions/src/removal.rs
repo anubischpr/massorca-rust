@@ -96,6 +96,17 @@ impl Extensions {
             .register(owner.into(), HookRun::Cleanup(Arc::new(cleanup)))
     }
 
+    /// Registers a listener told of every committed removal, whatever `delete_agent_homes` says, such as the extension
+    /// points dropping what the package registered (decision 0153). It runs after the package's files are deleted.
+    pub fn register_remove_listener(
+        &self,
+        owner: impl Into<String>,
+        listener: impl Fn(&RemovedPackage) + Send + Sync + 'static,
+    ) -> HookHandle {
+        self.hooks
+            .register(owner.into(), HookRun::Listener(Arc::new(listener)))
+    }
+
     pub(crate) fn run_guards(&self, id: &str) -> Result<(), Error> {
         for (owner, run) in self.hooks.of(HookKind::Guard) {
             if let HookRun::Guard(guard) = run {
@@ -178,6 +189,11 @@ impl Extensions {
             lockfile.packages.retain(|package| package.id != id);
             lockfile.write(&self.layout.lock_path())?;
             let failures = self.delete_package(&removed, delete_agent_homes, unread.as_deref());
+            for (_, run) in self.hooks.of(HookKind::Listener) {
+                if let HookRun::Listener(listener) = run {
+                    listener(&removed);
+                }
+            }
             let busy = self.mark_busy(id, Vec::new())?;
             (entry, manifest, failures, busy)
         };
@@ -264,14 +280,7 @@ impl Extensions {
             CliAction::LeftAlone
         } else {
             let command = manifest
-                .and_then(|manifest| {
-                    manifest
-                        .contributes
-                        .agent_adapters
-                        .iter()
-                        .find(|adapter| adapter.id == cli.agent)
-                })
-                .and_then(|adapter| adapter.cli.as_ref())
+                .and_then(|manifest| manifest.cli_of(&cli.agent))
                 .and_then(|spec| spec.uninstall.iter().find(|step| Some(step.os) == self.os))
                 .map(|step| step.command.clone());
             match command {
@@ -335,12 +344,7 @@ fn pending_uninstalls(
         .filter(|cli| cli.installed_by_package)
         .filter_map(|cli| {
             manifest?
-                .contributes
-                .agent_adapters
-                .iter()
-                .find(|adapter| adapter.id == cli.agent)?
-                .cli
-                .as_ref()?
+                .cli_of(&cli.agent)?
                 .uninstall
                 .iter()
                 .find(|step| Some(step.os) == os)

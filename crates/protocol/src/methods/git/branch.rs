@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Params: [`super::GitWorkspaceRef`]. Result: [`GitBranches`].
+/// Params: [`GitBranchesParams`]. Result: [`GitBranches`].
 pub const BRANCHES: &str = "git.branches";
 /// Params: [`GitBranchCreateParams`]. Result: [`GitBranch`].
 pub const BRANCH_CREATE: &str = "git.branch_create";
@@ -37,6 +37,18 @@ pub struct GitBranch {
     /// Checked out in another worktree of the repository.
     #[serde(default)]
     pub checked_out_elsewhere: bool,
+}
+
+/// Params of `git.branches`: exactly one of `workspace` (that workspace's checkout) and `project` (a git project's own
+/// checkout, with no workspace; capability `git-project-branches/1`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct GitBranchesParams {
+    /// Id, name or path of a workspace of a git project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Id, name or path of a git project. A folder project is refused with `git.not_a_repository`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// The current branch first, then the others by name.

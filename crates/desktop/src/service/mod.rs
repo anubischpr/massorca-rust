@@ -19,6 +19,7 @@ mod host_terminal;
 mod hosted_services;
 mod hosts;
 mod launch;
+mod live_hosts;
 mod quit;
 mod refusal;
 mod secrets;
@@ -74,7 +75,7 @@ pub use quit::{QUIT_BOUND, close_link_on_quit, close_link_within};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
-pub use skills::{SkillsListing, SkillsRead};
+pub use skills::{PlacementAnswer, PlacementCall, PlacementOutcome, SkillsListing, SkillsRead};
 #[cfg(test)]
 pub(crate) use team_room::RoomCommand;
 pub use team_room::{NO_CARDS, NO_ROOM, TeamRoomRead, TeamRooms};

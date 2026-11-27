@@ -34,7 +34,7 @@ fn ids_of(list: &Value) -> Vec<&str> {
 }
 
 #[test]
-fn the_catalogue_lists_the_four_agent_packages_and_ext_is_an_alias() {
+fn the_catalogue_lists_the_agent_and_tool_packages_and_ext_is_an_alias() {
     let host = Host::new();
 
     let catalogue = host.json(&["extension", "catalogue"]);
@@ -46,7 +46,10 @@ fn the_catalogue_lists_the_four_agent_packages_and_ext_is_an_alias() {
             "massorca.claude",
             "massorca.codex",
             "massorca.antigravity",
-            "massorca.gentle-shell"
+            "massorca.gentle-shell",
+            "massorca.git",
+            "massorca.gh",
+            "massorca.node"
         ]
     );
     assert_eq!(catalogue, aliased);

@@ -9,7 +9,7 @@ use massorca_desktop::service::{
     Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
-use massorca_protocol::methods::secrets::{SecretLink, SecretRemove, SecretSet};
+use massorca_protocol::methods::secrets::{SecretLink, SecretName, SecretRemove, SecretSet};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig, VaultOptions};
 use tempfile::TempDir;
@@ -366,5 +366,67 @@ fn base_secret_set() -> massorca_protocol::methods::secrets::SecretSet {
         name: "BRIDGE_TOKEN".to_owned(),
         value: String::new(),
         replace: false,
+    }
+}
+
+#[tokio::test]
+async fn a_linked_name_is_unlinked_and_the_owner_keeps_the_secret() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the connection and the list",
+        |s| s.connection.is_connected() && matches!(s.secrets.list, Some(Ok(_))),
+    )
+    .await;
+    handle
+        .secret_set(SecretSet {
+            name: "SHARED_TOKEN".to_owned(),
+            value: VALUE.to_owned(),
+            ..base_secret_set()
+        })
+        .await
+        .expect("the secret is added");
+    let client = client_for(home.path()).await;
+    client
+        .secret_link(&SecretLink {
+            ..base_secret_link()
+        })
+        .await
+        .expect("the project links the secret");
+    until(
+        &mut updates,
+        &mut state,
+        "the owned name and its link",
+        |s| names(s) == ["SHARED_TOKEN", "SHARED_TOKEN"],
+    )
+    .await;
+
+    let removed = handle
+        .secret_unlink(SecretName {
+            ..base_secret_name()
+        })
+        .await
+        .expect("the link is removed");
+    assert_eq!(removed.scope, "project:demo");
+    until(&mut updates, &mut state, "the owned name alone", |s| {
+        names(s) == ["SHARED_TOKEN"]
+    })
+    .await;
+
+    drop(client);
+    drop(handle);
+    drop(bridge);
+    stop_service(service).await;
+}
+
+/// Every `SecretName` field at its usual value; tests override the fields they vary.
+fn base_secret_name() -> massorca_protocol::methods::secrets::SecretName {
+    massorca_protocol::methods::secrets::SecretName {
+        scope: "project:demo".to_owned(),
+        name: "SHARED_TOKEN".to_owned(),
     }
 }

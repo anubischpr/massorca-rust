@@ -3,6 +3,7 @@
 //! form and the run history are their own pages.
 
 use super::super::Shell;
+use super::routine_service::ROUTINE_GONE;
 use super::team_pill;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
@@ -84,7 +85,10 @@ pub(in crate::shell) fn routines_page(
     } else {
         let mut list = div().flex().flex_wrap().gap(px(SPACE_4));
         for routine in &team_data.routines {
-            list = list.child(routine_card(routine, team, team_data, shell, &theme, &zone));
+            let run_notice = model.teams().routine_run_notice(team, routine.id);
+            list = list.child(routine_card(
+                routine, team, team_data, shell, &theme, &zone, run_notice,
+            ));
         }
         list.into_any_element()
     };
@@ -159,7 +163,8 @@ fn new_web_address_button() -> Button {
 
 const WEB_ADDRESS_UNAVAILABLE: &str = "Web addresses are not available yet.";
 
-/// A routine card: its name, the schedule in words, the bot, the next run, and the switch with its More button.
+/// A routine card: its name, the schedule in words, the bot, the next run, why its last run-now was refused, and the
+/// switch with its More button.
 fn routine_card(
     routine: &Routine,
     team: TeamId,
@@ -167,6 +172,7 @@ fn routine_card(
     shell: &WeakEntity<Shell>,
     theme: &Theme,
     zone: &TimeZone,
+    run_notice: Option<&str>,
 ) -> impl IntoElement {
     let bot = routine
         .bot
@@ -187,16 +193,15 @@ fn routine_card(
     let more = {
         let shell = shell.clone();
         let id = routine.id;
-        IconButton::new(
-            format!("routine-more-{}", routine.id.0),
-            IconName::Ellipsis,
-            "More",
+        let trigger = format!("routine-more-{}", routine.id.0);
+        let selector = trigger.clone();
+        div().debug_selector(move || selector).child(
+            IconButton::new(trigger, IconName::Ellipsis, "More").on_click(move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.open_routine_menu(team, id, enabled, window, cx);
+                });
+            }),
         )
-        .on_click(move |window, cx| {
-            let _ = shell.update(cx, |shell, cx| {
-                shell.open_routine_menu(team, id, enabled, window, cx);
-            });
-        })
     };
     let mut card = Card::new(format!("routine-{}", routine.id.0))
         .padding(CardPadding::Comfortable)
@@ -211,6 +216,14 @@ fn routine_card(
     }
     if let Some(outcome) = routine.last_run {
         card = card.child(line(format!("Last run: {}", outcome.word()), theme));
+    }
+    if let Some(notice) = run_notice {
+        let notice_id = routine.id.0;
+        card = card.child(
+            div()
+                .debug_selector(move || format!("routine-run-notice-{notice_id}"))
+                .child(line(notice.to_owned(), theme)),
+        );
     }
     div().w(px(320.0)).child(
         card.footer_action(
@@ -341,6 +354,49 @@ impl Shell {
             let _ = service
                 .set_routine_paused(team_key, routine_key, !enabled)
                 .await;
+        })
+        .detach();
+    }
+
+    /// Makes one run of a routine now: through the service when one is attached, else as a sample run. A refusal
+    /// stays on the routine's card until the next run.
+    pub(super) fn run_routine_now(
+        &mut self,
+        team: TeamId,
+        routine: RoutineId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.model
+            .teams_mut()
+            .set_routine_run_notice(team, routine, None);
+        let Some(service) = self.service.clone() else {
+            let _ = self.model.teams_mut().run_routine(team, routine);
+            cx.notify();
+            return;
+        };
+        let (Some(team_key), Some(routine_key)) =
+            (self.team_key(team, cx), self.routine_key(routine, cx))
+        else {
+            self.model.teams_mut().set_routine_run_notice(
+                team,
+                routine,
+                Some(ROUTINE_GONE.to_owned()),
+            );
+            cx.notify();
+            return;
+        };
+        // The card shows the new last run when the read that follows the answer lands; the history reads runs on open.
+        cx.spawn(async move |this, cx| {
+            let answer = service.run_routine_now(team_key, routine_key).await;
+            this.update(cx, |shell, cx| {
+                let notice = answer.err().map(|refusal| refusal.message());
+                shell
+                    .model
+                    .teams_mut()
+                    .set_routine_run_notice(team, routine, notice);
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }

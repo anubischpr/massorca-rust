@@ -1,7 +1,7 @@
 //! What the service reported, and the reducer that folds it into one state (decision 0028).
 //! The store changes only through these updates, never optimistically.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
@@ -26,7 +26,7 @@ use super::connection::ConnectionState;
 use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::host_sessions::{HostSessions, HostSessionsRead};
 use super::refusal::Refusal;
-use super::skills::SkillsRead;
+use super::skills::{PlacementAnswer, PlacementOutcome, SkillsRead};
 use super::team_room::{TeamRoomRead, TeamRooms, keep_newest};
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 use crate::model::chat_transcript::ChatTranscript;
@@ -74,6 +74,7 @@ pub enum StoreUpdate {
     AgentNoProjectOffered(bool),
     /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
     AgentImportDetectOffered(bool),
+    AutomationDestinationsOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -84,8 +85,14 @@ pub enum StoreUpdate {
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
     WorkspaceRenameOffered(bool),
+    /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
+    GitSyncOffered(bool),
+    /// Whether the service offers `projects/1`: Remove project and the project's base branch.
+    ProjectEditsOffered(bool),
     /// Whether the service offers `agent-archive/1` on `agent.forget`, read on each connect.
     AgentArchiveOffered(bool),
+    /// Whether the service offers host program updates (`extensions-programs/1`, decision 0151).
+    ProgramUpdateOffered(bool),
     /// Each agent kind's chat support as `agent.kinds` lists it, by kind id, after a connect. Replaces what was held.
     AgentKindChatResync(BTreeMap<String, KindChat>),
     /// What the git watch and the git calls learned about one workspace.
@@ -100,6 +107,7 @@ pub enum StoreUpdate {
     HostMarketplace(HostMarketplaceRead),
     /// What a discovery of skills answered, for This computer or a paired host; the newest answer per host is kept.
     Skills(SkillsRead),
+    SkillPlacement(PlacementAnswer),
     /// Every setting the service declares with its value, after a connect. Replaces what was held.
     ConfigResync(Vec<ConfigValue>),
     /// One setting the service changed or stored, read again by its owner and key.
@@ -156,6 +164,12 @@ pub enum HostLink {
     },
     /// Not reachable; the sentence says why.
     Unreachable(String),
+    /// Out of contact and retried by itself: attempt `attempt` runs at `retry_at`. The host may still be running.
+    Reconnecting {
+        reason: String,
+        attempt: u32,
+        retry_at: Instant,
+    },
     /// The host no longer accepts this computer's device: pair again.
     SignInNeeded(String),
     /// The host speaks another protocol version than this app.
@@ -291,8 +305,14 @@ pub struct StoreState {
     pub host_listings: BTreeMap<String, HostMarketplaceRead>,
     /// The agent sessions each paired host last reported, by host name (STAT-16).
     pub host_sessions: BTreeMap<String, HostSessions>,
+    /// Hosts this computer forgot: a late session report for one changes nothing until it is paired again.
+    pub forgotten_hosts: BTreeSet<String>,
     /// The newest skills answer of This computer (None) and of each paired host, by host name.
     pub skills: BTreeMap<Option<String>, SkillsRead>,
+    /// The newest placement answer that is not a list: a preview, a placement, a removal, or a refusal.
+    pub placement: Option<PlacementAnswer>,
+    /// The newest answer that lists the skills MassOrca placed on This computer.
+    pub managed: Option<PlacementAnswer>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
@@ -304,6 +324,8 @@ pub struct StoreState {
     pub agent_no_project: bool,
     /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
     pub agent_import_detect: bool,
+    /// Whether the service offers automation destinations (`automation-destinations/1`); without it none is sent.
+    pub automation_destinations: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -315,8 +337,14 @@ pub struct StoreState {
     pub workspace_unique_name: bool,
     /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
     pub workspace_rename: bool,
+    /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
+    pub git_sync: bool,
+    /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
+    pub project_edits: bool,
     /// Whether the service offers `agent-archive/1` on `agent.forget`; without it no session can be deleted.
     pub agent_archive: bool,
+    /// Whether the service offers `extensions-programs/1`; without it no tool shows Update.
+    pub program_update: bool,
     /// Each agent kind's chat support by kind id (decision 0101, D10); a kind absent from it cannot chat.
     pub agent_kind_chat: BTreeMap<String, KindChat>,
     /// The transcript of each followed chat session, by session id (decision 0101).
@@ -358,18 +386,25 @@ impl Default for StoreState {
             extensions: None,
             host_listings: BTreeMap::new(),
             host_sessions: BTreeMap::new(),
+            forgotten_hosts: BTreeSet::new(),
             skills: BTreeMap::new(),
+            placement: None,
+            managed: None,
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
             agent_no_project: false,
             agent_import_detect: false,
+            automation_destinations: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
             workspace_unique_name: false,
             workspace_rename: false,
+            git_sync: false,
+            project_edits: false,
             agent_archive: false,
+            program_update: false,
             agent_kind_chat: BTreeMap::new(),
             chat: BTreeMap::new(),
             chat_refused: BTreeMap::new(),
@@ -478,6 +513,9 @@ impl StoreState {
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
+            StoreUpdate::AutomationDestinationsOffered(offered) => {
+                self.automation_destinations = offered;
+            }
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
@@ -485,7 +523,10 @@ impl StoreState {
                 self.workspace_unique_name = offered;
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
+            StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
+            StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
+            StoreUpdate::ProgramUpdateOffered(offered) => self.program_update = offered,
             StoreUpdate::AgentKindChatResync(chats) => self.agent_kind_chat = chats,
             StoreUpdate::Chat { session, event } => {
                 self.chat_refused.remove(&session);
@@ -522,6 +563,7 @@ impl StoreState {
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::HostSessions(read) => self.apply_host_sessions(read),
             StoreUpdate::Skills(read) => self.apply_skills(read),
+            StoreUpdate::SkillPlacement(answer) => self.apply_placement(answer),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
                 replace_by(&mut self.config, value, |held| {
@@ -616,9 +658,27 @@ impl StoreState {
         self.host_listings.insert(read.host.clone(), read);
     }
 
+    /// Keeps the newest placement answer of each slot: a list of placed skills, or any other placement answer.
+    fn apply_placement(&mut self, answer: PlacementAnswer) {
+        let slot = match answer.outcome {
+            PlacementOutcome::Managed(_) => &mut self.managed,
+            _ => &mut self.placement,
+        };
+        if slot
+            .as_ref()
+            .is_some_and(|held| held.request > answer.request)
+        {
+            return;
+        }
+        *slot = Some(answer);
+    }
+
     /// Keeps the newest check of each host's sessions. A check that did not reach the host keeps the sessions it
-    /// last saw, marked unreached, so they show as unverifiable rather than gone.
+    /// last saw, marked unreached, so they show as unverifiable rather than gone. A forgotten host keeps none.
     fn apply_host_sessions(&mut self, read: HostSessionsRead) {
+        if self.forgotten_hosts.contains(&read.host) {
+            return;
+        }
         let held = self.host_sessions.entry(read.host).or_default();
         if held.request > read.request {
             return;
@@ -663,6 +723,17 @@ impl StoreState {
             })
             .collect();
         hosts.sort_by(|a, b| a.record.name.cmp(&b.record.name));
+        for entry in &self.hosts {
+            if !hosts
+                .iter()
+                .any(|listed| listed.record.name == entry.record.name)
+            {
+                self.forgotten_hosts.insert(entry.record.name.clone());
+            }
+        }
+        for entry in &hosts {
+            self.forgotten_hosts.remove(&entry.record.name);
+        }
         self.host_sessions
             .retain(|name, _| hosts.iter().any(|entry| &entry.record.name == name));
         self.hosts = hosts;
@@ -791,6 +862,7 @@ pub(crate) mod fixtures {
     pub fn project(id: &str, name: &str) -> Project {
         Project {
             icon: None,
+            remote_owner: None,
             id: id.into(),
             kind: ProjectKind::Git,
             path: format!("/repos/{name}"),
@@ -803,6 +875,7 @@ pub(crate) mod fixtures {
 
     pub fn workspace(id: &str, project_id: &str, name: &str, created: i64) -> Workspace {
         Workspace {
+            in_place: false,
             id: id.into(),
             project_id: project_id.into(),
             kind: WorkspaceKind::Worktree,
@@ -1175,6 +1248,7 @@ pub(crate) mod fixtures {
             added_at_ms: 1,
             base_ref: None,
             icon: None,
+            remote_owner: None,
         }
     }
 
@@ -1193,6 +1267,7 @@ pub(crate) mod fixtures {
             no_setup: false,
             unique_name: false,
             name_generated: false,
+            in_place: false,
         }
     }
 
@@ -1235,6 +1310,17 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// A push answer for `feat/scm` with the outcome given. Tests set `upstream_set` when they need it.
+    pub fn git_pushed(
+        outcome: massorca_protocol::methods::git::remote::PushOutcome,
+    ) -> massorca_protocol::methods::git::remote::GitPushed {
+        massorca_protocol::methods::git::remote::GitPushed {
+            remote_branch: "feat/scm".into(),
+            outcome,
+            upstream_set: false,
+        }
+    }
+
     /// Every `BranchState` field at its usual value; tests override the fields they vary.
     pub fn base_branch_state() -> massorca_protocol::methods::git::status::BranchState {
         massorca_protocol::methods::git::status::BranchState {
@@ -1270,6 +1356,16 @@ pub(crate) mod fixtures {
             old_size: None,
             new_size: None,
             submodule: None,
+        }
+    }
+
+    /// Every `SubmodulePointer` field at its usual value; tests override the fields they vary.
+    pub fn base_submodule_pointer() -> massorca_protocol::methods::git::diff::SubmodulePointer {
+        massorca_protocol::methods::git::diff::SubmodulePointer {
+            old_commit: Some("1111111aaaaaaa".to_owned()),
+            new_commit: Some("2222222bbbbbbb".to_owned()),
+            dirty: Some(false),
+            summary: "Subproject commit 1111111aaaaaaa..2222222bbbbbbb".to_owned(),
         }
     }
 
@@ -1788,6 +1884,14 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Every `SecretName` field at its usual value; tests override the fields they vary.
+    pub fn base_secret_name() -> massorca_protocol::methods::secrets::SecretName {
+        massorca_protocol::methods::secrets::SecretName {
+            scope: "project:p1".to_owned(),
+            name: "OPENAI_API_KEY".to_owned(),
+        }
+    }
+
     /// Every `SecretRemoved` field at its usual value; tests override the fields they vary.
     pub fn base_secret_removed() -> massorca_protocol::methods::secrets::SecretRemoved {
         massorca_protocol::methods::secrets::SecretRemoved {
@@ -2264,6 +2368,32 @@ mod tests {
     }
 
     #[test]
+    fn a_session_report_for_a_host_this_computer_forgot_brings_no_group_back() {
+        let mut state = StoreState::default();
+        let t0 = Instant::now();
+        state.apply(
+            StoreUpdate::HostsResync(vec![host("vps"), host("gone")]),
+            t0,
+        );
+        state.apply(StoreUpdate::HostsResync(vec![host("vps")]), t0);
+        let report = |name: &str| {
+            StoreUpdate::HostSessions(HostSessionsRead {
+                host: name.to_owned(),
+                request: 1,
+                answer: None,
+            })
+        };
+
+        state.apply(report("gone"), t0);
+        assert!(
+            !state.host_sessions.contains_key("gone"),
+            "a removed host's sessions stay removed"
+        );
+        state.apply(report("vps"), t0);
+        assert!(state.host_sessions.contains_key("vps"));
+    }
+
+    #[test]
     fn a_failed_connection_says_what_the_host_refused_in_a_sentence() {
         assert_eq!(
             HostLink::from_error(&ClientError::HostUnreachable("timed out".into())),
@@ -2449,5 +2579,26 @@ mod tests {
                 .map(|read| read.request),
             Some(3)
         );
+    }
+
+    #[test]
+    fn placement_answers_keep_the_newest_request_of_each_slot() {
+        use massorca_protocol::methods::skill_placement::SkillPlacementResult;
+
+        use crate::service::{PlacementAnswer, PlacementOutcome};
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let result = |name: &str| SkillPlacementResult {
+            name: name.to_owned(),
+            canonical_path: None,
+            agents: Vec::new(),
+        };
+        let answer =
+            |request, outcome| StoreUpdate::SkillPlacement(PlacementAnswer { request, outcome });
+        state.apply(answer(2, PlacementOutcome::Changed(result("new"))), now);
+        state.apply(answer(1, PlacementOutcome::Preview(result("old"))), now);
+        state.apply(answer(3, PlacementOutcome::Managed(Vec::new())), now);
+        assert_eq!(state.placement.as_ref().map(|held| held.request), Some(2));
+        assert_eq!(state.managed.as_ref().map(|held| held.request), Some(3));
     }
 }

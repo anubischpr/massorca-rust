@@ -3352,6 +3352,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cde48f36530cbd91b65f050101e6c056d6eb743cea2a8f0f19beef69c6742ff8"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3684,6 +3694,7 @@ dependencies = [
 name = "massorca-core-extensions"
 version = "0.1.0"
 dependencies = [
+ "junction",
  "massorca-ext-package",
  "massorca-process",
  "massorca-profile",
@@ -3700,6 +3711,7 @@ name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "libc",
  "massorca-core-remote",
  "massorca-process",
  "massorca-protocol",
@@ -3707,6 +3719,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "win32job",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3740,6 +3753,7 @@ dependencies = [
  "rusqlite",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
  "uuid",
 ]
 
@@ -3912,6 +3926,7 @@ dependencies = [
  "massorca-process",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "widestring",
  "windows-sys 0.61.2",
 ]

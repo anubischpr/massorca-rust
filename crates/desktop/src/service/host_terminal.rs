@@ -1,18 +1,18 @@
-//! A paired host's terminal, attached over that host's own connection (STAT-16). Each attach opens its own connection
-//! to the host and closes it on detach. A lost connection is reported as out of contact, then opened again with
-//! backoff; the attach starts again from a snapshot, as a local attach does (0034). Input and resize go to the host,
-//! never to This PC's service.
+//! A paired host's terminal, attached over that host's live connection (STAT-16, REM-07): the attach borrows the
+//! connection of the host's link and opens none of its own. A lost connection is reported as out of contact; once the
+//! link reconnects the attach starts again from a snapshot, as a local attach does (0034). Input and resize go to the
+//! host, never to This PC's service.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use massorca_client::{
-    AttachUpdate, Backoff, Client, ClientError, TerminalAttachment, is_transient, jittered,
+    AttachUpdate, Client, ClientError, LiveWatch, TerminalAttachment, is_transient,
 };
-use massorca_profile::Profile;
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
-use super::extensions::connect_host;
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 use super::terminals::{AttachRole, TerminalWrite, spawn_writes};
 
@@ -89,7 +89,7 @@ pub(crate) struct HostAttach {
 }
 
 impl ServiceHandle {
-    /// Attaches to `terminal` on the paired host `host` at `cols` x `rows`, over that host's own connection. The attach
+    /// Attaches to `terminal` on the paired host `host` at `cols` x `rows`, over that host's live connection. The attach
     /// runs in the background from now on; the host's items come through the returned handle.
     pub fn attach_host_terminal(
         &self,
@@ -114,8 +114,8 @@ impl ServiceHandle {
     }
 }
 
-/// Starts an attach's task on the bridge's runtime.
-pub(super) fn spawn_attach(profile: Profile, attach: HostAttach) {
+/// Starts an attach's task on the bridge's runtime. A host with no live link refuses the attach as not paired.
+pub(super) fn spawn_attach(live: LiveHosts, attach: HostAttach) {
     let HostAttach {
         host,
         terminal,
@@ -123,28 +123,29 @@ pub(super) fn spawn_attach(profile: Profile, attach: HostAttach) {
         items,
         writes,
     } = attach;
+    let Some(link) = live.watch(&host) else {
+        let error = ClientError::HostNotFound(host);
+        let _ = items.send(HostTerminalItem::Refused(Refusal::from(&error)));
+        return;
+    };
     let follow = Follow {
-        profile,
-        host,
+        link,
         terminal,
         size,
         items,
         writes,
-        backoff: Backoff::default(),
         out_of_contact: false,
     };
     tokio::spawn(follow.run());
 }
 
-/// One attach on its task: the host and terminal, the grid to show, and the channels to the UI.
+/// One attach on its task: the host's link, the terminal and the grid to show, and the channels to the UI.
 struct Follow {
-    profile: Profile,
-    host: String,
+    link: LiveWatch,
     terminal: String,
     size: (u16, u16),
     items: mpsc::UnboundedSender<HostTerminalItem>,
     writes: mpsc::UnboundedReceiver<HostWrite>,
-    backoff: Backoff,
     /// Whether the UI has been told the host is out of contact, and not yet that it is back.
     out_of_contact: bool,
 }
@@ -155,7 +156,7 @@ enum Leg {
     Detached,
     /// The screen lost its place: attach again at once, from a snapshot.
     Reattach,
-    /// The connection was lost: reconnect after a backoff.
+    /// The connection was lost: attach again once the link has reconnected.
     Lost,
     /// The terminal ended, or the attach stopped without a loss.
     Finished,
@@ -167,44 +168,42 @@ impl Follow {
     async fn run(mut self) {
         loop {
             let size = self.size;
-            let connecting = connect(
-                self.profile.clone(),
-                self.host.clone(),
-                self.terminal.clone(),
-                size,
-            );
-            let connected = match self.while_out_of_contact(connecting).await {
+            let mut link = self.link.clone();
+            let terminal = self.terminal.clone();
+            let connected = match self
+                .while_out_of_contact(attach(&mut link, terminal, size))
+                .await
+            {
                 None => return,
                 Some(connected) => connected,
             };
+            // The connection taken is the one the link has now, so a later change means it was lost or replaced.
+            self.link = link;
             match connected {
-                Ok((client, attachment)) => {
-                    self.backoff.reset();
-                    match self.pump(client, attachment, size).await {
-                        Leg::Detached => return,
-                        Leg::Reattach => {}
-                        Leg::Lost => {
-                            if !self.lose().await {
-                                return;
-                            }
-                        }
-                        Leg::Finished => {
-                            self.send(HostTerminalItem::Finished);
-                            return;
-                        }
-                        Leg::Refused(refusal) => {
-                            self.send(HostTerminalItem::Refused(refusal));
+                Ok((client, attachment)) => match self.pump(client, attachment, size).await {
+                    Leg::Detached => return,
+                    Leg::Reattach => {}
+                    Leg::Lost => {
+                        if !self.lose().await {
                             return;
                         }
                     }
-                }
+                    Leg::Finished => {
+                        self.send(HostTerminalItem::Finished);
+                        return;
+                    }
+                    Leg::Refused(refusal) => {
+                        self.send(HostTerminalItem::Refused(refusal));
+                        return;
+                    }
+                },
                 Err(error) if is_transient(&error) => {
                     if !self.lose().await {
                         return;
                     }
                 }
                 Err(error) => {
-                    self.send(HostTerminalItem::Refused(Refusal::from(&error)));
+                    self.send(HostTerminalItem::Refused(Refusal::from(&*error)));
                     return;
                 }
             }
@@ -216,7 +215,8 @@ impl Follow {
         self.items.send(item).is_ok()
     }
 
-    /// Reports the host out of contact, once per loss, and waits out the next backoff. False once the UI has dropped the attach.
+    /// Reports the host out of contact, once per loss, and waits for the link's connection to change. False once the UI
+    /// has dropped the attach or the link has stopped (the host was forgotten).
     async fn lose(&mut self) -> bool {
         if !self.out_of_contact {
             self.out_of_contact = true;
@@ -224,10 +224,10 @@ impl Follow {
                 return false;
             }
         }
-        let pause = jittered(self.backoff.next_delay());
-        self.while_out_of_contact(tokio::time::sleep(pause))
-            .await
-            .is_some()
+        let mut link = self.link.clone();
+        let running = self.while_out_of_contact(link.changed()).await;
+        self.link = link;
+        running == Some(true)
     }
 
     /// Waits for `pending` while taking in the UI's writes: input is dropped, and a resize is kept for the next attach.
@@ -291,18 +291,17 @@ impl Follow {
     }
 }
 
-/// Connects to the host on a connection of its own, and attaches `terminal` at `size`, from a snapshot.
-async fn connect(
-    profile: Profile,
-    host: String,
+/// Attaches `terminal` at `size`, from a snapshot, on the connection the host's link has once its attempt settles.
+async fn attach(
+    link: &mut LiveWatch,
     terminal: String,
     size: (u16, u16),
-) -> Result<(Client, TerminalAttachment), ClientError> {
-    let client = connect_host(&profile, &host).await?;
+) -> Result<(Client, TerminalAttachment), Arc<ClientError>> {
+    let client = link.client().await?;
     let mut params = AttachRole::AnswersQueries.attach_params(&terminal, None);
     params.cols = Some(size.0);
     params.rows = Some(size.1);
-    let attachment = client.terminal_attach(&params).await?;
+    let attachment = client.terminal_attach(&params).await.map_err(Arc::new)?;
     Ok((client, attachment))
 }
 

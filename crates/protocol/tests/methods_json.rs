@@ -26,6 +26,7 @@ fn sample_project() -> projects::Project {
         added_at_ms: 1_767_225_600_000_i64,
         base_ref: None,
         icon: None,
+        remote_owner: None,
     }
 }
 
@@ -42,6 +43,7 @@ fn sample_project_json() -> Value {
 
 fn sample_workspace() -> workspaces::Workspace {
     workspaces::Workspace {
+        in_place: false,
         id: "w-1".to_owned(),
         project_id: "p-1".to_owned(),
         kind: workspaces::WorkspaceKind::Worktree,
@@ -102,6 +104,9 @@ fn method_names_follow_the_contract() {
     assert_eq!(projects::SHOW, "project.show");
     assert_eq!(projects::REMOVE, "project.remove");
     assert_eq!(projects::SET_BASE, "project.set_base");
+    assert_eq!(projects::INIT_GIT, "project.init_git");
+    assert_eq!(capabilities::PROJECT_INIT_GIT, "project-init-git/1");
+    assert_eq!(capabilities::PROJECT_ICON_COLOR, "project-icon-color/1");
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
@@ -348,6 +353,7 @@ fn project_ref_uses_the_project_key() {
 fn workspace_create_params_omit_unset_options_but_always_write_existing_branch() {
     assert_wire(
         &workspaces::WorkspaceCreateParams {
+            in_place: false,
             project: "app".to_owned(),
             name: "feat-x".to_owned(),
             branch: None,
@@ -375,6 +381,7 @@ fn workspace_create_params_without_a_name_decode_as_a_blank_name() {
 fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
     assert_wire(
         &workspaces::WorkspaceCreateParams {
+            in_place: false,
             project: "app".to_owned(),
             name: "feat-x".to_owned(),
             branch: None,
@@ -407,6 +414,30 @@ fn workspace_create_params_default_existing_branch_to_false() {
 }
 
 #[test]
+fn workspace_create_params_write_in_place_only_when_it_is_set() {
+    assert_wire(
+        &workspaces::WorkspaceCreateParams {
+            project: "app".to_owned(),
+            name: String::new(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: false,
+            path: None,
+            request_id: None,
+            no_setup: false,
+            unique_name: false,
+            name_generated: false,
+            in_place: true,
+        },
+        &json!({ "project": "app", "name": "", "existing_branch": false, "in_place": true }),
+    );
+    let plain: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).expect("decodes");
+    assert!(!plain.in_place);
+}
+
+#[test]
 fn workspace_list_params_project_is_optional() {
     assert_wire(
         &workspaces::WorkspaceListParams { project: None },
@@ -431,6 +462,7 @@ fn workspace_remove_params_default_force_to_false() {
             force: false,
             discard_ignored: false,
             forget_orphan: false,
+            with_children: false,
             allow_failed_archive: false,
         }
     );
@@ -445,13 +477,15 @@ fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
             force: true,
             discard_ignored: true,
             forget_orphan: true,
+            with_children: true,
             allow_failed_archive: false,
         },
         &json!({
             "workspace": "feat-x",
             "force": true,
             "discard_ignored": true,
-            "forget_orphan": true
+            "forget_orphan": true,
+            "with_children": true
         }),
     );
 }
@@ -659,9 +693,37 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             branch_deleted: true,
             branch_kept_reason: None,
             directory_kept: false,
+            removed_children: Vec::new(),
             archive: None,
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
+    );
+}
+
+#[test]
+fn workspace_removed_lists_the_child_workspaces_removed_first() {
+    let child = workspaces::WorkspaceRemoved {
+        workspace: sample_workspace(),
+        branch_deleted: true,
+        branch_kept_reason: None,
+        directory_kept: false,
+        removed_children: Vec::new(),
+        archive: None,
+    };
+    assert_wire(
+        &workspaces::WorkspaceRemoved {
+            workspace: sample_workspace(),
+            branch_deleted: true,
+            branch_kept_reason: None,
+            directory_kept: false,
+            removed_children: vec![child],
+            archive: None,
+        },
+        &json!({
+            "workspace": sample_workspace_json(),
+            "branch_deleted": true,
+            "removed_children": [{ "workspace": sample_workspace_json(), "branch_deleted": true }]
+        }),
     );
 }
 
@@ -673,6 +735,7 @@ fn workspace_removed_says_when_a_directory_was_kept() {
             branch_deleted: false,
             branch_kept_reason: None,
             directory_kept: true,
+            removed_children: Vec::new(),
             archive: None,
         },
         &json!({
@@ -691,6 +754,7 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
             directory_kept: false,
+            removed_children: Vec::new(),
             archive: None,
         },
         &json!({

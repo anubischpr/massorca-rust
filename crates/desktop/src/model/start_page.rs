@@ -191,6 +191,8 @@ pub fn send_reason(
 pub struct StartOptions {
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Fast speed for the start, sent only when the person chose it on a model that takes it (capability `agent-fast/1`).
+    pub fast: Option<bool>,
 }
 
 /// The options a start sends: the declared model id and the declared effort id the picker chose (decisions 0094 and
@@ -202,11 +204,11 @@ pub fn start_options(offered: bool, model: Option<&str>, effort: Option<&str>) -
     StartOptions {
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
+        fast: None,
     }
 }
 
-/// Why Fast is off on every model until the service offers `agent-fast/1`. No declared model carries a Fast flag yet, and
-/// `agent.start` has no field for a speed, so Fast stays off even once the service offers it.
+/// Why Fast is off on every model until the service offers `agent-fast/1`.
 pub const FAST_NEEDS_NEWER_SERVICE: &str = "Fast mode needs a newer service.";
 
 /// The reason Fast is off on every model, or `None` once the service offers fast speed.
@@ -246,7 +248,7 @@ pub fn start_params(
         request_id: None,
         permission_mode,
         model: options.model,
-        fast: None,
+        fast: options.fast,
         effort: options.effort,
     }
 }
@@ -591,6 +593,7 @@ mod tests {
             StartOptions {
                 model: Some("opus".to_owned()),
                 effort: Some("xhigh".to_owned()),
+                fast: None,
             }
         );
         assert_eq!(
@@ -614,8 +617,25 @@ mod tests {
             StartOptions {
                 model: Some("haiku".to_owned()),
                 effort: None,
+                fast: None,
             }
         );
         assert_eq!(start_options(true, None, None), StartOptions::default());
+    }
+
+    #[test]
+    fn the_start_carries_fast_only_when_the_person_chose_it() {
+        let fast = StartOptions {
+            fast: Some(true),
+            ..StartOptions::default()
+        };
+        assert_eq!(
+            start_params(None, "claude", "", None, fast, (120, 40)).fast,
+            Some(true)
+        );
+        assert_eq!(
+            start_params(None, "claude", "", None, StartOptions::default(), (120, 40)).fast,
+            None
+        );
     }
 }

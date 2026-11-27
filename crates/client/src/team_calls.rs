@@ -16,8 +16,8 @@ use massorca_protocol::methods::teams::{
     RoutineRunList, RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams,
     TeamDelegateParams, TeamDelegated, TeamList, TeamMemoryAddParams, TeamMemoryLine,
     TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
-    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
-    TeamRef, TeamRemoveParams, TeamUpdateParams,
+    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectShowParams,
+    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -99,6 +99,14 @@ impl Client {
         params: &TeamProjectRemoveParams,
     ) -> Result<TeamProject, ClientError> {
         self.call(teams::PROJECT_REMOVE, params).await
+    }
+
+    /// `team.project_show`: one project of a team, by id or exact name.
+    pub async fn team_project_show(
+        &self,
+        params: &TeamProjectShowParams,
+    ) -> Result<TeamProject, ClientError> {
+        self.call(teams::PROJECT_SHOW, params).await
     }
 
     /// `team.board`: a team's Board, or one project's, in four columns.

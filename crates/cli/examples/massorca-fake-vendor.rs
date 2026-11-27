@@ -7,6 +7,7 @@
 //! - As a package manager it installs the CLI a built-in's command names into the first folder of its `PATH`, the way a
 //!   real install puts the CLI on `PATH`, and removes it for an uninstall. A file `fail-install` in that folder makes the
 //!   install fail with exit 7.
+//! - `upgrade` puts the CLI in place again and says so; a file `fail-update` makes it fail with exit 7.
 //! - As a CLI it answers `--version` with exit 0. A file `fail-verify` in its folder makes that exit 1.
 //! - As a CLI, `self-uninstall --yes` records that it ran and takes its own file away, as a vendor's uninstaller removes
 //!   the CLI it is (decision 0164). Windows does not delete a running image, so there the file is renamed aside.
@@ -53,18 +54,28 @@ fn main() -> ExitCode {
 
 /// The CLI a command installs or removes, by the package or installer it names.
 fn cli_named_by(words: &[&str]) -> Option<&'static str> {
-    const PACKAGES: [(&str, &str); 6] = [
+    const PACKAGES: [(&str, &str); 9] = [
         ("@openai/codex", "codex"),
         ("@anthropic-ai/claude-code", "claude"),
         ("Anthropic.ClaudeCode", "claude"),
         ("claude-code", "claude"),
         ("antigravity.google", "agy"),
         ("gentle-pi", "gentle-shell"),
+        ("Git.Git", "git"),
+        ("GitHub.cli", "gh"),
+        ("OpenJS.NodeJS.LTS", "node"),
     ];
+    // brew names a tool by its bare formula.
+    const FORMULAS: [&str; 3] = ["git", "gh", "node"];
     PACKAGES
         .iter()
         .find(|(package, _)| words.iter().any(|word| word.contains(package)))
         .map(|(_, cli)| *cli)
+        .or_else(|| {
+            FORMULAS
+                .into_iter()
+                .find(|formula| words.last() == Some(formula))
+        })
 }
 
 fn package_manager(folder: &Path, words: &[&str]) -> ExitCode {
@@ -75,6 +86,15 @@ fn package_manager(folder: &Path, words: &[&str]) -> ExitCode {
     let target = folder.join(format!("{cli}{}", env::consts::EXE_SUFFIX));
     if words.contains(&"uninstall") {
         return finish(fs::remove_file(target));
+    }
+    if words.contains(&"upgrade") {
+        if folder.join("fail-update").exists() {
+            complain("fake-vendor: the update fails on purpose");
+            return ExitCode::from(7);
+        }
+        let copied = env::current_exe().and_then(|exe| fs::copy(exe, &target));
+        say(&format!("fake-vendor: updated {cli}"));
+        return finish(copied.map(|_| ()));
     }
     if words
         .iter()

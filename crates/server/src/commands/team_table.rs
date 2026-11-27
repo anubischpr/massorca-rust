@@ -133,6 +133,19 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "team.project.show",
+            "Show a team's project",
+            "team.project_show",
+            json!({
+                "type": "object",
+                "required": ["team", "project"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "team.project.update",
             "Change a team's project",
             "team.project_update",

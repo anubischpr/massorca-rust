@@ -10,7 +10,9 @@ mod runs_table;
 pub(in crate::shell) use editor::{AutomationEditor, editor_dialog};
 
 use super::Shell;
-use crate::model::automations::{AutomationsState, next_run_text, schedule_summary};
+use crate::model::automations::{
+    AutomationsState, destination_summary, next_run_text, schedule_summary,
+};
 use gpui::{AnyElement, IntoElement, ParentElement, Styled, WeakEntity, div, prelude::*, px};
 use massorca_protocol::methods::automations::Automation;
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -225,7 +227,11 @@ fn automation_row(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(theme.palette.text.tertiary)
-                .child(format!("{project} · {}", next_run_text(automation, now_ms))),
+                .child(format!(
+                    "{project} · {} · {}",
+                    destination_summary(automation),
+                    next_run_text(automation, now_ms)
+                )),
         );
     div()
         .flex()

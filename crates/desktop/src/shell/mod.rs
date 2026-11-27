@@ -21,8 +21,10 @@ mod pairing_qr;
 mod palette;
 mod path_field;
 mod preflight_banner;
+mod project_base;
 mod project_icon;
 mod project_mark;
+mod project_remove;
 mod project_sidebar;
 mod rail;
 mod remote_session_view;
@@ -30,7 +32,9 @@ mod remote_terminal;
 mod resize_edges;
 mod secret_requests;
 mod service_banner;
+mod session_child_wait;
 mod session_grid;
+mod session_rename;
 mod session_view;
 mod settings;
 mod settings_remove_dialog;
@@ -40,6 +44,7 @@ mod sidebar;
 mod sidebar_rows;
 mod source_control;
 mod source_control_dialogs;
+mod source_control_sync;
 mod start_page;
 mod start_placement;
 mod status_bar;
@@ -100,6 +105,8 @@ use zones::ZoneFocus;
 #[cfg(test)]
 mod add_host_tests;
 #[cfg(test)]
+mod add_project_icon_tests;
+#[cfg(test)]
 mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
@@ -126,6 +133,10 @@ mod path_field_tests;
 #[cfg(test)]
 mod preflight_banner_tests;
 #[cfg(test)]
+mod project_base_tests;
+#[cfg(test)]
+mod project_remove_tests;
+#[cfg(test)]
 mod rail_tests;
 #[cfg(test)]
 mod remote_terminal_tests;
@@ -144,7 +155,11 @@ mod settings_git_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
+mod shared_folder_tests;
+#[cfg(test)]
 mod sidebar_session_rows_tests;
+#[cfg(test)]
+mod source_control_sync_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -250,6 +265,8 @@ pub struct Shell {
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// The session row whose title is being edited in place (A97 Rename).
+    session_rename: Option<session_rename::SessionRename>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
     chat_transcripts: HashMap<String, crate::model::chat_transcript::ChatTranscript>,
     /// The chat session whose transcript stream the bridge follows for the open view (decision 0101).
@@ -263,6 +280,10 @@ pub struct Shell {
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
+    /// The Remove project dialog's flow, while the dialog is open.
+    project_remove: Option<crate::model::project_remove::ProjectRemoveFlow>,
+    /// The base-branch dialog, while it is open: its flow and the field the branch is typed into.
+    project_base: Option<project_base::ProjectBase>,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
@@ -341,6 +362,10 @@ pub struct Shell {
     marketplace_skills_request: u64,
     /// Whether the Skills section's "Where MassOrca looked" report is open.
     marketplace_roots_open: bool,
+    /// The request number of the newest placement call; only its answer is shown.
+    marketplace_placement_request: u64,
+    /// The placement the owner must confirm in the Skills section, if one is open.
+    marketplace_placement_review: Option<marketplace::PlacementReview>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal of the open remote session, attached over its paired host's own connection (STAT-16).
@@ -670,6 +695,7 @@ impl Shell {
             session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            session_rename: None,
             chat_transcripts: HashMap::new(),
             chat_watched: None,
             chat_history_pending: BTreeSet::new(),
@@ -677,6 +703,8 @@ impl Shell {
             session_resume_gone: HashSet::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
+            project_remove: None,
+            project_base: None,
             team_dialog: None,
             team_confirm: None,
             team_menu: None,
@@ -724,6 +752,8 @@ impl Shell {
             _marketplace_host_changes: marketplace_host_changes,
             marketplace_skills_request: 0,
             marketplace_roots_open: false,
+            marketplace_placement_request: 0,
+            marketplace_placement_review: None,
             terminal_views: BTreeMap::new(),
             remote_terminal: None,
             work_panel_size: Rc::default(),
@@ -906,6 +936,7 @@ impl Render for Shell {
         self.ensure_calendar_loaded(cx);
         self.focus_started_terminal(window, cx);
         self.focus_started_chat(window, cx);
+        self.focus_session_rename(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
@@ -1096,6 +1127,12 @@ impl Render for Shell {
             .map(|notice| host_remove::removal_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
+        let archive = self
+            .store
+            .read(cx)
+            .state()
+            .agent_archive
+            .then(|| self.model.show_archived());
         let body = div()
             .relative()
             .flex_1()
@@ -1106,7 +1143,11 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.collapsed_projects,
+                        sidebar::SidebarView {
+                            collapsed: &self.collapsed_projects,
+                            renaming: self.session_rename.as_ref(),
+                            archive,
+                        },
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -1134,7 +1175,11 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
-                        &self.collapsed_projects,
+                        sidebar::SidebarView {
+                            collapsed: &self.collapsed_projects,
+                            renaming: self.session_rename.as_ref(),
+                            archive,
+                        },
                         &self.search,
                         true,
                         self.rail.morph_generation(),
@@ -1177,6 +1222,14 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let base_dialog = self
+            .project_base
+            .as_ref()
+            .map(|base| project_base::project_base_dialog(base, &shell, cx));
+        let remove_project = self
+            .project_remove
+            .as_ref()
+            .map(|flow| project_remove::project_remove_dialog(flow, &shell, cx));
         let discard = self
             .source_control
             .discard
@@ -1315,6 +1368,8 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(delete_session, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
+            .when_some(remove_project, |el, dialog| el.child(dialog))
+            .when_some(base_dialog, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_switch, |el, menu| el.child(menu))

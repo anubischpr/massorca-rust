@@ -27,6 +27,8 @@ pub const PATH_NOT_DIRECTORY: &str = "path.not_directory";
 pub const PROJECT_NOT_FOUND: &str = "project.not_found";
 pub const PROJECT_EXISTS: &str = "project.exists";
 pub const PROJECT_NOT_GIT: &str = "project.not_git";
+/// The folder is already a git repository, or inside one, or already a git project (decision 0115).
+pub const PROJECT_ALREADY_GIT: &str = "project.already_git";
 pub const PROJECT_HAS_WORKSPACES: &str = "project.has_workspaces";
 pub const WORKSPACE_NOT_FOUND: &str = "workspace.not_found";
 pub const WORKSPACE_NAME_TAKEN: &str = "workspace.name_taken";
@@ -38,6 +40,21 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// Delegated children run in workspaces of their own under this one; removal needs `with_children` (decision 0110).
+/// `data.children` names them.
+pub const WORKSPACE_HAS_CHILDREN: &str = "workspace.has_children";
+/// Skill placement (SKL-02): a folder for the skill already holds one MassOrca did not place.
+pub const SKILL_NAME_TAKEN: &str = "skill.name_taken";
+/// Skill placement (SKL-02): the skill changed since MassOrca placed it; remove the placed copies first.
+pub const SKILL_CONTENT_CHANGED: &str = "skill.content_changed";
+/// Skill placement (SKL-02): `skills.unplace` names a skill MassOrca did not place.
+pub const SKILL_NOT_PLACED: &str = "skill.not_placed";
+/// Skill placement (SKL-02): no skill with that id is found on this host.
+pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+/// Skill placement (SKL-02): the skill cannot be copied (a link inside it, a bundled or plugin skill, or too large).
+pub const SKILL_NOT_PLACEABLE: &str = "skill.not_placeable";
+/// Skill placement (SKL-02): the placement record on this host cannot be read, so nothing is removed.
+pub const SKILL_RECORD_INVALID: &str = "skill.record_invalid";
 /// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
 /// `removing`, and a project with such a workspace cannot be forgotten.
 pub const WORKSPACE_BUSY: &str = "workspace.busy";
@@ -364,6 +381,9 @@ pub const EXTENSION_ASSET_NOT_LISTED: &str = "extension.asset_not_listed";
 pub const EXTENSION_ASSET_TOO_LARGE: &str = "extension.asset_too_large";
 pub const EXTENSION_INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
 pub const EXTENSION_IO: &str = "extension.io";
+/// An extension point refused one of a package's contributions (a key another owner holds, or an owner name outside
+/// the rule), so none of its contributions register (decision 0153).
+pub const EXTENSION_POINT_REFUSED: &str = "extension.point_refused";
 /// An installed package's files no longer match its lockfile hash; nothing they name runs.
 pub const EXTENSION_TAMPERED: &str = "extension.tampered";
 /// A package from outside the built-in catalogue claims publisher `massorca` or a `massorca.*` id.
@@ -396,6 +416,18 @@ pub const AUTOMATION_RUN_INTERRUPTED: &str = "automation.run_interrupted";
 pub const AUTOMATION_RUN_EXITED: &str = "automation.run_exited";
 /// An automation run's agent session is gone, so how it ended cannot be known.
 pub const AUTOMATION_RUN_STRANDED: &str = "automation.run_stranded";
+/// A run did not start because its destination workspace was removed (decision 0127).
+pub const AUTOMATION_DESTINATION_REMOVED: &str = "automation.destination_removed";
+/// A run did not start because its repository is no longer attached to this host: its folder is gone or it is no
+/// longer a git repository (decision 0127).
+pub const AUTOMATION_REPOSITORY_DETACHED: &str = "automation.repository_detached";
+/// A run did not start because its destination folder moved or is missing (decision 0127).
+pub const AUTOMATION_PATH_CHANGED: &str = "automation.path_changed";
+/// An automation's destination cannot be used: a workspace of another project, a worktree per run in a folder
+/// project, or a blank base branch (decision 0127).
+pub const AUTOMATION_DESTINATION_INVALID: &str = "automation.destination_invalid";
+/// A new worktree per run names a base branch that is not a commit of its project's repository (decision 0127).
+pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown";
 /// A team message call that is not an agent run of a bot's task with its run token (decision 0129).
 pub const TEAM_MESSAGE_NOT_A_BOT: &str = "team.message_not_a_bot";
 /// A team message to a task that is neither the sender's parent nor one of its children (decision 0129).

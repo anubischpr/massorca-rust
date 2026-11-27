@@ -27,7 +27,7 @@ use crate::error::{CliError, exit};
 use crate::output::Output;
 use massorca_protocol::methods::teams::{
     BotUpdateParams, TeamMemoryAddParams, TeamMemoryListParams, TeamMemoryRemoveParams,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamUpdateParams,
+    TeamProjectRemoveParams, TeamProjectShowParams, TeamProjectUpdateParams, TeamUpdateParams,
 };
 use massorca_protocol::{capabilities, codes};
 
@@ -206,6 +206,13 @@ pub enum TeamProjectCommand {
     List {
         /// Team id or name.
         team: String,
+    },
+    /// Shows one project: its goal, its code source and the Workspaces project it links.
+    Show {
+        /// Team id or name.
+        team: String,
+        /// Project id or name within the team.
+        project: String,
     },
     /// Changes a team's project. Only the options given change.
     Update(TeamProjectUpdateArgs),
@@ -398,7 +405,7 @@ pub struct TeamProjectUpdateArgs {
     /// value clears it.
     #[arg(long, value_name = "PROJECT")]
     pub source: Option<String>,
-    /// Where the code is, recorded only (nothing is cloned or created). Needs Workspaces in the team.
+    /// Where the code is, recorded only (nothing is cloned or created). `none` clears it; a kind needs Workspaces.
     #[arg(long, value_enum, value_name = "KIND")]
     pub code_source: Option<CodeSourceArg>,
 }
@@ -410,6 +417,8 @@ pub enum CodeSourceArg {
     ExistingRepository,
     /// A new folder with git.
     NewFolderWithGit,
+    /// No code source. In an update it clears the recorded one.
+    None,
 }
 
 impl From<CodeSourceArg> for CodeSource {
@@ -417,6 +426,7 @@ impl From<CodeSourceArg> for CodeSource {
         match source {
             CodeSourceArg::ExistingRepository => Self::ExistingRepository,
             CodeSourceArg::NewFolderWithGit => Self::NewFolderWithGit,
+            CodeSourceArg::None => Self::None,
         }
     }
 }
@@ -621,6 +631,12 @@ async fn run_project(
                 text::project_table(&list.projects)
             };
             output.success(&list, &lines);
+        }
+        TeamProjectCommand::Show { team, project } => {
+            let shown = client
+                .team_project_show(&TeamProjectShowParams { team, project })
+                .await?;
+            output.success(&shown, &text::project_details(&shown));
         }
         TeamProjectCommand::Update(args) => {
             let project = client

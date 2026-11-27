@@ -14,7 +14,7 @@ use massorca_protocol::methods::chat::{
     ChatHistoryPage, ChatHistoryParams, ChatInterrupted, ChatItem, ChatItemBody, ChatSnapshot,
     ChatSubscribeParams, ChatUnsupportedReason, ChatUpdate, DiffStatus, EndReason, KindChat,
     MessageState, NoticeLevel, PlanEntry, PlanStatus, ResetReason, RunType, SubagentStatus,
-    ToolStatus, ToolUse, Turn, TurnState,
+    TokenUsage, ToolStatus, ToolUse, Turn, TurnState,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -271,6 +271,7 @@ fn a_snapshot_carries_the_head_the_page_the_latest_turn_and_the_activity() {
                 outcome: None,
                 user_item: Some("m-1".to_owned()),
                 completed_at_ms: None,
+                usage: None,
             }),
         )
     };
@@ -470,8 +471,27 @@ fn every_item_type_has_its_wire_shape() {
                 outcome: Some(Outcome::Success),
                 user_item: None,
                 completed_at_ms: Some(9),
+                usage: None,
             }),
             json!({ "type": "turn", "state": "completed", "outcome": "success", "completed_at_ms": 9 }),
+        ),
+        (
+            ChatItemBody::Turn(Turn {
+                state: TurnState::Running,
+                outcome: None,
+                user_item: None,
+                completed_at_ms: None,
+                usage: Some(TokenUsage {
+                    input_tokens: 1200,
+                    cached_input_tokens: 800,
+                    output_tokens: 40,
+                    reasoning_output_tokens: 10,
+                    total_tokens: 1240,
+                }),
+            }),
+            json!({ "type": "turn", "state": "running", "usage": {
+                "input_tokens": 1200, "cached_input_tokens": 800, "output_tokens": 40,
+                "reasoning_output_tokens": 10, "total_tokens": 1240 } }),
         ),
     ];
     for (body, body_json) in cases {
