@@ -159,7 +159,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TEAM_ROOM_CARD_NOT_FOUND, "team.room_card_not_found"),
     (codes::TEAM_ROOM_CARD_ANSWERED, "team.room_card_answered"),
     (codes::TEAM_ROOM_LINE_NOT_FOUND, "team.room_line_not_found"),
-    (codes::TEAM_ROOM_MENTION_UNKNOWN, "team.room_mention_unknown"),
+    (
+        codes::TEAM_ROOM_MENTION_UNKNOWN,
+        "team.room_mention_unknown",
+    ),
     (codes::TEAM_ROOM_FILE_OUTSIDE, "team.room_file_outside"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
