@@ -27,6 +27,7 @@ mod git_file_content;
 mod git_fixture;
 mod git_index;
 mod git_log;
+mod git_rebase;
 mod git_remote;
 mod git_status;
 mod git_watch;

@@ -55,6 +55,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::EXTENSIONS_ROLLBACK,
             capabilities::EXTENSIONS,
             capabilities::GIT_PROJECT_BRANCHES,
+            capabilities::GIT_REBASE_BASE,
             capabilities::GIT_REMOTE_IDENTITY,
             capabilities::GIT,
             capabilities::HOST,
