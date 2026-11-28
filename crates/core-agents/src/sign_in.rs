@@ -17,7 +17,9 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AccountState, AccountsAdded};
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 
-use crate::account_check::{Verdict, account_strip_names, sign_in_env, state_name, unknown};
+use crate::account_check::{
+    CheckOutcome, Verdict, account_strip_names, sign_in_env, state_name, unknown,
+};
 use crate::accounts::{
     DEFAULT_LABEL, DecisionMark, ORIGIN_IMPORT, ORIGIN_SIGN_IN, refused_state, valid_label,
 };
@@ -248,9 +250,11 @@ impl Agents {
         )
         .unwrap_or(false);
         let kind_program = self.runnable_kind(kind).ok();
-        let verdict = kind_program
+        let checked = kind_program
             .as_ref()
             .and_then(|(decl, program)| self.check_account_home(decl, program, account, None));
+        let timed_out = checked.as_ref().is_some_and(CheckOutcome::timed_out);
+        let verdict = checked.map(CheckOutcome::verdict);
         let outcome = sign_in_outcome(verdict.as_ref(), files, end);
         let refused = refused_state(verdict.as_ref());
         // A refused sign-in is signed out first, as a removal signs out (decision 0059); an import never is.
@@ -259,7 +263,13 @@ impl Agents {
         } else {
             None
         };
+        let kept = !matches!(outcome, SignInOutcome::Discard);
         self.store_outcome(kind, account, outcome, mark, sign_out, refused);
+        // A check stopped at its time limit kept the account as `unknown`; a retry decides it later (decision 0059, amended
+        // 2026-11-27).
+        if timed_out && kept {
+            self.schedule_check_retry(kind, account);
+        }
     }
 
     /// Decides a sign-in again to an existing account (decision 0059), while the caller holds its mark. The account is kept
@@ -273,12 +283,21 @@ impl Agents {
             Ok(Some(row)) if row.kind == kind => row,
             _ => return,
         };
-        let verdict = match self.runnable_kind(kind) {
+        let checked = match self.runnable_kind(kind) {
             Ok((decl, program)) => {
                 self.check_verdict(&decl, &program, account, row.identity.as_deref())
             }
-            Err(_) => unknown(),
+            Err(_) => CheckOutcome::Decided(unknown()),
         };
+        // A check stopped at its time limit is no verdict: the account keeps its state, is announced with it, and its
+        // check is retried later (decision 0059, amended 2026-11-27).
+        if checked.timed_out() {
+            drop(mark);
+            self.notify_account(kind, account, crate::account_check::parse_state(&row.state));
+            self.schedule_check_retry(kind, account);
+            return;
+        }
+        let verdict = checked.verdict();
         // Under the gate, so the comparison and the write are one step. A login that turned out to be another account's is
         // a conflict: the recorded identity stays (ACC-03).
         let (recorded, state) = {

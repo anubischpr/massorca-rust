@@ -7,6 +7,7 @@ pub mod account_check;
 pub mod accounts;
 pub mod catalog;
 pub mod chat;
+mod check_retry;
 pub mod credentials;
 pub mod event;
 pub mod fast_mode;

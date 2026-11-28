@@ -367,6 +367,23 @@ struct Inner {
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
+    /// How account checks run: their time limit and the waits before a timed-out check is retried (decision 0059, amended
+    /// 2026-11-27). Tests change it; see [`crate::check_retry`].
+    check_settings: Mutex<crate::check_retry::CheckSettings>,
+    /// The background retries of timed-out checks, one per account at most. Taken after the homes gate and the account
+    /// busy lock when they are held; nothing else is taken while it is held.
+    check_retries: Mutex<crate::check_retry::CheckRetries>,
+}
+
+/// A handle on the service that does not keep it alive, for a background thread that must end with it.
+#[derive(Clone)]
+pub(crate) struct WeakAgents(Weak<Inner>);
+
+impl WeakAgents {
+    /// The service, while it exists.
+    pub(crate) fn upgrade(&self) -> Option<Agents> {
+        self.0.upgrade().map(|inner| Agents { inner })
+    }
 }
 
 /// A run whose exit the service has not seen yet.
@@ -481,6 +498,8 @@ impl Agents {
                         .ok()
                         .as_deref(),
                 ),
+                check_settings: Mutex::new(crate::check_retry::CheckSettings::default()),
+                check_retries: Mutex::new(crate::check_retry::CheckRetries::default()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -531,6 +550,27 @@ impl Agents {
     /// How long a sign-in terminal may stay open with no result (decision 0059).
     pub(crate) fn sign_in_timeout(&self) -> Duration {
         self.inner.sign_in_timeout
+    }
+
+    /// A handle on the service that does not keep it alive.
+    pub(crate) fn downgrade(&self) -> WeakAgents {
+        WeakAgents(Arc::downgrade(&self.inner))
+    }
+
+    /// How account checks run, as a copy (decision 0059, amended 2026-11-27).
+    pub(crate) fn check_settings(&self) -> crate::check_retry::CheckSettings {
+        lock(&self.inner.check_settings).clone()
+    }
+
+    /// Replaces how account checks run, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_check_settings(&self, settings: crate::check_retry::CheckSettings) {
+        *lock(&self.inner.check_settings) = settings;
+    }
+
+    /// The background check retries, under their lock.
+    pub(crate) fn check_retries(&self) -> MutexGuard<'_, crate::check_retry::CheckRetries> {
+        lock(&self.inner.check_retries)
     }
 
     /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.
