@@ -47,7 +47,7 @@ Ranking judgement: I ranked by how far each answer changes the first-version set
    - Options: keep the lead bot (owner direction, design open question 6); adopt pv96 routing (one host query, no lead role).
    - Source: [bot-teams.md](bot-teams.md) (requests are classified by one host query); [automations.md](automations.md) AUTO-13, AUTO-20.
 
-7. **Prototypes as core.** **Decided on the owner's behalf, pending review** (design open question 16; pending-owner-review item 12): prototypes is core, with its entry in the Workspaces Sidebar. This reverses the earlier default, which made it an extension. The owner must confirm.
+7. **Prototypes as core.** **Owner-confirmed 2026-11-27** (design open question 16; pending-owner-review item 12): prototypes is core, with its entry in the Workspaces Sidebar. This reverses the earlier default, which made it an extension. The first version carries only PROTO-01, PROTO-02, PROTO-04 and PROTO-05, at the lowest priority; PROTO-03 and PROTO-06 to PROTO-14 stay later.
    - Why it matters: it decides whether the first-version prototype features (4 of 13 in the prototypes domain) are built into the core or shipped as an extension.
    - Options: core with the Sidebar entry (the decision taken); extension that contributes the Sidebar entry.
    - Source: [prototypes.md](prototypes.md); WS-41 (first version).
@@ -483,7 +483,7 @@ Design open questions (`docs/design/screen-inventory.md`, "Open questions for th
 - **Where views open (design Q13).** **Answered (owner, 2026-11-12):** a diff opens as a Work panel file tab. Tasks, Calendar, Marketplace, Settings, the Bot Teams pages and Automations open as full pages over the canvas, with the Sidebar hidden and Back returning to the session. Artifacts items open in a Work panel tab (X-AR-01).
 - **Title bar (design Q14).** **Answered: decided on the owner's behalf, pending review** (pending-owner-review item 13): the title bar stays in the frame (D-SH-03).
 - **Mode switch (design Q15).** **Answered: decided on the owner's behalf, pending review** (pending-owner-review item 14): from any other page the first press returns to the current mode's home (D-SH-10).
-- **Prototypes (design Q16).** **Answered: decided on the owner's behalf, pending review** (pending-owner-review item 12): prototypes is core, with its Sidebar entry (D-WS-01). The owner's confirmation is blocking item 7.
+- **Prototypes (design Q16).** **Answered: owner-confirmed 2026-11-27** (pending-owner-review item 12): prototypes is core, with its Sidebar entry (D-WS-01); see item 7 for the first-version rows.
 
 Owner answers that open items in earlier versions of this document already settled:
 

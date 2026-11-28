@@ -69,6 +69,12 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Rename a generated workspace after its first agent prompt, from a title the agent writes.",
         ),
         (
+            "usage.enabled",
+            Bool,
+            json!(false),
+            "Record and show agent usage and limits for this computer and its hosts.",
+        ),
+        (
             "sessions.search",
             Bool,
             json!(true),
@@ -248,7 +254,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let settings = core_settings(root);
-        assert_eq!(settings.len(), 32);
+        assert_eq!(settings.len(), 33);
         let mut keys = HashSet::new();
         for decl in &settings {
             assert!(

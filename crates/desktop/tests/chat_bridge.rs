@@ -429,6 +429,7 @@ fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPrompt
         session: String::new(),
         text: "again".to_owned(),
         force: false,
+        attachments: Vec::new(),
     }
 }
 

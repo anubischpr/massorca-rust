@@ -6,11 +6,15 @@ import type * as Rust from '../generated/massorca_client_ffi';
 import { toException } from './native-errors';
 import {
   agentEvent,
+  botSummary,
   gitEvent,
   gitStatusSummary,
   hostSummary,
   offerSummary,
   protocolInfo,
+  routineRunSummary,
+  routineSummary,
+  teamSummary,
   terminalEvent,
   terminalSummary,
   whoAmI,
@@ -24,6 +28,7 @@ import {
 } from './native-shapes';
 import type {
   AgentEvent,
+  BotSummary,
   GitEvent,
   GitStatusSummary,
   Host,
@@ -31,6 +36,9 @@ import type {
   MassOrcaBinding,
   OfferSummary,
   ProtocolInfo,
+  RoutineRunSummary,
+  RoutineSummary,
+  TeamSummary,
   TerminalEvent,
   TerminalSummary,
   TerminalView,
@@ -79,6 +87,34 @@ class NativeHost implements Host {
 
   workspaces(project?: string): Promise<WorkspaceSummary[]> {
     return guardAsync(async () => (await this.host.workspaces(project)).map(workspaceSummary));
+  }
+
+  teams(): Promise<TeamSummary[]> {
+    return guardAsync(async () => (await this.host.teams()).map(teamSummary));
+  }
+
+  teamBots(team: string): Promise<BotSummary[]> {
+    return guardAsync(async () => (await this.host.teamBots(team)).map(botSummary));
+  }
+
+  teamRoutines(team: string): Promise<RoutineSummary[]> {
+    return guardAsync(async () => (await this.host.teamRoutines(team)).map(routineSummary));
+  }
+
+  routineRuns(team: string, routine: string, limit?: number): Promise<RoutineRunSummary[]> {
+    return guardAsync(async () => (await this.host.routineRuns(team, routine, limit)).map(routineRunSummary));
+  }
+
+  pauseRoutine(team: string, routine: string): Promise<RoutineSummary> {
+    return guardAsync(async () => routineSummary(await this.host.pauseRoutine(team, routine)));
+  }
+
+  resumeRoutine(team: string, routine: string): Promise<RoutineSummary> {
+    return guardAsync(async () => routineSummary(await this.host.resumeRoutine(team, routine)));
+  }
+
+  runRoutine(team: string, routine: string): Promise<RoutineRunSummary> {
+    return guardAsync(async () => routineRunSummary(await this.host.runRoutine(team, routine)));
   }
 
   terminals(workspace?: string): Promise<TerminalSummary[]> {

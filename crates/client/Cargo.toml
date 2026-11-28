@@ -10,10 +10,20 @@ publish.workspace = true
 [features]
 # The local service: its socket, autostart and the profile's host store. The phone builds without it (decision 0080).
 default = ["local"]
-local = ["dep:interprocess", "dep:massorca-process", "dep:massorca-profile", "dep:windows-sys"]
+local = [
+    "dep:interprocess",
+    "dep:massorca-core-remote",
+    "dep:massorca-process",
+    "dep:massorca-profile",
+    "dep:win32job",
+    "dep:windows-sys",
+    "tokio/io-util",
+    "tokio/process",
+]
 
 [dependencies]
 massorca-process = { workspace = true, optional = true }
+massorca-core-remote = { workspace = true, optional = true }
 getrandom.workspace = true
 interprocess = { workspace = true, optional = true }
 massorca-net.workspace = true
@@ -26,6 +36,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
+win32job = { workspace = true, optional = true }
 windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]

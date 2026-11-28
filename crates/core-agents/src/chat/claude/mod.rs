@@ -26,7 +26,7 @@ use serde_json::Value;
 
 pub use self::approvals::{DENIED_MESSAGE, UNREADABLE_REQUEST_MESSAGE};
 pub use self::launch::STREAM_JSON_ARGS;
-use super::adapter::{ApprovalAnswer, ChatAdapter, JournalOp};
+use super::adapter::{ApprovalAnswer, ChatAdapter, JournalOp, PromptImage};
 
 /// The name a kind's `chat.adapter` gives this dialect.
 pub const ADAPTER_NAME: &str = "claude-stream-json";
@@ -170,6 +170,14 @@ impl ChatAdapter for ClaudeAdapter {
 
     fn encode_prompt(&mut self, text: &str) -> Vec<u8> {
         launch::user_message(text)
+    }
+
+    fn encode_prompt_with_images(&mut self, text: &str, images: &[PromptImage]) -> Option<Vec<u8>> {
+        Some(launch::user_message_with_images(text, images))
+    }
+
+    fn carries_images(&self) -> bool {
+        true
     }
 
     fn translate(&mut self, line: &str) -> Vec<JournalOp> {
