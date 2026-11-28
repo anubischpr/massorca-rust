@@ -1254,10 +1254,10 @@ fn restored_package() -> ExtensionInstalled {
     }
 }
 
-/// Opening Installed reads the picked host's skills, placed skills and hosted services; the script takes those reads
-/// before the test's own calls, and answers the services read with an empty list.
+/// Opening Installed reads the picked host's skills, placed skills, MassOrca's bundled skills (SKL-04) and hosted services;
+/// the script takes those reads before the test's own calls, and answers the services read with an empty list.
 fn take_installed_reads(rig: &mut Rig) {
-    for _ in 0..3 {
+    for _ in 0..4 {
         match rig.script.next() {
             Some(Command::Skills { .. } | Command::SkillPlacement { .. }) => {}
             Some(Command::HostedServices {

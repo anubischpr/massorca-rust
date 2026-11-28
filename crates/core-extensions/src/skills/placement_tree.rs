@@ -55,25 +55,48 @@ pub(super) fn place_copy(source: &Path, target: &Path) -> Result<(), PlacementEr
 /// same skill.
 pub(super) fn tree_digest(root: &Path) -> Result<String, PlacementError> {
     let survey = survey(root)?;
-    let mut hasher = Sha256::new();
+    let mut digest = FolderDigest::new();
     for dir in &survey.dirs {
-        hasher.update(b"dir\0");
-        hasher.update(relative(dir).as_bytes());
-        hasher.update(b"\0");
+        digest.dir(dir);
     }
     for (rel, absolute) in &survey.files {
         let bytes = fs::read(absolute).map_err(io_at("cannot read", absolute))?;
-        hasher.update(b"file\0");
-        hasher.update(relative(rel).as_bytes());
-        hasher.update(b"\0");
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
+        digest.file(rel, &bytes);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(digest.finish())
+}
+
+/// The digest of a skill folder, fed one entry at a time. Callers feed the directories, then the files, each sorted by path,
+/// so a folder's digest can also be computed from bytes held in memory (see `bundled.rs`).
+#[derive(Default)]
+pub(super) struct FolderDigest(Sha256);
+
+impl FolderDigest {
+    pub(super) fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    pub(super) fn dir(&mut self, path: &Path) {
+        self.0.update(b"dir\0");
+        self.0.update(relative(path).as_bytes());
+        self.0.update(b"\0");
+    }
+
+    pub(super) fn file(&mut self, path: &Path, bytes: &[u8]) {
+        self.0.update(b"file\0");
+        self.0.update(relative(path).as_bytes());
+        self.0.update(b"\0");
+        self.0.update((bytes.len() as u64).to_le_bytes());
+        self.0.update(bytes);
+    }
+
+    pub(super) fn finish(self) -> String {
+        self.0
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 }
 
 /// Whether `path` is a real folder: not a link, and not a file.

@@ -3,6 +3,7 @@
 
 mod accounts;
 mod agent_links;
+mod bundled_skills;
 mod catalogue;
 mod extension_items;
 mod extension_refusals;
@@ -33,6 +34,7 @@ pub use accounts::{
     connection_rows, import_outcome, import_update_sentence, terminal_sign_in,
 };
 pub use agent_links::{AgentLink, installed_agent_links};
+pub use bundled_skills::{BundledAction, BundledRow, bundled_review_sentence, bundled_rows};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text, status_word};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;

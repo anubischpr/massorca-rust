@@ -125,6 +125,8 @@ pub const SKILLS_PLACE: &str = "skills-place/1";
 /// Workspace scope for placements and the agent switch (`skills.agents`, decision 0150). A client sends `scope: workspace`
 /// only to a service that offers it.
 pub const SKILLS_PLACE_SCOPES: &str = "skills-place/2";
+/// The skills MassOrca ships (`skills.bundled.list`, `skills.bundled.install`, `skills.bundled.refresh`, SKL-04).
+pub const SKILLS_BUNDLED: &str = "skills-bundled/1";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).

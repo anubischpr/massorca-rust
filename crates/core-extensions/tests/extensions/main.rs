@@ -18,6 +18,7 @@ mod review;
 mod rollback;
 mod run_log;
 mod service;
+mod skill_bundled;
 mod skill_discovery;
 mod skill_files;
 mod skill_placement;

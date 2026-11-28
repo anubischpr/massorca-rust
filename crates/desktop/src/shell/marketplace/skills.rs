@@ -16,9 +16,10 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use super::MarketplaceFrame;
 use super::host_pick::effective_target;
 use crate::model::marketplace::{
-    HostTarget, ItemKind, ManagedRow, RootRow, SkillRow, detected_agents, managed_rows,
-    place_review_sentence, plan_detail_lines, remove_review_sentence, result_sentence, root_rows,
-    search_skills, skill_count_line, skill_rows,
+    BundledAction, BundledRow, HostTarget, ItemKind, ManagedRow, RootRow, SkillRow,
+    bundled_review_sentence, bundled_rows, detected_agents, managed_rows, place_review_sentence,
+    plan_detail_lines, remove_review_sentence, result_sentence, root_rows, search_skills,
+    skill_count_line, skill_rows,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::{PlacementAnswer, PlacementCall, PlacementOutcome, SkillsListing};
@@ -59,6 +60,8 @@ pub(super) struct SkillsSection {
     pub(super) answer: Option<PlacementAnswer>,
     /// The skills MassOrca placed on This computer, by name.
     pub(super) placed: Vec<ManagedRow>,
+    /// The MassOrca skills this build ships, with their state on This computer; empty on a paired host.
+    pub(super) bundled: Vec<BundledRow>,
 }
 
 /// A placement the owner must confirm: the preview of placing a skill (answered under `request`), or the removal of the
@@ -73,6 +76,12 @@ pub(in crate::shell) enum PlacementReview {
     },
     Remove {
         name: String,
+    },
+    /// The install or update of a MassOrca skill, for the agents the review names (SKL-04).
+    Bundled {
+        name: String,
+        update: bool,
+        agents: Vec<PlacementAgent>,
     },
 }
 
@@ -91,8 +100,11 @@ impl Shell {
         };
         match target {
             HostTarget::Local => {
+                // Why: the placed and bundled lists answer under placement numbers, the ones a change refreshes them with.
+                let listed = self.next_placement_request();
                 service.read_skills(request, refresh);
-                service.skill_placement(request, PlacementCall::Managed);
+                service.skill_placement(listed, PlacementCall::Managed);
+                service.skill_placement(listed, PlacementCall::BundledList);
             }
             HostTarget::Paired(name) => service.read_host_skills(name.clone(), request, refresh),
         }
@@ -151,13 +163,23 @@ pub(super) fn section_of(shell: &Shell, cx: &App) -> SkillsSection {
         .get(&host.map(str::to_owned))
         .filter(|read| read.request == shell.marketplace_skills_request)
         .map(|read| &read.listing);
+    let shown = panel(answer, host, state.connection.is_connected());
+    // Why: the bundled rows wait for This computer's scan, so Install knows the agent folders it writes to.
+    let bundled = match state.bundled.as_ref().map(|held| &held.outcome) {
+        Some(PlacementOutcome::Bundled(skills))
+            if host.is_none() && matches!(shown, SkillsPanel::Found { .. }) =>
+        {
+            bundled_rows(skills)
+        }
+        _ => Vec::new(),
+    };
     SkillsSection {
         roots_open: shell.marketplace_roots_open,
         host: match &target {
             HostTarget::Local => "this computer".to_owned(),
             HostTarget::Paired(name) => name.clone(),
         },
-        panel: panel(answer, host, state.connection.is_connected()),
+        panel: shown,
         local: host.is_none(),
         review: shell.marketplace_placement_review.clone(),
         answer: state.placement.clone(),
@@ -165,6 +187,7 @@ pub(super) fn section_of(shell: &Shell, cx: &App) -> SkillsSection {
             Some(PlacementOutcome::Managed(skills)) => managed_rows(skills),
             _ => Vec::new(),
         },
+        bundled,
     }
 }
 
@@ -244,6 +267,7 @@ pub(super) fn skills_section(frame: &MarketplaceFrame, cx: &App) -> AnyElement {
                 )
                 .child(refresh_button(frame)),
         )
+        .children(bundled_group(frame, cx))
         .child(body)
         .child(placement_panel(frame, cx))
         .children(report)
@@ -302,6 +326,72 @@ fn place_button(frame: &MarketplaceFrame, row: &SkillRow) -> Button {
     Button::new(format!("marketplace-skill-place-{}", row.id), "Place")
         .variant(ButtonVariant::Secondary)
         .on_click(move |_, cx| start_place(&shell, skill_id.clone(), name.clone(), cx))
+}
+
+/// The MassOrca skills group above the discovered skills: each skill's name, description, state and one action (SKL-04).
+fn bundled_group(frame: &MarketplaceFrame, cx: &App) -> Option<AnyElement> {
+    if frame.skills.bundled.is_empty() {
+        return None;
+    }
+    let theme = *cx.theme();
+    let mut group = div().flex().flex_col().gap(px(SPACE_1)).child(
+        div()
+            .id("marketplace-bundled-heading")
+            .role(Role::Heading)
+            .text_style(TYPE_LABEL)
+            .text_color(theme.palette.text.primary)
+            .child("MassOrca skills"),
+    );
+    for row in &frame.skills.bundled {
+        group = group.child(bundled_row(frame, row, cx));
+    }
+    Some(group.into_any_element())
+}
+
+/// One bundled skill as a list row: its description, its state on this computer, and the one action it offers.
+fn bundled_row(frame: &MarketplaceFrame, row: &BundledRow, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let mut item = ListRow::new(
+        SharedString::from(format!("marketplace-bundled-{}", row.name)),
+        row.name.clone(),
+    );
+    if !row.description.is_empty() {
+        item = item.secondary(row.description.clone());
+    }
+    let mut trailing = div().flex().items_center().gap(px(SPACE_2)).child(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(theme.palette.text.tertiary)
+            .child(row.state_line.clone()),
+    );
+    if let Some(action) = row.action {
+        trailing = trailing.child(bundled_button(frame, row, action));
+    }
+    item.trailing(trailing).into_any_element()
+}
+
+/// The button of a bundled skill's action: Install and Update open a review, and Remove opens the placed-skill review.
+fn bundled_button(frame: &MarketplaceFrame, row: &BundledRow, action: BundledAction) -> Button {
+    let shell = frame.shell.clone();
+    let name = row.name.clone();
+    let agents = row.agents.clone();
+    let (id, label) = match action {
+        BundledAction::Install => (
+            format!("marketplace-bundled-install-{}", row.name),
+            "Install",
+        ),
+        BundledAction::Update => (format!("marketplace-bundled-update-{}", row.name), "Update"),
+        BundledAction::Remove => (format!("marketplace-bundled-remove-{}", row.name), "Remove"),
+    };
+    Button::new(id, label)
+        .variant(ButtonVariant::Secondary)
+        .on_click(move |_, cx| match action {
+            BundledAction::Install => {
+                start_bundled(&shell, name.clone(), false, agents.clone(), cx)
+            }
+            BundledAction::Update => start_bundled(&shell, name.clone(), true, agents.clone(), cx),
+            BundledAction::Remove => start_remove(&shell, name.clone(), cx),
+        })
 }
 
 /// The placement area under the list: the review waiting for the owner, the note of the last change, and the skills
@@ -411,6 +501,28 @@ fn review_body(
                 )
                 .into_any_element()
         }
+        PlacementReview::Bundled {
+            name,
+            update,
+            agents,
+        } => {
+            let mut actions = div().flex().gap(px(SPACE_2));
+            if !agents.is_empty() {
+                let confirm = shell.clone();
+                let label = if *update { "Update" } else { "Install" };
+                actions = actions.child(
+                    Button::new("marketplace-bundled-confirm", label)
+                        .variant(ButtonVariant::Primary)
+                        .on_click(move |_, cx| confirm_bundled(&confirm, cx)),
+                );
+            }
+            body.child(review_text(
+                bundled_review_sentence(name, *update, agents),
+                theme,
+            ))
+            .child(actions.child(cancel_button("marketplace-bundled-cancel", &shell)))
+            .into_any_element()
+        }
     }
 }
 
@@ -439,7 +551,9 @@ fn answer_note(answer: Option<&PlacementAnswer>) -> Option<String> {
             Some(result_sentence(result, removing))
         }
         PlacementOutcome::Refused(refusal) => Some(refusal.sentence()),
-        PlacementOutcome::Preview(_) | PlacementOutcome::Managed(_) => None,
+        PlacementOutcome::Preview(_)
+        | PlacementOutcome::Managed(_)
+        | PlacementOutcome::Bundled(_) => None,
     }
 }
 
@@ -564,6 +678,57 @@ fn confirm_remove(shell: &WeakEntity<Shell>, cx: &mut App) {
         let next = shell.next_placement_request();
         if let Some(service) = shell.service.clone() {
             service.skill_placement(next, PlacementCall::Unplace { name });
+        }
+        cx.notify();
+    });
+}
+
+/// Opens the review of installing or updating a bundled skill: the folders it goes to, or the agents it is placed for.
+fn start_bundled(
+    shell: &WeakEntity<Shell>,
+    name: String,
+    update: bool,
+    placed: Vec<PlacementAgent>,
+    cx: &mut App,
+) {
+    let _ = shell.update(cx, |shell, cx| {
+        let agents = if update {
+            placed
+        } else {
+            detected_here(shell.store.read(cx).state())
+        };
+        shell.marketplace_placement_review = Some(PlacementReview::Bundled {
+            name,
+            update,
+            agents,
+        });
+        cx.notify();
+    });
+}
+
+/// Sends the install or update the owner confirmed, for the agents its review named; nothing is sent for none.
+fn confirm_bundled(shell: &WeakEntity<Shell>, cx: &mut App) {
+    let _ = shell.update(cx, |shell, cx| {
+        let Some(PlacementReview::Bundled {
+            name,
+            update,
+            agents,
+        }) = shell.marketplace_placement_review.clone()
+        else {
+            return;
+        };
+        if agents.is_empty() {
+            return;
+        }
+        shell.marketplace_placement_review = None;
+        let next = shell.next_placement_request();
+        let call = if update {
+            PlacementCall::BundledRefresh { name }
+        } else {
+            PlacementCall::BundledInstall { name }
+        };
+        if let Some(service) = shell.service.clone() {
+            service.skill_placement(next, call);
         }
         cx.notify();
     });

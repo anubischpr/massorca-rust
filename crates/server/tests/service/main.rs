@@ -47,6 +47,7 @@ mod reconnect;
 mod registries;
 mod secrets;
 mod secrets_hardening;
+mod skill_bundled;
 mod skill_placement;
 mod skills;
 mod stalled_reader;

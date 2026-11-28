@@ -312,6 +312,8 @@ pub struct StoreState {
     pub placement: Option<PlacementAnswer>,
     /// The newest answer that lists the skills MassOrca placed on This computer.
     pub managed: Option<PlacementAnswer>,
+    /// The newest answer that lists the MassOrca skills this build ships, with their state on This computer (SKL-04).
+    pub bundled: Option<PlacementAnswer>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
@@ -387,6 +389,7 @@ impl Default for StoreState {
             skills: BTreeMap::new(),
             placement: None,
             managed: None,
+            bundled: None,
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
@@ -649,10 +652,11 @@ impl StoreState {
         self.host_listings.insert(read.host.clone(), read);
     }
 
-    /// Keeps the newest placement answer of each slot: a list of placed skills, or any other placement answer.
+    /// Keeps the newest placement answer of each slot: a list of placed or bundled skills, or any other placement answer.
     fn apply_placement(&mut self, answer: PlacementAnswer) {
         let slot = match answer.outcome {
             PlacementOutcome::Managed(_) => &mut self.managed,
+            PlacementOutcome::Bundled(_) => &mut self.bundled,
             _ => &mut self.placement,
         };
         if slot
@@ -1783,6 +1787,17 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Every `BundledSkill` field at its usual value; tests override the fields they vary.
+    pub fn base_bundled_skill() -> massorca_protocol::methods::skill_bundled::BundledSkill {
+        massorca_protocol::methods::skill_bundled::BundledSkill {
+            name: String::new(),
+            description: String::new(),
+            version: String::new(),
+            state: massorca_protocol::methods::skill_bundled::BundledSkillState::NotPlaced,
+            agents: Vec::new(),
+        }
+    }
+
     /// Every `AccountsImported` field at its usual value; tests override the fields they vary.
     pub fn base_accounts_imported() -> massorca_protocol::methods::agents::AccountsImported {
         massorca_protocol::methods::agents::AccountsImported {
@@ -2607,5 +2622,20 @@ mod tests {
         state.apply(answer(3, PlacementOutcome::Managed(Vec::new())), now);
         assert_eq!(state.placement.as_ref().map(|held| held.request), Some(2));
         assert_eq!(state.managed.as_ref().map(|held| held.request), Some(3));
+    }
+
+    #[test]
+    fn a_bundled_list_answer_keeps_its_own_newest_slot() {
+        use crate::service::{PlacementAnswer, PlacementOutcome};
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let answer =
+            |request, outcome| StoreUpdate::SkillPlacement(PlacementAnswer { request, outcome });
+        state.apply(answer(4, PlacementOutcome::Bundled(Vec::new())), now);
+        state.apply(answer(3, PlacementOutcome::Bundled(Vec::new())), now);
+        state.apply(answer(5, PlacementOutcome::Managed(Vec::new())), now);
+        assert_eq!(state.bundled.as_ref().map(|held| held.request), Some(4));
+        assert_eq!(state.managed.as_ref().map(|held| held.request), Some(5));
+        assert!(state.placement.is_none());
     }
 }

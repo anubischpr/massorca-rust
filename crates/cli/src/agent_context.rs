@@ -35,6 +35,7 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "service.log.path",
     "service.run",
     "service.unit",
+    "skills.bundled.show",
 ];
 
 /// The document `agent-context` prints: every command, sorted by its typed form.

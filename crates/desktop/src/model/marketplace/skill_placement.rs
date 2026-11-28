@@ -58,7 +58,7 @@ pub fn detected_agents(sources: &[SkillSource]) -> Vec<PlacementAgent> {
 }
 
 /// "Cursor", "Cursor and Gemini CLI", or "Codex, Cursor and Gemini CLI".
-fn join_labels(labels: &[&str]) -> String {
+pub(super) fn join_labels(labels: &[&str]) -> String {
     match labels {
         [] => String::new(),
         [only] => (*only).to_owned(),

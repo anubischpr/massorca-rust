@@ -3,6 +3,9 @@
 
 use massorca_client::Client;
 use massorca_protocol::capabilities;
+use massorca_protocol::methods::skill_bundled::{
+    BundledSkill, SkillsBundledInstallParams, SkillsBundledNameParams,
+};
 use massorca_protocol::methods::skill_placement::{
     ManagedSkill, PlacementAgent, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
     SkillsManagedParams,
@@ -55,6 +58,13 @@ fn has_skills(offered: &[String]) -> bool {
     offered
         .iter()
         .any(|name| name.as_str() == capabilities::SKILLS)
+}
+
+/// Whether a service's welcome offers the `skills-bundled/1` capability the bundled skills need (SKL-04).
+fn has_bundled(offered: &[String]) -> bool {
+    offered
+        .iter()
+        .any(|name| name.as_str() == capabilities::SKILLS_BUNDLED)
 }
 
 /// Asks a service for its skills; a service without the capability predates discovery.
@@ -116,7 +126,7 @@ pub(super) fn spawn_host_read(
     });
 }
 
-/// A call about placed skills on This computer (SKL-02): a preview, a placement, a removal, or the list of placed skills.
+/// A call about skills on This computer: a placement, a removal or the placed list (SKL-02), or a bundled skill (SKL-04).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlacementCall {
     /// What placing the skill for these agents would do. Changes nothing.
@@ -133,6 +143,16 @@ pub enum PlacementCall {
         name: String,
     },
     Managed,
+    /// Lists the skills MassOrca ships and their state on This computer. Changes nothing.
+    BundledList,
+    /// Places a bundled skill for every agent folder on this computer.
+    BundledInstall {
+        name: String,
+    },
+    /// Brings a placed bundled skill to this build's text, for the agents it is placed for.
+    BundledRefresh {
+        name: String,
+    },
 }
 
 /// What a placement call answered.
@@ -141,6 +161,8 @@ pub enum PlacementOutcome {
     Preview(SkillPlacementResult),
     Changed(SkillPlacementResult),
     Managed(Vec<ManagedSkill>),
+    /// The skills MassOrca ships; empty when the service does not offer them.
+    Bundled(Vec<BundledSkill>),
     Refused(Refusal),
 }
 
@@ -170,7 +192,10 @@ pub(super) fn spawn_placement(
     tokio::spawn(async move {
         let changes = matches!(
             call,
-            PlacementCall::Place { .. } | PlacementCall::Unplace { .. }
+            PlacementCall::Place { .. }
+                | PlacementCall::Unplace { .. }
+                | PlacementCall::BundledInstall { .. }
+                | PlacementCall::BundledRefresh { .. }
         );
         let outcome = placement(&client, call).await;
         let refresh = changes && matches!(outcome, PlacementOutcome::Changed(_));
@@ -179,12 +204,14 @@ pub(super) fn spawn_placement(
             outcome,
         }));
         if refresh {
-            // Why: a change also refreshes the placed list, under the same request, so the list never shows a stale copy.
-            let managed = placement(&client, PlacementCall::Managed).await;
-            let _ = updates.send(StoreUpdate::SkillPlacement(PlacementAnswer {
-                request,
-                outcome: managed,
-            }));
+            // Why: a change also refreshes the placed and bundled lists, under the same request, so neither shows a stale copy.
+            for list in [PlacementCall::Managed, PlacementCall::BundledList] {
+                let outcome = placement(&client, list).await;
+                let _ = updates.send(StoreUpdate::SkillPlacement(PlacementAnswer {
+                    request,
+                    outcome,
+                }));
+            }
         }
     });
 }
@@ -219,6 +246,26 @@ async fn placement(client: &Client, call: PlacementCall) -> PlacementOutcome {
             .skills_managed(&SkillsManagedParams::default())
             .await
             .map(|managed| PlacementOutcome::Managed(managed.skills)),
+        PlacementCall::BundledList => {
+            if !has_bundled(&client.welcome().capabilities) {
+                return PlacementOutcome::Bundled(Vec::new());
+            }
+            client
+                .skills_bundled_list()
+                .await
+                .map(|listed| PlacementOutcome::Bundled(listed.skills))
+        }
+        PlacementCall::BundledInstall { name } => client
+            .skills_bundled_install(&SkillsBundledInstallParams {
+                name,
+                agents: Vec::new(),
+            })
+            .await
+            .map(PlacementOutcome::Changed),
+        PlacementCall::BundledRefresh { name } => client
+            .skills_bundled_refresh(&SkillsBundledNameParams { name })
+            .await
+            .map(PlacementOutcome::Changed),
     };
     answered.unwrap_or_else(|error| PlacementOutcome::Refused(Refusal::from(&error)))
 }

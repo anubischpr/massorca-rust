@@ -37,6 +37,7 @@ pub mod secret;
 pub mod secret_input;
 pub mod server_status;
 pub mod service;
+pub mod skill_guide;
 pub mod skills;
 pub mod stream_reconnect;
 pub mod target;
