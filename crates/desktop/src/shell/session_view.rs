@@ -865,6 +865,7 @@ impl Shell {
             session: session.to_owned(),
             text,
             force: false,
+            attachments: Vec::new(),
         };
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
@@ -913,6 +914,7 @@ impl Shell {
             session: session.to_owned(),
             text,
             request_id: None,
+            attachments: Vec::new(),
         };
         let id = session.to_owned();
         let shell = cx.entity().downgrade();

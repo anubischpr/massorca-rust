@@ -62,6 +62,9 @@ pub struct QueuedPromptRow {
     pub updated_at_ms: i64,
     /// Whether the caller that queued it held host-admin scope when it did.
     pub host_admin: bool,
+    /// The files the prompt sends, as a JSON array of the paths the caller gave (decision 0172). The store keeps the text as
+    /// it is; core-agents writes it and reads it, and checks the files again before the prompt is typed.
+    pub attachments_json: String,
 }
 
 /// A prompt to queue. Its position is the next one of its session.
@@ -75,9 +78,11 @@ pub struct NewQueuedPrompt {
     pub at: i64,
     /// Whether the caller held host-admin scope (decision 0071); a run that later holds secrets types only such prompts.
     pub host_admin: bool,
+    /// The files the prompt sends, as a JSON array of paths; `[]` for none (decision 0172).
+    pub attachments_json: String,
 }
 
-const SELECT_QUEUED: &str = "SELECT id, session_id, position, text, request_id, state, reason, created_at_ms, updated_at_ms, host_admin FROM agent_prompt_queue";
+const SELECT_QUEUED: &str = "SELECT id, session_id, position, text, request_id, state, reason, created_at_ms, updated_at_ms, host_admin, attachments_json FROM agent_prompt_queue";
 
 fn queued_from_row(row: &Row<'_>) -> rusqlite::Result<QueuedPromptRow> {
     Ok(QueuedPromptRow {
@@ -91,6 +96,7 @@ fn queued_from_row(row: &Row<'_>) -> rusqlite::Result<QueuedPromptRow> {
         created_at_ms: row.get("created_at_ms")?,
         updated_at_ms: row.get("updated_at_ms")?,
         host_admin: row.get("host_admin")?,
+        attachments_json: row.get("attachments_json")?,
     })
 }
 
@@ -102,8 +108,8 @@ impl Store {
         new: &NewQueuedPrompt,
     ) -> Result<QueuedPromptRow, StoreError> {
         self.lock().execute(
-            "INSERT INTO agent_prompt_queue (id, session_id, position, text, request_id, state, reason, created_at_ms, updated_at_ms, host_admin) SELECT ?1, ?2, COALESCE(MAX(position), 0) + 1, ?3, ?4, 'waiting', NULL, ?5, ?5, ?6 FROM agent_prompt_queue WHERE session_id = ?2",
-            params![new.id, new.session_id, new.text, new.request_id, new.at, new.host_admin],
+            "INSERT INTO agent_prompt_queue (id, session_id, position, text, request_id, state, reason, created_at_ms, updated_at_ms, host_admin, attachments_json) SELECT ?1, ?2, COALESCE(MAX(position), 0) + 1, ?3, ?4, 'waiting', NULL, ?5, ?5, ?6, ?7 FROM agent_prompt_queue WHERE session_id = ?2",
+            params![new.id, new.session_id, new.text, new.request_id, new.at, new.host_admin, new.attachments_json],
         )?;
         self.get_queued_prompt(&new.id)?
             .ok_or_else(|| StoreError::Constraint {
