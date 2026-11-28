@@ -3,18 +3,23 @@
 use std::path::Path;
 
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AgentListParams, AgentSession};
+use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceListParams,
-    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRenameParams, WorkspaceSetup,
-    WorkspaceUpdateParams,
+    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRenameParams, WorkspaceRunsStopped,
+    WorkspaceSetup, WorkspaceUpdateParams,
 };
+use serde_json::json;
 
+use crate::agent_text;
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
 use crate::connect::connect;
 use crate::cwd_path::PathRules;
 use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::target::Target;
+use crate::terminal;
 use crate::workspace_text;
 
 /// Runs one `workspace` subcommand against the service `target` names.
@@ -134,8 +139,62 @@ pub async fn execute(
                 .await?;
             output.success(&check, &[workspace_text::check_line(&check)]);
         }
+        WorkspaceCommand::Sessions(args) => {
+            let workspace = paths.selector(&args.workspace)?;
+            if args.stop {
+                let stopped = client
+                    .workspace_stop_runs(&WorkspaceRef {
+                        workspace: workspace.clone(),
+                    })
+                    .await?;
+                output.success(&stopped, &stopped_lines(&stopped));
+            } else {
+                let sessions = client
+                    .agent_list_with(&AgentListParams {
+                        workspace: Some(workspace.clone()),
+                        include_archived: false,
+                    })
+                    .await?;
+                let terminals = client.terminal_list(Some(&workspace)).await?;
+                let lines = sessions_lines(&sessions.sessions, &terminals.terminals);
+                let listed = json!({
+                    "sessions": sessions.sessions,
+                    "terminals": terminals.terminals,
+                });
+                output.success(&listed, &lines);
+            }
+        }
     }
     Ok(())
+}
+
+/// The agent sessions, then the terminals, of one workspace, each as its list command prints them.
+fn sessions_lines(sessions: &[AgentSession], terminals: &[Terminal]) -> Vec<String> {
+    let mut lines = agent_text::sessions_lines(sessions);
+    if terminals.is_empty() {
+        lines.push("no terminals".to_owned());
+    } else {
+        lines.extend(terminal::terminal_table(terminals));
+    }
+    lines
+}
+
+/// What `workspace sessions --stop` asked to stop, one line each, or that nothing was running.
+fn stopped_lines(stopped: &WorkspaceRunsStopped) -> Vec<String> {
+    if stopped.agents.is_empty() && stopped.terminals.is_empty() {
+        return vec!["nothing was running".to_owned()];
+    }
+    stopped
+        .agents
+        .iter()
+        .map(|id| format!("stopped agent {id}"))
+        .chain(
+            stopped
+                .terminals
+                .iter()
+                .map(|id| format!("stopped terminal {id}")),
+        )
+        .collect()
 }
 
 /// The protocol params for `workspace create`, with a worktree path made absolute against the working directory.

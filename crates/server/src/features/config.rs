@@ -29,8 +29,10 @@ pub(crate) const WORKSPACES_BRANCH_PREFIX_CUSTOM: &str = "workspaces.branch_pref
 pub(crate) const WORKSPACES_LAYOUT: &str = "workspaces.layout";
 const LAYOUT_NESTED: &str = "nested";
 const LAYOUT_FLAT: &str = "flat";
+const LAYOUT_IN_PROJECT: &str = "in_project";
 /// The app theme; terminals answer colour queries from its palette.
 const APPEARANCE_THEME: &str = "appearance.theme";
+const TERMINAL_THEME: &str = "terminal.theme";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = Vec::new();
@@ -71,9 +73,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries.settings.register(SettingDecl {
             owner: Owner::Core,
             key: WORKSPACES_LAYOUT.to_owned(),
-            kind: SettingKind::Choice(&[LAYOUT_NESTED, LAYOUT_FLAT]),
-            default: Value::String(LAYOUT_NESTED.to_owned()),
-            description: "Where a new project's workspaces go: in a folder named after the project, or directly in the default root."
+            kind: SettingKind::Choice(&[LAYOUT_NESTED, LAYOUT_FLAT, LAYOUT_IN_PROJECT]),
+            default: Value::String(LAYOUT_IN_PROJECT.to_owned()),
+            description: "Where a new project's workspaces go: in a folder named after the project under the default root, directly in the default root, or in the project's own .worktrees folder."
                 .to_owned(),
             aliases: Vec::new(),
         })?,
@@ -120,7 +122,7 @@ pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
     home_path(&["massorca", "workspaces"])
 }
 
-/// The layout a project added now gets under the default root: the stored `workspaces.layout`, else nested.
+/// The layout a project added now gets: the stored `workspaces.layout`, else in-project (decision 0183).
 pub(crate) async fn workspace_layout(ctx: &RequestCtx) -> Result<WorkspaceLayout, ErrorBody> {
     let stored = store_blocking::run(&ctx.state, |store| {
         store.get_setting(config::DEFAULT_OWNER, WORKSPACES_LAYOUT)
@@ -130,13 +132,14 @@ pub(crate) async fn workspace_layout(ctx: &RequestCtx) -> Result<WorkspaceLayout
         .as_deref()
         .map(stored_json)
         .transpose()?
-        .unwrap_or_else(|| Value::String(LAYOUT_NESTED.to_owned()));
+        .unwrap_or_else(|| Value::String(LAYOUT_IN_PROJECT.to_owned()));
     match value.as_str() {
         Some(LAYOUT_NESTED) => Ok(WorkspaceLayout::Nested),
         Some(LAYOUT_FLAT) => Ok(WorkspaceLayout::Flat),
+        Some(LAYOUT_IN_PROJECT) => Ok(WorkspaceLayout::InProject),
         _ => Err(ErrorBody::new(
             codes::CONFIG_INVALID_VALUE,
-            "workspaces.layout must be nested or flat",
+            "workspaces.layout must be nested, flat or in_project",
         )),
     }
 }
@@ -191,7 +194,7 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     .await?;
     let before = before.as_deref().map(stored_json).transpose()?;
     let after = view(&decl, Some(params.value));
-    follow_theme(&ctx, &decl, &after);
+    follow_theme(&ctx, &decl).await;
     publish_if_changed(&ctx, &decl, before, &after);
     Ok(after)
 }
@@ -216,7 +219,7 @@ async fn reset(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorB
     .await?;
     let before = before.as_deref().map(stored_json).transpose()?;
     let after = view(&decl, None);
-    follow_theme(&ctx, &decl, &after);
+    follow_theme(&ctx, &decl).await;
     publish_if_changed(&ctx, &decl, before, &after);
     Ok(after)
 }
@@ -348,28 +351,52 @@ pub(crate) fn terminal_theme(value: Option<&Value>) -> TerminalTheme {
     }
 }
 
-/// The terminal palette of the stored `appearance.theme`; an unreadable value counts as unset.
-pub(crate) fn stored_terminal_theme(store: &Store) -> TerminalTheme {
-    let stored = store
-        .get_setting(config::DEFAULT_OWNER, APPEARANCE_THEME)
-        .ok()
-        .flatten()
-        .and_then(|json| serde_json::from_str::<Value>(&json).ok());
-    terminal_theme(stored.as_ref())
+/// The palette `terminal.theme` and `appearance.theme` choose: `dark` and `light` name it, while `system` or an unset
+/// `terminal.theme` follows `appearance.theme`.
+pub(crate) fn terminal_palette(
+    terminal: Option<&Value>,
+    appearance: Option<&Value>,
+) -> TerminalTheme {
+    match terminal.and_then(Value::as_str) {
+        Some("dark") => TerminalTheme::Dark,
+        Some("light") => TerminalTheme::Light,
+        _ => terminal_theme(appearance),
+    }
 }
 
-/// Keeps the terminals' palette in step when `appearance.theme` changes.
-fn follow_theme(ctx: &RequestCtx, decl: &SettingDecl, after: &ConfigValue) {
-    if decl.owner.to_string() == config::DEFAULT_OWNER && decl.key == APPEARANCE_THEME {
-        ctx.state
-            .terminals
-            .set_theme(terminal_theme(Some(&after.value)));
+/// The terminal palette of the stored `terminal.theme` and `appearance.theme`; an unreadable value counts as unset.
+pub(crate) fn stored_terminal_theme(store: &Store) -> TerminalTheme {
+    let stored = |key: &str| {
+        store
+            .get_setting(config::DEFAULT_OWNER, key)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+    };
+    terminal_palette(
+        stored(TERMINAL_THEME).as_ref(),
+        stored(APPEARANCE_THEME).as_ref(),
+    )
+}
+
+/// Keeps the terminals' palette in step when `appearance.theme` or `terminal.theme` changes; reads both stored values.
+async fn follow_theme(ctx: &RequestCtx, decl: &SettingDecl) {
+    if decl.owner.to_string() != config::DEFAULT_OWNER
+        || !matches!(decl.key.as_str(), APPEARANCE_THEME | TERMINAL_THEME)
+    {
+        return;
+    }
+    // A failed read keeps the palette in place; the next change of either setting corrects it.
+    if let Ok(theme) =
+        store_blocking::run(&ctx.state, |store| Ok(stored_terminal_theme(store))).await
+    {
+        ctx.state.terminals.set_theme(theme);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::terminal_theme;
+    use super::{terminal_palette, terminal_theme};
     use massorca_core_terminal::TerminalTheme;
     use serde_json::json;
 
@@ -379,5 +406,24 @@ mod tests {
         assert_eq!(terminal_theme(Some(&json!("dark"))), TerminalTheme::Dark);
         assert_eq!(terminal_theme(Some(&json!("system"))), TerminalTheme::Dark);
         assert_eq!(terminal_theme(None), TerminalTheme::Dark);
+    }
+
+    #[test]
+    fn an_explicit_terminal_theme_overrides_the_appearance_and_system_follows_it() {
+        let (dark, light, system) = (json!("dark"), json!("light"), json!("system"));
+        assert_eq!(
+            terminal_palette(Some(&dark), Some(&light)),
+            TerminalTheme::Dark
+        );
+        assert_eq!(
+            terminal_palette(Some(&light), Some(&dark)),
+            TerminalTheme::Light
+        );
+        assert_eq!(
+            terminal_palette(Some(&system), Some(&light)),
+            TerminalTheme::Light
+        );
+        assert_eq!(terminal_palette(None, Some(&light)), TerminalTheme::Light);
+        assert_eq!(terminal_palette(None, None), TerminalTheme::Dark);
     }
 }

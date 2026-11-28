@@ -135,13 +135,16 @@ fn settings_set_reset_and_list_a_choice_setting() {
 }
 
 #[test]
-fn workspaces_layout_is_nested_by_default_and_takes_only_nested_or_flat() {
+fn workspaces_layout_is_in_project_by_default_and_takes_only_nested_flat_or_in_project() {
     let sandbox = Sandbox::new();
 
     let got = sandbox.json_ok("default", &["config", "get", "workspaces.layout"]);
-    assert_eq!(got["value"], "nested");
+    assert_eq!(got["value"], "in_project");
     assert_eq!(got["is_default"], true);
-    assert_eq!(got["choices"], serde_json::json!(["nested", "flat"]));
+    assert_eq!(
+        got["choices"],
+        serde_json::json!(["nested", "flat", "in_project"])
+    );
 
     sandbox
         .run(

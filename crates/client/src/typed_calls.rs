@@ -34,7 +34,7 @@ use massorca_protocol::methods::usage::{self, UsageList, UsageParams};
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
-    WorkspaceRenameParams, WorkspaceUpdateParams,
+    WorkspaceRenameParams, WorkspaceRunsStopped, WorkspaceUpdateParams,
 };
 
 use crate::client::Client;
@@ -217,6 +217,14 @@ impl Client {
         params: &WorkspaceRef,
     ) -> Result<WorkspaceCheck, ClientError> {
         self.call(workspaces::CHECK, params).await
+    }
+
+    /// `workspace.stop_runs`: stops every agent run and terminal of a workspace; the workspace itself stays.
+    pub async fn workspace_stop_runs(
+        &self,
+        params: &WorkspaceRef,
+    ) -> Result<WorkspaceRunsStopped, ClientError> {
+        self.call(workspaces::STOP_RUNS, params).await
     }
 
     /// `terminal.create`: starts a terminal in a workspace.

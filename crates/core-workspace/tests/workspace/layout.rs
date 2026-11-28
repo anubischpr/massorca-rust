@@ -1,5 +1,6 @@
 //! Where a project's default workspaces go: in a folder of the project's own under the default root
 //! (nested), or directly in the default root (flat). A project keeps the root it was added with (ADR 0008).
+//! The fixture pins nested; `in_project_layout` covers the default.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +10,7 @@ use massorca_protocol::codes;
 use crate::fixture::{Fixture, canonical, create_params, expect_code, project_add, text};
 
 #[test]
-fn nested_is_the_default_and_a_workspace_goes_in_its_projects_folder() {
+fn nested_puts_a_workspace_in_its_projects_folder() {
     let fx = Fixture::new();
 
     let project = fx.repo_project();

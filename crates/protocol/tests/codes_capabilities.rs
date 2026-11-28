@@ -66,6 +66,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
     (codes::WORKSPACE_PATH_TAKEN, "workspace.path_taken"),
+    (codes::WORKSPACE_PATH_TOO_LONG, "workspace.path_too_long"),
     (codes::WORKSPACE_DIRTY, "workspace.dirty"),
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
@@ -200,7 +201,9 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
     assert_eq!(capabilities::WORKSPACE_RENAME, "workspace-rename/1");
+    assert_eq!(capabilities::WORKSPACE_STOP_RUNS, "workspace-stop-runs/1");
     assert_eq!(capabilities::GIT, "git/1");
+    assert_eq!(capabilities::GIT_REBASE_BASE, "git-rebase-base/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
     assert_eq!(capabilities::TERMINALS, "terminals/1");

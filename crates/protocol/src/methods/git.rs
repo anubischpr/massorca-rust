@@ -7,6 +7,7 @@ pub mod commit;
 pub mod diff;
 pub mod index;
 pub mod log;
+pub mod rebase;
 pub mod remote;
 pub mod remotes;
 pub mod status;

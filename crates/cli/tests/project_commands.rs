@@ -54,6 +54,54 @@ fn a_repository_is_added_as_a_git_project_and_listed_shown_and_removed() {
 }
 
 #[test]
+fn by_default_a_repositorys_workspaces_go_in_its_worktrees_folder_and_show_prints_the_root() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let repo_text = repo.to_string_lossy().into_owned();
+
+    let added = sandbox.json_ok("default", &["project", "add", repo_text.as_str()]);
+    let root = std::path::PathBuf::from(added["workspaces_root"].as_str().expect("root"));
+    assert_eq!(
+        root.file_name().and_then(|name| name.to_str()),
+        Some(".worktrees")
+    );
+    assert_eq!(
+        std::fs::canonicalize(root.parent().expect("parent")).expect("repo"),
+        std::fs::canonicalize(&repo).expect("repo")
+    );
+    assert!(
+        !root.exists(),
+        "nothing is created until the first worktree"
+    );
+
+    let shown = sandbox.json_ok("default", &["project", "show", "repo"]);
+    assert_eq!(shown["workspaces_root"], added["workspaces_root"]);
+    let text = sandbox
+        .run("default", &["project", "show", "repo"])
+        .success();
+    let expected = format!("workspaces root: {}", root.display());
+    assert!(
+        stdout_text(&text).contains(&expected),
+        "{}",
+        stdout_text(&text)
+    );
+
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+    let path = std::path::PathBuf::from(created["path"].as_str().expect("path"));
+    assert_eq!(
+        std::fs::canonicalize(&path).expect("the workspace exists"),
+        std::fs::canonicalize(root.join("feature")).expect("the workspace exists")
+    );
+    let exclude = std::fs::read_to_string(repo.join(".git").join("info").join("exclude"))
+        .expect("the exclude file");
+    assert!(
+        exclude.lines().any(|line| line == "/.worktrees/"),
+        "{exclude}"
+    );
+}
+
+#[test]
 fn a_directory_is_added_as_a_folder_with_the_folder_flag() {
     let sandbox = Sandbox::new();
     let notes = sandbox.home().join("notes");

@@ -13,6 +13,7 @@ mod fixture;
 mod index;
 mod log;
 mod merge;
+mod rebase;
 mod refs;
 mod remote;
 mod remote_identity;

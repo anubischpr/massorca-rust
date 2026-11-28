@@ -25,6 +25,8 @@ pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
 pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
 /// `in_place` on `workspace.create` (decision 0112): the project's own checkout becomes its workspace, and removal only forgets it.
 pub const WORKSPACE_IN_PLACE: &str = "workspace-in-place/1";
+/// `workspace.stop_runs`: stopping every agent run and terminal of a workspace while the workspace stays.
+pub const WORKSPACE_STOP_RUNS: &str = "workspace-stop-runs/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).
@@ -88,6 +90,8 @@ pub const GIT: &str = "git/1";
 pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
 /// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
 pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
+/// `git.rebase_base`: rebasing a worktree's branch onto its base branch (decision 0181).
+pub const GIT_REBASE_BASE: &str = "git-rebase-base/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).

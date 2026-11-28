@@ -228,3 +228,17 @@ fn main_worktree_of_a_linked_worktree_of_a_bare_repository_is_none() {
     assert!(git().toplevel(&linked).expect("toplevel").is_some());
     assert_eq!(git().main_worktree(&linked).expect("main worktree"), None);
 }
+
+#[test]
+fn a_linked_worktree_shares_the_main_repositorys_common_dir() {
+    let fixture = Fixture::new();
+    let linked = fixture.sibling("linked");
+    run_git(
+        &fixture.repo(),
+        &["worktree", "add", "-q", "-b", "linked", text(&linked)],
+    );
+    let main = git().common_dir(&fixture.repo()).expect("main common dir");
+    let from_linked = git().common_dir(&linked).expect("linked common dir");
+    assert_eq!(canonical(&main), canonical(&fixture.repo().join(".git")));
+    assert_eq!(canonical(&from_linked), canonical(&main));
+}

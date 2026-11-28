@@ -95,6 +95,12 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             workspace_args(json!({})),
         ),
         command(
+            "git.rebase-base",
+            "Rebase the branch onto its base; a conflict aborts the rebase and lists the files",
+            "git.rebase_base",
+            workspace_args(json!({ "refresh": { "type": "boolean" } })),
+        ),
+        command(
             "git.watch",
             "Stream what changes in a workspace",
             "git.watch",
