@@ -164,6 +164,56 @@ fn make_link(target: &Path, link: &Path) -> bool {
 }
 
 #[tokio::test]
+async fn an_at_suggests_bots_teams_projects_and_the_files_of_a_folder() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    rooms(&client, &home.path().join("parser")).await;
+    let suggest = |query: &str| TeamRoomMentionsParams {
+        team: "alpha".to_owned(),
+        query: query.to_owned(),
+        limit: None,
+    };
+
+    let all = client
+        .team_room_mentions(&suggest(""))
+        .await
+        .expect("team.room_mentions");
+    let inserts: Vec<&str> = all.mentions.iter().map(|m| m.insert.as_str()).collect();
+    assert_eq!(
+        inserts,
+        ["@Mara", "@Bruno", "@team:beta", "@project:Parser", "@file:"]
+    );
+    let teams_only = client
+        .team_room_mentions(&suggest("team:"))
+        .await
+        .expect("teams");
+    assert_eq!(teams_only.mentions.len(), 1);
+    assert_eq!(teams_only.mentions[0].kind, RoomMentionKind::Team);
+    let bruno = client.team_room_mentions(&suggest("bru")).await.expect("bru");
+    assert_eq!(bruno.mentions[0].insert, "@Bruno");
+
+    let root = client
+        .team_room_mentions(&suggest("file:"))
+        .await
+        .expect("files");
+    let files: Vec<&str> = root.mentions.iter().map(|m| m.insert.as_str()).collect();
+    assert_eq!(files, ["@file:README.md", "@file:src/"]);
+    let src = client
+        .team_room_mentions(&suggest("file:src/l"))
+        .await
+        .expect("src");
+    assert_eq!(src.mentions[0].insert, "@file:src/lib.rs");
+    assert_eq!(src.mentions[0].project.as_deref(), Some("Parser"));
+    let refused = client
+        .team_room_mentions(&suggest("file:../"))
+        .await
+        .expect_err("no listing outside a project");
+    assert_eq!(remote_code(&refused), codes::TEAM_ROOM_FILE_OUTSIDE);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_team_mention_sends_the_request_to_that_teams_todo() {
     let home = temp_home();
     let running = start(home.path(), "default").await;

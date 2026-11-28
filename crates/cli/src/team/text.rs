@@ -1,6 +1,8 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
-use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, RoomTyping, TeamRoomMessage};
+use massorca_protocol::methods::team_room::{
+    RoomAuthor, RoomCard, RoomMention, RoomMentionKind, RoomTyping, TeamRoomMessage,
+};
 use massorca_protocol::methods::teams::{
     Board, Bot, CodeSource, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday,
     Team, TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
@@ -376,4 +378,27 @@ fn card_line(id: &str, author: &str, text: &str, card: &RoomCard) -> String {
             format!("{author}\t{text}\tcard {id}: {}", choices.join(", "))
         }
     }
+}
+
+/// One line per mention: its kind, the text that names it, and a file's project.
+pub fn mention_lines(mentions: &[RoomMention]) -> Vec<String> {
+    if mentions.is_empty() {
+        return vec!["no mentions".to_owned()];
+    }
+    mentions
+        .iter()
+        .map(|mention| {
+            let kind = match mention.kind {
+                RoomMentionKind::Bot => "bot",
+                RoomMentionKind::Team => "team",
+                RoomMentionKind::Project => "project",
+                RoomMentionKind::File => "file",
+                RoomMentionKind::Unknown => "unknown",
+            };
+            match &mention.project {
+                Some(project) => format!("{kind}\t{}\tin {project}", mention.insert),
+                None => format!("{kind}\t{}", mention.insert),
+            }
+        })
+        .collect()
 }

@@ -12,7 +12,8 @@ use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::team_room::{
-    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomPostParams,
+    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomMentionsParams, TeamRoomPostParams,
+    TeamRoomResolveParams,
 };
 use massorca_protocol::methods::teams::{
     Board, BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
@@ -310,6 +311,29 @@ pub enum TeamRoomCommand {
         message: String,
         /// One of the card's choices.
         choice: String,
+    },
+    /// Lists what an @ typed so far can name in the room: the team's bots (@Name), the other teams (@team:Name), the
+    /// team's projects (@project:Name) and @file:. A QUERY starting with file: lists the files and folders of one folder
+    /// of the team's projects (file:src/ lists src). Needs a host with team-room/4.
+    Mentions {
+        /// Team id or name.
+        team: String,
+        /// The text after the @ typed so far.
+        #[arg(default_value = "")]
+        query: String,
+        /// At most this many (20 without it, 100 at most).
+        #[arg(long, value_name = "N")]
+        limit: Option<u32>,
+    },
+    /// Shows what each mention of TEXT names, as a posted line reads it: @Name a bot of the team, @team:Name another
+    /// team, @project:Name a project of the team, @file:path a file inside a project's folder. A typed mention that
+    /// names nothing is refused (team.room_mention_unknown), and so is a file outside its project
+    /// (team.room_file_outside).
+    Resolve {
+        /// Team id or name.
+        team: String,
+        /// The line.
+        text: String,
     },
 }
 
@@ -775,6 +799,18 @@ async fn run_room(
             let mut lines = text::room_lines(std::slice::from_ref(&answered.card));
             lines.extend(text::room_lines(&answered.messages));
             output.success(&answered, &lines);
+        }
+        TeamRoomCommand::Mentions { team, query, limit } => {
+            let mentions = client
+                .team_room_mentions(&TeamRoomMentionsParams { team, query, limit })
+                .await?;
+            output.success(&mentions, &text::mention_lines(&mentions.mentions));
+        }
+        TeamRoomCommand::Resolve { team, text } => {
+            let mentions = client
+                .team_room_resolve(&TeamRoomResolveParams { team, text })
+                .await?;
+            output.success(&mentions, &text::mention_lines(&mentions.mentions));
         }
     }
     Ok(())

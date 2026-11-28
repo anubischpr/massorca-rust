@@ -218,6 +218,33 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "team.room.mentions",
+            "List what an @ typed so far can name in a team's Conference room",
+            "team.room_mentions",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 0 }
+                }
+            }),
+        ),
+        command(
+            "team.room.resolve",
+            "Show what each mention of a Conference room line names",
+            "team.room_resolve",
+            json!({
+                "type": "object",
+                "required": ["team", "text"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "text": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "team.memory.list",
             "List a team's memory lines, or one bot's",
             "team.memory_list",

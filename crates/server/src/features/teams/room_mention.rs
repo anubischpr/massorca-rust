@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use massorca_core_store::{BotRow, Store, TeamProjectRow, TeamRow};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::team_room::{
-    RoomMention, RoomMentionKind, RoomMentions, TeamRoomResolveParams,
+    RoomMention, RoomMentionKind, RoomMentions, TeamRoomMentionsParams, TeamRoomResolveParams,
 };
 use massorca_protocol::{ErrorBody, codes};
 
@@ -20,6 +20,29 @@ use super::{blocking, selectors, store_error};
 const TEAM_PREFIX: &str = "team:";
 const PROJECT_PREFIX: &str = "project:";
 const FILE_PREFIX: &str = "file:";
+/// Suggestions `team.room_mentions` returns without a limit, and at most.
+pub(super) const DEFAULT_SUGGESTIONS: usize = 20;
+pub(super) const MAX_SUGGESTIONS: usize = 100;
+
+/// `team.room_mentions`.
+pub(super) async fn mentions(
+    ctx: RequestCtx,
+    params: TeamRoomMentionsParams,
+) -> Result<RoomMentions, ErrorBody> {
+    let workspaces = shared(&ctx);
+    blocking(&ctx, move |store, _agents| {
+        let team = selectors::team(store, &params.team)?;
+        let bots = store.list_bots(&team.id).map_err(store_error)?;
+        let projects = Projects::of(store, &workspaces, &team)?;
+        let limit = params.limit.map_or(DEFAULT_SUGGESTIONS, |limit| {
+            usize::try_from(limit).map_or(MAX_SUGGESTIONS, |limit| limit.min(MAX_SUGGESTIONS))
+        });
+        Ok(RoomMentions {
+            mentions: suggest(store, &team, &bots, &projects, &params.query, limit)?,
+        })
+    })
+    .await
+}
 
 /// `team.room_resolve`.
 pub(super) async fn resolve_line(
@@ -334,6 +357,111 @@ fn slashed(path: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// What `query` (the text after an `@`) can name, at most `limit`: the team's bots, the other teams, the team's
+/// projects and the file prefix, or with `file:` the files and folders of one folder of the team's projects.
+pub(super) fn suggest(
+    store: &Store,
+    team: &TeamRow,
+    bots: &[BotRow],
+    projects: &Projects,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<RoomMention>, ErrorBody> {
+    if let Some(path) = strip_prefix_ignoring_case(query, FILE_PREFIX) {
+        return files(projects, path, limit);
+    }
+    let (only, wanted) = [
+        (TEAM_PREFIX, RoomMentionKind::Team),
+        (PROJECT_PREFIX, RoomMentionKind::Project),
+    ]
+    .into_iter()
+    .find_map(|(prefix, kind)| strip_prefix_ignoring_case(query, prefix).map(|rest| (Some(kind), rest)))
+    .unwrap_or((None, query));
+    let wanted = wanted.to_lowercase();
+    let matches = |name: &str| name.to_lowercase().contains(&wanted);
+    let shown = |kind: RoomMentionKind| only.is_none_or(|only| only == kind);
+    let mut list = Vec::new();
+    if shown(RoomMentionKind::Bot) {
+        list.extend(bots.iter().filter(|bot| matches(&bot.name)).map(bot_mention));
+    }
+    if shown(RoomMentionKind::Team) {
+        let teams = store.list_teams().map_err(store_error)?;
+        list.extend(
+            teams
+                .iter()
+                .filter(|other| other.id != team.id && matches(&other.name))
+                .map(team_mention),
+        );
+    }
+    if shown(RoomMentionKind::Project) {
+        list.extend(
+            projects
+                .rows
+                .iter()
+                .filter(|(row, _)| matches(&row.name))
+                .map(|(row, _)| project_mention(row)),
+        );
+    }
+    if only.is_none() && FILE_PREFIX.starts_with(wanted.as_str()) {
+        list.push(RoomMention {
+            kind: RoomMentionKind::File,
+            id: String::new(),
+            label: FILE_PREFIX.to_owned(),
+            insert: format!("@{FILE_PREFIX}"),
+            project: None,
+        });
+    }
+    list.truncate(limit);
+    Ok(list)
+}
+
+/// The entries of the folder `path` names (up to its last `/`) whose name starts with the rest, in each project with a
+/// folder: folders end with `/`. Hidden entries are left out.
+fn files(projects: &Projects, path: &str, limit: usize) -> Result<Vec<RoomMention>, ErrorBody> {
+    let written = format!("@{FILE_PREFIX}{path}");
+    let (folder, start) = path.rsplit_once('/').unwrap_or(("", path));
+    let relative = inside(folder).ok_or_else(|| outside(&written))?;
+    let start = start.to_lowercase();
+    let mut list = Vec::new();
+    for (row, root) in projects.roots(None) {
+        let dir = root.join(&relative);
+        if !stays_inside(root, &dir) {
+            if dir.exists() {
+                return Err(outside(&written));
+            }
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut named: Vec<(String, bool)> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let is_dir = entry.file_type().ok()?.is_dir();
+                (!name.starts_with('.') && name.to_lowercase().starts_with(&start))
+                    .then_some((name, is_dir))
+            })
+            .collect();
+        named.sort();
+        for (name, is_dir) in named {
+            let mut shown = slashed(&relative.join(&name));
+            if is_dir {
+                shown.push('/');
+            }
+            list.push(RoomMention {
+                kind: RoomMentionKind::File,
+                id: shown.clone(),
+                label: shown.clone(),
+                insert: format!("@{FILE_PREFIX}{shown}"),
+                project: Some(row.name.clone()),
+            });
+        }
+    }
+    list.truncate(limit);
+    Ok(list)
 }
 
 #[cfg(test)]
