@@ -29,7 +29,7 @@ use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
     ApprovalAnswer, ChatAdapter, ChatChanged, ClaudeAdapter, CodexAdapter, JournalOp, KILL_GRACE,
-    approval_key, claude, codex, version,
+    approval_key, claude, codex,
 };
 use crate::kind::KindDecl;
 use crate::launch::LaunchPlan;
@@ -170,7 +170,7 @@ impl Agents {
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
         let (decl, program) = self.startable_kind(&params.kind)?;
-        let adapter = chat_adapter_for(&decl, &program)?;
+        let adapter = chat_adapter_for(self, &decl, &program)?;
         self.start_chat(params, grant, adapter)
     }
 
@@ -683,7 +683,7 @@ impl Agents {
         decl: &KindDecl,
         program: &Path,
     ) -> Result<Box<dyn ChatAdapter>, AgentError> {
-        chat_adapter_for(decl, program)
+        chat_adapter_for(self, decl, program)
     }
 
     /// Runs the version probe a chat resume of `selector` needs, so a caller can do it before taking its own gates; the
@@ -695,7 +695,7 @@ impl Agents {
         if self.run_type_of(&row.id).ok() == Some(RunType::Chat)
             && let Ok((decl, program)) = self.resumable_kind(&row)
         {
-            let _ = version::kind_chat(&decl, Some(&program));
+            let _ = self.chat_support(&decl, &program);
         }
     }
 
@@ -868,13 +868,18 @@ impl Agents {
 }
 
 /// The adapter for a chat run of `decl` with its resolved `program`: the test dialect for a test service's chat kinds,
-/// else the one the kind's `chat` block names, once the probed CLI version is in its range.
-fn chat_adapter_for(decl: &KindDecl, program: &Path) -> Result<Box<dyn ChatAdapter>, AgentError> {
+/// else the one the kind's `chat` block names, once the probed CLI version is in its range. A probe still pending is
+/// waited for, bounded ([`Agents::chat_support`]).
+fn chat_adapter_for(
+    agents: &Agents,
+    decl: &KindDecl,
+    program: &Path,
+) -> Result<Box<dyn ChatAdapter>, AgentError> {
     #[cfg(feature = "test-hooks")]
     if crate::chat::is_test_chat_kind(&decl.id) {
         return Ok(Box::new(crate::chat::TestAdapter::default()));
     }
-    let Some(chat) = version::kind_chat(decl, Some(program)) else {
+    let Some(chat) = agents.chat_support(decl, program) else {
         return Err(chat_unsupported(decl, None));
     };
     if !chat.supported {

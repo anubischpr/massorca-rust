@@ -802,6 +802,14 @@ and the result is kept per program path and modified time in the probe cache the
 `claude` kind declares `2.1.258` through `2.x`, the `codex` kind `0.172.0` through `0.x`. A test build probes only the programs
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
+A version probe still running at its 5 s limit is no answer yet (decision 0059, amendment 2026-11-27): the kind reads
+`version_unknown` for now, nothing is cached, and `agent.kinds` retries the probe in the background with the account
+check's retry (`check_retry.rs`: after 2 s, 5 s and 15 s, at most one retry per kind). When a retry decides, the kind is
+announced as `Change::Models`, published as `agent.accounts_changed` of the kind, so a client reads the kinds again. A
+chat start or resume whose probe times out starts that retry and waits for it, at most every retry's wait plus one probe
+limit per run, then reads the support again (`Agents::chat_support`); only then is it refused with
+`agent.chat_unsupported`.
+
 ## Archive and delete (decision 0163)
 
 `agent.archive_session` hides an exited session (`archived`, a durable `archived_at`): `agent.list` leaves it out unless

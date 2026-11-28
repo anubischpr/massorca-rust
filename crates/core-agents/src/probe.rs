@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::account_check::{RunOutput, account_strip_names, run_probe};
+use crate::account_check::{CheckRun, RunOutput, account_strip_names, run_probe_timed};
+use crate::check_retry::CheckRunner;
 use crate::kind::KindDecl;
 
 /// How long a probe may run before it counts as failed.
@@ -30,6 +31,19 @@ fn probe_cache() -> &'static Mutex<HashMap<ProbeKey, (RunOutput, Instant)>> {
 /// and no account home, for at most [`PROBE_TIMEOUT`], and kept per program path, modified time and arguments. A
 /// replaced program has a new modified time, so it is probed again.
 pub(crate) fn cached_probe(decl: &KindDecl, program: &Path, args: &[String]) -> RunOutput {
+    probe_with(decl, program, args, PROBE_TIMEOUT, None).run
+}
+
+/// [`cached_probe`], for at most `timeout`, with `runner` standing in for the program when it is set, and whether the run
+/// was stopped at the time limit. Such a run is no answer yet, so it is not kept: the next probe runs the program again
+/// (decision 0059, amended 2026-11-27).
+pub(crate) fn probe_with(
+    decl: &KindDecl,
+    program: &Path,
+    args: &[String],
+    timeout: Duration,
+    runner: Option<&CheckRunner>,
+) -> CheckRun {
     let modified = fs::metadata(program)
         .and_then(|metadata| metadata.modified())
         .ok();
@@ -40,12 +54,20 @@ pub(crate) fn cached_probe(decl: &KindDecl, program: &Path, args: &[String]) -> 
         .get(&key)
         && (known.exit == Some(0) || at.elapsed() < FAILED_PROBE_TTL)
     {
-        return known.clone();
+        return CheckRun {
+            run: known.clone(),
+            timed_out: false,
+        };
     }
-    let output = run_probe(program, args, &account_strip_names(decl), PROBE_TIMEOUT);
-    probe_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(key, (output.clone(), Instant::now()));
-    output
+    let probed = match runner {
+        Some(runner) => runner(program, args),
+        None => run_probe_timed(program, args, &account_strip_names(decl), timeout),
+    };
+    if !probed.timed_out {
+        probe_cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, (probed.run.clone(), Instant::now()));
+    }
+    probed
 }

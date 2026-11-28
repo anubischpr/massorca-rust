@@ -404,3 +404,9 @@ existed, and nothing checked it again until an explicit `agent.accounts.check`.
 - **Known limit.** A retry applies its result as an explicit check does, so an imported account whose
   first check timed out is not compared with the kind's other logins (amendment 2026-11-24) when the
   retry finds it signed in.
+- **The version probe too.** A kind's `--version` probe killed at its limit read `version_unknown`, so a
+  chat start was refused with `agent.chat_unsupported` on a loaded machine. The same rule applies: the
+  timed-out probe is not cached and is retried in the background with the same helper (at most one
+  retry per kind). A decided probe announces the kind as an account change of the kind, the event a
+  client reads the kinds again on. A chat start that finds the probe timed out waits for the retry,
+  bounded by every retry's wait plus one probe limit per run, before it refuses.

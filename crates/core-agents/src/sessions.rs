@@ -122,8 +122,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
-    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment); the kind id. Announced
-    /// as an account change of the kind, so a client reads the kinds again. Watchers do not get it.
+    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment), or a background retry
+    /// of its version probe decided (decision 0059, amended 2026-11-27); the kind id. Announced as an account change of
+    /// the kind, so a client reads the kinds again. Watchers do not get it.
     Models(String),
     /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
     /// of the session do.
@@ -605,7 +606,18 @@ impl Agents {
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
         let catalog = Catalog::load(self.kind_packages(), profile_dir);
-        let mut kinds = catalog.views(profile_dir, &self.program_search());
+        let settings = self.check_settings();
+        let (mut kinds, probes_timed_out) = catalog.views_with(
+            profile_dir,
+            &self.program_search(),
+            settings.probe_timeout,
+            settings.runner.as_ref(),
+        );
+        // A version probe stopped at its time limit is no answer yet: it is retried in the background, and the kind is
+        // announced once a retry decides (decision 0059, amended 2026-11-27).
+        for kind in probes_timed_out {
+            self.schedule_probe_retry(&kind);
+        }
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);

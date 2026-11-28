@@ -1,8 +1,15 @@
-//! Background retries of an account check stopped at its time limit (decision 0059, amended 2026-11-27). A check killed at
-//! the cap is not a verdict: the account keeps its last known state, and the check is retried after each wait of
-//! [`CHECK_RETRY_DELAYS`], one retry at a time per account, until one run decides. A retry applies its result through
-//! the same path as `agent.accounts.check`, which announces a changed state with `agent.accounts_changed`. A decided
-//! verdict is never retried. A newer explicit check supersedes a pending retry, and a removal cancels it.
+//! Background retries of a program run stopped at its time limit (decision 0059, amended 2026-11-27): an account check
+//! and a kind's version probe. A run killed at the cap is not a verdict. An account keeps its last known state, and a kind
+//! its chat support as `version_unknown`, while the run is retried after each wait of [`CHECK_RETRY_DELAYS`], one retry
+//! at a time per account or kind, until one run decides.
+//!
+//! - An account check's retry applies its result through the same path as `agent.accounts.check`, which announces a
+//!   changed state with `agent.accounts_changed`. A newer explicit check supersedes a waiting retry, and a removal cancels
+//!   it.
+//! - A version probe's retry announces the kind ([`Change::Models`], published as `agent.accounts_changed` of the kind)
+//!   once it decides, so a client reads the kinds again. A chat start that finds the probe pending waits for it, bounded.
+//!
+//! A decided verdict is never retried.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,30 +17,38 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::account_check::{CHECK_TIMEOUT, CheckRun, run_check};
-use crate::sessions::{Agents, WeakAgents};
+use massorca_protocol::methods::chat::KindChat;
 
-/// The waits before each retry of a timed-out check: three retries, the last about 22 seconds after the first check.
+use crate::account_check::{CHECK_TIMEOUT, CheckRun, run_check};
+use crate::chat::version::kind_chat_with;
+use crate::kind::KindDecl;
+use crate::probe::PROBE_TIMEOUT;
+use crate::sessions::{AgentError, Agents, Change, WeakAgents};
+
+/// The waits before each retry of a timed-out run: three retries, the last about 22 seconds after the first run.
 pub const CHECK_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(5),
     Duration::from_secs(15),
 ];
 
-/// How often a waiting retry looks whether it was cancelled or superseded.
+/// How often a waiting retry, or a chat start waiting for a probe, looks again.
 const RETRY_POLL: Duration = Duration::from_millis(25);
 
-/// A stand-in for the check's program, given the check's arguments: tests use it to make a run finish or time out on cue.
-pub(crate) type CheckRunner = Arc<dyn Fn(&[String]) -> CheckRun + Send + Sync>;
+/// A stand-in for a checked or probed program, given the program and its arguments: tests use it to make a run finish or
+/// time out on cue.
+pub(crate) type CheckRunner = Arc<dyn Fn(&Path, &[String]) -> CheckRun + Send + Sync>;
 
-/// How account checks run.
+/// How account checks and version probes run.
 #[derive(Clone)]
 pub(crate) struct CheckSettings {
-    /// How long a check may run before it is stopped.
+    /// How long an account check may run before it is stopped.
     pub(crate) timeout: Duration,
-    /// The waits before each retry of a timed-out check; empty retries nothing.
+    /// How long a version probe may run before it is stopped.
+    pub(crate) probe_timeout: Duration,
+    /// The waits before each retry of a timed-out run; empty retries nothing.
     pub(crate) retry_delays: Vec<Duration>,
-    /// Runs instead of the check's program, when set.
+    /// Runs instead of the checked or probed program, when set.
     pub(crate) runner: Option<CheckRunner>,
 }
 
@@ -41,16 +56,30 @@ impl Default for CheckSettings {
     fn default() -> Self {
         Self {
             timeout: CHECK_TIMEOUT,
+            probe_timeout: PROBE_TIMEOUT,
             retry_delays: CHECK_RETRY_DELAYS.to_vec(),
             runner: None,
         }
     }
 }
 
-/// The retries waiting or running: the generation of each account's current retry, and how many retry threads exist.
+/// What a retry runs again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RetryKey {
+    /// The check of an account, by id.
+    Account(String),
+    /// The version probe of a kind, by id.
+    Probe(String),
+}
+
+/// One run of a retry, given the service and the retry's generation: `Ok(true)` when it timed out again. An error ends
+/// the retries.
+type Attempt = Box<dyn Fn(&Agents, u64) -> Result<bool, AgentError> + Send>;
+
+/// The retries waiting or running: the generation of each current retry, and how many retry threads exist.
 #[derive(Debug, Default)]
 pub(crate) struct CheckRetries {
-    current: HashMap<String, u64>,
+    current: HashMap<RetryKey, u64>,
     next: u64,
     threads: usize,
 }
@@ -67,7 +96,7 @@ impl Agents {
     ) -> CheckRun {
         let settings = self.check_settings();
         if let Some(runner) = &settings.runner {
-            return runner(args);
+            return runner(program, args);
         }
         run_check(program, args, home, home_env, strip_env, settings.timeout)
     }
@@ -75,43 +104,119 @@ impl Agents {
     /// Retries the check of `account` in the background, after a check of it timed out. A retry already waiting for the
     /// account is superseded by this one, so at most one is in flight.
     pub(crate) fn schedule_check_retry(&self, kind: &str, account: &str) {
+        let (kind, id) = (kind.to_owned(), account.to_owned());
+        self.schedule_retry(
+            RetryKey::Account(account.to_owned()),
+            true,
+            Box::new(move |agents, generation| agents.check_for_retry(&kind, &id, generation)),
+        );
+    }
+
+    /// Retries the version probe of `kind` in the background, after a probe of it timed out. A retry already in flight for
+    /// the kind is kept, so at most one is.
+    pub(crate) fn schedule_probe_retry(&self, kind: &str) {
+        let id = kind.to_owned();
+        self.schedule_retry(
+            RetryKey::Probe(kind.to_owned()),
+            false,
+            Box::new(move |agents, _| agents.probe_for_retry(&id)),
+        );
+    }
+
+    /// The chat support of `decl` with its resolved `program`, as a chat start reads it: a probe stopped at its time limit
+    /// is retried in the background, and this waits for that retry, at most [`probe_wait`], before reading the support
+    /// again. `None` for a kind without a `chat` block.
+    pub(crate) fn chat_support(&self, decl: &KindDecl, program: &Path) -> Option<KindChat> {
+        let settings = self.check_settings();
+        let probe = |settings: &CheckSettings| {
+            kind_chat_with(
+                decl,
+                Some(program),
+                settings.probe_timeout,
+                settings.runner.as_ref(),
+            )
+        };
+        let (chat, timed_out) = probe(&settings)?;
+        if !timed_out {
+            return Some(chat);
+        }
+        self.schedule_probe_retry(&decl.id);
+        let deadline = Instant::now() + probe_wait(&settings);
+        let key = RetryKey::Probe(decl.id.clone());
+        while self.check_retries().current.contains_key(&key) && Instant::now() < deadline {
+            thread::sleep(RETRY_POLL);
+        }
+        probe(&settings).map(|(chat, _)| chat)
+    }
+
+    /// One retry of a kind's timed-out version probe. `Ok(true)` when it timed out again; a decided probe announces the
+    /// kind, so a client reads the kinds again.
+    fn probe_for_retry(&self, kind: &str) -> Result<bool, AgentError> {
+        let (decl, program) = self.runnable_kind(kind)?;
+        let settings = self.check_settings();
+        match kind_chat_with(
+            &decl,
+            Some(&program),
+            settings.probe_timeout,
+            settings.runner.as_ref(),
+        ) {
+            Some((_, true)) => Ok(true),
+            Some((_, false)) => {
+                self.notify(Change::Models(kind.to_owned()));
+                Ok(false)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Starts a retry thread for `key`. With `supersede`, it replaces a retry already in flight; without, an existing one
+    /// is kept and nothing starts.
+    fn schedule_retry(&self, key: RetryKey, supersede: bool, attempt: Attempt) {
         let delays = self.check_settings().retry_delays;
         if delays.is_empty() {
             return;
         }
         let generation = {
             let mut retries = self.check_retries();
+            if !supersede && retries.current.contains_key(&key) {
+                return;
+            }
             retries.next += 1;
             let generation = retries.next;
-            retries.current.insert(account.to_owned(), generation);
+            retries.current.insert(key.clone(), generation);
             retries.threads += 1;
             generation
         };
         let weak = self.downgrade();
-        let (kind, account) = (kind.to_owned(), account.to_owned());
         let spawned = thread::Builder::new()
-            .name("account-check-retry".to_owned())
+            .name("check-retry".to_owned())
             .spawn({
                 let weak = weak.clone();
-                let account = account.clone();
-                move || retry_loop(&weak, &kind, &account, generation, &delays)
+                let key = key.clone();
+                move || retry_loop(&weak, &key, generation, &delays, &attempt)
             });
         if spawned.is_err() {
-            tracing::warn!("an account check retry could not start");
+            tracing::warn!("a background retry could not start");
             if let Some(agents) = weak.upgrade() {
-                agents.end_retry(&account, generation);
+                agents.end_retry(&key, generation);
             }
         }
     }
 
     /// Cancels a retry waiting for `account`, if any: the account was removed, or is being checked again.
     pub(crate) fn cancel_check_retry(&self, account: &str) {
-        self.check_retries().current.remove(account);
+        self.check_retries()
+            .current
+            .remove(&RetryKey::Account(account.to_owned()));
     }
 
     /// Whether `generation` is still the retry wanted for `account`.
     pub(crate) fn retry_is_current(&self, account: &str, generation: u64) -> bool {
-        self.check_retries().current.get(account) == Some(&generation)
+        self.key_is_current(&RetryKey::Account(account.to_owned()), generation)
+    }
+
+    fn key_is_current(&self, key: &RetryKey, generation: u64) -> bool {
+        self.check_retries().current.get(key) == Some(&generation)
     }
 
     /// How many retry threads exist, waiting or running.
@@ -120,51 +225,61 @@ impl Agents {
         self.check_retries().threads
     }
 
-    /// Ends a retry thread: its account's entry goes when it is still this retry's.
-    fn end_retry(&self, account: &str, generation: u64) {
+    /// Ends a retry thread: its entry goes when it is still this retry's.
+    fn end_retry(&self, key: &RetryKey, generation: u64) {
         let mut retries = self.check_retries();
-        if retries.current.get(account) == Some(&generation) {
-            retries.current.remove(account);
+        if retries.current.get(key) == Some(&generation) {
+            retries.current.remove(key);
         }
         retries.threads = retries.threads.saturating_sub(1);
     }
 }
 
-/// The body of a retry thread: after each wait, one check of the account, until a run decides, the retries run out, or
-/// the retry is cancelled or superseded. A refused check (the account is gone, busy, or being removed) ends it.
-fn retry_loop(weak: &WeakAgents, kind: &str, account: &str, generation: u64, delays: &[Duration]) {
+/// How long a chat start waits for a pending probe: every retry's wait, and a probe's time limit for each run.
+fn probe_wait(settings: &CheckSettings) -> Duration {
+    let runs = u32::try_from(settings.retry_delays.len()).unwrap_or(u32::MAX);
+    settings.retry_delays.iter().sum::<Duration>()
+        + settings
+            .probe_timeout
+            .saturating_mul(runs.saturating_add(1))
+}
+
+/// The body of a retry thread: after each wait, one run of `attempt`, until a run decides, the retries run out, or the
+/// retry is cancelled or superseded. A refused run (the account or kind is gone, busy, or being removed) ends it.
+fn retry_loop(
+    weak: &WeakAgents,
+    key: &RetryKey,
+    generation: u64,
+    delays: &[Duration],
+    attempt: &Attempt,
+) {
     for delay in delays {
-        if !wait_while_current(weak, account, generation, *delay) {
+        if !wait_while_current(weak, key, generation, *delay) {
             break;
         }
         let Some(agents) = weak.upgrade() else {
             return;
         };
-        match agents.check_for_retry(kind, account, generation) {
-            Ok(true) => {
-                tracing::info!(
-                    kind,
-                    "an account check timed out again; it is retried later"
-                );
-            }
+        match attempt(&agents, generation) {
+            Ok(true) => tracing::info!(?key, "a run timed out again; it is retried later"),
             Ok(false) => break,
             Err(error) => {
-                tracing::info!(kind, code = error.code, "an account check retry ended");
+                tracing::info!(?key, code = error.code, "a background retry ended");
                 break;
             }
         }
     }
     if let Some(agents) = weak.upgrade() {
-        agents.end_retry(account, generation);
+        agents.end_retry(key, generation);
     }
 }
 
 /// Waits `delay`, and says whether the retry is still wanted at its end. Returns early once it is not.
-fn wait_while_current(weak: &WeakAgents, account: &str, generation: u64, delay: Duration) -> bool {
+fn wait_while_current(weak: &WeakAgents, key: &RetryKey, generation: u64, delay: Duration) -> bool {
     let due = Instant::now() + delay;
     loop {
         match weak.upgrade() {
-            Some(agents) if agents.retry_is_current(account, generation) => {}
+            Some(agents) if agents.key_is_current(key, generation) => {}
             _ => return false,
         }
         let now = Instant::now();
@@ -181,6 +296,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use massorca_protocol::methods::agents::{AccountState, ImportResult};
+    use massorca_protocol::methods::chat::ChatUnsupportedReason;
 
     use super::*;
     use crate::account_check::RunOutput;
@@ -197,6 +313,8 @@ mod tests {
         SignedIn,
         /// Finished and reports not signed in.
         SignedOut,
+        /// Prints a CLI version inside the Claude chat range.
+        Version,
     }
 
     /// A stand-in check that takes `steps` in order, then repeats the last, and counts its runs.
@@ -204,7 +322,7 @@ mod tests {
         let steps = steps.to_vec();
         let runs = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&runs);
-        let runner: CheckRunner = Arc::new(move |_args| {
+        let runner: CheckRunner = Arc::new(move |_program, _args| {
             let index = counter.fetch_add(1, Ordering::SeqCst);
             let step = steps[index.min(steps.len() - 1)];
             let (exit, output, timed_out) = match step {
@@ -215,6 +333,7 @@ mod tests {
                     false,
                 ),
                 Step::SignedOut => (Some(1), r#"{"loggedIn":false}"#, false),
+                Step::Version => (Some(0), "2.1.300 (Claude Code)", false),
             };
             CheckRun {
                 run: RunOutput {
@@ -247,6 +366,7 @@ mod tests {
         fs::write(kinds.join("fake.json"), kind.to_string()).expect("write the fake kind");
         agents.set_check_settings(CheckSettings {
             timeout: Duration::from_millis(50),
+            probe_timeout: Duration::from_millis(50),
             retry_delays: delays.to_vec(),
             runner: Some(runner),
         });
@@ -423,6 +543,155 @@ mod tests {
         assert!(
             account_events(&changes).is_empty(),
             "nothing changed, so nothing is announced"
+        );
+    }
+
+    /// Declares kind `fakechat`, a chat kind whose program is a file of its own in the profile, so its version probe is
+    /// cached apart from every other test's, and makes the service use `runner` with `delays` between retries.
+    fn fake_chat_kind(
+        agents: &Agents,
+        profile: &Path,
+        runner: CheckRunner,
+        delays: &[Duration],
+    ) -> std::path::PathBuf {
+        let program = profile.join(format!("fake-chat-cli{}", std::env::consts::EXE_SUFFIX));
+        fs::write(&program, b"not run: a stand-in answers").expect("the program file");
+        let runner = only(&program, runner);
+        let kinds = paths::kinds_dir(profile);
+        fs::create_dir_all(&kinds).expect("create the kinds directory");
+        let kind = serde_json::json!({
+            "id": "fakechat",
+            "name": "Fake Chat",
+            "program": [program.to_str().expect("a UTF-8 path")],
+            "prompt": { "mode": "none" },
+            "session_ref": { "assign": ["--session-id", "{ref}"] },
+            "resume": ["--resume", "{ref}"],
+            "chat": { "adapter": "claude-stream-json", "min_version": "2.1.258", "max_major": 2 }
+        });
+        fs::write(kinds.join("fakechat.json"), kind.to_string()).expect("write the chat kind");
+        agents.set_check_settings(CheckSettings {
+            timeout: Duration::from_millis(50),
+            probe_timeout: Duration::from_millis(50),
+            retry_delays: delays.to_vec(),
+            runner: Some(runner),
+        });
+        program
+    }
+
+    /// `runner` for `program` alone: any other program, such as a built-in kind's CLI found on this host, is not run.
+    fn only(program: &Path, runner: CheckRunner) -> CheckRunner {
+        let program = program.to_path_buf();
+        Arc::new(move |asked: &Path, args: &[String]| {
+            if asked == program {
+                return runner(asked, args);
+            }
+            CheckRun {
+                run: RunOutput {
+                    exit: None,
+                    output: String::new(),
+                },
+                timed_out: false,
+            }
+        })
+    }
+
+    /// The chat support `agent.kinds` lists for `fakechat`.
+    fn listed_chat(agents: &Agents) -> KindChat {
+        agents
+            .kinds()
+            .kinds
+            .into_iter()
+            .find(|kind| kind.id == "fakechat")
+            .and_then(|kind| kind.chat)
+            .expect("the chat kind is listed with its chat support")
+    }
+
+    /// Every change collected so far.
+    fn all_changes(agents: &Agents) -> Arc<std::sync::Mutex<Vec<Change>>> {
+        let changes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&changes);
+        agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
+        changes
+    }
+
+    #[test]
+    fn a_timed_out_version_probe_is_no_verdict_and_a_retry_announces_the_kind() {
+        let (agents, _, profile) = service();
+        let (runner, runs) = scripted(&[Step::Hang, Step::Version]);
+        fake_chat_kind(&agents, profile.path(), runner, &QUICK);
+        let changes = all_changes(&agents);
+
+        let first = listed_chat(&agents);
+        assert!(!first.supported, "{first:?}");
+        assert_eq!(first.reason, Some(ChatUnsupportedReason::VersionUnknown));
+
+        retries_settle(&agents);
+        assert!(
+            changes
+                .lock()
+                .unwrap()
+                .contains(&Change::Models("fakechat".to_owned())),
+            "the kind is announced once the retry decides"
+        );
+        let after = listed_chat(&agents);
+        assert!(after.supported, "{after:?}");
+        assert_eq!(after.version.as_deref(), Some("2.1.300"));
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "the retry's answer is cached"
+        );
+    }
+
+    #[test]
+    fn one_probe_retry_per_kind_is_in_flight() {
+        let (agents, _, profile) = service();
+        let (runner, _runs) = scripted(&[Step::Hang]);
+        fake_chat_kind(&agents, profile.path(), runner, &[Duration::from_secs(30)]);
+
+        listed_chat(&agents);
+        listed_chat(&agents);
+
+        assert_eq!(agents.check_retry_threads(), 1);
+    }
+
+    #[test]
+    fn a_chat_start_waits_for_a_pending_probe_instead_of_refusing() {
+        let (agents, _, profile) = service();
+        let (runner, runs) = scripted(&[Step::Hang, Step::Version]);
+        fake_chat_kind(&agents, profile.path(), runner, &QUICK);
+        let (decl, program) = agents.runnable_kind("fakechat").expect("the kind runs");
+
+        let chat = agents.chat_support(&decl, &program).expect("a chat block");
+
+        assert!(chat.supported, "{chat:?}");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "the start's probe and one retry"
+        );
+    }
+
+    #[test]
+    fn a_chat_start_stops_waiting_once_every_probe_timed_out() {
+        let (agents, _, profile) = service();
+        let (runner, runs) = scripted(&[Step::Hang]);
+        fake_chat_kind(&agents, profile.path(), runner, &QUICK);
+        let (decl, program) = agents.runnable_kind("fakechat").expect("the kind runs");
+        let started = Instant::now();
+
+        let chat = agents.chat_support(&decl, &program).expect("a chat block");
+
+        assert_eq!(chat.reason, Some(ChatUnsupportedReason::VersionUnknown));
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the wait is bounded"
+        );
+        retries_settle(&agents);
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            5,
+            "the start's probe, three retries, and the start's last look"
         );
     }
 }

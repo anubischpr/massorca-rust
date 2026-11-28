@@ -1792,7 +1792,7 @@ pub(crate) mod tests {
     /// would be kept as `unknown` instead of refused (decision 0059, amended 2026-11-27).
     fn refuse_checks(agents: &Agents) {
         agents.set_check_settings(crate::check_retry::CheckSettings {
-            runner: Some(Arc::new(|_args: &[String]| {
+            runner: Some(Arc::new(|_program: &Path, _args: &[String]| {
                 crate::account_check::CheckRun {
                     run: crate::account_check::RunOutput {
                         exit: Some(1),

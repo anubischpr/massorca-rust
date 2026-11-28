@@ -328,13 +328,15 @@ pub(crate) fn run_check(
 }
 
 /// Runs `program` with `args` and the stripped names removed, without any account home, for at most `timeout`: the
-/// support probe of a kind's instruction channel (decision 0161). The output and exit are as [`run_program`]'s.
-pub(crate) fn run_probe(
+/// support probe of a kind's instruction channel (decision 0161) and its version (decision 0101). The output and exit
+/// are as [`run_program`]'s; the flag says the program was stopped at `timeout`, which is no answer yet (decision 0059,
+/// amended 2026-11-27).
+pub(crate) fn run_probe_timed(
     program: &Path,
     args: &[String],
     strip_env: &[String],
     timeout: Duration,
-) -> RunOutput {
+) -> CheckRun {
     let mut command = massorca_process::command(program);
     command
         .args(args)
@@ -344,7 +346,8 @@ pub(crate) fn run_probe(
     for name in strip_env {
         command.env_remove(name);
     }
-    run_command(&mut command, timeout)
+    let (run, timed_out) = run_command_timed(&mut command, timeout);
+    CheckRun { run, timed_out }
 }
 
 /// Runs `command` for at most `timeout`, then stops its whole process tree and collects its output.
