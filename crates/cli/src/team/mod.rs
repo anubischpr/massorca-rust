@@ -301,6 +301,11 @@ pub enum TeamRoomCommand {
         /// Make a reply to a bot's line a task instead of a conversation.
         #[arg(long, conflicts_with = "bot", requires = "reply_to")]
         task: bool,
+        /// Let one routing query, run with the default agent (agents.default_kind), place a line that names no bot or
+        /// team: a bot's task, another team's Todo, a conversation, or a choice card when it is unclear. The line
+        /// waits in the room until the query answers. Needs a host with team-room/4.
+        #[arg(long, conflicts_with_all = ["bot", "to", "ask", "reply_to"])]
+        route: bool,
     },
     /// Answers a choice card once: `bot:<id>` gives the request to that bot, `team:<id>` puts it in another team's
     /// Todo, and `todo` keeps it in this team's Todo with no bot. `team room list` prints each card's choices.
@@ -748,7 +753,18 @@ async fn run_room(
             reply_to,
             ask,
             task,
+            route,
         } => {
+            if route && !client.has_capability(capabilities::TEAM_ROOM_ROUTING) {
+                return Err(CliError::new(
+                    codes::CAPABILITY_NOT_NEGOTIATED,
+                    format!(
+                        "this service does not offer {}, so it cannot route a line; update MassOrca on the host",
+                        capabilities::TEAM_ROOM_ROUTING
+                    ),
+                    exit::ERROR,
+                ));
+            }
             // An older host ignores both and makes a task, so they need a host that answers in the room.
             if (ask || reply_to.is_some())
                 && !client.has_capability(capabilities::TEAM_ROOM_REPLIES)
@@ -779,7 +795,7 @@ async fn run_room(
                     } else {
                         task.then_some(false)
                     },
-                    route: None,
+                    route: route.then_some(true),
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));

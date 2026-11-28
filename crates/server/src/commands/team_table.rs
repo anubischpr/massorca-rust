@@ -199,7 +199,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "text": { "type": "string" },
                     "bot": { "type": "string" },
-                    "to": { "type": "string" }
+                    "to": { "type": "string" },
+                    "route": { "type": "boolean" }
                 }
             }),
         ),
