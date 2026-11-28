@@ -1,15 +1,16 @@
 //! Element tests of the routine pages (AUTO-28, screens 4.6 and 4.7): the list, the form, the pause switch, the
 //! delete confirm and the run history, on a service store whose calls are answered by hand, and on the sample store.
 
-use super::super::service_tests::{Rig, draw, rig};
+use super::super::service_tests::{Rig, click, draw, rig};
 use super::*;
 use crate::data::SampleDataSource;
 use crate::model::canvas::Canvas;
 use crate::model::teams::{
-    RoutineField, RoutineId, RunsState, SampleTeamsSource, ScheduleKind, TeamId, TeamPage, Weekday,
+    RoutineField, RoutineId, RunOutcome, RunsState, SampleTeamsSource, ScheduleKind, TeamId,
+    TeamPage, Weekday,
 };
 use crate::service::fixtures::team;
-use crate::service::{Command, RoutineCommand, StoreUpdate, TeamRecord, TeamsRead};
+use crate::service::{Command, Refusal, RoutineCommand, StoreUpdate, TeamRecord, TeamsRead};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::teams::{
     Bot as WireBot, Routine as WireRoutine, RoutineCadence, RoutineRun, RoutineWeekday,
@@ -329,5 +330,110 @@ fn the_sample_store_saves_a_once_routine_without_a_service(cx: &mut TestAppConte
             shell.model().canvas(),
             Canvas::Team(TeamPage::Routines(TeamId(1)))
         );
+    });
+}
+
+#[gpui::test]
+fn run_now_sends_team_routine_run_and_the_card_menu_offers_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = service_routines(cx);
+    click(cx, "routine-more-3");
+    draw(cx);
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let Some(Command::Routine(RoutineCommand::Run {
+        team,
+        routine,
+        reply,
+    })) = rig.script.next()
+    else {
+        panic!("Run now in the More menu calls team.routine_run");
+    };
+    assert_eq!((team.as_str(), routine.as_str()), ("t1", "r1"));
+    reply
+        .send(Ok(RoutineRun {
+            id: "run-2".into(),
+            routine_id: "r1".into(),
+            scheduled_for_ms: NEXT_RUN_MS,
+            task_id: Some("k10".into()),
+            error: None,
+            error_code: None,
+            created_at_ms: 2,
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            shell
+                .model()
+                .teams()
+                .routine_run_notice(TeamId(1), RoutineId(3)),
+            None,
+            "a run that worked leaves no notice"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_refused_run_now_is_shown_on_the_routine_card(cx: &mut TestAppContext) {
+    let (mut rig, cx) = service_routines(cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.run_routine_now(TeamId(1), RoutineId(3), cx);
+    });
+    cx.run_until_parked();
+    let Some(Command::Routine(RoutineCommand::Run { reply, .. })) = rig.script.next() else {
+        panic!("Run now calls team.routine_run");
+    };
+    let message = "This routine is paused. Resume it to run it now.";
+    reply
+        .send(Err(Refusal::Failed {
+            code: "team.routine_run_refused".into(),
+            message: message.into(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            shell
+                .model()
+                .teams()
+                .routine_run_notice(TeamId(1), RoutineId(3)),
+            Some(message)
+        );
+    });
+    assert!(
+        cx.debug_bounds("routine-run-notice-3").is_some(),
+        "the refusal is drawn on the routine's card"
+    );
+}
+
+#[gpui::test]
+fn the_sample_store_run_now_records_a_done_run(cx: &mut TestAppContext) {
+    let (shell, cx) = sample_routines(cx);
+    let routine = shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .teams()
+            .team(TeamId(1))
+            .expect("the sample team")
+            .routines[0]
+            .id
+    });
+    shell.update(cx, |shell, cx| {
+        shell.run_routine_now(TeamId(1), routine, cx);
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        let item = shell
+            .model()
+            .teams()
+            .team(TeamId(1))
+            .expect("the sample team")
+            .routines
+            .iter()
+            .find(|item| item.id == routine)
+            .expect("the routine");
+        assert_eq!(item.last_run, Some(RunOutcome::Done));
     });
 }

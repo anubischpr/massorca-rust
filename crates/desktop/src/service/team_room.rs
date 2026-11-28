@@ -10,6 +10,7 @@ use massorca_protocol::methods::team_room::{
     TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomListParams, TeamRoomMessage,
     TeamRoomPostParams, TeamRoomPosted,
 };
+use massorca_protocol::methods::teams::{DelegationLink, TeamRef};
 use massorca_protocol::{capabilities, codes};
 use tokio::sync::{mpsc, oneshot};
 
@@ -38,6 +39,8 @@ pub struct TeamRoomRead {
     /// The names of the bots working now, for the typing line.
     pub typing: Vec<String>,
     pub room: Result<Vec<TeamRoomMessage>, Refusal>,
+    /// The delegated children of the team's tasks, for the task cards (decision 0128); empty on a host without them.
+    pub delegations: Vec<DelegationLink>,
 }
 
 /// The rooms the store holds, by the service's team id.
@@ -91,6 +94,21 @@ impl ServiceHandle {
     }
 }
 
+/// The delegated children of a team's tasks. A host without the capability, or a refusal, has none to show.
+async fn delegations_of(client: &Client, team: &str) -> Result<Vec<DelegationLink>, ClientError> {
+    if !client.has_capability(capabilities::TEAM_DELEGATE) {
+        return Ok(Vec::new());
+    }
+    let params = TeamRef {
+        team: team.to_owned(),
+    };
+    match client.team_delegation_list(&params).await {
+        Ok(list) => Ok(list.links),
+        Err(ClientError::Remote(_) | ClientError::Protocol(_)) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Reads one team's room. A service without the capability answers with `NO_ROOM`; a refusal is an answer; a lost
 /// link is an error, so the bridge reconnects.
 pub(super) async fn read(
@@ -109,6 +127,7 @@ pub(super) async fn read(
             answers_replies,
             typing: Vec::new(),
             room: Err(no_room()),
+            delegations: Vec::new(),
         });
     }
     let params = TeamRoomListParams {
@@ -117,6 +136,7 @@ pub(super) async fn read(
     };
     match client.team_room_list(&params).await {
         Ok(list) => Ok(TeamRoomRead {
+            delegations: delegations_of(client, &team).await?,
             team,
             number,
             answers_cards,
@@ -131,6 +151,7 @@ pub(super) async fn read(
             answers_replies,
             typing: Vec::new(),
             room: Err(Refusal::from(&error)),
+            delegations: Vec::new(),
         }),
         Err(error) => Err(error),
     }
@@ -207,6 +228,7 @@ mod tests {
             answers_cards: false,
             answers_replies: false,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Err(Refusal::Failed {
                 code: "test".to_owned(),
                 message: text.to_owned(),

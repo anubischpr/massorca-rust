@@ -139,7 +139,8 @@ fn tell_room(
     task: &TaskRow,
     outcome: TaskOutcome,
 ) -> Result<Option<String>, StoreError> {
-    if task.origin != TaskOrigin::Room {
+    // A delegated child reports to its room as a room task does (decision 0128).
+    if task.origin != TaskOrigin::Room && store.task_delegation_parent(&task.id)?.is_none() {
         return Ok(None);
     }
     store.insert_team_room_message(&TeamRoomMessageRow {

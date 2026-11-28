@@ -97,6 +97,8 @@ pub const TEAM_ROOM_CARDS: &str = "team-room/2";
 /// Conversation replies in a team's room: `ask` and `reply_to` of `team.room_post`, and the `quoted` and `typing` fields
 /// of `team.room_list` (decision 0122). A host that has it also keeps `team-room/1` and `team-room/2`.
 pub const TEAM_ROOM_REPLIES: &str = "team-room/3";
+/// Bot delegation (`team.delegate`, `team.delegation_tree`, decision 0128). A host that has it also keeps `teams/1`.
+pub const TEAM_DELEGATE: &str = "team-delegate/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).

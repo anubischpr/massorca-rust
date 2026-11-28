@@ -14,7 +14,7 @@ use super::routine_history::{RoutineHistory, RunsState};
 use super::team_edit::TeamChange;
 use super::types::{
     AddressId, BoardOwner, Bot, BotId, Column, HostChoice, MemoryId, MemoryTab, Pick, Project,
-    ProjectId, RoutineId, Task, Team, TeamId,
+    ProjectId, RoutineId, RunOutcome, Task, Team, TeamId,
 };
 
 /// Names hold at most this many characters (screens 4.5, 4.7).
@@ -99,6 +99,8 @@ pub struct TeamsState {
     access_notice: Option<(TeamId, String)>,
     /// Why the last removal of a team was refused, and for which team.
     removal_notice: Option<(TeamId, String)>,
+    /// Why the last run-now of a routine was refused, and for which routine.
+    routine_run_notice: Option<(TeamId, RoutineId, String)>,
     /// The project filter each team's Board shows; a team with none shows every card.
     board_filters: BTreeMap<TeamId, ProjectFilter>,
     /// Whether the Sidebar leaves out the projects whose cards are all Done.
@@ -127,6 +129,7 @@ impl TeamsState {
             notice: None,
             access_notice: None,
             removal_notice: None,
+            routine_run_notice: None,
             board_filters: BTreeMap::new(),
             hide_finished_projects: false,
             routine_history: None,
@@ -175,6 +178,7 @@ impl TeamsState {
         fresh.memory_tab = self.memory_tab;
         fresh.notice = self.notice.clone();
         fresh.access_notice = self.access_notice.clone();
+        fresh.routine_run_notice = self.routine_run_notice.clone();
         fresh.board_filters = self.board_filters.clone();
         fresh.hide_finished_projects = self.hide_finished_projects;
         fresh.routine_history = self.routine_history.clone();
@@ -370,6 +374,19 @@ impl TeamsState {
             .find(|item| item.id == routine)
             .ok_or(TeamError::Missing)?;
         item.enabled = enabled;
+        Ok(())
+    }
+
+    /// Records a sample run of a routine in the sample store: its last run reads Done.
+    pub fn run_routine(&mut self, team: TeamId, routine: RoutineId) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        let item = self.teams[index]
+            .routines
+            .iter_mut()
+            .find(|item| item.id == routine)
+            .ok_or(TeamError::Missing)?;
+        item.last_run = Some(RunOutcome::Done);
         Ok(())
     }
 
@@ -683,6 +700,24 @@ impl TeamsState {
     /// Keeps why a removal of a team was refused, or clears it with `None`.
     pub fn set_removal_notice(&mut self, team: TeamId, notice: Option<String>) {
         self.removal_notice = notice.map(|notice| (team, notice));
+    }
+
+    /// Why the last run-now of `routine` was refused, if it was.
+    pub fn routine_run_notice(&self, team: TeamId, routine: RoutineId) -> Option<&str> {
+        self.routine_run_notice
+            .as_ref()
+            .filter(|(owner, id, _)| *owner == team && *id == routine)
+            .map(|(_, _, notice)| notice.as_str())
+    }
+
+    /// Keeps why a run-now of a routine was refused, or clears it with `None`.
+    pub fn set_routine_run_notice(
+        &mut self,
+        team: TeamId,
+        routine: RoutineId,
+        notice: Option<String>,
+    ) {
+        self.routine_run_notice = notice.map(|notice| (team, routine, notice));
     }
 
     /// The team a page shows, when it belongs to a team that exists.

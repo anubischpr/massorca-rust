@@ -11,9 +11,10 @@ use massorca_protocol::methods::team_room::{
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
-    Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
-    RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams, TeamList, TeamMemoryAddParams,
-    TeamMemoryLine, TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    DelegationList, DelegationTree, Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun,
+    RoutineRunList, RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams,
+    TeamDelegateParams, TeamDelegated, TeamList, TeamMemoryAddParams, TeamMemoryLine,
+    TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
     TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectShowParams,
     TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
@@ -126,6 +127,31 @@ impl Client {
         params: &TeamRoomPostParams,
     ) -> Result<TeamRoomPosted, ClientError> {
         self.call(team_room::ROOM_POST, params).await
+    }
+
+    /// `team.delegate`: a bot's run hands a task to a teammate as a child of its own task (decision 0128). Capability
+    /// `team-delegate/1`.
+    pub async fn team_delegate(
+        &self,
+        params: &TeamDelegateParams,
+    ) -> Result<TeamDelegated, ClientError> {
+        self.call(teams::DELEGATE, params).await
+    }
+
+    /// `team.delegation_tree`: a task and the children it delegated, oldest first (capability `team-delegate/1`).
+    pub async fn team_delegation_tree(
+        &self,
+        params: &TaskRef,
+    ) -> Result<DelegationTree, ClientError> {
+        self.call(teams::DELEGATION_TREE, params).await
+    }
+
+    /// `team.delegation_list`: every delegated child of a team's tasks, for the Conference room (capability `team-delegate/1`).
+    pub async fn team_delegation_list(
+        &self,
+        params: &TeamRef,
+    ) -> Result<DelegationList, ClientError> {
+        self.call(teams::DELEGATION_LIST, params).await
     }
 
     /// `team.room_answer`: answers a room's choice card once (decision 0121).

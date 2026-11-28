@@ -226,6 +226,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "team.bot.update",
             "team.bot.rm",
             "team.create",
+            "team.delegate",
             "team.list",
             "team.memory.add",
             "team.memory.list",
