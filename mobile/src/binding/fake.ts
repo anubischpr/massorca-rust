@@ -6,6 +6,7 @@ import { errorFromCode } from './ffi-error';
 import {
   FfiException,
   type AgentEvent,
+  type BotSummary,
   type FfiError,
   type GitEvent,
   type GitStatusSummary,
@@ -14,6 +15,9 @@ import {
   type MassOrcaBinding,
   type OfferSummary,
   type ProtocolInfo,
+  type RoutineRunSummary,
+  type RoutineSummary,
+  type TeamSummary,
   type TerminalEvent,
   type TerminalSummary,
   type TerminalView,
@@ -32,6 +36,13 @@ export type FakeCall =
   | 'whoami'
   | 'protocol'
   | 'workspaces'
+  | 'teams'
+  | 'teamBots'
+  | 'teamRoutines'
+  | 'routineRuns'
+  | 'pauseRoutine'
+  | 'resumeRoutine'
+  | 'runRoutine'
   | 'terminals'
   | 'gitStatus'
   | 'watchAgents'
@@ -54,6 +65,10 @@ export interface FakeOptions {
   readonly whoami?: WhoAmI;
   readonly workspaces?: readonly WorkspaceSummary[];
   readonly terminals?: readonly TerminalSummary[];
+  readonly teams?: readonly TeamSummary[];
+  readonly bots?: readonly BotSummary[];
+  readonly routines?: readonly RoutineSummary[];
+  readonly routineRuns?: readonly RoutineRunSummary[];
 }
 
 interface FakeState {
@@ -70,8 +85,21 @@ interface FakeState {
   readonly whoami: WhoAmI;
   readonly workspaces: readonly WorkspaceSummary[];
   readonly terminals: readonly TerminalSummary[];
+  readonly teams: readonly TeamSummary[];
+  readonly bots: readonly BotSummary[];
+  /** Replaced as routines are paused, resumed and read; the order is the creation order. */
+  readonly routines: RoutineSummary[];
+  /** Newest first, as the host lists them. */
+  readonly routineRuns: RoutineRunSummary[];
+  /** Calls whose next run never answers, for the loading state. */
+  readonly stalls: Set<FakeCall>;
   gitStatus: GitStatusSummary;
 }
+
+/** The next run the fake gives a resumed routine: a fixed instant in 2100, so tests do not depend on the clock. */
+const FAKE_NEXT_RUN_MS = 4102444800000n;
+const FAKE_CREATED_MS = 1n;
+const FAKE_RUN_DEFAULT_LIMIT = 50;
 
 const DEFAULT_PROTOCOL: ProtocolInfo = {
   protocol: 16,
@@ -112,6 +140,38 @@ function readOffer(text: string): OfferSummary {
     expiresAtMs: 4102444800000n,
     scopes: ['workspaces:read'],
   };
+}
+
+/** The team `selector` names, by id or exact name, as the host answers it. */
+function teamOf(state: FakeState, selector: string): TeamSummary {
+  const team = state.teams.find((candidate) => candidate.id === selector || candidate.name === selector);
+  if (team === undefined) {
+    throw new FfiException({ tag: 'Remote', code: 'team.not_found', message: `No team named ${selector}.` });
+  }
+  return team;
+}
+
+/** The routine `selector` names within `team`, by id or exact name. */
+function routineOf(state: FakeState, team: TeamSummary, selector: string): RoutineSummary {
+  const routine = state.routines.find(
+    (candidate) => candidate.teamId === team.id && (candidate.id === selector || candidate.name === selector),
+  );
+  if (routine === undefined) {
+    throw new FfiException({
+      tag: 'Remote',
+      code: 'team.routine_not_found',
+      message: `Team ${team.name} has no routine ${selector}.`,
+    });
+  }
+  return routine;
+}
+
+/** Pauses or resumes a routine, as the host does: a paused routine has no next run, a resumed one has one. */
+function setPaused(state: FakeState, team: string, routine: string, paused: boolean): RoutineSummary {
+  const current = routineOf(state, teamOf(state, team), routine);
+  const next: RoutineSummary = { ...current, paused, nextRunAtMs: paused ? undefined : FAKE_NEXT_RUN_MS };
+  state.routines.splice(state.routines.indexOf(current), 1, next);
+  return next;
 }
 
 /** A pull-based watch over a scripted list; it ends (returns null) when the list runs out or it is closed. */
@@ -219,6 +279,59 @@ class FakeHost implements Host {
     return this.state.workspaces.filter((w) => project === undefined || w.projectId === project);
   }
 
+  async teams(): Promise<TeamSummary[]> {
+    enter(this.state, 'teams');
+    if (this.state.stalls.delete('teams')) return new Promise<TeamSummary[]>(() => undefined);
+    return [...this.state.teams];
+  }
+
+  async teamBots(team: string): Promise<BotSummary[]> {
+    enter(this.state, 'teamBots');
+    const id = teamOf(this.state, team).id;
+    return this.state.bots.filter((bot) => bot.teamId === id);
+  }
+
+  async teamRoutines(team: string): Promise<RoutineSummary[]> {
+    enter(this.state, 'teamRoutines');
+    const id = teamOf(this.state, team).id;
+    return this.state.routines.filter((routine) => routine.teamId === id);
+  }
+
+  async routineRuns(team: string, routine: string, limit?: number): Promise<RoutineRunSummary[]> {
+    enter(this.state, 'routineRuns');
+    const id = routineOf(this.state, teamOf(this.state, team), routine).id;
+    return this.state.routineRuns
+      .filter((run) => run.routineId === id)
+      .slice(0, limit ?? FAKE_RUN_DEFAULT_LIMIT);
+  }
+
+  async pauseRoutine(team: string, routine: string): Promise<RoutineSummary> {
+    enter(this.state, 'pauseRoutine');
+    return setPaused(this.state, team, routine, true);
+  }
+
+  async resumeRoutine(team: string, routine: string): Promise<RoutineSummary> {
+    enter(this.state, 'resumeRoutine');
+    return setPaused(this.state, team, routine, false);
+  }
+
+  async runRoutine(team: string, routine: string): Promise<RoutineRunSummary> {
+    enter(this.state, 'runRoutine');
+    const id = routineOf(this.state, teamOf(this.state, team), routine).id;
+    const sequence = this.state.routineRuns.length + 1;
+    const run: RoutineRunSummary = {
+      id: `fake-run-${sequence}`,
+      routineId: id,
+      scheduledForMs: FAKE_CREATED_MS,
+      taskId: `fake-task-${sequence}`,
+      error: undefined,
+      errorCode: undefined,
+      createdAtMs: FAKE_CREATED_MS,
+    };
+    this.state.routineRuns.unshift(run);
+    return run;
+  }
+
   async terminals(workspace?: string): Promise<TerminalSummary[]> {
     enter(this.state, 'terminals');
     return this.state.terminals.filter((t) => workspace === undefined || t.workspaceId === workspace);
@@ -266,6 +379,11 @@ export class FakeMassOrca implements MassOrcaBinding {
       whoami: options.whoami ?? DEFAULT_WHOAMI,
       workspaces: options.workspaces ?? [],
       terminals: options.terminals ?? [],
+      teams: options.teams ?? [],
+      bots: options.bots ?? [],
+      routines: [...(options.routines ?? [])],
+      routineRuns: [...(options.routineRuns ?? [])],
+      stalls: new Set(),
       gitStatus: EMPTY_GIT_STATUS,
     };
   }
@@ -288,6 +406,11 @@ export class FakeMassOrca implements MassOrcaBinding {
   /** The events of the next terminal view: it delivers them in order, then stays open until it is closed. */
   scriptTerminal(events: readonly TerminalEvent[]): void {
     this.state.terminalScripts.push([...events]);
+  }
+
+  /** The next `teams` call never answers, so the list stays in its loading state. */
+  stallNextTeams(): void {
+    this.state.stalls.add('teams');
   }
 
   /** The git status that every read of a workspace returns from now on. */

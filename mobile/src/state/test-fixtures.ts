@@ -4,11 +4,15 @@ import {
   FfiException,
   type AgentEvent,
   type AgentSessionSummary,
+  type BotSummary,
   type GitEvent,
   type GitStatusSummary,
   type Host,
   type HostSummary,
   type ProtocolInfo,
+  type RoutineRunSummary,
+  type RoutineSummary,
+  type TeamSummary,
   type TerminalSummary,
   type TerminalView,
   type WhoAmI,
@@ -49,6 +53,46 @@ export function workspace(overrides: Partial<WorkspaceSummary> & { readonly id: 
     branch: 'feat/example',
     state: 'ready',
     missing: false,
+    ...overrides,
+  };
+}
+
+export function team(overrides: Partial<TeamSummary> & { readonly id: string }): TeamSummary {
+  return { name: overrides.id, ...overrides };
+}
+
+export function bot(overrides: Partial<BotSummary> & { readonly id: string }): BotSummary {
+  return { teamId: 'team-1', name: overrides.id, lead: false, ...overrides };
+}
+
+/** A weekly routine on Mondays at 09:00 that runs next in four days from `nowMs`, unless it is paused. */
+export function routine(overrides: Partial<RoutineSummary> & { readonly id: string }, nowMs: number = Date.now()): RoutineSummary {
+  return {
+    teamId: 'team-1',
+    botId: 'bot-1',
+    name: overrides.id,
+    cadence: 'weekly',
+    time: '09:00',
+    weekday: 'monday',
+    monthDay: undefined,
+    runDate: undefined,
+    zone: undefined,
+    paused: false,
+    nextRunAtMs: BigInt(nowMs + 4 * 86_400_000 + 3_600_000),
+    createdAtMs: 1n,
+    ...overrides,
+  };
+}
+
+/** A run that started two hours before `nowMs`, with a task. */
+export function routineRun(overrides: Partial<RoutineRunSummary> & { readonly id: string }, nowMs: number = Date.now()): RoutineRunSummary {
+  return {
+    routineId: 'routine-1',
+    scheduledForMs: BigInt(nowMs - 2 * 3_600_000),
+    taskId: 'task-1',
+    error: undefined,
+    errorCode: undefined,
+    createdAtMs: BigInt(nowMs - 2 * 3_600_000),
     ...overrides,
   };
 }
@@ -111,6 +155,34 @@ class StalledHost implements Host {
     return this.inner.protocol();
   }
 
+  teams(): Promise<TeamSummary[]> {
+    return this.inner.teams();
+  }
+
+  teamBots(teamId: string): Promise<BotSummary[]> {
+    return this.inner.teamBots(teamId);
+  }
+
+  teamRoutines(teamId: string): Promise<RoutineSummary[]> {
+    return this.inner.teamRoutines(teamId);
+  }
+
+  routineRuns(teamId: string, routineId: string, limit?: number): Promise<RoutineRunSummary[]> {
+    return this.inner.routineRuns(teamId, routineId, limit);
+  }
+
+  pauseRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.pauseRoutine(teamId, routineId);
+  }
+
+  resumeRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.resumeRoutine(teamId, routineId);
+  }
+
+  runRoutine(teamId: string, routineId: string): Promise<RoutineRunSummary> {
+    return this.inner.runRoutine(teamId, routineId);
+  }
+
   workspaces(): Promise<WorkspaceSummary[]> {
     return new Promise<WorkspaceSummary[]>(() => undefined);
   }
@@ -158,6 +230,34 @@ class StalledStatusHost implements Host {
     return this.inner.protocol();
   }
 
+  teams(): Promise<TeamSummary[]> {
+    return this.inner.teams();
+  }
+
+  teamBots(teamId: string): Promise<BotSummary[]> {
+    return this.inner.teamBots(teamId);
+  }
+
+  teamRoutines(teamId: string): Promise<RoutineSummary[]> {
+    return this.inner.teamRoutines(teamId);
+  }
+
+  routineRuns(teamId: string, routineId: string, limit?: number): Promise<RoutineRunSummary[]> {
+    return this.inner.routineRuns(teamId, routineId, limit);
+  }
+
+  pauseRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.pauseRoutine(teamId, routineId);
+  }
+
+  resumeRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.resumeRoutine(teamId, routineId);
+  }
+
+  runRoutine(teamId: string, routineId: string): Promise<RoutineRunSummary> {
+    return this.inner.runRoutine(teamId, routineId);
+  }
+
   workspaces(project?: string): Promise<WorkspaceSummary[]> {
     return this.inner.workspaces(project);
   }
@@ -203,6 +303,34 @@ class StalledTerminalsHost implements Host {
 
   protocol(): ProtocolInfo {
     return this.inner.protocol();
+  }
+
+  teams(): Promise<TeamSummary[]> {
+    return this.inner.teams();
+  }
+
+  teamBots(teamId: string): Promise<BotSummary[]> {
+    return this.inner.teamBots(teamId);
+  }
+
+  teamRoutines(teamId: string): Promise<RoutineSummary[]> {
+    return this.inner.teamRoutines(teamId);
+  }
+
+  routineRuns(teamId: string, routineId: string, limit?: number): Promise<RoutineRunSummary[]> {
+    return this.inner.routineRuns(teamId, routineId, limit);
+  }
+
+  pauseRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.pauseRoutine(teamId, routineId);
+  }
+
+  resumeRoutine(teamId: string, routineId: string): Promise<RoutineSummary> {
+    return this.inner.resumeRoutine(teamId, routineId);
+  }
+
+  runRoutine(teamId: string, routineId: string): Promise<RoutineRunSummary> {
+    return this.inner.runRoutine(teamId, routineId);
   }
 
   workspaces(project?: string): Promise<WorkspaceSummary[]> {
