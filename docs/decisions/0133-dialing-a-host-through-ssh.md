@@ -63,7 +63,13 @@ names the route as typed and ends with what ssh printed last, for example:
 the host is unreachable: through the SSH route `ssh -J bastion deploy@vps`: Permission denied (publickey).
 ```
 
-Messages never carry keys or passwords. An unreachable route is retried with
+Messages carry no key and no password the client holds; the route is echoed as
+the user typed it, so an ssh option written with a secret in it shows up.
+What ssh printed is quoted as printable text only: control characters, such as
+the ANSI sequences a banner or a ProxyCommand may send, are dropped. A relative
+`MASSORCA_SSH` is refused rather than ignored. `-f`, alone or in a cluster, and
+`-o ForkAfterAuthentication` are refused in a route, since a backgrounded ssh
+would outlive its connection. An unreachable route is retried with
 the network backoff like any unreachable host; a key mismatch is final.
 
 **The child's life.** The ssh process belongs to the connection: dropping the
