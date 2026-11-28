@@ -72,6 +72,11 @@ pub(crate) async fn serve(
                 max_frame_len,
                 streams: StreamTable::default(),
             });
+            // Dropped with `serving` on every exit, including a writer that ends first or an aborted task.
+            let _release_upload = session
+                .state
+                .self_update
+                .release_on_drop(&session.connection_id);
             shutdown_seen = run_session(&session, &mut inbound, &mut signal, live.as_mut()).await;
         }
     };

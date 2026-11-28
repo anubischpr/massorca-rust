@@ -49,8 +49,8 @@ pub use permission::{Permission, Principal, Scopes, authorize};
 pub use readiness::{Health, NetworkReadiness, PendingOffer, Readiness};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 pub use service::{
-    DiscoveryOptions, RunningService, SKILL_HOME_ENV, Service, ServiceConfig, VAULT_PROTECTION_ENV,
-    VaultOptions,
+    DiscoveryOptions, RunningService, SKILL_HOME_ENV, SelfUpdateOptions, Service, ServiceConfig,
+    VAULT_PROTECTION_ENV, VaultOptions,
 };
 pub use settings::{SettingDecl, SettingKind, SettingsRegistry};
 pub use shutdown::ShutdownHandle;

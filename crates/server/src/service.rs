@@ -42,6 +42,7 @@ use crate::event_bus::EventBus;
 use crate::extension_points::{ExtensionPoints, sync_extension_points};
 use crate::features;
 use crate::features::extension_process::HostPrograms;
+pub use crate::features::self_update::SelfUpdateOptions;
 use crate::instance_lock;
 use crate::kind_packages::{ExtensionKindPackages, prepare_builtin_agents};
 use crate::network::{self, NetworkConfig};
@@ -134,12 +135,14 @@ impl Service {
         vault_options: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
         let discovery = DiscoveryOptions::from_env();
+        let self_update = SelfUpdateOptions::from_env();
         Self::start_inner(
             config,
             NetworkConfig::default(),
             vault_options,
             discovery,
             None,
+            self_update,
         )
         .await
     }
@@ -159,7 +162,32 @@ impl Service {
         discovery: DiscoveryOptions,
     ) -> Result<RunningService, ServiceError> {
         let vault = VaultOptions::from_env();
-        Self::start_inner(config, network, vault, discovery, None).await
+        Self::start_inner(
+            config,
+            network,
+            vault,
+            discovery,
+            None,
+            SelfUpdateOptions::from_env(),
+        )
+        .await
+    }
+
+    /// [`Service::start`] with explicit self-update options instead of the environment's (decision 0132).
+    pub async fn start_with_self_update(
+        config: ServiceConfig,
+        self_update: SelfUpdateOptions,
+    ) -> Result<RunningService, ServiceError> {
+        let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
+        Self::start_inner(
+            config,
+            NetworkConfig::default(),
+            vault,
+            discovery,
+            None,
+            self_update,
+        )
+        .await
     }
 
     /// As `start_with_network`, with explicit vault options instead of the environment's.
@@ -168,7 +196,15 @@ impl Service {
         network: NetworkConfig,
         vault: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, vault, DiscoveryOptions::default(), None).await
+        Self::start_inner(
+            config,
+            network,
+            vault,
+            DiscoveryOptions::default(),
+            None,
+            SelfUpdateOptions::from_env(),
+        )
+        .await
     }
 
     /// As `start`, and also listens on the network as `network` says (decision 0045).
@@ -177,7 +213,15 @@ impl Service {
         network: NetworkConfig,
     ) -> Result<RunningService, ServiceError> {
         let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
-        Self::start_inner(config, network, vault, discovery, None).await
+        Self::start_inner(
+            config,
+            network,
+            vault,
+            discovery,
+            None,
+            SelfUpdateOptions::from_env(),
+        )
+        .await
     }
 
     /// As `start_with_network`, for a caller that has just checked the profile root itself with `secure_root` and got
@@ -189,7 +233,15 @@ impl Service {
         checked: RootAccess,
     ) -> Result<RunningService, ServiceError> {
         let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
-        Self::start_inner(config, network, vault, discovery, Some(checked)).await
+        Self::start_inner(
+            config,
+            network,
+            vault,
+            discovery,
+            Some(checked),
+            SelfUpdateOptions::from_env(),
+        )
+        .await
     }
 
     async fn start_inner(
@@ -198,6 +250,7 @@ impl Service {
         vault_options: VaultOptions,
         discovery_options: DiscoveryOptions,
         checked: Option<RootAccess>,
+        self_update: SelfUpdateOptions,
     ) -> Result<RunningService, ServiceError> {
         let mut timings = StartTimings::new();
         let ServiceConfig {
@@ -355,6 +408,7 @@ impl Service {
             extensions,
             host_programs,
             skills: features::skills::SkillScans::new(discovery_options),
+            self_update: Arc::new(features::self_update::SelfUpdate::new(self_update)),
             _kind_guard: kind_guard,
             _kind_cleanup: kind_cleanup,
             extension_points,

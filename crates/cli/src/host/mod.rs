@@ -9,6 +9,7 @@ pub mod records;
 pub mod self_test;
 pub mod status;
 pub mod status_watch;
+pub mod update;
 
 use massorca_profile::Profile;
 
@@ -35,6 +36,7 @@ pub fn command_path(command: &HostCommand) -> &'static str {
         HostCommand::SelfTest { .. } => "host self-test",
         HostCommand::Discover => "host discover",
         HostCommand::AddSsh(_) => "host add-ssh",
+        HostCommand::Update(_) => "host update",
         HostCommand::Memory => "host memory",
         HostCommand::Ports => "host ports",
         HostCommand::Forward(_) => "host forward",
@@ -63,6 +65,7 @@ pub async fn execute(
         }
         HostCommand::Discover => discover::execute(profile, output).await,
         HostCommand::AddSsh(args) => add_ssh::execute(profile, &args, output).await,
+        HostCommand::Update(args) => update::execute(profile, &args, output).await,
         HostCommand::Memory => Err(CliError::new(
             "internal",
             "host memory addresses a service; it does not run on the hosts list",

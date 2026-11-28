@@ -26,6 +26,7 @@ mod script_trust;
 mod secret_params;
 mod secret_refusals;
 mod secrets;
+pub(crate) mod self_update;
 mod service;
 mod skill_placement;
 pub(crate) mod skills;
@@ -69,6 +70,7 @@ pub(crate) fn register_core(
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
     handles.extend(host::register(registries)?);
+    handles.extend(self_update::register(registries)?);
     handles.extend(usage::register(registries)?);
     handles.extend(tools::register(registries)?);
     handles.extend(config::register(registries)?);
