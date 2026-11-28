@@ -11,12 +11,13 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
+use massorca_core_vault::is_dangerous_env_name;
 use massorca_protocol::methods::agents::{KindSettings, KindSettingsSetParams};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::kind::KindDecl;
-use crate::provided_env::{ProviderError, has_reserved_prefix, same_name};
+use crate::provided_env::{ProviderError, SecretGrant, has_reserved_prefix, same_name};
 
 /// Most standing arguments of a kind.
 pub const MAX_ARGS: usize = 256;
@@ -69,6 +70,10 @@ pub enum SettingsError {
     InvalidName(String),
     #[error("{0} is set by MassOrca for every run; use another name")]
     ReservedName(String),
+    #[error(
+        "{0} can load code, redirect lookups or swap an endpoint, so a run holding secrets may not receive it; use another name"
+    )]
+    DangerousName(String),
     #[error("the value of {0} must be at most 8 KiB and without NUL")]
     InvalidValue(String),
     #[error("a kind takes at most {MAX_ENV} variables")]
@@ -104,6 +109,22 @@ impl StandingSettings {
                 .map(|(name, value)| (name.clone(), value.clone())),
         );
         env
+    }
+
+    /// The variables a run gets, and whether it holds secrets because of them (decision 0174, amendment A1): the
+    /// standing variables under the caller's, only for a caller the vault provides secrets to (host-admin scope,
+    /// decision 0071). A standing value may be a secret, so a run that gets one holds secrets; any other caller's run
+    /// gets its own variables only.
+    #[must_use]
+    pub fn env_for(
+        &self,
+        grant: SecretGrant,
+        caller: &BTreeMap<String, String>,
+    ) -> (BTreeMap<String, String>, bool) {
+        match grant {
+            SecretGrant::Provide => (self.env_with(caller), !self.env.is_empty()),
+            SecretGrant::Withhold(_) => (caller.clone(), false),
+        }
     }
 
     /// Applies `change` to these settings, checking every value it sets against `decl`.
@@ -187,7 +208,8 @@ fn check_program(program: &str) -> Result<(), SettingsError> {
     Ok(())
 }
 
-/// A name a process can take, and that no launch sets for itself: not `MASSORCA_*` and not the kind's credential home.
+/// A name a process can take, that no launch sets for itself (not `MASSORCA_*` and not the kind's credential home), and
+/// that a run holding secrets may receive ([`is_dangerous_env_name`], the vault's own rule for a secret's name).
 fn check_name(name: &str, decl: &KindDecl) -> Result<(), SettingsError> {
     if name.is_empty()
         || name.len() > MAX_TEXT_BYTES
@@ -202,6 +224,9 @@ fn check_name(name: &str, decl: &KindDecl) -> Result<(), SettingsError> {
         .is_some_and(|credentials| same_name(name, &credentials.home_env));
     if has_reserved_prefix(name) || credential_home {
         return Err(SettingsError::ReservedName(name.to_owned()));
+    }
+    if is_dangerous_env_name(name) {
+        return Err(SettingsError::DangerousName(name.to_owned()));
     }
     Ok(())
 }
@@ -367,6 +392,7 @@ mod tests {
 
     use super::{KindSettingsStore, SettingsError, StandingSettings};
     use crate::kind::KindDecl;
+    use crate::provided_env::SecretGrant;
 
     const SECRET: &str = "placeholder-standing-8b2d";
 
@@ -517,6 +543,59 @@ mod tests {
         );
         let merged = settings.env_with(&env(&[("SHARED", "caller")]));
         assert_eq!(merged, env(&[("SHARED", "caller"), ("ONLY_STANDING", "s")]));
+    }
+
+    #[test]
+    fn standing_variables_reach_only_a_host_admin_run_and_mark_it_as_holding_secrets() {
+        let settings = StandingSettings {
+            program: None,
+            args: Vec::new(),
+            env: env(&[("SHARED", "standing"), ("API_TOKEN", SECRET)]),
+        };
+        let caller = env(&[("SHARED", "caller")]);
+
+        let (granted, holds) = settings.env_for(SecretGrant::Provide, &caller);
+        assert_eq!(granted, env(&[("SHARED", "caller"), ("API_TOKEN", SECRET)]));
+        assert!(holds, "a run that gets standing variables holds secrets");
+
+        let (withheld, holds) = settings.env_for(SecretGrant::Withhold("not admin"), &caller);
+        assert_eq!(
+            withheld, caller,
+            "a non-admin run gets its own variables only"
+        );
+        assert!(!holds);
+
+        let (plain, holds) = StandingSettings::default().env_for(SecretGrant::Provide, &caller);
+        assert_eq!(plain, caller);
+        assert!(!holds, "no standing variable, nothing to hold");
+    }
+
+    #[test]
+    fn a_dangerous_variable_name_is_refused_when_it_is_set() {
+        let mut settings = StandingSettings::default();
+        for name in [
+            "LD_PRELOAD",
+            "NODE_OPTIONS",
+            "ANTHROPIC_BASE_URL",
+            "https_proxy",
+        ] {
+            let error = settings
+                .apply(
+                    &KindSettingsSetParams {
+                        env: env(&[(name, SECRET)]),
+                        ..change()
+                    },
+                    &decl(),
+                )
+                .unwrap_err();
+            assert_eq!(error, SettingsError::DangerousName(name.to_owned()));
+            let message = error.to_string();
+            assert!(
+                message.contains(name) && !message.contains(SECRET),
+                "{message}"
+            );
+        }
+        assert!(settings.is_empty(), "nothing was stored");
     }
 
     #[test]

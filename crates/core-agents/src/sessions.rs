@@ -700,9 +700,9 @@ impl Agents {
         };
         let (decl, program, standing) = self.installed_kind_with(&params.kind, true)?;
         // The kind's standing arguments come before the start's, and its standing variables under the start's (decision
-        // 0174): what a start names wins.
+        // 0174): what a start names wins. The variables reach a host-admin caller's run only, which then holds secrets.
         let caller_args = standing.args_with(&params.args);
-        let caller_env = standing.env_with(&params.env);
+        let (caller_env, standing_holds) = standing.env_for(grant, &params.env);
         let mode = modes::plan_start(
             &decl,
             params.permission_mode.as_deref(),
@@ -773,7 +773,7 @@ impl Agents {
 
         // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
         let provided = self.provided_env(&workspace.project_id, grant)?;
-        let holds_secrets = !provided.is_empty() || parent_holds;
+        let holds_secrets = !provided.is_empty() || parent_holds || standing_holds;
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
         // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
@@ -1043,6 +1043,12 @@ impl Agents {
                 ),
             ));
         }
+        // Besides the mode and the kept options, a resumed run takes the kind's resume arguments and its standing
+        // settings only (decision 0174): the caller's arguments and environment of the first start are not kept with the
+        // session (docs/architecture/agents.md). Standing arguments come after the mode's own, so they leave it
+        // unconfirmed, as at a start; standing variables reach a host-admin caller's run only, which then holds secrets.
+        let standing_args = standing.args_with(&[]);
+        let (standing_env, standing_holds) = standing.env_for(grant, &BTreeMap::new());
         let (mode, still_pending) = modes::plan_resume(
             &decl,
             permission_mode,
@@ -1050,6 +1056,7 @@ impl Agents {
             row.pending_permission_mode.as_deref(),
             Some(program.as_path()),
         )?;
+        let mode = mode.with_caller_args(&standing_args);
         let workspace = self
             .inner
             .config
@@ -1109,7 +1116,8 @@ impl Agents {
             None => false,
         };
         // Sticky: once a run of the session got secrets, its scrollback may hold them, so the mark never clears.
-        let holds_secrets = !provided.is_empty() || parent_holds || row.holds_secrets;
+        let holds_secrets =
+            !provided.is_empty() || parent_holds || row.holds_secrets || standing_holds;
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
@@ -1127,11 +1135,6 @@ impl Agents {
             .unwrap_or(false);
         let mode_args = [mode.args.clone(), kept.args.clone()].concat();
         let fast = decl.fast_for(kept.model.as_deref(), chosen_fast)?;
-        // Besides those options, a resumed run takes the kind's resume arguments and its standing settings only (decision
-        // 0174): the caller's arguments and environment of the first start are not kept with the session
-        // (docs/architecture/agents.md).
-        let standing_args = standing.args_with(&[]);
-        let standing_env = standing.env_with(&BTreeMap::new());
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,

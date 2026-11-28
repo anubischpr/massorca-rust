@@ -240,6 +240,36 @@ fn caller_arguments_leave_a_named_mode_unconfirmed() {
     stop(&sandbox, &id_of(&started));
 }
 
+/// The kind's standing arguments (decision 0174) come after the mode's own on a resume too, so a resumed mode is never
+/// confirmed while the kind has any.
+#[test]
+fn standing_arguments_leave_a_resumed_mode_unconfirmed() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake", &["--mode", "careful"]);
+    assert_eq!(started["mode_confirmed"], true, "{started}");
+    let session = id_of(&started);
+    until(&sandbox, &session, "idle");
+    stopped(&sandbox, &session);
+
+    sandbox.json_ok(
+        "default",
+        &["agent", "settings", "set", "fake", "--arg", "extra"],
+    );
+    let named = resume(&sandbox, &session, &["--mode", "careful"]);
+    assert_eq!(named["permission_mode"], "careful");
+    assert!(
+        named.get("mode_confirmed").is_none(),
+        "the standing arguments may override the mode: {named}"
+    );
+    wait_for_line(&sandbox, &terminal_of(&named), "fake-agent: mode careful");
+    stopped(&sandbox, &session);
+
+    let kept = resume(&sandbox, &session, &[]);
+    assert_eq!(kept["permission_mode"], "careful");
+    assert!(kept.get("mode_confirmed").is_none(), "{kept}");
+    stop(&sandbox, &session);
+}
+
 #[test]
 fn a_bypass_mode_is_never_inherited_by_a_delegated_child() {
     let sandbox = sandbox();
