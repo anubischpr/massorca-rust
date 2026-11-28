@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentItem,
   AgentSessionSummary,
+  BotSummary,
   GitEvent,
   GitFileStatus,
   GitItem,
@@ -15,6 +16,9 @@ import type {
   LinkState,
   OfferSummary,
   ProtocolInfo,
+  RoutineRunSummary,
+  RoutineSummary,
+  TeamSummary,
   TerminalEvent,
   TerminalSummary,
   WhoAmI,
@@ -92,6 +96,13 @@ export interface RustHost {
   whoami(): Promise<Rust.WhoAmI>;
   protocol(): Rust.ProtocolInfo;
   workspaces(project: string | undefined): Promise<Rust.WorkspaceSummary[]>;
+  teams(): Promise<Rust.TeamSummary[]>;
+  teamBots(team: string): Promise<Rust.BotSummary[]>;
+  teamRoutines(team: string): Promise<Rust.RoutineSummary[]>;
+  routineRuns(team: string, routine: string, limit: number | undefined): Promise<Rust.RoutineRunSummary[]>;
+  pauseRoutine(team: string, routine: string): Promise<Rust.RoutineSummary>;
+  resumeRoutine(team: string, routine: string): Promise<Rust.RoutineSummary>;
+  runRoutine(team: string, routine: string): Promise<Rust.RoutineRunSummary>;
   terminals(workspace: string | undefined): Promise<Rust.TerminalSummary[]>;
   gitStatus(workspace: string): Promise<Rust.GitStatusSummary>;
   watchGit(workspace: string): RustWatch<RustGitEvent>;
@@ -150,6 +161,44 @@ export function workspaceSummary(raw: Rust.WorkspaceSummary): WorkspaceSummary {
     branch: raw.branch,
     state: raw.state,
     missing: raw.missing,
+  };
+}
+
+export function teamSummary(raw: Rust.TeamSummary): TeamSummary {
+  return { id: raw.id, name: raw.name };
+}
+
+export function botSummary(raw: Rust.BotSummary): BotSummary {
+  return { id: raw.id, teamId: raw.teamId, name: raw.name, lead: raw.lead };
+}
+
+export function routineSummary(raw: Rust.RoutineSummary): RoutineSummary {
+  return {
+    id: raw.id,
+    teamId: raw.teamId,
+    botId: raw.botId,
+    name: raw.name,
+    cadence: raw.cadence,
+    time: raw.time,
+    weekday: raw.weekday,
+    monthDay: raw.monthDay,
+    runDate: raw.runDate,
+    zone: raw.zone,
+    paused: raw.paused,
+    nextRunAtMs: raw.nextRunAtMs,
+    createdAtMs: raw.createdAtMs,
+  };
+}
+
+export function routineRunSummary(raw: Rust.RoutineRunSummary): RoutineRunSummary {
+  return {
+    id: raw.id,
+    routineId: raw.routineId,
+    scheduledForMs: raw.scheduledForMs,
+    taskId: raw.taskId,
+    error: raw.error,
+    errorCode: raw.errorCode,
+    createdAtMs: raw.createdAtMs,
   };
 }
 

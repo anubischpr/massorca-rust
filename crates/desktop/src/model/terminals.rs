@@ -2,7 +2,7 @@
 //! the state words, the exit text and the tab titles (decision 0033; terminals.md).
 
 use massorca_protocol::methods::terminals::{
-    ExitReason, Terminal, TerminalCreateParams, TerminalState,
+    ExitReason, ShellSpec, Terminal, TerminalCreateParams, TerminalState,
 };
 
 use crate::service::StoreState;
@@ -107,11 +107,26 @@ pub fn running_count(state: &StoreState) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
-/// Parameters for a new terminal in a workspace: the default shell at the workspace root (0032).
-pub fn new_terminal_params(workspace_id: &str, cols: u16, rows: u16) -> TerminalCreateParams {
+/// The program the `terminal.shell` setting names for new terminals; `None` (the host's default shell) when it is
+/// empty or not text. The whole value is the program, so a path with spaces stays one.
+pub fn shell_setting(value: Option<&serde_json::Value>) -> Option<ShellSpec> {
+    let program = value?.as_str()?.trim();
+    (!program.is_empty()).then(|| ShellSpec {
+        program: program.to_owned(),
+        args: Vec::new(),
+    })
+}
+
+/// Parameters for a new terminal in a workspace at the workspace root (0032): `shell`, or the host's default shell.
+pub fn new_terminal_params(
+    workspace_id: &str,
+    cols: u16,
+    rows: u16,
+    shell: Option<ShellSpec>,
+) -> TerminalCreateParams {
     TerminalCreateParams {
         workspace: workspace_id.to_owned(),
-        shell: None,
+        shell,
         cwd: None,
         env: Default::default(),
         cols: Some(cols),
@@ -127,6 +142,23 @@ mod tests {
 
     use super::*;
     use crate::service::StoreUpdate;
+
+    #[test]
+    fn the_shell_setting_names_the_whole_program_and_empty_keeps_the_host_default() {
+        let spaced = serde_json::json!(r"C:\Program Files\PowerShell\7\pwsh.exe");
+        assert_eq!(
+            shell_setting(Some(&spaced)).map(|spec| spec.program),
+            Some(r"C:\Program Files\PowerShell\7\pwsh.exe".to_owned())
+        );
+        for empty in [
+            serde_json::json!(""),
+            serde_json::json!("  "),
+            serde_json::json!(7),
+        ] {
+            assert_eq!(shell_setting(Some(&empty)), None, "{empty}");
+        }
+        assert_eq!(shell_setting(None), None);
+    }
 
     fn terminal(id: &str, workspace: &str, state: TerminalState) -> Terminal {
         Terminal {
@@ -251,7 +283,7 @@ mod tests {
 
     #[test]
     fn a_new_terminal_uses_the_default_shell_in_the_workspace() {
-        let params = new_terminal_params("w9", 120, 40);
+        let params = new_terminal_params("w9", 120, 40, None);
         assert_eq!(params.workspace, "w9");
         assert!(params.shell.is_none());
         assert_eq!((params.cols, params.rows), (Some(120), Some(40)));
