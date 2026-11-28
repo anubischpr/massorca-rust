@@ -26,6 +26,7 @@ use crate::queries::{Query, QueryScanner, ThemeCell, colour_reply};
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, SCROLLBACK_ROWS, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
+use crate::terminal_path::{PathSource, start_environment};
 use massorca_host_stats::{MemorySample, ProcessTable};
 
 /// Largest input accepted per call (0033).
@@ -182,6 +183,8 @@ pub struct TerminalInfo {
     pub holds_secrets: bool,
     /// Set at creation for an agent run: git inside it never waits for a credential prompt (TERM-24).
     pub git_credential_guard: bool,
+    /// Where the PATH the program started with came from (TERM-17).
+    pub path_source: PathSource,
 }
 
 /// One terminal's process memory (`TerminalManager::memory`).
@@ -392,7 +395,8 @@ impl TerminalManager {
         }
         validate_size(spec.size)?;
         check_cwd(&spec.cwd)?;
-        let (program, args) = self.resolve_shell(spec.shell.as_ref())?;
+        let (env, path_source) = start_environment(&self.inner.config.base_env);
+        let (program, args) = Self::resolve_shell(spec.shell.as_ref(), &env)?;
         let seq = {
             let mut registry = lock(&self.inner.registry);
             if registry.live >= self.inner.config.max_live {
@@ -402,14 +406,18 @@ impl TerminalManager {
             registry.next_seq += 1;
             registry.next_seq
         };
-        self.start(spec, program, args, seq).inspect_err(|_| {
-            let mut registry = lock(&self.inner.registry);
-            registry.live = registry.live.saturating_sub(1);
-        })
+        self.start(spec, program, args, seq, &env, path_source)
+            .inspect_err(|_| {
+                let mut registry = lock(&self.inner.registry);
+                registry.live = registry.live.saturating_sub(1);
+            })
     }
 
-    fn resolve_shell(&self, shell: Option<&ShellChoice>) -> Result<(PathBuf, Vec<String>)> {
-        let env = &self.inner.config.base_env;
+    /// The program a terminal starts: the named one, found on the terminal's PATH, or the default shell.
+    fn resolve_shell(
+        shell: Option<&ShellChoice>,
+        env: &EnvSnapshot,
+    ) -> Result<(PathBuf, Vec<String>)> {
         match shell {
             Some(choice) => resolve_program(&choice.program, env)
                 .map(|program| (program, choice.args.clone()))
@@ -426,12 +434,14 @@ impl TerminalManager {
         program: PathBuf,
         args: Vec<String>,
         seq: u64,
+        base: &EnvSnapshot,
+        path_source: PathSource,
     ) -> Result<TerminalInfo> {
         let config = &self.inner.config;
         let id = uuid::Uuid::now_v7().to_string();
         let git_credential_guard = crate::credential_guard::requested(&spec.env);
         let env = build_environment(
-            &config.base_env,
+            base,
             &TerminalEnv {
                 terminal_id: &id,
                 workspace_id: &spec.workspace_id,
@@ -461,6 +471,7 @@ impl TerminalManager {
             request_id: spec.request_id.clone(),
             holds_secrets: spec.holds_secrets,
             git_credential_guard,
+            path_source,
             pid: spawned.master.pid(),
             master: Arc::new(spawned.master),
             tree: spawned.tree,
@@ -1057,6 +1068,7 @@ pub(crate) struct Terminal {
     request_id: Option<String>,
     holds_secrets: bool,
     git_credential_guard: bool,
+    path_source: PathSource,
     pid: Option<u32>,
     master: Arc<PtyMaster>,
     tree: ProcessTree,
@@ -1115,6 +1127,7 @@ impl Terminal {
             exit,
             holds_secrets: self.holds_secrets,
             git_credential_guard: self.git_credential_guard,
+            path_source: self.path_source,
         }
     }
 

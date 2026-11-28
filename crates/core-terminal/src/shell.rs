@@ -51,6 +51,14 @@ impl EnvSnapshot {
             .find(|(key, _)| names_match(key, name))
             .map(|(_, value)| value.as_str())
     }
+
+    /// A copy with `name` set to `value`, replacing every entry of that name.
+    #[must_use]
+    pub fn with_var(mut self, name: &str, value: &str) -> Self {
+        self.vars.retain(|(key, _)| !names_match(key, name));
+        self.vars.push((name.to_owned(), value.to_owned()));
+        self
+    }
 }
 
 /// Whether two variable names are the same: case-insensitive on Windows only.

@@ -11,6 +11,9 @@ pub mod queries;
 pub mod ring;
 pub mod screen;
 pub mod shell;
+pub mod terminal_path;
+#[cfg(windows)]
+mod windows_registry;
 
 /// An environment value of a run: zeroed when dropped, because it may be a vault secret (decision 0071).
 pub type EnvValue = zeroize::Zeroizing<String>;

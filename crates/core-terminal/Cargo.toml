@@ -24,6 +24,8 @@ rustix = { workspace = true, features = ["fs"] }
 # A job object per terminal ends its whole process tree (decision 0031).
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true
+# The machine and user PATH a terminal starts with, read from the registry (decision 0032).
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Registry"] }
 
 [dev-dependencies]
 massorca-process = { workspace = true, features = ["test-support"] }
