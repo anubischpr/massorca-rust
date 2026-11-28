@@ -941,3 +941,70 @@ fn a_mark_without_the_activity_time_marks_the_current_one() {
     assert!(store.mark_agent_session_seen(&row.id, None, 20).unwrap());
     assert_eq!(seen_at(&store, &row.id), Some(20));
 }
+
+#[test]
+fn child_workspaces_are_those_of_delegated_writers_deepest_first() {
+    let (store, main) = store_with_workspace();
+    let project = store.get_workspace(&main).unwrap().unwrap().project_id;
+    let workspace = |name: &str| {
+        let row = workspace_row(&project, name, &format!("/repos/app-workspaces/{name}"));
+        store.insert_workspace(&row).unwrap();
+        row.id
+    };
+    let (child, grandchild, via_reader, unrelated) = (
+        workspace("main-1"),
+        workspace("main-1-1"),
+        workspace("main-2"),
+        workspace("other"),
+    );
+    let parent = session_row(&main, 10);
+    // A read-only child runs in its parent's workspace, so it adds none.
+    let mut reader = session_row(&main, 11);
+    reader.parent_id = Some(parent.id.clone());
+    reader.read_only = true;
+    let mut writer = session_row(&child, 12);
+    writer.parent_id = Some(parent.id.clone());
+    let mut grand = session_row(&grandchild, 13);
+    grand.parent_id = Some(writer.id.clone());
+    let mut reader_writer = session_row(&via_reader, 14);
+    reader_writer.parent_id = Some(reader.id.clone());
+    let lone = session_row(&unrelated, 15);
+    for row in [&parent, &reader, &writer, &grand, &reader_writer, &lone] {
+        store.insert_agent_session(row).unwrap();
+    }
+
+    let found: Vec<String> = store
+        .list_delegated_child_workspaces(&main)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(found.first().map(String::as_str), Some("main-1-1"));
+    let mut rest = found[1..].to_vec();
+    rest.sort();
+    assert_eq!(rest, vec!["main-1".to_owned(), "main-2".to_owned()]);
+    assert!(
+        store
+            .list_delegated_child_workspaces(&grandchild)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_delegated_child_workspaces(&unrelated)
+            .unwrap()
+            .is_empty()
+    );
+
+    // A child workspace already gone takes its sessions, so it is no longer listed.
+    assert!(store.delete_workspace(&via_reader).unwrap());
+    assert_eq!(
+        store
+            .list_delegated_child_workspaces(&main)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.name)
+            .collect::<Vec<_>>(),
+        vec!["main-1-1".to_owned(), "main-1".to_owned()]
+    );
+}

@@ -860,13 +860,22 @@ fn run_step(
     Ok(())
 }
 
-/// How long an open waits for another opener's upgrade before it gives up. Tests keep it short but above the time a
-/// loaded machine needs for a backup and a few steps.
-const UPGRADE_LOCK_WAIT: Duration = if cfg!(test) {
-    Duration::from_secs(5)
-} else {
-    Duration::from_secs(30)
-};
+/// How long an open waits for another opener's upgrade before it gives up.
+const UPGRADE_LOCK_WAIT: Duration = Duration::from_secs(30);
+
+#[cfg(test)]
+thread_local! {
+    /// A shorter wait for the one test that holds the lock forever; every other test keeps the real wait.
+    static UPGRADE_LOCK_WAIT_OVERRIDE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+fn upgrade_lock_wait() -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = UPGRADE_LOCK_WAIT_OVERRIDE.with(std::cell::Cell::get) {
+        return wait;
+    }
+    UPGRADE_LOCK_WAIT
+}
 
 /// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish. The wait is
 /// bounded, so a lock that is never released fails the open with a message instead of hanging it.
@@ -879,7 +888,8 @@ fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
         .truncate(false)
         .write(true)
         .open(&path)?;
-    let deadline = Instant::now() + UPGRADE_LOCK_WAIT;
+    let wait = upgrade_lock_wait();
+    let deadline = Instant::now() + wait;
     loop {
         match lock.try_lock() {
             Ok(()) => return Ok(lock),
@@ -892,7 +902,7 @@ fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
                     format!(
                         "{} stayed locked by another upgrade for {}s",
                         path.display(),
-                        UPGRADE_LOCK_WAIT.as_secs()
+                        wait.as_secs()
                     ),
                 )));
             }
@@ -1112,6 +1122,8 @@ mod tests {
         let path = dir.path().join("store.db");
         let held = fs::File::create(dir.path().join("store.db.migrating")).unwrap();
         held.lock().unwrap();
+        super::UPGRADE_LOCK_WAIT_OVERRIDE
+            .with(|wait| wait.set(Some(std::time::Duration::from_secs(2))));
         let mut connection = Connection::open(&path).unwrap();
         let started = std::time::Instant::now();
         let error = migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap_err();

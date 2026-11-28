@@ -151,6 +151,7 @@ pub async fn add_project_and_workspace(
         .await?;
     let workspace = client
         .workspace_create(&WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             name: name.to_owned(),
             branch: None,

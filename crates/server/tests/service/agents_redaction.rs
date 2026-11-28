@@ -31,6 +31,7 @@ fn seed(store: &Store) -> (String, String) {
     };
     store.insert_project(&project).expect("project");
     let workspace = WorkspaceRow {
+        in_place: false,
         id: new_id(),
         project_id: project.id,
         kind: WorkspaceKind::Folder,
