@@ -13,7 +13,17 @@ fn sandbox() -> Sandbox {
     }
     sandbox.json_ok(
         "default",
-        &["team", "bot", "add", "alpha", "mara", "--agent", "claude", "--job", "Writes the parser"],
+        &[
+            "team",
+            "bot",
+            "add",
+            "alpha",
+            "mara",
+            "--agent",
+            "claude",
+            "--job",
+            "Writes the parser",
+        ],
     );
     sandbox
 }

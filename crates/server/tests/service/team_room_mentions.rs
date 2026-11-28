@@ -108,7 +108,13 @@ async fn a_line_resolves_bots_teams_projects_and_files_and_refuses_unknown_ones(
     let named: Vec<(RoomMentionKind, &str, &str)> = resolved
         .mentions
         .iter()
-        .map(|mention| (mention.kind, mention.label.as_str(), mention.insert.as_str()))
+        .map(|mention| {
+            (
+                mention.kind,
+                mention.label.as_str(),
+                mention.insert.as_str(),
+            )
+        })
         .collect();
     assert_eq!(
         named,
@@ -122,11 +128,31 @@ async fn a_line_resolves_bots_teams_projects_and_files_and_refuses_unknown_ones(
     assert_eq!(resolved.mentions[3].project.as_deref(), Some("Parser"));
 
     for (text, code, mention) in [
-        ("ask @team:gamma", codes::TEAM_ROOM_MENTION_UNKNOWN, "@team:gamma"),
-        ("see @project:nope", codes::TEAM_ROOM_MENTION_UNKNOWN, "@project:nope"),
-        ("see @file:src/main.rs", codes::TEAM_ROOM_MENTION_UNKNOWN, "@file:src/main.rs"),
-        ("see @file:../secrets.txt", codes::TEAM_ROOM_FILE_OUTSIDE, "@file:../secrets.txt"),
-        ("see @file:src/../../x", codes::TEAM_ROOM_FILE_OUTSIDE, "@file:src/../../x"),
+        (
+            "ask @team:gamma",
+            codes::TEAM_ROOM_MENTION_UNKNOWN,
+            "@team:gamma",
+        ),
+        (
+            "see @project:nope",
+            codes::TEAM_ROOM_MENTION_UNKNOWN,
+            "@project:nope",
+        ),
+        (
+            "see @file:src/main.rs",
+            codes::TEAM_ROOM_MENTION_UNKNOWN,
+            "@file:src/main.rs",
+        ),
+        (
+            "see @file:../secrets.txt",
+            codes::TEAM_ROOM_FILE_OUTSIDE,
+            "@file:../secrets.txt",
+        ),
+        (
+            "see @file:src/../../x",
+            codes::TEAM_ROOM_FILE_OUTSIDE,
+            "@file:src/../../x",
+        ),
     ] {
         let refused = client
             .team_room_resolve(&resolve(text))
@@ -190,7 +216,10 @@ async fn an_at_suggests_bots_teams_projects_and_the_files_of_a_folder() {
         .expect("teams");
     assert_eq!(teams_only.mentions.len(), 1);
     assert_eq!(teams_only.mentions[0].kind, RoomMentionKind::Team);
-    let bruno = client.team_room_mentions(&suggest("bru")).await.expect("bru");
+    let bruno = client
+        .team_room_mentions(&suggest("bru"))
+        .await
+        .expect("bru");
     assert_eq!(bruno.mentions[0].insert, "@Bruno");
 
     let root = client
@@ -262,9 +291,7 @@ async fn project_and_file_mentions_link_the_project_and_give_the_task_the_files(
     let ids = rooms(&client, &home.path().join("parser")).await;
 
     let posted = client
-        .team_room_post(&held_post(
-            "@mara tidy @file:src/lib.rs in @project:Parser",
-        ))
+        .team_room_post(&held_post("@mara tidy @file:src/lib.rs in @project:Parser"))
         .await
         .expect("team.room_post");
     let task = posted.messages[1].task.as_ref().expect("a task");

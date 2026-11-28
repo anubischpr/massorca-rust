@@ -150,7 +150,9 @@ fn scan(text: &str) -> Vec<Found<'_>> {
                 (FILE_PREFIX, RoomMentionKind::File),
             ]
             .into_iter()
-            .find_map(|(prefix, kind)| strip_prefix_ignoring_case(after, prefix).map(|rest| (kind, rest)))
+            .find_map(|(prefix, kind)| {
+                strip_prefix_ignoring_case(after, prefix).map(|rest| (kind, rest))
+            })
             .unwrap_or((RoomMentionKind::Bot, after));
             found.push(Found { at, kind, rest });
         }
@@ -161,7 +163,8 @@ fn scan(text: &str) -> Vec<Found<'_>> {
 
 fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     let head = text.get(..prefix.len())?;
-    head.eq_ignore_ascii_case(prefix).then(|| &text[prefix.len()..])
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &text[prefix.len()..])
 }
 
 /// The longest of `names` that `rest` starts with, in any letter case, followed by no letter or digit.
@@ -220,10 +223,16 @@ pub(super) fn resolve(
     let found = scan(text);
     let mut mentions = Mentions::default();
     // Projects first, so a file mention looks in the project the line names wherever it is written.
-    for item in found.iter().filter(|item| item.kind == RoomMentionKind::Project) {
+    for item in found
+        .iter()
+        .filter(|item| item.kind == RoomMentionKind::Project)
+    {
         let row = longest_name(
             item.rest,
-            projects.rows.iter().map(|(row, _)| (row.name.as_str(), row)),
+            projects
+                .rows
+                .iter()
+                .map(|(row, _)| (row.name.as_str(), row)),
         )
         .ok_or_else(|| unknown(&written(text, item.at), "project", "of this team"))?;
         mentions.project.get_or_insert_with(|| row.clone());
@@ -231,7 +240,8 @@ pub(super) fn resolve(
     for item in &found {
         let mention = match item.kind {
             RoomMentionKind::Bot => {
-                let Some(bot) = longest_name(item.rest, bots.iter().map(|bot| (bot.name.as_str(), bot)))
+                let Some(bot) =
+                    longest_name(item.rest, bots.iter().map(|bot| (bot.name.as_str(), bot)))
                 else {
                     continue;
                 };
@@ -252,7 +262,10 @@ pub(super) fn resolve(
             RoomMentionKind::Project => {
                 let row = longest_name(
                     item.rest,
-                    projects.rows.iter().map(|(row, _)| (row.name.as_str(), row)),
+                    projects
+                        .rows
+                        .iter()
+                        .map(|(row, _)| (row.name.as_str(), row)),
                 )
                 .ok_or_else(|| unknown(&written(text, item.at), "project", "of this team"))?;
                 project_mention(row)
@@ -377,14 +390,20 @@ pub(super) fn suggest(
         (PROJECT_PREFIX, RoomMentionKind::Project),
     ]
     .into_iter()
-    .find_map(|(prefix, kind)| strip_prefix_ignoring_case(query, prefix).map(|rest| (Some(kind), rest)))
+    .find_map(|(prefix, kind)| {
+        strip_prefix_ignoring_case(query, prefix).map(|rest| (Some(kind), rest))
+    })
     .unwrap_or((None, query));
     let wanted = wanted.to_lowercase();
     let matches = |name: &str| name.to_lowercase().contains(&wanted);
     let shown = |kind: RoomMentionKind| only.is_none_or(|only| only == kind);
     let mut list = Vec::new();
     if shown(RoomMentionKind::Bot) {
-        list.extend(bots.iter().filter(|bot| matches(&bot.name)).map(bot_mention));
+        list.extend(
+            bots.iter()
+                .filter(|bot| matches(&bot.name))
+                .map(bot_mention),
+        );
     }
     if shown(RoomMentionKind::Team) {
         let teams = store.list_teams().map_err(store_error)?;
@@ -470,9 +489,19 @@ mod tests {
 
     #[test]
     fn a_path_that_climbs_or_is_absolute_is_not_inside() {
-        assert_eq!(inside("src/lib.rs"), Some(PathBuf::from("src").join("lib.rs")));
+        assert_eq!(
+            inside("src/lib.rs"),
+            Some(PathBuf::from("src").join("lib.rs"))
+        );
         assert_eq!(inside("./src"), Some(PathBuf::from("src")));
-        for path in ["../x", "src/../../x", "/etc/hosts", "\\\\host\\share", "C:x", "C:/x"] {
+        for path in [
+            "../x",
+            "src/../../x",
+            "/etc/hosts",
+            "\\\\host\\share",
+            "C:x",
+            "C:/x",
+        ] {
             assert_eq!(inside(path), None, "{path}");
         }
     }
