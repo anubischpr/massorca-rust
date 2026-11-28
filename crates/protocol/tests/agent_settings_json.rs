@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::agents::{
-    self, KindSettings, KindSettingsCleared, KindSettingsRef, KindSettingsSetParams,
+    self, AgentStartParams, KindSettings, KindSettingsCleared, KindSettingsRef,
+    KindSettingsSetParams,
 };
 use serde_json::json;
 
@@ -72,6 +73,19 @@ fn set_params_never_print_an_env_value() {
     let shown = format!("{params:?}");
     assert!(shown.contains("API_TOKEN"), "{shown}");
     assert!(!shown.contains("placeholder-value-5d0e"), "{shown}");
+}
+
+/// `agent start --env` sends its variables as `env`; printing the params never shows a value (decision 0174).
+#[test]
+fn start_params_never_print_an_env_value() {
+    let params: AgentStartParams = serde_json::from_value(json!({
+        "kind": "claude",
+        "env": { "API_TOKEN": "placeholder-value-9a31" }
+    }))
+    .expect("decodes");
+    let shown = format!("{params:?}");
+    assert!(shown.contains("API_TOKEN"), "{shown}");
+    assert!(!shown.contains("placeholder-value-9a31"), "{shown}");
 }
 
 #[test]

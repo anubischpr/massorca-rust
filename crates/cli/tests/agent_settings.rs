@@ -263,7 +263,9 @@ fn a_standing_program_runs_a_kind_whose_own_program_is_missing() {
             fake_agent(),
         ],
     );
-    assert_eq!(set["program"], fake_agent());
+    // The CLI sends the path made absolute, which on Windows also turns its separators into backslashes.
+    let absolute = std::path::absolute(fake_agent()).expect("an absolute path");
+    assert_eq!(set["program"], absolute.to_str().expect("a UTF-8 path"));
     let run = start_fake(&sandbox, &[]);
     wait_for_line(&sandbox, &run, "fake-agent: ready");
 
@@ -334,4 +336,52 @@ fn an_unknown_kind_and_a_reserved_name_are_refused() {
         .failure();
     let stderr = String::from_utf8_lossy(&malformed.get_output().stderr).into_owned();
     assert!(stderr.contains("KEY=VALUE"), "{stderr}");
+}
+
+/// A value given to `--env` is never repeated: not by a refused option, nor by a refusal of the name it sets.
+#[test]
+fn an_env_value_is_never_echoed_and_a_dangerous_name_is_refused_when_set() {
+    const VALUE: &str = "placeholder-echo-check-71e4";
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox, fake_agent());
+    let _service = spawn_service(&sandbox);
+
+    let without_name = format!("={VALUE}");
+    let without_equals = VALUE.to_owned();
+    for text in [&without_name, &without_equals] {
+        for args in [
+            vec!["agent", "start", "fake", "--env", text.as_str()],
+            vec!["agent", "settings", "set", "fake", "--env", text.as_str()],
+        ] {
+            let outcome = sandbox.run("default", &args).failure();
+            let output = outcome.get_output();
+            let shown = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(shown.contains("KEY=VALUE"), "{args:?}: {shown}");
+            assert!(!shown.contains(VALUE), "{args:?} echoed the value: {shown}");
+        }
+    }
+
+    // A name that loads code or swaps an endpoint is refused when it is set, naming the name only.
+    for name in ["NODE_OPTIONS", "ANTHROPIC_BASE_URL"] {
+        let pair = format!("{name}={VALUE}");
+        let outcome = sandbox
+            .run(
+                "default",
+                &with_json(&["agent", "settings", "set", "fake", "--env", &pair]),
+            )
+            .failure();
+        let error = single_document(&outcome)["error"].clone();
+        assert_eq!(error["code"], "request.invalid_params", "{error}");
+        let message = error["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains(name) && !message.contains(VALUE),
+            "{error}"
+        );
+    }
+    let none = sandbox.json_ok("default", &["agent", "settings", "show", "fake"]);
+    assert_eq!(none, json!({ "kind": "fake" }), "nothing was stored");
 }

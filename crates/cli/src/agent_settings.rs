@@ -60,8 +60,8 @@ pub struct SettingsSetArgs {
     pub no_args: bool,
     /// Set a standing variable, repeatable. The value is visible in process listings while this command runs; use
     /// `--secret-env` for a secret.
-    #[arg(long = "env", value_name = "KEY=VALUE", value_parser = parse_env)]
-    pub env: Vec<(String, String)>,
+    #[arg(long = "env", value_name = "KEY=VALUE", value_parser = EnvParser)]
+    pub env: Vec<EnvVar>,
     /// Set a standing variable whose value comes from stdin, or a prompt that does not echo.
     #[arg(long = "secret-env", value_name = "KEY")]
     pub secret_env: Option<String>,
@@ -70,21 +70,74 @@ pub struct SettingsSetArgs {
     pub unset_env: Vec<String>,
 }
 
+/// One `--env KEY=VALUE` option. `Debug` shows the name only: the value may be a secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for EnvVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvVar")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a malformed `--env` says. It never repeats the option's text, which may hold a value.
+const ENV_USAGE: &str =
+    "expected KEY=VALUE with a name before `=` (the text given is not repeated)";
+
 /// `KEY=VALUE`, split at the first `=`; the key must not be empty.
 ///
 /// # Errors
-/// The text has no `=`, or nothing before it.
-pub fn parse_env(text: &str) -> Result<(String, String), String> {
+/// The text has no `=`, or nothing before it; the message never repeats the text.
+pub fn parse_env(text: &str) -> Result<EnvVar, String> {
     match text.split_once('=') {
-        Some((key, value)) if !key.is_empty() => Ok((key.to_owned(), value.to_owned())),
-        _ => Err("expected KEY=VALUE".to_owned()),
+        Some((key, value)) if !key.is_empty() => Ok(EnvVar {
+            name: key.to_owned(),
+            value: value.to_owned(),
+        }),
+        _ => Err(ENV_USAGE.to_owned()),
+    }
+}
+
+/// The parser of `--env`: clap's own error for a value parser repeats the refused text, so this one reports without it.
+#[derive(Clone, Copy, Debug)]
+pub struct EnvParser;
+
+impl clap::builder::TypedValueParser for EnvParser {
+    type Value = EnvVar;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<EnvVar, clap::Error> {
+        let option = arg.map_or_else(|| "--env".to_owned(), |arg| format!("--{}", arg.get_id()));
+        value
+            .to_str()
+            .ok_or_else(|| ENV_USAGE.to_owned())
+            .and_then(parse_env)
+            .map_err(|message| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::InvalidValue,
+                    format!(
+                        "invalid {option}: {message}
+"
+                    ),
+                )
+                .with_cmd(cmd)
+            })
     }
 }
 
 /// The variables of repeated `--env KEY=VALUE` options; a later one of the same key wins.
 #[must_use]
-pub fn env_map(pairs: Vec<(String, String)>) -> BTreeMap<String, String> {
-    pairs.into_iter().collect()
+pub fn env_map(vars: Vec<EnvVar>) -> BTreeMap<String, String> {
+    vars.into_iter().map(|var| (var.name, var.value)).collect()
 }
 
 /// Runs one `agent settings` subcommand.
@@ -185,16 +238,33 @@ fn cleared_line(cleared: &KindSettingsCleared) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_env;
+    use super::{EnvVar, parse_env};
+
+    fn var(name: &str, value: &str) -> EnvVar {
+        EnvVar {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        }
+    }
 
     #[test]
     fn an_env_option_splits_at_the_first_equals_sign() {
-        assert_eq!(
-            parse_env("URL=a=b"),
-            Ok(("URL".to_owned(), "a=b".to_owned()))
-        );
-        assert_eq!(parse_env("EMPTY="), Ok(("EMPTY".to_owned(), String::new())));
+        assert_eq!(parse_env("URL=a=b"), Ok(var("URL", "a=b")));
+        assert_eq!(parse_env("EMPTY="), Ok(var("EMPTY", "")));
         assert!(parse_env("NOVALUE").is_err());
         assert!(parse_env("=value").is_err());
+    }
+
+    #[test]
+    fn an_env_option_never_shows_its_value() {
+        const VALUE: &str = "placeholder-debug-3e8c";
+        let parsed = parse_env(&format!("API_TOKEN={VALUE}")).unwrap();
+        let shown = format!("{parsed:?}");
+        assert!(
+            shown.contains("API_TOKEN") && !shown.contains(VALUE),
+            "{shown}"
+        );
+        let refused = parse_env(&format!("={VALUE}")).unwrap_err();
+        assert!(!refused.contains(VALUE), "{refused}");
     }
 }

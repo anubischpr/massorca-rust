@@ -367,8 +367,8 @@ pub struct AgentStartArgs {
     pub chat: bool,
     /// A variable set in the run, repeatable. It replaces the kind's standing variable of the same name (`agent
     /// settings`, decision 0174).
-    #[arg(long = "env", value_name = "KEY=VALUE", value_parser = agent_settings::parse_env)]
-    pub env: Vec<(String, String)>,
+    #[arg(long = "env", value_name = "KEY=VALUE", value_parser = agent_settings::EnvParser)]
+    pub env: Vec<agent_settings::EnvVar>,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
