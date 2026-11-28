@@ -8,7 +8,7 @@ use crate::model::morph::{MorphFrame, ease, incoming, outgoing};
 use crate::model::navigation::Mode;
 use crate::model::rail::{RailEntry, RailItem, rail_items, theme_label};
 use crate::model::roving::{FocusStep, step};
-use crate::model::shell::{Agent, UsageModel, UsageStatus};
+use crate::model::shell::{Agent, UsageControl, UsageModel, UsageStatus, UsageWindowLine};
 use crate::model::shell_state::ShellModel;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Div, FocusHandle, IntoElement, KeyDownEvent,
@@ -16,8 +16,10 @@ use gpui::{
     size, svg,
 };
 use massorca_ui::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use massorca_ui::components::button::{Button, ButtonSize};
 use massorca_ui::components::popover::{Popover, PopoverPlacement, PopoverVariant, PopoverWidth};
 use massorca_ui::components::skeleton::{LineWidth, Skeleton};
+use massorca_ui::components::switch::Switch;
 use massorca_ui::components::usage_ring::{UsageReading, UsageRing, UsageSlot, usage_name};
 use massorca_ui::style::{FocusRing, Surface};
 use massorca_ui::tokens::{
@@ -444,14 +446,24 @@ fn usage_ring(
         .title("Usage")
         .trigger_focus(handle.clone())
         .on_dismiss(move |_, cx| change(&dismiss, cx, |shell| shell.model.close_usage_popover()))
-        .child(usage_popover_body(usage, theme))
+        .child(usage_popover_body(usage, position, shell, theme))
         .into_any_element()
 }
 
-/// The popover's rows: the agent, the reading or the state it is in, when the window resets, and
-/// the plan (D-SH-15).
-fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
+/// The popover's rows: the agent and its account, the reading or the state it is in, a failed read, each limit window,
+/// when it was read, a refresh of its account, and the usage switch (D-SH-15, ACC-09, ACC-10, ACC-15).
+fn usage_popover_body(
+    usage: &UsageModel,
+    position: usize,
+    shell: &WeakEntity<Shell>,
+    theme: &Theme,
+) -> Div {
     let kind = agent_kind(usage.agent);
+    let who = if usage.label.is_empty() {
+        kind.label().to_string()
+    } else {
+        format!("{} · {}", kind.label(), usage.label)
+    };
     let agent = div()
         .flex()
         .flex_row()
@@ -460,11 +472,13 @@ fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
         .text_style(TYPE_BODY)
         .text_color(theme.palette.text.primary)
         .child(AgentIcon::new(kind).size(AgentIconSize::Small))
-        .child(kind.label());
-    let body = div().flex().flex_col().gap(px(SPACE_1)).child(agent);
-    let body = match usage.status.headline() {
+        .child(who);
+    let mut body = div().flex().flex_col().gap(px(SPACE_1)).child(agent);
+    body = match usage.status.headline() {
         Some(headline) => body.child(
             div()
+                .id(SharedString::from(format!("usage-headline-{position}")))
+                .debug_selector(|| "usage-headline".to_owned())
                 .text_style(TYPE_BODY)
                 .text_color(theme.palette.text.primary)
                 .child(headline),
@@ -473,16 +487,91 @@ fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
             .child(Skeleton::line(LineWidth::Full))
             .child(Skeleton::line(LineWidth::Partial)),
     };
-    if !matches!(usage.status, UsageStatus::Percent(_)) {
-        return body;
+    if let Some(error) = &usage.error {
+        body = body.child(
+            div()
+                .id(SharedString::from(format!("usage-error-{position}")))
+                .debug_selector(|| "usage-error".to_owned())
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.status.danger_fg)
+                .child(error.clone()),
+        );
     }
-    let body = if usage.resets_in.is_empty() {
-        body
-    } else {
-        body.child(usage_row(format!("Resets in {}", usage.resets_in), theme))
-    };
-    // D-SH-15 lists a Plan row; the usage data does not carry the plan name yet.
-    body.child(usage_row("Plan not reported", theme))
+    for (index, line) in usage.windows.iter().enumerate() {
+        body = body.child(usage_window_row(line, position, index, theme));
+    }
+    if !usage.read_text.is_empty() {
+        body = body.child(usage_row(format!("Read {}", usage.read_text), theme));
+    }
+    if usage.windows.is_empty() && matches!(usage.status, UsageStatus::Percent(_)) {
+        // A reading with a percent and no windows, as the sample data gives.
+        if !usage.resets_in.is_empty() {
+            body = body.child(usage_row(format!("Resets in {}", usage.resets_in), theme));
+        }
+        // D-SH-15 lists a Plan row; the usage data does not carry the plan name yet.
+        body = body.child(usage_row("Plan not reported", theme));
+    }
+    if let Some(account) = &usage.account {
+        let shell = shell.clone();
+        let (kind_name, account_id) = (account.kind.clone(), account.account.clone());
+        body = body.child(
+            Button::new(
+                SharedString::from(format!("usage-refresh-{position}")),
+                "Refresh",
+            )
+            .size(ButtonSize::Compact)
+            .on_click(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.refresh_usage(kind_name.clone(), account_id.clone(), cx);
+                });
+            }),
+        );
+    }
+    if let UsageControl::Switch { on } = usage.control {
+        let shell = shell.clone();
+        body = body.child(
+            div()
+                .id(SharedString::from(format!("usage-switch-row-{position}")))
+                .debug_selector(|| "usage-switch".to_owned())
+                .flex()
+                .flex_col()
+                .w_full()
+                .child(
+                    Switch::new(SharedString::from(format!("usage-switch-{position}")), on)
+                        .label("Usage on this computer")
+                        .on_change(move |checked, _, cx| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.set_usage_enabled(checked, cx);
+                            });
+                        }),
+                ),
+        );
+    }
+    body
+}
+
+/// One limit window's row: its name, what it holds, when it resets, and a limit reached (ACC-09, ACC-10).
+fn usage_window_row(
+    line: &UsageWindowLine,
+    position: usize,
+    index: usize,
+    theme: &Theme,
+) -> impl IntoElement {
+    let mut text = format!("{}: {}", line.title, line.value);
+    if !line.resets.is_empty() {
+        text = format!("{text} · {}", line.resets);
+    }
+    if line.limited {
+        text = format!("{text} · limit reached");
+    }
+    div()
+        .id(SharedString::from(format!(
+            "usage-window-{position}-{index}"
+        )))
+        .debug_selector(move || format!("usage-window-{position}-{index}"))
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.secondary)
+        .child(text)
 }
 
 /// One caption row of the usage popover: "Resets in 2 days", "Plan" (D-SH-15).
@@ -500,11 +589,11 @@ fn usage_reading(status: UsageStatus) -> UsageReading {
         UsageStatus::Loading => UsageReading::Loading,
         UsageStatus::NotReported => UsageReading::NotReported,
         UsageStatus::Unavailable => UsageReading::Unavailable,
+        UsageStatus::Off => UsageReading::NotReported,
+        UsageStatus::NeedsNewerService => UsageReading::Unavailable,
         UsageStatus::Failed { last } => UsageReading::Failed {
             last: last.map(f32::from),
         },
-        UsageStatus::Off => UsageReading::NotReported,
-        UsageStatus::NeedsNewerService => UsageReading::Unavailable,
     }
 }
 

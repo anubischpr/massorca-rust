@@ -55,6 +55,7 @@ mod teams;
 mod title_bar;
 mod tooltip;
 mod transcript_rows;
+mod usage_sidebar;
 mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
@@ -181,6 +182,8 @@ mod tests;
 mod title_bar_tests;
 #[cfg(test)]
 mod ui_state_tests;
+#[cfg(test)]
+mod usage_sidebar_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
