@@ -10,6 +10,7 @@ mod room_mention;
 mod room_quote;
 mod room_reply;
 mod room_reply_end;
+mod room_route;
 mod room_schedule;
 mod room_typing;
 mod routine_run;

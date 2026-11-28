@@ -34,6 +34,7 @@ use crate::registry::RegistrationHandle;
 use super::room_card::{self, card_lines, card_view};
 use super::room_mention::{self, Mentions, Projects};
 use super::room_reply::{self, Conversation};
+use super::room_route;
 use super::room_schedule::{Moment, scheduled_moment};
 use super::routines::{HostZone, add_routine, routine_view};
 use super::task::{create_task, view_of};
@@ -132,7 +133,7 @@ pub(super) struct Start {
 
 impl Start {
     /// Whether the caller holds host-admin scope, which a routine it schedules keeps for its runs (decision 0071).
-    fn admin(&self) -> bool {
+    pub(super) fn admin(&self) -> bool {
         matches!(self.grant, SecretGrant::Provide)
     }
 }
@@ -173,6 +174,7 @@ async fn post(ctx: RequestCtx, params: TeamRoomPostParams) -> Result<TeamRoomPos
                     to: params.to.clone(),
                     reply_to: params.reply_to.clone(),
                     ask: params.ask,
+                    route: params.route,
                 }),
                 start: Start {
                     workspaces: for_mutation(&ctx).await?,
@@ -259,6 +261,8 @@ struct PersonAsk {
     to: Option<String>,
     reply_to: Option<String>,
     ask: Option<bool>,
+    /// The routing query places a line nothing else addresses (AUTO-13).
+    route: Option<bool>,
 }
 
 /// Stores a person's line, makes it a task for the bot it names (else `to`, else the lead, else the only bot), starts
@@ -317,15 +321,19 @@ fn person_line(
     }
     // A task asked in reply to a bot's line goes to that bot unless the line names another.
     let receiver = room_quote::replied_bot(&bots, quoted.as_ref()).or(to.as_ref());
+    let room = Room {
+        store,
+        agents,
+        team,
+        bots: &bots,
+        saved: &Cell::new(false),
+    };
+    if asked.route == Some(true) && receiver.is_none() && mentioned_bot(&bots, &text).is_none() {
+        return room_route::route(&room, start, new_line(team, None, text, None), changes);
+    }
     match addressed_bot(&bots, &text, receiver) {
         Some(bot) => deliver(
-            &Room {
-                store,
-                agents,
-                team,
-                bots: &bots,
-                saved: &Cell::new(false),
-            },
+            &room,
             start,
             bot,
             Request {
