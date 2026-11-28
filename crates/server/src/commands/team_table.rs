@@ -446,5 +446,11 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             "team.delegation_list",
             selector("team"),
         ),
+        command(
+            "team.delegation.tree",
+            "Show a task's delegation tree",
+            "team.delegation_tree",
+            selector("task"),
+        ),
     ]
 }
