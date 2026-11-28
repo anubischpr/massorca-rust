@@ -51,6 +51,12 @@ pub fn check(route: &SshRoute, record: &HostRecord) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The checks of a route that need no host record: the target and the ssh options.
+pub fn check_options(route: &SshRoute) -> Result<(), CliError> {
+    stdio_forward_arguments(&route.ssh_target, &route.ssh_args, "127.0.0.1:7347")?;
+    Ok(())
+}
+
 /// One line on how `host` is dialed.
 pub fn route_line(host: &str, route: Option<&SshRoute>, record: &HostRecord) -> String {
     match route {
