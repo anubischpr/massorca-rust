@@ -157,6 +157,14 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(host::ports::execute(&target, autostart, output))
         }
+        // The host is NAME, so `--host` is refused as for the other `host` commands.
+        Commands::Host {
+            command: HostCommand::Forward(args),
+        } => {
+            globals.local_only("host forward")?;
+            let target = Target::new(globals.profile()?, Some(args.name.clone()));
+            block_on(host::forward::execute(&target, &args, output))
+        }
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))

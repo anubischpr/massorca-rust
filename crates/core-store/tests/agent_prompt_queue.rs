@@ -54,6 +54,7 @@ fn queue(store: &Store, session: &str, text: &str, request_id: Option<&str>) -> 
             request_id: request_id.map(str::to_owned),
             at: 10,
             host_admin: false,
+            attachments_json: "[]".to_owned(),
         })
         .unwrap()
 }
@@ -119,6 +120,7 @@ fn a_request_id_is_unique_within_its_session_only() {
         request_id: Some("req-1".to_owned()),
         at: 11,
         host_admin: false,
+        attachments_json: "[]".to_owned(),
     });
     assert_conflict(
         again.map(|_| ()),
@@ -139,6 +141,7 @@ fn a_request_id_is_unique_within_its_session_only() {
         request_id: Some("req-1".to_owned()),
         at: 11,
         host_admin: false,
+        attachments_json: "[]".to_owned(),
     });
     assert!(
         elsewhere.is_ok(),
@@ -281,6 +284,7 @@ fn a_prompt_must_belong_to_a_session() {
         request_id: None,
         at: 1,
         host_admin: false,
+        attachments_json: "[]".to_owned(),
     });
     assert!(
         matches!(orphan, Err(StoreError::Constraint { .. })),
@@ -299,6 +303,7 @@ fn a_queued_prompt_keeps_whether_its_caller_held_host_admin() {
             request_id: None,
             at: 10,
             host_admin: true,
+            attachments_json: "[]".to_owned(),
         })
         .unwrap();
 
@@ -346,4 +351,34 @@ fn delivered_request_ids_are_kept_up_to_the_limit_per_session() {
         store.find_delivered_request(&session, "req-3").unwrap(),
         Some(4)
     );
+}
+
+#[test]
+fn a_queued_prompt_keeps_the_attachments_it_was_queued_with() {
+    let (store, session) = store_with_session();
+    let attached = store
+        .insert_queued_prompt(&NewQueuedPrompt {
+            id: new_id(),
+            session_id: session.clone(),
+            text: "look".to_owned(),
+            request_id: None,
+            at: 10,
+            host_admin: false,
+            attachments_json: r#"["notes/a.txt","shots/b.png"]"#.to_owned(),
+        })
+        .unwrap();
+    let plain = queue(&store, &session, "plain", None);
+    assert_eq!(
+        attached.attachments_json,
+        r#"["notes/a.txt","shots/b.png"]"#
+    );
+    assert_eq!(plain.attachments_json, "[]");
+    let listed = store.list_queued_prompts(&session).unwrap();
+    assert_eq!(listed[0].attachments_json, attached.attachments_json);
+    assert_eq!(listed[1].attachments_json, "[]");
+    let found = store
+        .get_queued_prompt(&attached.id)
+        .unwrap()
+        .expect("the prompt is stored");
+    assert_eq!(found.attachments_json, attached.attachments_json);
 }

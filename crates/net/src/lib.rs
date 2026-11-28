@@ -2,6 +2,7 @@
 //! frame transport. Only this crate handles keys, certificates and TLS configuration.
 
 mod error;
+mod forward_splice;
 mod frames;
 mod identity;
 mod log_guard;
@@ -12,6 +13,7 @@ mod trace_log;
 mod transport;
 
 pub use error::NetError;
+pub use forward_splice::{SpliceEnd, SpliceLimits, SpliceReport, splice};
 pub use frames::{
     Keepalive, PreAuthGate, PreAuthOpener, pre_auth_gate, spawn_frame_tasks,
     spawn_gated_frame_tasks,

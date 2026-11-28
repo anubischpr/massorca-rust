@@ -394,6 +394,17 @@ fn declare_fast_kind(home: &Path) {
     std::fs::write(dir.join("fast-fake.json"), kind).expect("the kind file");
 }
 
+/// Declares kind `model-fake`: the shell again, resumable by an assigned ref, with two models and no live model command.
+fn declare_resumable_model_kind(home: &Path) {
+    let dir = profile(home).dir().join("agents").join("kinds");
+    std::fs::create_dir_all(&dir).expect("the kinds folder");
+    let program = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let kind = format!(
+        r#"{{"id":"model-fake","name":"Model fake agent","program":["{program}"],"session_ref":{{"assign":["--session-id","{{ref}}"]}},"resume":["--resume","{{ref}}"],"model":{{"flag":"--model","choices":[{{"id":"fast-model","label":"Fast model","default":true}},{{"id":"plain-model","label":"Plain model"}}]}}}}"#
+    );
+    std::fs::write(dir.join("model-fake.json"), kind).expect("the kind file");
+}
+
 /// Folds the bridge's updates into `state`, as the store does, until `done` holds.
 async fn fold_until(
     updates: &mut UnboundedReceiver<StoreUpdate>,
@@ -996,6 +1007,71 @@ async fn a_fast_start_carries_fast_to_the_session_only_when_the_kind_and_model_t
 }
 
 #[tokio::test]
+async fn a_running_sessions_model_changes_for_its_next_resume_through_the_bridge() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_resumable_model_kind(home.path());
+    let service = start_service(home.path()).await;
+    let (bridge, mut updates, mut state) =
+        bridge_with_detected_kind(home.path(), "model-fake").await;
+    fold_until(
+        &mut updates,
+        &mut state,
+        "the live options capability",
+        |s| s.agent_options_live,
+    )
+    .await;
+    let handle = bridge.handle();
+    let workspace = add_workspace(&handle, &repo_dir).await;
+    let session = handle
+        .agent_start(AgentStartParams {
+            kind: "model-fake".to_owned(),
+            read_only: true,
+            ..fake_start_params(&workspace.id)
+        })
+        .await
+        .expect("the session starts");
+
+    // The kind declares no live model command, so the change waits for the next resume and is stored at once.
+    let set = handle
+        .agent_set_options(massorca_protocol::methods::agents::AgentSetOptionsParams {
+            session: session.id.clone(),
+            model: Some("plain-model".to_owned()),
+            effort: None,
+            fast: None,
+        })
+        .await
+        .expect("the change is accepted");
+    assert_eq!(
+        set.applied.model,
+        Some(massorca_protocol::methods::agents::OptionApplied::NextResume)
+    );
+    assert_eq!((set.applied.effort, set.applied.fast), (None, None));
+    fold_until(&mut updates, &mut state, "the stored model", |s| {
+        s.agents.iter().any(|agent| {
+            agent.id == session.id && agent.meta.model.as_deref() == Some("plain-model")
+        })
+    })
+    .await;
+
+    // An effort the kind declares no flag for is refused as agent.start refuses it.
+    let refused = handle
+        .agent_set_options(massorca_protocol::methods::agents::AgentSetOptionsParams {
+            session: session.id.clone(),
+            model: None,
+            effort: Some("high".to_owned()),
+            fast: None,
+        })
+        .await
+        .expect_err("an effort the kind does not take is refused");
+    assert_eq!(refused.code(), Some(codes::AGENT_OPTION_UNSUPPORTED));
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
 async fn a_folder_projects_second_start_runs_in_its_folder_beside_the_first() {
     let home = temp_home();
     let folder = home.path().with_file_name("notes");
@@ -1137,6 +1213,7 @@ fn base_agent_prompt_params() -> massorca_protocol::methods::agents::AgentPrompt
         session: String::new(),
         text: "again".to_owned(),
         force: false,
+        attachments: Vec::new(),
     }
 }
 
