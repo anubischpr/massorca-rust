@@ -51,6 +51,7 @@ mod tasks;
 mod team_delegate;
 mod team_project_code;
 mod team_room;
+mod team_room_mentions;
 mod teams;
 mod terminal_secrets;
 mod terminal_wait;

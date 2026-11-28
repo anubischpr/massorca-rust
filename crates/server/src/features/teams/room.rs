@@ -61,6 +61,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::TEAM_ROOM_REPLIES, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::TEAM_ROOM_ROUTING, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            team_room::ROOM_RESOLVE,
+            capabilities::TEAM_ROOM_ROUTING,
+            Permission::Read,
+            super::room_mention::resolve_line,
+        )?,
         methods.register(
             Owner::Core,
             team_room::ROOM_LIST,

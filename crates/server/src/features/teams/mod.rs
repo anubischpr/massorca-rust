@@ -6,6 +6,7 @@ mod bot;
 mod memory;
 mod room;
 mod room_card;
+mod room_mention;
 mod room_quote;
 mod room_reply;
 mod room_reply_end;
