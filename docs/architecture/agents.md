@@ -244,6 +244,24 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
   another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
   `agent.credentials_invalid`.
 
+## Account credential access (decision 0176)
+
+`Agents::with_account_credential(kind, account, |secret| ...)` lends one account's credential file (the kind's first
+required file) to a closure as a `Secret` and returns only the closure's value. No wire method exposes it; the usage
+feature calls it in process.
+
+- Gate: only while the global setting `usage.enabled` is on (`AgentsConfig.usage_gate`, asked at every call; default
+  off). Off, it returns `UsageDisabled` before touching the store or the disk.
+- Checks: those of showing credentials and launch, through the same functions: a known kind, an account row of that
+  kind, `usable_account_home` (no link from `<profile>/agents` to the home), and a regular file opened without following
+  a link, at most 1 MiB, UTF-8. The homes lock is held for the read only, never while the closure runs.
+- Secret: zeroed on drop, `Debug` is `[redacted]`, no `Display`, `Serialize` or `Clone`; never logged, never in argv,
+  a child's environment or a protocol type.
+- Endpoint: `vendor_endpoint::official_origin(kind)` (`https://api.anthropic.com` for `claude`, `https://chatgpt.com`
+  for `codex`, none otherwise; a kind with none is refused) and `vendor_endpoint::check_url(kind, url)`, which the
+  caller runs before every request carrying the secret. Tests may point a kind at a loopback origin through
+  `vendor_endpoint::test_hooks` (`cfg(test)` or the `test-hooks` feature only).
+
 ## Session record (`AgentSession`)
 
 | Field | Meaning |
