@@ -74,6 +74,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::SERVICE,
             capabilities::SERVICES,
             capabilities::SKILLS_PLACE,
+            capabilities::SKILLS_PLACE_SCOPES,
             capabilities::SKILLS,
             capabilities::TEAM_ROOM,
             capabilities::TEAM_ROOM_CARDS,

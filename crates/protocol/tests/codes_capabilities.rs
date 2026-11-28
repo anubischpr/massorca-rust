@@ -220,6 +220,7 @@ fn capability_names_match_the_contract() {
     );
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
+    assert_eq!(capabilities::SKILLS_PLACE_SCOPES, "skills-place/2");
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");

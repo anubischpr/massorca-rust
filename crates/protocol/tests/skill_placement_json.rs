@@ -76,3 +76,60 @@ fn the_place_params_take_agent_ids_and_an_unplace_without_agents_means_all() {
         serde_json::from_value(json!({"name": "notes"})).expect("decodes");
     assert!(unplace.agents.is_empty());
 }
+
+#[test]
+fn the_scope_is_global_when_a_client_sends_none() {
+    let params: SkillPlaceParams =
+        serde_json::from_value(json!({"skill_id": "abc", "agents": ["codex"]})).expect("decodes");
+
+    assert_eq!(params.target.scope, wire::PlacementScope::Global);
+    assert_eq!(params.target.workspace_id, None);
+}
+
+#[test]
+fn a_workspace_scope_names_its_workspace_and_a_newer_scope_decodes_as_unknown() {
+    let params: SkillPlaceParams = serde_json::from_value(json!({
+        "skill_id": "abc",
+        "agents": ["cursor"],
+        "scope": "workspace",
+        "workspace_id": "ws-1"
+    }))
+    .expect("decodes");
+    assert_eq!(params.target.scope, wire::PlacementScope::Workspace);
+    assert_eq!(params.target.workspace_id.as_deref(), Some("ws-1"));
+
+    let newer: SkillPlaceParams = serde_json::from_value(json!({
+        "skill_id": "abc",
+        "agents": ["cursor"],
+        "scope": "folder"
+    }))
+    .expect("decodes");
+    assert_eq!(newer.target.scope, wire::PlacementScope::Unknown);
+}
+
+#[test]
+fn the_agent_switch_names_its_agents_to_add_and_to_drop_and_its_method_and_capability() {
+    let params: wire::SkillAgentsParams =
+        serde_json::from_value(json!({"name": "notes", "add": ["cursor"], "drop": ["claude"]}))
+            .expect("decodes");
+
+    assert_eq!(params.add, [PlacementAgent::Cursor]);
+    assert_eq!(params.drop, [PlacementAgent::Claude]);
+    assert_eq!(params.target.scope, wire::PlacementScope::Global);
+    assert_eq!(wire::AGENTS, "skills.agents");
+    assert_eq!(capabilities::SKILLS_PLACE_SCOPES, "skills-place/2");
+}
+
+#[test]
+fn a_managed_skill_names_its_workspace_only_when_it_has_one() {
+    let workspace: wire::ManagedSkill =
+        serde_json::from_value(json!({"name": "notes", "agents": [], "workspace_id": "ws-1"}))
+            .expect("decodes");
+    assert_eq!(workspace.workspace_id.as_deref(), Some("ws-1"));
+
+    let global: wire::ManagedSkill =
+        serde_json::from_value(json!({"name": "notes", "agents": []})).expect("decodes");
+    assert_eq!(global.workspace_id, None);
+    let value: Value = serde_json::to_value(&global).expect("encodes");
+    assert!(value.get("workspace_id").is_none());
+}
