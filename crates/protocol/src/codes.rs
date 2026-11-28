@@ -27,6 +27,8 @@ pub const PATH_NOT_DIRECTORY: &str = "path.not_directory";
 pub const PROJECT_NOT_FOUND: &str = "project.not_found";
 pub const PROJECT_EXISTS: &str = "project.exists";
 pub const PROJECT_NOT_GIT: &str = "project.not_git";
+/// The folder is already a git repository, or inside one, or already a git project (decision 0115).
+pub const PROJECT_ALREADY_GIT: &str = "project.already_git";
 pub const PROJECT_HAS_WORKSPACES: &str = "project.has_workspaces";
 pub const WORKSPACE_NOT_FOUND: &str = "workspace.not_found";
 pub const WORKSPACE_NAME_TAKEN: &str = "workspace.name_taken";
@@ -38,6 +40,9 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// Delegated children run in workspaces of their own under this one; removal needs `with_children` (decision 0110).
+/// `data.children` names them.
+pub const WORKSPACE_HAS_CHILDREN: &str = "workspace.has_children";
 /// Skill placement (SKL-02): a folder for the skill already holds one MassOrca did not place.
 pub const SKILL_NAME_TAKEN: &str = "skill.name_taken";
 /// Skill placement (SKL-02): the skill changed since MassOrca placed it; remove the placed copies first.

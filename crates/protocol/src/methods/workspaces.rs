@@ -69,6 +69,11 @@ pub struct WorkspaceCreateParams {
     /// `branch` or `existing_branch`, whose branch is the person's (`workspace-rename/1`, decision 0111).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub name_generated: bool,
+    /// The project's own checkout is the workspace: no worktree and no branch is made, and removal only forgets the row
+    /// (decision 0112, `workspace-in-place/1`). Takes none of `branch`, `base`, `existing_branch`, `refresh_base`, `path`,
+    /// `unique_name` or `name_generated`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_place: bool,
 }
 
 /// Params of `workspace.list`.
@@ -130,6 +135,10 @@ pub struct WorkspaceRemoveParams {
     /// Forgets a row whose directory git does not recognise as its worktree; the directory stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_orphan: bool,
+    /// Removes the workspaces of delegated children first, deepest first, each with the same checks and waivers
+    /// (decision 0110). Without it a workspace with child workspaces is refused with `workspace.has_children`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_children: bool,
     /// Removes the worktree even when its archive script fails or times out (decision 0095).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_failed_archive: bool,
@@ -146,6 +155,9 @@ pub struct WorkspaceRemoved {
     /// git does not register as a worktree. Absent (false) when the directory was removed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub directory_kept: bool,
+    /// The delegated children's workspaces removed first under `with_children`, deepest first. Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_children: Vec<WorkspaceRemoved>,
     /// What became of the project's archive script; absent when there is none or the workspace is a folder (0095).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<WorkspaceArchive>,
@@ -253,6 +265,9 @@ pub struct Workspace {
     /// The service chose the name (decision 0111), so `workspace.rename` may replace it; a typed name is never renamed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub name_generated: bool,
+    /// The project's own checkout, registered by `workspace.create` with `in_place` (decision 0112): removal only forgets it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_place: bool,
 }
 
 /// What a create did with the project's setup script. A setup that cannot start never fails the create.

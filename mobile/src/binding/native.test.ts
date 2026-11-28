@@ -40,6 +40,36 @@ const workspaceRecord: Rust.WorkspaceSummary = {
   missing: false,
 };
 
+const teamRecord: Rust.TeamSummary = { id: 't-1', name: 'alpha' };
+
+const botRecord: Rust.BotSummary = { id: 'b-1', teamId: 't-1', name: 'mara', lead: true };
+
+const routineRecord: Rust.RoutineSummary = {
+  id: 'r-1',
+  teamId: 't-1',
+  botId: 'b-1',
+  name: 'morning',
+  cadence: 'weekly',
+  time: '09:00',
+  weekday: 'monday',
+  monthDay: undefined,
+  runDate: undefined,
+  zone: 'Europe/Madrid',
+  paused: false,
+  nextRunAtMs: 1_800_000_000_000n,
+  createdAtMs: 1n,
+};
+
+const runRecord: Rust.RoutineRunSummary = {
+  id: 'run-1',
+  routineId: 'r-1',
+  scheduledForMs: 1_799_000_000_000n,
+  taskId: undefined,
+  error: 'bot removed: the routine has no bot to run',
+  errorCode: 'bot.not_found',
+  createdAtMs: 1_799_000_000_500n,
+};
+
 const terminalRecord: Rust.TerminalSummary = {
   id: 'term-1',
   workspaceId: 'ws-1',
@@ -202,6 +232,8 @@ class FakeHost implements RustHost {
   readonly gitStatusArgs: string[] = [];
   readonly gitWatchArgs: string[] = [];
   readonly agentWatchArgs: (string | undefined)[] = [];
+  /** The routine calls in order, as `verb team routine`. */
+  readonly routineCalls: string[] = [];
   readonly gitWatches: ScriptedWatch<RustGitEvent>[] = [];
   readonly agentWatches: ScriptedWatch<RustAgentEvent>[] = [];
   readonly attachArgs: [string, number, number][] = [];
@@ -232,6 +264,47 @@ class FakeHost implements RustHost {
     this.failures.check('workspaces');
     this.workspaceArgs.push(project);
     return [workspaceRecord];
+  }
+
+  async teams(): Promise<Rust.TeamSummary[]> {
+    this.failures.check('teams');
+    return [teamRecord];
+  }
+
+  async teamBots(team: string): Promise<Rust.BotSummary[]> {
+    this.failures.check('teamBots');
+    this.routineCalls.push(`bots ${team}`);
+    return [botRecord];
+  }
+
+  async teamRoutines(team: string): Promise<Rust.RoutineSummary[]> {
+    this.failures.check('teamRoutines');
+    this.routineCalls.push(`routines ${team}`);
+    return [routineRecord];
+  }
+
+  async routineRuns(team: string, routine: string, limit: number | undefined): Promise<Rust.RoutineRunSummary[]> {
+    this.failures.check('routineRuns');
+    this.routineCalls.push(`runs ${team} ${routine} ${limit ?? 'default'}`);
+    return [runRecord];
+  }
+
+  async pauseRoutine(team: string, routine: string): Promise<Rust.RoutineSummary> {
+    this.failures.check('pauseRoutine');
+    this.routineCalls.push(`pause ${team} ${routine}`);
+    return { ...routineRecord, paused: true, nextRunAtMs: undefined };
+  }
+
+  async resumeRoutine(team: string, routine: string): Promise<Rust.RoutineSummary> {
+    this.failures.check('resumeRoutine');
+    this.routineCalls.push(`resume ${team} ${routine}`);
+    return routineRecord;
+  }
+
+  async runRoutine(team: string, routine: string): Promise<Rust.RoutineRunSummary> {
+    this.failures.check('runRoutine');
+    this.routineCalls.push(`run ${team} ${routine}`);
+    return runRecord;
   }
 
   async terminals(workspace: string | undefined): Promise<Rust.TerminalSummary[]> {
@@ -436,6 +509,33 @@ describe('createNativeBinding', () => {
       truncated: false,
     });
     expect(client.host.gitStatusArgs).toEqual(['ws-1']);
+  });
+
+  it('reads the teams, bots and routines of a host, with the newest runs of a routine', async () => {
+    const { binding, client } = harness();
+    const host = await binding.connect('home-pc');
+
+    expect(await host.teams()).toEqual([teamRecord]);
+    expect(await host.teamBots('t-1')).toEqual([botRecord]);
+    expect(await host.teamRoutines('t-1')).toEqual([routineRecord]);
+    expect(await host.routineRuns('t-1', 'r-1', 1)).toEqual([runRecord]);
+    expect(await host.routineRuns('t-1', 'r-1')).toEqual([runRecord]);
+    expect(client.host.routineCalls).toEqual(['bots t-1', 'routines t-1', 'runs t-1 r-1 1', 'runs t-1 r-1 default']);
+  });
+
+  it('pauses, resumes and runs a routine, and reports a refused change as the app error', async () => {
+    const { binding, client, failures } = harness();
+    const host = await binding.connect('home-pc');
+
+    expect(await host.pauseRoutine('t-1', 'r-1')).toEqual({ ...routineRecord, paused: true, nextRunAtMs: undefined });
+    expect(await host.resumeRoutine('t-1', 'r-1')).toEqual(routineRecord);
+    expect(await host.runRoutine('t-1', 'r-1')).toEqual(runRecord);
+    expect(client.host.routineCalls).toEqual(['pause t-1 r-1', 'resume t-1 r-1', 'run t-1 r-1']);
+
+    failures.fail('pauseRoutine', generated('Remote', { code: 'team.routine_not_found', message: 'no routine' }));
+    await expect(host.pauseRoutine('t-1', 'r-1')).rejects.toMatchObject({
+      error: { tag: 'Remote', code: 'team.routine_not_found', message: 'no routine' },
+    });
   });
 
   it('lists the terminals of one workspace, or of every workspace, with their state and title', async () => {

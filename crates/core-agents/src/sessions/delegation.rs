@@ -579,6 +579,7 @@ impl Agents {
         }
         let create = |name: String| {
             workspaces.create_workspace(WorkspaceCreateParams {
+                in_place: false,
                 project: parent.project_id.clone(),
                 name,
                 branch: None,
@@ -1473,6 +1474,7 @@ then report"
             .unwrap();
         let lead = workspaces
             .create_workspace(WorkspaceCreateParams {
+                in_place: false,
                 project: project.id.clone(),
                 name: "lead".to_owned(),
                 branch: None,

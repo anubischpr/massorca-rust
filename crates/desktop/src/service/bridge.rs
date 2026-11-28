@@ -1200,10 +1200,15 @@ impl Link {
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }
+            // The event names the kind; its whole account list is read again. The kinds are read again too: an account
+            // change moves a kind's `imported` mark, and a background model listing is announced under this topic so a
+            // model choice shows its versioned label (decision 0166, amendment).
             TOPIC_ACCOUNTS_CHANGED => {
-                // The event names the kind; its whole list is read again.
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
-                return Outcome::Continue;
+                agents::list_kinds(client).await.map(|kinds| {
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
+                    StoreUpdate::AgentKindsResync(kinds)
+                })
             }
             // A rename or comment change is read again too: the event names the workspace, not its name.
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
@@ -1338,7 +1343,12 @@ fn spawn_call(
         Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .git_branches(
+                        &massorca_protocol::methods::git::branch::GitBranchesParams {
+                            workspace: Some(workspace),
+                            project: None,
+                        },
+                    )
                     .await
                     .map(|listed| {
                         listed

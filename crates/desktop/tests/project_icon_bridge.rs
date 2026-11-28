@@ -139,6 +139,7 @@ async fn a_project_icon_set_through_the_bridge_reads_back_from_project_list() {
         .id;
     let star = ProjectIcon::Lucide {
         name: "star".to_owned(),
+        color: None,
     };
     handle
         .update_project(ProjectUpdateParams {

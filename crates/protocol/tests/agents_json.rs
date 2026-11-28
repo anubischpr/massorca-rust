@@ -1275,10 +1275,11 @@ fn forget_takes_optional_workspace_removal_and_answers_with_the_session_flattene
             force: true,
             discard_ignored: true,
             expect_dirty: Some(false),
+            allow_failed_archive: true,
         },
         &json!({
             "session": "s1", "remove_workspace": true, "force": true, "discard_ignored": true,
-            "expect_dirty": false
+            "expect_dirty": false, "allow_failed_archive": true
         }),
     );
     let forgotten = AgentForgotten {

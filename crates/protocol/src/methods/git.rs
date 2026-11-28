@@ -8,6 +8,7 @@ pub mod diff;
 pub mod index;
 pub mod log;
 pub mod remote;
+pub mod remotes;
 pub mod status;
 pub mod watch;
 

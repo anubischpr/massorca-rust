@@ -11,6 +11,7 @@ mod conversations;
 mod create;
 mod error;
 mod generated_names;
+mod in_place;
 mod layout;
 mod names;
 mod paths;

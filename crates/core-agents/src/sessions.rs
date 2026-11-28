@@ -123,6 +123,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
+    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment); the kind id. Announced
+    /// as an account change of the kind, so a client reads the kinds again. Watchers do not get it.
+    Models(String),
     /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
     /// of the session do.
     Chat(Box<crate::chat::ChatChanged>),
@@ -343,8 +346,9 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
-    /// The model listings the service keeps (decision 0166), held in memory.
-    models: crate::model_catalog::ModelCache,
+    /// The model listings the service keeps (decision 0166), held in memory. Shared, so a background listing's guard can
+    /// hold it on its own thread.
+    models: Arc<crate::model_catalog::ModelCache>,
     /// The fast mode `agent.set_options` chose for each session, which its next resume launches with (decision 0171). The
     /// model and the effort are stored with the session (decision 0168); fast mode has no column, so it is held here, in
     /// memory: the service forgets it when it stops.
@@ -442,7 +446,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Agents {
     /// The model listings the service keeps (decision 0166).
-    pub(crate) fn model_cache(&self) -> &crate::model_catalog::ModelCache {
+    pub(crate) fn model_cache(&self) -> &Arc<crate::model_catalog::ModelCache> {
         &self.inner.models
     }
 
@@ -466,7 +470,7 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
-                models: crate::model_catalog::ModelCache::default(),
+                models: Arc::default(),
                 chosen_fast: Mutex::new(HashMap::new()),
                 started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
@@ -564,12 +568,14 @@ impl Agents {
     /// Every declared kind, read again from the profile, with programs resolved on the program search (decision 0164).
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
-        let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
-            .views(profile_dir, &self.program_search());
+        let catalog = Catalog::load(self.kind_packages(), profile_dir);
+        let mut kinds = catalog.views(profile_dir, &self.program_search());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
         }
+        // A model the catalog's last listing resolves reads as its version (decision 0166, amendment).
+        self.version_kind_labels(&catalog, &mut kinds);
         AgentKinds { kinds }
     }
 
@@ -3232,6 +3238,7 @@ pub(crate) mod tests {
         };
         store.insert_project(&project).unwrap();
         let workspace = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id.clone(),
             kind: WorkspaceKind::Folder,

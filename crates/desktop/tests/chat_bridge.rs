@@ -257,6 +257,7 @@ async fn a_chat_started_through_the_bridge_streams_answers_an_approval_and_inter
         .expect("the project is added");
     let workspace = handle
         .create_workspace(WorkspaceCreateParams {
+            in_place: false,
             project: project.id,
             ..base_workspace_create_params()
         })
@@ -466,6 +467,7 @@ fn base_workspace_create_params() -> massorca_protocol::methods::workspaces::Wor
         no_setup: false,
         unique_name: false,
         name_generated: false,
+        in_place: false,
     }
 }
 
