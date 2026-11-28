@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::super::Shell;
+use super::room_mentions::{MentionSuggestions, suggestions_row};
 use super::{team_pill, team_shape};
 use crate::model::canvas::Canvas;
 use crate::model::teams::{
@@ -60,6 +61,8 @@ pub(in crate::shell) struct RoomPage {
     /// The room reads asked for, by the service's team id, so each team is read once per open page.
     requested: Option<String>,
     pub(in crate::shell) receiver_menu: Option<OpenReceiverMenu>,
+    /// What the composer's last `@` word can name (AUTO-13).
+    pub(in crate::shell) mentions: MentionSuggestions,
 }
 
 impl fmt::Debug for RoomPage {
@@ -117,6 +120,8 @@ pub(in crate::shell) struct RoomFrame {
     replying: Option<String>,
     /// Whether Just ask is on.
     ask: bool,
+    /// What the composer's last `@` word can name.
+    mentions: Vec<massorca_protocol::methods::team_room::RoomMention>,
     shell: WeakEntity<Shell>,
 }
 
@@ -189,6 +194,7 @@ impl Shell {
                 .filter(|(team, _, _)| *team == team_id && answers_replies)
                 .map(|(_, _, quote)| quote.clone()),
             ask: self.room_page.ask && answers_replies,
+            mentions: self.mentions_of(team_id),
             shell: cx.entity().downgrade(),
         })
     }
@@ -203,6 +209,15 @@ impl Shell {
     ) {
         self.room_page.reply = Some((team, line, quote));
         cx.notify();
+    }
+
+    /// The composer field of `team`'s room, once it has one.
+    pub(in crate::shell) fn room_composer_field(&self, team: TeamId) -> Option<Entity<TextField>> {
+        self.room_page
+            .composer
+            .as_ref()
+            .filter(|composer| composer.team == team)
+            .map(|composer| composer.field.clone())
     }
 
     /// The composer field of `team`'s room; a new team gets a new field.
@@ -225,11 +240,18 @@ impl Shell {
                 .label("Message the team")
                 .placeholder("Ask the team, or name a bot with @")
         });
-        let events = cx.subscribe_in(&field, window, move |shell, _, event, window, cx| {
-            if *event == TextFieldEvent::Submitted {
-                shell.send_room_line(team, window, cx);
-            }
-        });
+        let events =
+            cx.subscribe_in(
+                &field,
+                window,
+                move |shell, field, event, window, cx| match event {
+                    TextFieldEvent::Submitted => shell.send_room_line(team, window, cx),
+                    TextFieldEvent::Changed => {
+                        let text = field.read(cx).text().to_owned();
+                        shell.suggest_mentions(team, &text, cx);
+                    }
+                },
+            );
         self.room_page.composer = Some(RoomComposer {
             team,
             field: field.clone(),
@@ -265,7 +287,8 @@ impl Shell {
         ) else {
             return;
         };
-        let to = receiver(&team_data, self.room_page.picks.get(&team).copied()).and_then(|bot| {
+        let picked = self.room_page.picks.get(&team).copied();
+        let to = receiver(&team_data, picked).and_then(|bot| {
             self.store
                 .read(cx)
                 .state()
@@ -304,7 +327,8 @@ impl Shell {
             start: self.room_page.hold.then_some(false),
             reply_to,
             ask: (self.room_page.ask && replies).then_some(true),
-            route: None,
+            // Without a receiver picked, a host that routes places the line; the lead is only the fallback (AUTO-13).
+            route: (picked.is_none() && !self.room_page.ask).then_some(true),
         };
         cx.spawn(async move |this, cx| {
             let answer = service.post_to_team_room(params).await;
@@ -848,6 +872,7 @@ fn composer(frame: &RoomFrame, ready: bool, theme: &Theme) -> impl IntoElement {
                         }),
                 )
         }))
+        .children(suggestions_row(team, &frame.mentions, &frame.shell, theme))
         .child(frame.field.clone())
         .child(
             div()
@@ -1131,6 +1156,7 @@ mod tests {
         assert_eq!(params.team, "t1");
         assert_eq!(params.text, "Add magic link sign-in");
         assert_eq!(params.to.as_deref(), Some("b2"), "the lead receives it");
+        assert_eq!(params.route, Some(true), "a host that routes places it");
         assert_eq!(params.bot, None);
         assert_eq!(params.start, None, "a task starts at once by default");
         let _ = reply.send(Err(Refusal::Failed {
@@ -1232,6 +1258,7 @@ mod tests {
             Some("b1"),
             "Mara, picked in the composer"
         );
+        assert_eq!(params.route, None, "a picked receiver is not routed");
     }
 
     #[gpui::test]
@@ -1449,5 +1476,50 @@ mod tests {
         assert!(cx.debug_bounds("button:room-reply-Parsed").is_none());
         assert!(cx.debug_bounds("room-ask").is_none());
         assert!(cx.debug_bounds("room-typing").is_none());
+    }
+
+    #[gpui::test]
+    fn an_at_word_asks_what_it_can_name_and_a_picked_mention_replaces_it(cx: &mut TestAppContext) {
+        use massorca_protocol::methods::team_room::{RoomMention, RoomMentionKind, RoomMentions};
+        let (mut rig, cx) = open_room(cx);
+        rig.updates
+            .send(room_read(Vec::new()))
+            .expect("the store listens");
+        cx.run_until_parked();
+        draw(cx);
+        type_line(&rig, cx, "ask @ma");
+        cx.run_until_parked();
+        let Some(Command::Room(RoomCommand::Mentions { params, reply })) = rig.script.next() else {
+            panic!("an @ word asks for suggestions");
+        };
+        assert_eq!((params.team.as_str(), params.query.as_str()), ("t1", "ma"));
+        let _ = reply.send(Ok(RoomMentions {
+            mentions: vec![RoomMention {
+                kind: RoomMentionKind::Bot,
+                id: "b1".into(),
+                label: "Mara".into(),
+                insert: "@Mara".into(),
+                project: None,
+            }],
+        }));
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            cx.debug_bounds("room-mentions").is_some(),
+            "the suggestions show"
+        );
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.pick_mention(TeamId(1), "@Mara", window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        rig.shell.read_with(cx, |shell, cx| {
+            let field = shell.room_composer_field(TeamId(1)).expect("the composer");
+            assert_eq!(field.read(cx).text(), "ask @Mara ");
+        });
+        assert!(
+            cx.debug_bounds("room-mentions").is_none(),
+            "a space ends the word"
+        );
     }
 }
