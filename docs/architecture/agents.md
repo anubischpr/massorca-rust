@@ -246,21 +246,25 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 
 ## Account credential access (decision 0176)
 
-`Agents::with_account_credential(kind, account, |secret| ...)` lends one account's credential file (the kind's first
-required file) to a closure as a `Secret` and returns only the closure's value. No wire method exposes it; the usage
-feature calls it in process.
+`Agents::with_account_credential(kind, account, url, |checked, secret| ...)` checks `url`, then lends one account's
+access token (from the kind's first required credential file) to a closure as a `Secret`, beside the `CheckedUrl`,
+and returns only the closure's value. No wire method exposes it; the usage feature calls it in process.
 
 - Gate: only while the global setting `usage.enabled` is on (`AgentsConfig.usage_gate`, asked at every call; default
   off). Off, it returns `UsageDisabled` before touching the store or the disk.
+- Endpoint: `vendor_endpoint::check_url(kind, url)` runs first and returns the `CheckedUrl`; a refused URL never
+  reaches the store or the home. `official_origin` is `https://api.anthropic.com` for `claude`, `https://chatgpt.com`
+  for `codex`, none otherwise, from code only: never standing kind settings, `*_BASE_URL` or proxy variables. The
+  request must not follow redirects or use a proxy. Tests may point a kind at a loopback origin through
+  `vendor_endpoint::test_hooks` (`cfg(test)` or the `test-hooks` feature only).
 - Checks: those of showing credentials and launch, through the same functions: a known kind, an account row of that
-  kind, `usable_account_home` (no link from `<profile>/agents` to the home), and a regular file opened without following
-  a link, at most 1 MiB, UTF-8. The homes lock is held for the read only, never while the closure runs.
+  kind, `usable_account_home` (no link from `<profile>/agents` to the home). The chain is then held (pinned on
+  Windows) while the file, a regular file opened without following a link, at most 1 MiB, UTF-8, is read exactly.
+  The homes lock is held for the read only, never while the closure runs.
+- Token: only `claudeAiOauth.accessToken` (`claude`) or `tokens.access_token` (`codex`), parsed in place from the
+  zeroed buffer; a missing or non-string token is `TokenMissing`. The refresh token never leaves core-agents.
 - Secret: zeroed on drop, `Debug` is `[redacted]`, no `Display`, `Serialize` or `Clone`; never logged, never in argv,
   a child's environment or a protocol type.
-- Endpoint: `vendor_endpoint::official_origin(kind)` (`https://api.anthropic.com` for `claude`, `https://chatgpt.com`
-  for `codex`, none otherwise; a kind with none is refused) and `vendor_endpoint::check_url(kind, url)`, which the
-  caller runs before every request carrying the secret. Tests may point a kind at a loopback origin through
-  `vendor_endpoint::test_hooks` (`cfg(test)` or the `test-hooks` feature only).
 
 ## Session record (`AgentSession`)
 

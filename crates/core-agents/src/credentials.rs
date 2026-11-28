@@ -21,7 +21,7 @@ use massorca_protocol::methods::agents::{
     CredentialFile, CredentialsImported, CredentialsRemoved, CredentialsShown, ImportedFile,
 };
 use serde_json::{Value, json};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::catalog::Catalog;
 use crate::kind::{KindDecl, valid_id};
@@ -654,8 +654,9 @@ pub fn usable_account_home(
 
 /// The contents of the account's credential file (decision 0176): the first required file the kind declares. The
 /// checks are those of [`show_account`] and launch: a valid kind and account id, `<profile>/agents` and
-/// `accounts/<kind>` plain directories and the home a plain directory ([`usable_account_home`]), then the file a regular
-/// file opened without following a link, at most [`MAX_FILE_BYTES`] ([`read_capped_into`]). The caller holds
+/// `accounts/<kind>` plain directories and the home a plain directory ([`usable_account_home`]). Then those directories
+/// are held ([`hold_account_chain`]: checked again and, on Windows, pinned) while the file, a regular file opened
+/// without following a link, at most [`MAX_FILE_BYTES`], is read exactly ([`read_exact_capped`]). The caller holds
 /// [`lock_homes`]. The returned bytes are zeroed when dropped; an error names the file and why, never anything read.
 pub(crate) fn read_account_credential(
     profile_dir: &Path,
@@ -684,13 +685,62 @@ pub(crate) fn read_account_credential(
             "account {account} of agent kind {kind} has no credential home"
         ))
     })?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    read_capped_into(&home.join(name), MAX_FILE_BYTES, &mut bytes).map_err(|reason| {
+    #[cfg(test)]
+    tests::run_credential_seam(tests::Seam::Checked, &home);
+    let _held = hold_account_chain(profile_dir, &decl.id, &home)?;
+    #[cfg(test)]
+    tests::run_credential_seam(tests::Seam::Held, &home);
+    read_exact_capped(&home.join(name), MAX_FILE_BYTES).map_err(|reason| {
         invalid(format!(
             "the credential file {name} of account {account} of agent kind {kind} cannot be used: {reason}"
         ))
-    })?;
-    Ok(bytes)
+    })
+}
+
+/// Holds `<profile>/agents`, `accounts/<kind>` and the account `home` while a credential file is read (decision 0176):
+/// each is checked again to be a plain directory and, on Windows, pinned as [`root_dir`] pins the directories it
+/// writes in, so none can be renamed or swapped for a junction until the returned guards drop. Elsewhere the checks
+/// stand alone, and the read's no-follow open guards the file itself.
+fn hold_account_chain(profile_dir: &Path, kind: &str, home: &Path) -> Result<Pins, AgentError> {
+    let mut dirs = dir_chain(profile_dir, &["accounts", kind]);
+    dirs.push(home.to_path_buf());
+    #[cfg(windows)]
+    let mut held = Pins::new();
+    #[cfg(not(windows))]
+    let held = Pins::new();
+    for dir in &dirs {
+        #[cfg(windows)]
+        held.push(hold_plain_dir(dir, "read")?);
+        #[cfg(not(windows))]
+        hold_plain_dir(dir, "read")?;
+    }
+    Ok(held)
+}
+
+/// Refuses `dir` with `agent.credentials_invalid` unless it is a plain directory, never a link (`through` names what
+/// is never done through one); on Windows, pins it and returns the pin.
+#[cfg(windows)]
+fn hold_plain_dir(dir: &Path, through: &str) -> Result<massorca_profile::PinnedDir, AgentError> {
+    check_plain_dir(dir, through)?;
+    pin(dir)
+}
+
+/// Refuses `dir` with `agent.credentials_invalid` unless it is a plain directory, never a link.
+#[cfg(not(windows))]
+fn hold_plain_dir(dir: &Path, through: &str) -> Result<(), AgentError> {
+    check_plain_dir(dir, through)
+}
+
+fn check_plain_dir(dir: &Path, through: &str) -> Result<(), AgentError> {
+    let meta = fs::symlink_metadata(dir)
+        .map_err(|error| internal("read the credential homes directory", &error))?;
+    if is_link(&meta) || !meta.is_dir() {
+        return Err(invalid(format!(
+            "{} is not a plain directory; credential homes are never {through} through a link",
+            dir.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The refusal of a credential file that is not UTF-8 text; it names nothing of the contents.
@@ -880,16 +930,10 @@ fn root_dir(profile_dir: &Path, chain: &[&str]) -> Result<(PathBuf, Pins), Agent
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(internal("create the credential homes directory", &error)),
         }
-        let meta = fs::symlink_metadata(dir)
-            .map_err(|error| internal("read the credential homes directory", &error))?;
-        if is_link(&meta) || !meta.is_dir() {
-            return Err(invalid(format!(
-                "{} is not a plain directory; credential homes are never written through a link",
-                dir.display()
-            )));
-        }
         #[cfg(windows)]
-        let pinned = pin(dir)?;
+        let pinned = hold_plain_dir(dir, "written")?;
+        #[cfg(not(windows))]
+        hold_plain_dir(dir, "written")?;
         // A directory made before this service restricted it keeps its inherited access, and one an elevated run
         // made is owned by Administrators; restrict it now, which also makes the user its owner, so no other user can
         // replace an entry in it and a non-elevated run accepts it later.
@@ -1063,14 +1107,44 @@ fn read_source(path: &Path) -> Result<Vec<u8>, String> {
 
 /// [`read_source`] with its own cap: the state file's source may be larger (decision 0099).
 pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
+    let (file, _len) = open_capped(path, cap)?;
     let mut bytes = Vec::new();
-    read_capped_into(path, cap, &mut bytes)?;
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| UNREADABLE.to_owned())?;
+    if bytes.len() as u64 > cap {
+        return Err(too_large(cap));
+    }
     Ok(bytes)
 }
 
-/// [`read_capped`] into `bytes`, reserved once at the file's size, so no reallocation leaves a copy of the contents behind
-/// unless the file grows while it is read. A caller that zeroes `bytes` afterwards (decision 0176) zeroes every copy.
-pub(crate) fn read_capped_into(path: &Path, cap: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
+/// A credential file read exactly (decision 0176): [`open_capped`]'s checks, then exactly the size the opened handle
+/// reports, read into one zeroed buffer of that size, then a check that nothing follows. Nothing passes through a
+/// buffer of std's own, so no copy of the contents is left anywhere when the result drops. A file that changes size
+/// while it is read is refused.
+pub(crate) fn read_exact_capped(path: &Path, cap: u64) -> Result<Zeroizing<Vec<u8>>, String> {
+    let (mut file, len) = open_capped(path, cap)?;
+    let len = usize::try_from(len).map_err(|_| too_large(cap))?;
+    let mut bytes = Zeroizing::new(vec![0; len]);
+    file.read_exact(&mut bytes)
+        .map_err(|_| CHANGED_WHILE_READ.to_owned())?;
+    let mut probe = [0_u8; 1];
+    let after = file.read(&mut probe);
+    probe.zeroize();
+    match after {
+        Ok(0) => Ok(bytes),
+        Ok(_) => Err(CHANGED_WHILE_READ.to_owned()),
+        Err(_) => Err(UNREADABLE.to_owned()),
+    }
+}
+
+/// The reason of a file whose size changed while it was read.
+const CHANGED_WHILE_READ: &str = "changed while it was read";
+
+/// Opens `path` for reading when it is a regular file, at most `cap` bytes, with no link followed: checked before the
+/// open, opened without following a final link, and checked again through the handle, which must be the same file.
+/// Returns the handle and the size it reports.
+fn open_capped(path: &Path, cap: u64) -> Result<(File, u64), String> {
     let before = match fs::symlink_metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING.to_owned()),
         Err(_) => return Err(UNREADABLE.to_owned()),
@@ -1086,14 +1160,7 @@ pub(crate) fn read_capped_into(path: &Path, cap: u64, bytes: &mut Vec<u8>) -> Re
     if after.len() > cap {
         return Err(too_large(cap));
     }
-    bytes.reserve_exact(usize::try_from(after.len().saturating_add(1)).unwrap_or(0));
-    file.take(cap + 1)
-        .read_to_end(bytes)
-        .map_err(|_| UNREADABLE.to_owned())?;
-    if bytes.len() as u64 > cap {
-        return Err(too_large(cap));
-    }
-    Ok(())
+    Ok((file, after.len()))
 }
 
 /// The reason of a file over `cap`: `larger than 1 MiB`, `larger than 16 MiB`, or a byte count.
@@ -1433,6 +1500,45 @@ mod tests {
         /// home is written and swapped in. Never compiled outside tests.
         static AFTER_ACCESS_CHANGE: std::cell::RefCell<Option<Hook>> =
             std::cell::RefCell::new(None);
+    }
+
+    /// Where a credential read stops for [`CREDENTIAL_SEAM`] (decision 0176).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Seam {
+        /// The chain and the home passed their first checks; nothing is held yet.
+        Checked,
+        /// The chain and the home are held; the file is not opened yet.
+        Held,
+    }
+
+    /// A hook the credential read seam runs with the stop and the account home.
+    type SeamHook = Box<dyn FnMut(Seam, &Path)>;
+
+    thread_local! {
+        /// Test-only seam inside a credential read, so a test can swap a directory between its steps. Never compiled
+        /// outside tests.
+        static CREDENTIAL_SEAM: std::cell::RefCell<Option<SeamHook>> =
+            std::cell::RefCell::new(None);
+    }
+
+    pub(super) fn run_credential_seam(seam: Seam, home: &Path) {
+        CREDENTIAL_SEAM.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(seam, home);
+            }
+        });
+    }
+
+    /// Runs `hook` at every credential read seam of this thread until the returned guard drops.
+    fn on_credential_seam(hook: impl FnMut(Seam, &Path) + 'static) -> impl Drop {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                CREDENTIAL_SEAM.with(|seam| *seam.borrow_mut() = None);
+            }
+        }
+        CREDENTIAL_SEAM.with(|seam| *seam.borrow_mut() = Some(Box::new(hook)));
+        Clear
     }
 
     pub(super) fn run_after_access_change(agents: &Path) {
@@ -2691,5 +2797,75 @@ mod tests {
             read_account_credential(fixture.profile.path(), &BuiltInPackages, "nope", ACCOUNT)
                 .unwrap_err();
         assert_eq!(error.code, codes::AGENT_KIND_NOT_FOUND);
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_link_after_the_checks_is_refused() {
+        for swapped in ["home", "kind"] {
+            let fixture = credential_fixture();
+            let home = account_home(&fixture, ACCOUNT);
+            let dir = if swapped == "home" {
+                home.clone()
+            } else {
+                home.parent().unwrap().to_path_buf()
+            };
+            let elsewhere = tempfile::tempdir().unwrap();
+            let target = elsewhere.path().join("moved");
+            let (moved_dir, moved_to) = (dir.clone(), target.clone());
+            // The swap lands after every first check passed, the moment a check-then-read race would use.
+            let _seam = on_credential_seam(move |seam, _home| {
+                if seam == Seam::Checked {
+                    fs::rename(&moved_dir, &moved_to).unwrap();
+                    link_dir(&moved_to, &moved_dir);
+                }
+            });
+            let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+            assert_eq!(
+                error.code,
+                codes::AGENT_CREDENTIALS_INVALID,
+                "{swapped}: {}",
+                error.message
+            );
+            assert!(!error.message.contains("\"fake\""), "{}", error.message);
+        }
+    }
+
+    /// On Windows the held directories are pinned: nobody can move one away while the file is read.
+    #[cfg(windows)]
+    #[test]
+    fn the_held_directories_cannot_be_moved_while_the_file_is_read() {
+        let fixture = credential_fixture();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let away = elsewhere.path().join("away");
+        let moved: std::rc::Rc<std::cell::RefCell<Vec<bool>>> = std::rc::Rc::default();
+        let record = std::rc::Rc::clone(&moved);
+        let _seam = on_credential_seam(move |seam, home| {
+            if seam == Seam::Held {
+                let kind_dir = home.parent().unwrap();
+                let agents = kind_dir.parent().unwrap().parent().unwrap();
+                for dir in [home, kind_dir, agents] {
+                    record.borrow_mut().push(fs::rename(dir, &away).is_ok());
+                }
+            }
+        });
+        assert_eq!(
+            read_credential(&fixture, ACCOUNT).unwrap(),
+            FAKE_TOKEN.as_bytes()
+        );
+        assert_eq!(
+            *moved.borrow(),
+            [false, false, false],
+            "every move was refused"
+        );
+    }
+
+    #[test]
+    fn an_exact_read_returns_the_whole_file_and_nothing_more() {
+        let fixture = credential_fixture();
+        let token = account_home(&fixture, ACCOUNT).join("token.json");
+        for content in [&b""[..], b"x", &[b'y'; 4097][..]] {
+            fs::write(&token, content).unwrap();
+            assert_eq!(read_credential(&fixture, ACCOUNT).unwrap(), content);
+        }
     }
 }
