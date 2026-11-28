@@ -10,6 +10,7 @@ use std::process::Stdio;
 
 use harness::{ChildGuard, Sandbox, eventually, execute_with_stdin, single_document, with_json};
 use massorca_cli::host::update::require_self_update;
+use massorca_process::test_executable::copy_executable;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -49,7 +50,16 @@ fn candidate(dir: &Path, version_line: Option<&str>) -> (PathBuf, String) {
         bytes.extend_from_slice(format!("\nMASSORCA-FAKE-VERSION:{line}\n").as_bytes());
     }
     let path = dir.join(format!("candidate{}", std::env::consts::EXE_SUFFIX));
-    std::fs::write(&path, &bytes).expect("the candidate");
+    // Written aside and copied in, then made executable: the CLI runs it for --version, and Linux needs the exec bit.
+    let source = dir.join("candidate.bytes");
+    std::fs::write(&source, &bytes).expect("the candidate's bytes");
+    copy_executable(&source, &path).expect("the candidate");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the candidate is executable");
+    }
     let sha = Sha256::digest(&bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -208,4 +218,19 @@ fn an_update_is_confirmed_and_checked_and_stray_test_variables_enable_nothing() 
     let mut marker = pair.installed.clone().into_os_string();
     marker.push(".restarted");
     assert!(!PathBuf::from(marker).exists(), "no restart program ran");
+}
+
+#[test]
+fn a_device_without_host_admin_is_refused() {
+    let pair = Pair::start(true);
+    let (binary, sha) = candidate(pair.dir.path(), None);
+    let denied = pair.update(&[
+        "--binary",
+        binary.to_str().expect("utf-8"),
+        "--sha256",
+        &sha,
+        "--yes",
+    ]);
+    assert_eq!(denied["error"]["code"], "permission.denied", "{denied}");
+    pair.assert_untouched();
 }
