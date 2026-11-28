@@ -416,3 +416,13 @@ pub const AUTOMATION_SCHEDULE_INVALID: &str = "automation.schedule_invalid";
 pub const AUTOMATION_ZONE_INVALID: &str = "automation.zone_invalid";
 /// A calendar window that ends before it starts, or spans more than 62 days.
 pub const CALENDAR_WINDOW_INVALID: &str = "calendar.window_invalid";
+/// An automation run did not start because the automation has no project (decision 0125).
+pub const AUTOMATION_NO_PROJECT: &str = "automation.no_project";
+/// An automation occurrence was later than its grace, or replaced by a later one; it is never replayed.
+pub const AUTOMATION_RUN_MISSED: &str = "automation.run_missed";
+/// The service stopped before an automation run's agent started.
+pub const AUTOMATION_RUN_INTERRUPTED: &str = "automation.run_interrupted";
+/// An automation run's agent exited without reporting completion.
+pub const AUTOMATION_RUN_EXITED: &str = "automation.run_exited";
+/// An automation run's agent session is gone, so how it ended cannot be known.
+pub const AUTOMATION_RUN_STRANDED: &str = "automation.run_stranded";

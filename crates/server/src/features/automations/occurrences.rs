@@ -2,12 +2,32 @@
 //! automation view. A disabled automation has none.
 
 use massorca_core_schedule::occurrences_between;
-use massorca_core_store::{AutomationRow, Store};
+use massorca_core_store::{AutomationRow, Store, run_state};
 use massorca_protocol::ErrorBody;
 use massorca_protocol::methods::automations::Automation;
 
 use super::definition::{HostZone, compile};
+use super::runs::KEPT_FINAL_RUNS;
 use super::view::automation_view;
+use crate::features::teams::store_error;
+
+/// The instants of the automation's completed runs whose occurrence falls in `[from_ms, to_ms)`, from its kept history.
+pub(crate) fn done_runs(
+    store: &Store,
+    automation_id: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<i64>, ErrorBody> {
+    Ok(store
+        .list_automation_runs(automation_id, KEPT_FINAL_RUNS * 2, None)
+        .map_err(store_error)?
+        .into_iter()
+        .filter(|run| {
+            run.state == run_state::COMPLETED && (from_ms..to_ms).contains(&run.scheduled_for)
+        })
+        .map(|run| run.scheduled_for)
+        .collect())
+}
 
 /// The automation as the protocol shows it, with the instants of its runs in `[from_ms, to_ms)`, earliest first and at
 /// most `limit` of them.

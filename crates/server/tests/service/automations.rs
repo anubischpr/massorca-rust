@@ -1,18 +1,23 @@
 //! Scheduled automation definitions over the wire (decision 0123): creation and its refusals, the creation key, the
-//! list order, edits, enable and disable, removal, and what a removed project leaves behind.
+//! list order, edits, enable and disable, removal, and what a removed project leaves behind. And their runs (decision
+//! 0125): a run now that cannot start, the history's pages, and history removed with its automation. A run that starts
+//! an agent is covered by the CLI tests with the fake agent.
 
 use std::path::Path;
+use std::time::Duration;
 
 use massorca_client::Client;
 use massorca_core_schedule::{ZoneSource, host_zone_used};
 use massorca_protocol::codes;
 use massorca_protocol::methods::automations::{
-    self, Automation, AutomationCadence, AutomationCreateParams, AutomationRef,
-    AutomationUpdateParams,
+    self, Automation, AutomationCadence, AutomationCreateParams, AutomationRef, AutomationRunState,
+    AutomationRunTrigger, AutomationRunsParams, AutomationUpdateParams, AutomationUsageStatus,
 };
+use massorca_protocol::methods::events::ChangeEvent;
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
 };
+use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
 
@@ -477,5 +482,133 @@ async fn an_automation_without_a_zone_names_the_host_zone_it_runs_in() {
         }
         (None, _) => {}
     }
+    stop(running).await;
+}
+
+/// The runs of `automation`, newest first, `limit` at a time below `before`.
+fn runs_of(automation: &str, limit: Option<u32>, before: Option<i64>) -> AutomationRunsParams {
+    AutomationRunsParams {
+        automation: automation.to_owned(),
+        limit,
+        before,
+    }
+}
+
+/// An automation whose project was removed: a run of it records "no project" and starts no agent.
+async fn orphan_automation(client: &Client, home: &Path) -> Automation {
+    folder_project(client, home, "app").await;
+    let created = client
+        .automation_create(&create_params("app", "Morning PRs"))
+        .await
+        .expect("create");
+    let _: Project = client
+        .call(
+            projects::REMOVE,
+            &ProjectRemoveParams {
+                project: "app".to_owned(),
+                forget_workspaces: false,
+            },
+        )
+        .await
+        .expect("project.remove");
+    created
+}
+
+#[tokio::test]
+async fn a_run_now_of_an_automation_without_a_project_is_recorded_as_unavailable_and_announced() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let created = orphan_automation(&client, home.path()).await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+
+    let run = client
+        .automation_run_now(&reference(&created.id))
+        .await
+        .expect("automation.run_now");
+
+    assert_eq!(run.state, AutomationRunState::SkippedUnavailable);
+    assert_eq!(run.trigger, AutomationRunTrigger::Manual);
+    assert_eq!(run.number, 1);
+    assert_eq!(
+        run.reason_code.as_deref(),
+        Some(codes::AUTOMATION_NO_PROJECT)
+    );
+    assert_eq!(run.session_id, None, "no agent started");
+    assert_eq!(run.usage.status, AutomationUsageStatus::Unavailable);
+    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes");
+    assert_eq!(event.topic, automations::TOPIC_AUTOMATION_CHANGED);
+    assert_eq!(event.id, created.id);
+    let listed = client
+        .automation_runs(&runs_of(&created.id, None, None))
+        .await
+        .expect("automation.runs");
+    assert_eq!(listed.runs, vec![run]);
+    let shown = client
+        .automation_show(&reference(&created.id))
+        .await
+        .expect("show");
+    assert_eq!(
+        shown.last_run_at_ms, None,
+        "a run that did not start is not the last run"
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn the_run_history_pages_newest_first_by_run_number() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let created = orphan_automation(&client, home.path()).await;
+    for _ in 0..3 {
+        client
+            .automation_run_now(&reference(&created.id))
+            .await
+            .expect("run now");
+    }
+
+    let first = client
+        .automation_runs(&runs_of("Morning PRs", Some(2), None))
+        .await
+        .expect("first page");
+    let numbers: Vec<i64> = first.runs.iter().map(|run| run.number).collect();
+    assert_eq!(numbers, [3, 2]);
+    assert_eq!(first.next_before, Some(2));
+    let last = client
+        .automation_runs(&runs_of(&created.id, Some(2), first.next_before))
+        .await
+        .expect("last page");
+    let numbers: Vec<i64> = last.runs.iter().map(|run| run.number).collect();
+    assert_eq!(numbers, [1]);
+    assert_eq!(last.next_before, None);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn removing_an_automation_removes_its_run_history() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let created = orphan_automation(&client, home.path()).await;
+    client
+        .automation_run_now(&reference(&created.id))
+        .await
+        .expect("run now");
+
+    client
+        .automation_remove(&reference(&created.id))
+        .await
+        .expect("remove");
+
+    let error = client
+        .automation_runs(&runs_of(&created.id, None, None))
+        .await
+        .expect_err("the history went with the automation");
+    assert_eq!(remote_code(&error), codes::AUTOMATION_NOT_FOUND);
     stop(running).await;
 }

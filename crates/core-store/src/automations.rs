@@ -3,7 +3,7 @@ use rusqlite::{Row, params};
 use crate::error::StoreError;
 use crate::store::Store;
 
-/// One row of `automations` (decision 0123): a scheduled agent run, defined and listed. Runs are not stored yet.
+/// One row of `automations` (decision 0123): a scheduled agent run, defined and listed. Its runs are `automation_runs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationRow {
     pub id: String,
@@ -30,7 +30,7 @@ pub struct AutomationRow {
     pub creation_key: Option<String>,
     /// The next occurrence to start, UTC epoch milliseconds; `None` while disabled.
     pub next_run_at: Option<i64>,
-    /// When the last run started; `None` until runs are stored.
+    /// When the last run started; `None` until it first runs.
     pub last_run_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -144,8 +144,46 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Deletes an automation. Returns whether a row was removed. Runs are not stored yet, so there is no history to
-    /// remove with it.
+    /// Writes the definition fields of the row with `row.id`: never `next_run_at` or `last_run_at`, which a claim moves.
+    /// Returns `false`, and writes nothing, when no such row exists.
+    pub fn update_automation_definition(&self, row: &AutomationRow) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE automations SET project_id = ?2, name = ?3, prompt = ?4, agent_kind = ?5, cadence = ?6, time = ?7, weekday = ?8, cron = ?9, zone = ?10, grace_minutes = ?11, enabled = ?12, updated_at = ?13 WHERE id = ?1",
+            params![
+                row.id,
+                row.project_id,
+                row.name,
+                row.prompt,
+                row.agent_kind,
+                row.cadence,
+                row.time,
+                row.weekday,
+                row.cron,
+                row.zone,
+                row.grace_minutes,
+                i64::from(row.enabled),
+                row.updated_at
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Moves `next_run_at` to `new` only while it is still `expected`, so a claim made meanwhile is never undone.
+    /// Returns whether it moved.
+    pub fn set_automation_next_run_if(
+        &self,
+        id: &str,
+        expected: Option<i64>,
+        new: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE automations SET next_run_at = ?3 WHERE id = ?1 AND next_run_at IS ?2",
+            params![id, expected, new],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Deletes an automation and its run history. Returns whether a row was removed.
     pub fn delete_automation(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self
             .lock()

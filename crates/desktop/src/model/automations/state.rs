@@ -1,7 +1,10 @@
-//! The Automations page's state: the list the service last reported, the editor's target, the delete question and the
-//! notice of the last refused change (decision 0123). The editor's fields live with the page that draws them.
+//! The Automations page's state: the list the service last reported, the editor's target, the delete question, the
+//! notice of the last refused change (decision 0123) and the open run table (decision 0125). The editor's fields live
+//! with the page that draws them.
 
-use massorca_protocol::methods::automations::Automation;
+use massorca_protocol::methods::automations::{Automation, AutomationRun};
+
+use super::runs::RunHistory;
 
 /// What the open editor changes: a new automation, or the one with this id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +22,10 @@ pub struct AutomationsState {
     delete: Option<String>,
     /// Why the last change was refused, shown above the list until the next change.
     notice: Option<String>,
+    /// The run table open under the list.
+    history: Option<RunHistory>,
+    /// The service's `automation.changed` count this page last read after.
+    changes_seen: u64,
 }
 
 impl AutomationsState {
@@ -113,6 +120,48 @@ impl AutomationsState {
     pub fn set_notice(&mut self, notice: Option<String>) {
         self.notice = notice;
     }
+
+    /// Takes note of the service's `automation.changed` count; returns whether it grew since the last note, so the page
+    /// reads again.
+    pub fn note_changes(&mut self, count: u64) -> bool {
+        let grew = count != self.changes_seen;
+        self.changes_seen = count;
+        grew
+    }
+
+    pub fn history(&self) -> Option<&RunHistory> {
+        self.history.as_ref()
+    }
+
+    /// Opens the run table of `automation`, unread until its runs answer.
+    pub fn open_history(&mut self, automation: String) {
+        self.history = Some(RunHistory::new(automation));
+    }
+
+    pub fn close_history(&mut self) {
+        self.history = None;
+    }
+
+    /// The runs read for `automation`; an answer for a table no longer open is dropped.
+    pub fn set_runs(&mut self, automation: &str, runs: Result<Vec<AutomationRun>, String>) {
+        if let Some(history) = self.history_of(automation) {
+            history.set_runs(runs);
+        }
+    }
+
+    /// A run the service just answered with, shown when its automation's table is open.
+    pub fn put_run(&mut self, run: AutomationRun) {
+        let automation = run.automation_id.clone();
+        if let Some(history) = self.history_of(&automation) {
+            history.put(run);
+        }
+    }
+
+    pub fn history_of(&mut self, automation: &str) -> Option<&mut RunHistory> {
+        self.history
+            .as_mut()
+            .filter(|history| history.automation() == automation)
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +249,29 @@ mod tests {
         state.ask_delete("b".to_owned());
         state.cancel_delete();
         assert_eq!(state.delete_target(), None);
+    }
+
+    #[test]
+    fn a_grown_change_count_asks_for_one_read() {
+        let mut state = AutomationsState::default();
+        assert!(!state.note_changes(0));
+        assert!(state.note_changes(2));
+        assert!(!state.note_changes(2));
+    }
+
+    #[test]
+    fn runs_read_for_a_table_no_longer_open_are_dropped() {
+        let mut state = AutomationsState::default();
+        state.open_history("a".to_owned());
+        state.set_runs("b", Ok(Vec::new()));
+        assert!(!state.history().is_some_and(RunHistory::is_read));
+        state.set_runs("a", Err("The service is not connected.".to_owned()));
+        assert_eq!(
+            state.history().and_then(RunHistory::error),
+            Some("The service is not connected.")
+        );
+        state.close_history();
+        assert!(state.history().is_none());
     }
 
     #[test]

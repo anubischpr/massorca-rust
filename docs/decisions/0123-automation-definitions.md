@@ -72,3 +72,9 @@ version leaves out.
   completion and usage (AUTO-07), host ownership (AUTO-08), destinations and workspace modes (AUTO-02), SSH and
   remote scheduling (AUTO-09), the calendar (AUTO-30).
 - An events topic for automation changes. Clients re-read the list after a change.
+
+## Amendment (decision 0125, 2026-11-26)
+
+- Runs are stored in `automation_runs`, which removing an automation removes with it (D3). The timer advances
+  `next_run_at` and sets `last_run_at`, so reads show the stored next run (D5). Topic `automation.changed` fires when a
+  run of the automation is recorded, starts or ends.

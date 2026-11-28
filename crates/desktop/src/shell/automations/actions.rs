@@ -138,12 +138,14 @@ impl Shell {
         cx.notify();
     }
 
-    /// Reads the automations when the Automations page is on screen and nothing has read them yet.
+    /// Reads the automations when the Automations page is on screen and nothing has read them yet, and again when the
+    /// service announced a change.
     pub(in crate::shell) fn ensure_automations_loaded(&mut self, cx: &mut Context<Self>) {
-        if self.model.canvas() != Canvas::Page(Page::Automations)
-            || self.automations.is_read()
-            || self.automations_loading
-        {
+        if self.model.canvas() != Canvas::Page(Page::Automations) || self.automations_loading {
+            return;
+        }
+        if self.automations.is_read() {
+            self.follow_automation_changes(cx);
             return;
         }
         let Some(service) = self.service.clone() else {
@@ -171,7 +173,7 @@ impl Shell {
         }
     }
 
-    fn automations_read(
+    pub(super) fn automations_read(
         &mut self,
         answer: Result<AutomationList, Refusal>,
         cx: &mut Context<Self>,

@@ -54,3 +54,9 @@ automation on one timeline. Routines and automations are one core schedule engin
   order.
 - The artboard's team picker is not built. The Team chip filters by kind.
 - Automation runs and their done state wait for AUTO-03.
+
+## Amendment (decision 0125, 2026-11-26)
+
+- Automations keep a run history now. With `include_done`, an automation's completed runs show as done at the
+  occurrence they stand for, read from its kept history (the newest 100 final runs); failed, missed and skipped runs
+  do not (D2, D3).

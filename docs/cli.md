@@ -467,8 +467,8 @@ The service log goes to the profile's log files only unless `--log-stderr` is gi
 
 ### Automations
 
-Scheduled automation definitions (decision 0123). An automation is stored, listed and changed here; this version
-does not start its runs.
+Scheduled automations (decision 0123) and their runs (decision 0125). The service runs each enabled automation's
+agent in its project on its schedule, and keeps its run history.
 
 | Command | What it does |
 |---|---|
@@ -479,9 +479,16 @@ does not start its runs.
 | `automations remove <AUTOMATION>` | Removes an automation. It cannot be restored. |
 | `automations enable <AUTOMATION>` | Enables an automation and schedules its next run from now. |
 | `automations disable <AUTOMATION>` | Disables an automation; it has no next run until it is enabled. |
+| `automations run <AUTOMATION> --now` | Runs the automation now and prints the run it recorded. The schedule does not move. `--now` is required. A run that cannot start, such as one whose automation has no project, is still recorded with the reason. |
+| `automations runs <AUTOMATION> [--limit <N>] [--before <NUMBER>]` | Lists the automation's runs, newest first by run number: 20 when `--limit` is unset, 100 at most. Each run shows its number, its state (starting, running, completed, missed, not started or failed), the time it stands for in UTC and why it did not run. `--before` lists the runs numbered below it; the last line names the next page's `--before`. |
 
 An automation whose project was removed stays listed with no project and does not start. A name two automations
 share is refused until the one meant is named by its id.
+
+A scheduled occurrence runs once when the service claims it within the automation's grace; a later one, and earlier
+occurrences the service missed, are recorded as missed and never replayed. A run ends completed when its agent reports
+done, with the agent's result, or failed when the agent exits without reporting done. The newest 100 finished runs of
+each automation are kept. A host that does not offer `automation-runs/1` says it is too old.
 
 ### Calendar
 
@@ -489,10 +496,10 @@ The runs of routines and automations in a window of days, on the shared schedule
 
 | Command | What it does |
 |---|---|
-| `calendar [--from <DATE>] [--days <N>] [--kind routines\|automations] [--done]` | Lists the runs in a window that starts at `--from`, a UTC date (`YYYY-MM-DD`, today in UTC when unset), and lasts `--days` days (1 to 62, 7 when unset). `--kind routines` lists only Bot Teams routines and `automations` only Workspaces automations; both when unset. Each run shows its date and time on its routine's or automation's zone, or on the host's zone when it has none. Done routine runs show only with `--done`. |
+| `calendar [--from <DATE>] [--days <N>] [--kind routines\|automations] [--done]` | Lists the runs in a window that starts at `--from`, a UTC date (`YYYY-MM-DD`, today in UTC when unset), and lasts `--days` days (1 to 62, 7 when unset). `--kind routines` lists only Bot Teams routines and `automations` only Workspaces automations; both when unset. Each run shows its date and time on its routine's or automation's zone, or on the host's zone when it has none. Done routine runs and completed automation runs show only with `--done`. |
 
 Upcoming runs start at the time of the call. A paused routine and a disabled automation have no upcoming runs.
-Automations keep no run history yet, so they have no done runs. A host that does not offer `calendar/1` says it is too
+A host that does not offer `calendar/1` says it is too
 old for the calendar.
 
 ### Hosts and pairing

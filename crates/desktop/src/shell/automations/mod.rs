@@ -1,8 +1,11 @@
 //! The Automations page (decision 0123): the scheduled automations the service holds. Each row shows its schedule, its
-//! project and its next run, with a switch to enable it, Edit, and Delete behind a confirm. The editor is `editor`.
+//! project and its next run, with a switch to enable it, Run now and Runs (decision 0125), Edit, and Delete behind a
+//! confirm. The editor is `editor`; the run table is `runs_table`.
 
 mod actions;
 mod editor;
+mod run_actions;
+mod runs_table;
 
 pub(in crate::shell) use editor::{AutomationEditor, editor_dialog};
 
@@ -81,9 +84,28 @@ pub(in crate::shell) fn page(frame: &AutomationsFrame, cx: &gpui::App) -> AnyEle
     } else {
         let mut list = div().flex().flex_col().gap(px(SPACE_2));
         for automation in automations {
-            list = list.child(automation_row(automation, frame.now_ms, shell, &theme));
+            list = list.child(automation_row(
+                automation,
+                frame.now_ms,
+                frame.connected,
+                shell,
+                &theme,
+            ));
         }
         body = body.child(list);
+        if let Some(history) = frame.state.history() {
+            let name = frame
+                .state
+                .find(history.automation())
+                .map_or("this automation", |automation| automation.name.as_str());
+            body = body.child(runs_table::runs_table(
+                history,
+                name,
+                frame.now_ms,
+                shell,
+                &theme,
+            ));
+        }
     }
     div()
         .id("automations-page")
@@ -143,6 +165,7 @@ fn new_button(shell: &WeakEntity<Shell>, connected: bool, variant: ButtonVariant
 fn automation_row(
     automation: &Automation,
     now_ms: i64,
+    connected: bool,
     shell: &WeakEntity<Shell>,
     theme: &Theme,
 ) -> impl IntoElement {
@@ -217,6 +240,8 @@ fn automation_row(
                 .items_center()
                 .gap(px(SPACE_2))
                 .child(switch)
+                .child(runs_table::run_now_button(&id, connected, shell))
+                .child(runs_table::runs_button(&id, shell))
                 .child(edit)
                 .child(delete),
         )
