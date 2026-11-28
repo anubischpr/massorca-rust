@@ -426,6 +426,21 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
         ),
         command("task.rm", "Remove a task", "task.rm", selector("task")),
         command(
+            "team.delegate",
+            "Hand a task to a teammate from inside a bot's run",
+            "team.delegate",
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "team": { "type": "string" },
+                    "read_only": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "team.message.send",
             "Message the parent's or a child's bot from inside a bot's run",
             "team.message_send",
@@ -463,21 +478,6 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             "List this bot run's unread messages",
             "team.inbox",
             json!({ "type": "object", "properties": { "mark_read": { "type": "boolean" } } }),
-        ),
-        command(
-            "team.delegate",
-            "Hand a task to a teammate from inside a bot's run",
-            "team.delegate",
-            json!({
-                "type": "object",
-                "required": ["text"],
-                "properties": {
-                    "text": { "type": "string" },
-                    "bot": { "type": "string" },
-                    "team": { "type": "string" },
-                    "read_only": { "type": "boolean" }
-                }
-            }),
         ),
     ]
 }

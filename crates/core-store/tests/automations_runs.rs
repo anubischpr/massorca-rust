@@ -219,6 +219,7 @@ fn store_with_session(request_id: Option<String>) -> (Store, AutomationRow, Stri
         created_at: 1,
         comment: None,
         name_generated: false,
+        in_place: false,
     };
     store.insert_workspace(&workspace).unwrap();
     let session = AgentSessionRow {
