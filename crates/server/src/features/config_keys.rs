@@ -159,7 +159,7 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "terminal.theme",
             Choice(&["system", "dark", "light"]),
             json!("system"),
-            "Terminal colour palette: system, dark or light. Stored only; terminals do not read it yet.",
+            "Terminal colour palette: system follows appearance.theme; dark and light set it.",
         ),
         (
             "browser.home",

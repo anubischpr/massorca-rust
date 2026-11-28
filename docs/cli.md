@@ -199,8 +199,7 @@ project) at the time the project is added.
   so `archive script ran in terminal <ID>` can still be read. Files on disk are not touched.
 
 Settings that affect workspace names are changed with `config set` (`config list` shows every setting).
-`terminal.theme` (`system`, `dark` or `light`; `system` by default) chooses the terminal colour palette. The service stores it
-now; terminals do not read it yet, so the palette still follows the app.
+`terminal.theme` (`system`, `dark` or `light`; `system` by default) chooses the terminal colour palette: `system` follows `appearance.theme`, and `dark` or `light` sets the palette whatever the app's theme is. Each terminal reads the palette as its output arrives, so a change also reaches running terminals.
 `workspaces.rename_from_first_prompt` (`true` by default) renames a generated workspace after the first prompt the person
 sends to its first session, from a title the kind's one-shot form writes, and its branch with it. Prompts typed by the
 prompt queue count too. A rename by this setting makes the name the person's, so the workspace is renamed once, and

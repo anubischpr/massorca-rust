@@ -44,8 +44,8 @@ async fn the_list_describes_each_kind() {
     let list = client.config_list().await.expect("config.list answers");
     assert_eq!(
         list.values.len(),
-        36,
-        "32 keys of 0070 and the first-prompt rename, the workspace root, the workspace layout and the two branch prefix keys"
+        37,
+        "32 keys of 0070, terminal.theme, the first-prompt rename, the workspace root, the workspace layout and the two branch prefix keys"
     );
     let find = |name: &str| {
         list.values
