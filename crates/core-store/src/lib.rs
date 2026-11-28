@@ -11,6 +11,7 @@ mod bot_skills;
 mod bots;
 mod devices;
 mod error;
+mod fresh_store;
 mod migration_files;
 #[cfg(test)]
 mod migration_folder;

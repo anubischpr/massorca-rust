@@ -722,6 +722,26 @@ pub(crate) fn migrate_observed(
     migration_files::apply_pending(connection, file, files, !checked, &mut backed_up, observe)
 }
 
+/// Builds the latest schema into `connection`, a brand-new file nobody else has opened (decision 0184): no lock and no
+/// backup. The frozen steps and migration files run in one transaction unless a step needs foreign keys off.
+pub(crate) fn build_new_observed(
+    connection: &mut Connection,
+    steps: &[Migration],
+    files: &[FileMigration],
+    observe: &mut dyn FnMut(&'static str),
+) -> Result<(), StoreError> {
+    let mut backed_up = true;
+    if !steps.iter().any(|step| step.foreign_keys_off)
+        && create_in_one_transaction(connection, steps, files)?
+    {
+        observe("store schema");
+    } else {
+        let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+        apply_frozen(connection, None, steps, supported, &mut backed_up, observe)?;
+    }
+    migration_files::apply_pending(connection, None, files, false, &mut backed_up, observe)
+}
+
 /// Runs the frozen steps newer than `user_version`, one transaction each.
 fn apply_frozen(
     connection: &mut Connection,
@@ -886,7 +906,7 @@ fn upgrade_lock_wait() -> Duration {
 
 /// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish. The wait is
 /// bounded, so a lock that is never released fails the open with a message instead of hanging it.
-fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
+pub(crate) fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
     let mut name = file.as_os_str().to_owned();
     name.push(".migrating");
     let path = PathBuf::from(name);
