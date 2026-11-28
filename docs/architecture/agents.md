@@ -421,14 +421,17 @@ ones, `args` added after the kind's own (and its mode and model flags) and befor
 under a start's own `env`. They are one sealed row of the profile's vault per kind, so a locked vault refuses a start of
 a kind that has settings with `agent.secrets_unavailable`. The program applies wherever the service runs the kind
 (starts, resumes, forks, children, sign-in, account checks, one-shot runs); the arguments and variables to every
-terminal and chat run, resumes included. A reader gets the variable names only.
+terminal and chat run, resumes included. A reader gets the variable names only. The variables follow the vault's
+boundary (amendment A1): only a run whose caller is host-admin gets them, and such a run is marked `holds_secrets`; any
+other caller's run gets its own `env` only. A name the vault refuses for a secret (`is_dangerous_env_name`) is refused
+when it is set. Standing arguments leave a started or resumed mode unconfirmed.
 
 ## Run environment
 
 On top of the terminal environment (0032): `MASSORCA_BIN`, the kind's
 home variable when the profile has a home for it (0056), minus the kind's
 `strip_env` in that case, then the profile vault's secrets for the workspace's
-project (0071), then the kind's standing `env` (decision 0174) with the caller's `env` over it,
+project (0071), then the kind's standing `env` (decision 0174, host-admin callers only) with the caller's `env` over it,
 then the run's own identity,
 `MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN` and `MASSORCA_AGENT_KIND`, which
 the caller cannot override. The kind's `strip_inherited_env` names are stripped

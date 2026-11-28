@@ -77,3 +77,33 @@ takes `--env KEY=VALUE` (repeatable) and sends it as `env`; it already sent `-- 
   commit-message generation (AG-27) once it exists, the environment for sign-in and account checks, and the pv96 rule
   that a chat's program must end in `.exe/.com/.cmd/.bat` on Windows, which the program search already enforces through
   `PATHEXT` for bare names but not for an absolute path.
+
+## Amendment 1, 2026-11-27: review findings
+
+A review of the first implementation found four gaps; each rule below replaces the part of D3 to D7 it names.
+
+A1 Standing variables follow the vault's boundary (amends D5 and D6). They reach a run only when its caller holds
+host-admin scope, the caller that receives vault secrets (`SecretGrant::Provide`, decision 0071). A run started, resumed,
+forked or delegated by any other caller gets its own `env` only, as if the kind had no standing variables; it still takes
+the standing program and arguments, which are not secret. A run that receives at least one standing variable is marked
+`holds_secrets`, as a run that receives a vault secret is, and the mark stays with its session: its scrollback and its
+children are then guarded as for any run holding secrets. The record is still read for such a caller, because it holds
+the program and arguments too, but its variables are dropped before the launch is planned.
+
+A2 Standing arguments leave a resumed mode unconfirmed (amends D6). A resume adds the standing arguments after the mode's
+own, so a resumed permission mode is recorded as not confirmed whenever the kind has standing arguments, exactly as a
+start's own arguments or standing arguments leave a started mode unconfirmed. Before this, a resume could record a mode
+as confirmed although a standing argument may override it.
+
+A3 The CLI never repeats a variable's value (amends D7). A malformed `--env` of `agent start` or `agent settings set`
+(no `=`, or no name before it) is refused with a usage message that does not repeat the text given, unlike clap's own
+error for a value parser. The parsed option, and `agent.start`'s params, print variable names only in `Debug`. Output on
+success names variables only, as before.
+
+A4 A dangerous name is refused when it is set (amends D4). `agent.settings.set` refuses a variable whose name loads code,
+redirects lookups, or swaps an endpoint or a trust store, using the same `is_dangerous_env_name` check the vault applies
+to a secret's name (decision 0071), with `request.invalid_params` naming the variable only. Since every run that receives
+standing variables now holds secrets (A1), such a name could never reach a run anyway: refusing it at set time reports
+the problem where it is made instead of at every start. A consequence is that a standing variable cannot point a kind at
+another endpoint through a `*_BASE_URL` or proxy variable; the standing program (a wrapper) remains the way to do that,
+and loosening this needs its own decision.
