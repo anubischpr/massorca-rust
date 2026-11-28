@@ -120,6 +120,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "settings.list",
             "settings.reset",
             "settings.set",
+            "skills.agents",
             "skills.installed",
             "skills.roots",
             "skills.preview",
