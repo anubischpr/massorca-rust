@@ -63,10 +63,12 @@ pub enum TranscriptRow {
         level: NoticeLevel,
         text: SharedString,
     },
-    /// The footer of a turn that has not completed cleanly. A completed turn has no row.
+    /// The footer of a turn that has not completed cleanly, or of a completed turn whose CLI reported token counts.
     Turn {
         id: SharedString,
         state: TurnState,
+        /// The token counts the CLI reported, worded by the owner; a quiet line under the state.
+        usage: Option<SharedString>,
     },
 }
 
@@ -145,6 +147,8 @@ pub enum NoticeLevel {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnState {
+    /// Drawn only to carry its token counts: no status word.
+    Completed,
     Running,
     Interrupted,
     /// The run ended with the turn open and nothing says how; it is not a success.
@@ -343,6 +347,6 @@ fn render_row(
             approval::approval_card(id, approval, host, on_action, p)
         }
         TranscriptRow::Notice { level, text, .. } => cards::notice(*level, text, p),
-        TranscriptRow::Turn { state, .. } => cards::turn_footer(*state, p),
+        TranscriptRow::Turn { state, usage, .. } => cards::turn_footer(*state, usage.as_ref(), p),
     }
 }
