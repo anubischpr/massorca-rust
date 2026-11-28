@@ -1233,11 +1233,11 @@ impl Render for Shell {
             (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
             _ => None,
         };
-        let add_project = self
-            .dialogs
-            .add_project
-            .as_ref()
-            .map(|dialog| workspace_dialog_views::add_project_dialog(dialog, &shell, cx));
+        let init_git = self.store.read(cx).state().project_init_git;
+        let add_project =
+            self.dialogs.add_project.as_ref().map(|dialog| {
+                workspace_dialog_views::add_project_dialog(dialog, &shell, init_git, cx)
+            });
         let remove = self
             .dialogs
             .remove

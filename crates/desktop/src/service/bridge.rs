@@ -104,6 +104,11 @@ pub(crate) enum Command {
         project: String,
         reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
+    /// `project.init_git`: turns a folder project into a git project; the answer is the updated project.
+    InitGitProject {
+        project: String,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
     Remove {
         params: WorkspaceRemoveParams,
         reply: oneshot::Sender<Result<WorkspaceRemoved, Refusal>>,
@@ -450,6 +455,13 @@ impl ServiceHandle {
     /// `git.branches` for a project's own checkout, with no workspace (`git-project-branches/1`).
     pub async fn git_project_branches(&self, project: String) -> Result<Vec<String>, Refusal> {
         self.ask(|reply| Command::GitProjectBranches { project, reply })
+            .await
+    }
+
+    /// `project.init_git`: turns a folder project into a git project. The project list changes through the
+    /// `project.changed` event, and the answer carries the updated project.
+    pub async fn init_git_project(&self, project: String) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::InitGitProject { project, reply })
             .await
     }
 
@@ -1039,6 +1051,9 @@ impl Link {
         self.emit(StoreUpdate::GitProjectBranchesOffered(
             client.has_capability(massorca_protocol::capabilities::GIT_PROJECT_BRANCHES),
         ));
+        self.emit(StoreUpdate::ProjectInitGitOffered(client.has_capability(
+            massorca_protocol::capabilities::PROJECT_INIT_GIT,
+        )));
         self.emit(StoreUpdate::GitSyncOffered(
             client.has_capability(massorca_protocol::capabilities::GIT),
         ));
@@ -1413,6 +1428,17 @@ fn spawn_call(
                 },
                 reply,
             );
+        }
+        Command::InitGitProject { project, reply } => {
+            tokio::spawn(async move {
+                let answer: Result<Project, _> = client
+                    .call(
+                        massorca_protocol::methods::projects::INIT_GIT,
+                        &massorca_protocol::methods::projects::ProjectRef { project },
+                    )
+                    .await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
+            });
         }
         Command::Create { params, reply } => {
             tokio::spawn(async move {

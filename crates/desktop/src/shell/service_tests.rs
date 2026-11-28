@@ -510,6 +510,143 @@ fn a_plain_folder_project_shows_the_no_git_marker_in_the_sidebar(cx: &mut TestAp
     assert!(cx.debug_bounds("sidebar-no-git-p1").is_none());
 }
 
+/// Takes the `project.init_git` call the No Git warning sends, answering with the project it named.
+fn expect_init_git(
+    script: &mut Script,
+) -> (
+    String,
+    tokio::sync::oneshot::Sender<Result<massorca_protocol::methods::projects::Project, Refusal>>,
+) {
+    loop {
+        match script.next() {
+            Some(Command::InitGitProject { project, reply }) => return (project, reply),
+            Some(_) => {}
+            None => panic!("a project.init_git call was expected"),
+        }
+    }
+}
+
+/// Opens the warning for the plain folder `/repos/notes`, reached through the path field.
+fn plain_folder_warning(rig: &mut Rig, cx: &mut VisualTestContext) {
+    send_path(rig, cx, "/repos/notes");
+    let (_, reply) = next_inspect(&mut rig.script);
+    reply
+        .send(Ok(inspection(ProjectKind::Folder, "/repos/notes", None)))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui::test]
+fn initialize_git_in_the_warning_adds_the_folder_then_makes_it_a_git_project(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::ProjectInitGitOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    plain_folder_warning(&mut rig, cx);
+    click(cx, "button:add-project-init-git");
+    let Some(Command::AddProject { params, reply }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    assert_eq!(params.path, "/repos/notes");
+    assert_eq!(
+        params.kind,
+        Some(ProjectKind::Folder),
+        "the folder is registered first, as a folder"
+    );
+    let mut folder = project("p9", "notes");
+    folder.kind = ProjectKind::Folder;
+    reply.send(Ok(folder)).expect("the shell waits");
+    cx.run_until_parked();
+    let (id, reply) = expect_init_git(&mut rig.script);
+    assert_eq!(
+        id, "p9",
+        "the new folder is the project turned into a git project"
+    );
+    reply
+        .send(Ok(project("p9", "notes")))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(
+            shell.dialogs.add_project.is_none(),
+            "the warning closes once the folder is a git project"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_refused_initialize_git_removes_the_folder_again_and_keeps_the_warning_with_its_reason(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::ProjectInitGitOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    plain_folder_warning(&mut rig, cx);
+    click(cx, "button:add-project-init-git");
+    let Some(Command::AddProject { reply, .. }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    let mut folder = project("p9", "notes");
+    folder.kind = ProjectKind::Folder;
+    reply.send(Ok(folder)).expect("the shell waits");
+    cx.run_until_parked();
+    let (_, reply) = expect_init_git(&mut rig.script);
+    reply
+        .send(Err(Refusal::Failed {
+            code: "project.already_git".into(),
+            message: "notes is already a git project.".into(),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    let Some(Command::RemoveProject { params, reply }) = rig.script.next() else {
+        panic!("the folder is removed again, so nothing is added");
+    };
+    assert_eq!(params.project, "p9");
+    reply
+        .send(Ok(project("p9", "notes")))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .dialogs
+            .add_project
+            .as_ref()
+            .expect("the warning stays open");
+        assert_eq!(
+            dialog.form.plain_folder.as_deref(),
+            Some("/repos/notes"),
+            "the folder is still held, not added"
+        );
+        assert_eq!(
+            dialog.form.error.as_deref(),
+            Some("notes is already a git project."),
+            "the service's sentence shows in the warning"
+        );
+    });
+}
+
+#[gpui::test]
+fn the_warning_offers_no_initialize_git_without_the_capability(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    plain_folder_warning(&mut rig, cx);
+    assert!(
+        cx.debug_bounds("button:add-project-init-git").is_none(),
+        "the service cannot run git init"
+    );
+    assert!(
+        cx.debug_bounds("dialog-action").is_some(),
+        "Continue without Git stays"
+    );
+}
+
 #[gpui::test]
 fn removing_a_workspace_walks_dirty_then_ignored_files_each_with_one_more_flag(
     cx: &mut TestAppContext,
