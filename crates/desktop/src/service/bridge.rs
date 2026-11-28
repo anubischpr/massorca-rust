@@ -14,8 +14,8 @@ use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentMarkSeenParams, AgentModeSet,
-    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
-    BringBackResult, PromptReceipt,
+    AgentOptionsSet, AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams,
+    AgentSetOptionsParams, AgentStartParams, BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -181,6 +181,10 @@ pub(crate) enum Command {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
     },
+    ResetConfig {
+        params: ConfigKey,
+        reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
     /// `agent.mark_seen`, answered on its oneshot; the store follows the service's `agent.changed` event.
     MarkSeen {
         params: AgentMarkSeenParams,
@@ -243,6 +247,11 @@ pub(crate) enum Command {
     AgentSetMode {
         params: AgentSetModeParams,
         reply: oneshot::Sender<Result<AgentModeSet, Refusal>>,
+    },
+    /// `agent.set_options` (decision 0171), answered with where each changed option took effect.
+    AgentSetOptions {
+        params: AgentSetOptionsParams,
+        reply: oneshot::Sender<Result<AgentOptionsSet, Refusal>>,
     },
     /// A prompt queue call (decision 0084), answered on its oneshot.
     AgentQueue(QueueCommand),
@@ -554,6 +563,13 @@ impl ServiceHandle {
     /// and the caller shows "Saved" only from that answer.
     pub async fn config_set(&self, params: ConfigSet) -> Result<ConfigValue, Refusal> {
         self.ask(|reply| Command::SetConfig { params, reply }).await
+    }
+
+    /// `config.reset`: the service drops the stored value. The answer is the default now in effect, which the store
+    /// takes as the change event will say too.
+    pub async fn config_reset(&self, params: ConfigKey) -> Result<ConfigValue, Refusal> {
+        self.ask(|reply| Command::ResetConfig { params, reply })
+            .await
     }
 
     /// `device.list` on this computer's service. The store's device list follows the answer too.
@@ -997,6 +1013,9 @@ impl Link {
         self.emit(StoreUpdate::AgentFastOffered(
             client.has_capability(AGENT_FAST_CAPABILITY),
         ));
+        self.emit(StoreUpdate::AgentOptionsLiveOffered(client.has_capability(
+            massorca_protocol::capabilities::AGENT_OPTIONS_LIVE,
+        )));
         self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
             client.has_capability(massorca_protocol::capabilities::WORKSPACE_UNIQUE_NAME),
         ));
@@ -1447,6 +1466,19 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::ResetConfig { params, reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .config_reset(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                if let Ok(value) = &result {
+                    let _ = updates.send(StoreUpdate::ConfigChanged(value.clone()));
+                }
+                let _ = reply.send(result);
+            });
+        }
         Command::ListDevices { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1534,6 +1566,9 @@ fn spawn_call(
         Command::AgentSetMode { params, reply } => {
             agents::spawn_set_mode(&client, params, reply, updates);
         }
+        Command::AgentSetOptions { params, reply } => {
+            agents::spawn_set_options(&client, params, reply, updates);
+        }
         Command::MarkSeen { params, reply } => agents::spawn_mark_seen(&client, params, reply),
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
@@ -1611,7 +1646,7 @@ fn refuse_while_down(command: Command) {
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::SetConfig { reply, .. } => {
+        Command::SetConfig { reply, .. } | Command::ResetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
@@ -1661,6 +1696,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AgentSetMode { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentSetOptions { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Delegate { reply, .. } => {

@@ -46,6 +46,7 @@ pub mod terminal;
 pub mod terminal_attach;
 pub mod terminal_wait;
 pub mod time_text;
+pub mod usage;
 pub mod workspace;
 pub mod workspace_text;
 

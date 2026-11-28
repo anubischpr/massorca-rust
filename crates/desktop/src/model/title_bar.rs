@@ -102,6 +102,7 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     } else {
         TOGGLED_REGIONS
             .into_iter()
+            .filter(|region| model.region_offered(*region))
             .map(|region| RegionToggle {
                 region,
                 on: model.region_visible(region),
