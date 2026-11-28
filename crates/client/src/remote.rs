@@ -4,7 +4,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use massorca_net::{Keepalive, NetError, Pin, TlsIdentity};
+use massorca_net::{ClientWsOver, Keepalive, NetError, Pin, TlsIdentity};
 use massorca_protocol::methods::devices::Secret;
 use massorca_protocol::pairing::{AuthRequest, Offer};
 use massorca_protocol::{MAX_FRAME_LEN_NETWORK, PeerInfo};
@@ -12,7 +12,7 @@ use massorca_protocol::{MAX_FRAME_LEN_NETWORK, PeerInfo};
 use crate::client::Client;
 use crate::error::ClientError;
 use crate::handshake;
-use crate::host_storage::{HostRecord, HostStorage};
+use crate::host_storage::{HostRecord, HostStorage, SshRoute};
 use crate::identity_mismatch::{IdentityMismatch, TrustedFrom};
 use crate::transport::FrameIo;
 
@@ -29,8 +29,13 @@ impl Client {
         let record = hosts.get(name)?;
         let identity = hosts.identity(name)?;
         let pin = parse_pin(&record.pin)?;
+        let route = hosts.route(name)?;
+        let dial = match &route {
+            Some(route) => Dial::Ssh(route, &record.addresses),
+            None => Dial::Direct(&record.addresses),
+        };
         open(
-            &record.addresses,
+            dial,
             pin,
             &identity,
             client,
@@ -48,6 +53,18 @@ impl Client {
         device_name: &str,
         client: &PeerInfo,
     ) -> Result<(Self, HostRecord), ClientError> {
+        Self::pair_through(hosts, offer, name, device_name, client, None).await
+    }
+
+    /// `pair`, dialing the server through `route` when one is given (decision 0133). The route is not stored here.
+    pub async fn pair_through(
+        hosts: &(impl HostStorage + ?Sized),
+        offer: &Offer,
+        name: &str,
+        device_name: &str,
+        client: &PeerInfo,
+        route: Option<&SshRoute>,
+    ) -> Result<(Self, HostRecord), ClientError> {
         crate::host_storage::validate_host_name(name)?;
         if hosts.exists(name) {
             return Err(ClientError::HostExists(name.to_owned()));
@@ -62,8 +79,12 @@ impl Client {
             secret: Secret::new(offer.secret.expose()),
             name: device_name.to_owned(),
         };
+        let dial = match route {
+            Some(route) => Dial::Ssh(route, &offer.addresses),
+            None => Dial::Direct(&offer.addresses),
+        };
         let connected = open(
-            &offer.addresses,
+            dial,
             pin,
             &identity,
             client,
@@ -90,26 +111,50 @@ impl Client {
     }
 }
 
+/// How a connection reaches the server: its addresses in order, or through an SSH route (decision 0133).
+enum Dial<'a> {
+    Direct(&'a [String]),
+    Ssh(&'a SshRoute, &'a [String]),
+}
+
 async fn open(
-    addresses: &[String],
+    dial: Dial<'_>,
     pin: Pin,
     identity: &TlsIdentity,
     client: &PeerInfo,
     auth: AuthRequest,
     (host, trusted_from): (&str, TrustedFrom),
 ) -> Result<Client, ClientError> {
-    let (ws, _address) = massorca_net::connect(addresses, pin, identity, CONNECT_TIMEOUT)
-        .await
-        .map_err(|error| network_error(error, host, trusted_from, pin))?;
-    let mut io = FrameIo::spawn_with(MAX_FRAME_LEN_NETWORK, |queues| {
-        massorca_net::spawn_frame_tasks(
-            ws,
-            MAX_FRAME_LEN_NETWORK,
-            Keepalive::default(),
-            queues.inbound,
-            queues.outbound,
-        )
-    });
+    let mut io = match dial {
+        Dial::Direct(addresses) => {
+            let (ws, _address) = massorca_net::connect(addresses, pin, identity, CONNECT_TIMEOUT)
+                .await
+                .map_err(|error| network_error(error, host, trusted_from, pin))?;
+            frame_io(ws)
+        }
+        #[cfg(feature = "local")]
+        Dial::Ssh(route, addresses) => {
+            use crate::ssh_dial::{DialFailure, dial};
+            match dial(route, addresses, pin, identity).await {
+                Ok(ws) => frame_io(ws),
+                Err(DialFailure::Mismatch(error)) => {
+                    return Err(network_error(error, host, trusted_from, pin));
+                }
+                Err(DialFailure::Unreachable(sentence)) => {
+                    return Err(ClientError::HostUnreachable(sentence));
+                }
+            }
+        }
+        // A store without the local feature never runs ssh.
+        #[cfg(not(feature = "local"))]
+        Dial::Ssh(route, addresses) => {
+            return Err(ClientError::HostUnreachable(format!(
+                "through the SSH route `{}`: this device cannot run ssh to reach {}",
+                route.describe(),
+                addresses.join(", ")
+            )));
+        }
+    };
     match handshake::exchange(&mut io, client, Some(auth.to_auth())).await {
         Ok(welcome) => Ok(Client::open(io, welcome)),
         Err(error) => {
@@ -117,6 +162,21 @@ async fn open(
             Err(error)
         }
     }
+}
+
+fn frame_io<S>(ws: ClientWsOver<S>) -> FrameIo
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    FrameIo::spawn_with(MAX_FRAME_LEN_NETWORK, |queues| {
+        massorca_net::spawn_frame_tasks(
+            ws,
+            MAX_FRAME_LEN_NETWORK,
+            Keepalive::default(),
+            queues.inbound,
+            queues.outbound,
+        )
+    })
 }
 
 fn parse_pin(text: &str) -> Result<Pin, ClientError> {

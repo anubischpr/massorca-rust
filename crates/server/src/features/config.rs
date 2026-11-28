@@ -29,6 +29,7 @@ pub(crate) const WORKSPACES_BRANCH_PREFIX_CUSTOM: &str = "workspaces.branch_pref
 pub(crate) const WORKSPACES_LAYOUT: &str = "workspaces.layout";
 const LAYOUT_NESTED: &str = "nested";
 const LAYOUT_FLAT: &str = "flat";
+const LAYOUT_IN_PROJECT: &str = "in_project";
 /// The app theme; terminals answer colour queries from its palette.
 const APPEARANCE_THEME: &str = "appearance.theme";
 const TERMINAL_THEME: &str = "terminal.theme";
@@ -72,9 +73,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries.settings.register(SettingDecl {
             owner: Owner::Core,
             key: WORKSPACES_LAYOUT.to_owned(),
-            kind: SettingKind::Choice(&[LAYOUT_NESTED, LAYOUT_FLAT]),
-            default: Value::String(LAYOUT_NESTED.to_owned()),
-            description: "Where a new project's workspaces go: in a folder named after the project, or directly in the default root."
+            kind: SettingKind::Choice(&[LAYOUT_NESTED, LAYOUT_FLAT, LAYOUT_IN_PROJECT]),
+            default: Value::String(LAYOUT_IN_PROJECT.to_owned()),
+            description: "Where a new project's workspaces go: in a folder named after the project under the default root, directly in the default root, or in the project's own .worktrees folder."
                 .to_owned(),
             aliases: Vec::new(),
         })?,
@@ -121,7 +122,7 @@ pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
     home_path(&["massorca", "workspaces"])
 }
 
-/// The layout a project added now gets under the default root: the stored `workspaces.layout`, else nested.
+/// The layout a project added now gets: the stored `workspaces.layout`, else in-project (decision 0183).
 pub(crate) async fn workspace_layout(ctx: &RequestCtx) -> Result<WorkspaceLayout, ErrorBody> {
     let stored = store_blocking::run(&ctx.state, |store| {
         store.get_setting(config::DEFAULT_OWNER, WORKSPACES_LAYOUT)
@@ -131,13 +132,14 @@ pub(crate) async fn workspace_layout(ctx: &RequestCtx) -> Result<WorkspaceLayout
         .as_deref()
         .map(stored_json)
         .transpose()?
-        .unwrap_or_else(|| Value::String(LAYOUT_NESTED.to_owned()));
+        .unwrap_or_else(|| Value::String(LAYOUT_IN_PROJECT.to_owned()));
     match value.as_str() {
         Some(LAYOUT_NESTED) => Ok(WorkspaceLayout::Nested),
         Some(LAYOUT_FLAT) => Ok(WorkspaceLayout::Flat),
+        Some(LAYOUT_IN_PROJECT) => Ok(WorkspaceLayout::InProject),
         _ => Err(ErrorBody::new(
             codes::CONFIG_INVALID_VALUE,
-            "workspaces.layout must be nested or flat",
+            "workspaces.layout must be nested, flat or in_project",
         )),
     }
 }

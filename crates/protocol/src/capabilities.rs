@@ -63,6 +63,9 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `attachments` on `agent.prompt` and `agent.queue` (decision 0172): files of the session's workspace sent with a prompt,
+/// typed as mentions on a terminal run and sent with a chat run.
+pub const AGENT_PROMPT_ATTACHMENTS: &str = "agent-prompt-attachments/1";
 /// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
 /// where its kind declares a live command for them, and kept for the session's next resume otherwise.
 pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
@@ -123,6 +126,8 @@ pub const SKILLS_PLACE: &str = "skills-place/1";
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
+/// Port forwards to loopback ports on the host (`host.forward*`, decision 0131): needs `binary-frames/1` too.
+pub const PORT_FORWARD: &str = "port-forward/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
 /// Scheduled automation definitions (`automation.*`, decision 0123). Not offered by a service that predates them.

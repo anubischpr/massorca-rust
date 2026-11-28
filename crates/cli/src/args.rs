@@ -649,11 +649,39 @@ pub enum HostCommand {
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
     AddSsh(HostAddSshArgs),
+    /// Sets how a paired host is dialed: through ssh (`ssh -W`), for a host only a bastion reaches, or directly.
+    /// Makes no connection.
+    Route(HostRouteArgs),
     /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
     Memory,
-    /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them. Works
-    /// with --host.
+    /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them, with the
+    /// URL each is opened at and whether a forward carries it. Works with --host.
     Ports,
+    /// Listens on a local port and carries each connection to a loopback port on host NAME, until Ctrl+C or until the
+    /// forward is stopped on the host. Needs host-admin on the host. With --list or --stop, reads or stops the host's
+    /// forwards instead.
+    Forward(HostForwardArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HostForwardArgs {
+    /// Host name, as `host list` shows it; `local` is this computer's own service.
+    pub name: String,
+    /// Port on the host, reached on its loopback address (127.0.0.1, then ::1).
+    #[arg(required_unless_present_any = ["list", "stop"], conflicts_with_all = ["list", "stop"])]
+    pub port: Option<u16>,
+    /// Local port to listen on. Defaults to the host port; 0 picks a free one, which the first line prints.
+    #[arg(long, value_name = "PORT", conflicts_with_all = ["list", "stop"])]
+    pub local: Option<u16>,
+    /// Local address to listen on. Any address other than a loopback one lets other machines reach the host port.
+    #[arg(long, value_name = "ADDRESS", default_value = "127.0.0.1", conflicts_with_all = ["list", "stop"])]
+    pub bind: std::net::IpAddr,
+    /// Lists the forwards open on the host, from every device.
+    #[arg(long, conflicts_with = "stop")]
+    pub list: bool,
+    /// Stops a forward on the host, by the id `--list` shows, and every connection it carries.
+    #[arg(long, value_name = "FORWARD")]
+    pub stop: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -669,6 +697,30 @@ pub struct HostRemoveArgs {
     /// SSH destination of the host to uninstall, as ssh takes it: [user@]host.
     #[arg(long, value_name = "TARGET", requires = "uninstall")]
     pub ssh: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("how").required(true).args(["ssh", "direct"])))]
+pub struct HostRouteArgs {
+    /// Host name.
+    pub name: String,
+    /// SSH destination to dial through, as ssh takes it: [user@]host or a ~/.ssh/config alias.
+    #[arg(long, value_name = "TARGET")]
+    pub ssh: Option<String>,
+    /// Extra option for ssh, repeatable: --ssh-arg -J --ssh-arg bastion.
+    #[arg(
+        long = "ssh-arg",
+        value_name = "ARG",
+        allow_hyphen_values = true,
+        requires = "ssh"
+    )]
+    pub ssh_arg: Vec<String>,
+    /// HOST:PORT the SSH target connects to. Defaults to the host's first address.
+    #[arg(long, value_name = "HOST:PORT", requires = "ssh")]
+    pub forward: Option<String>,
+    /// Dials the host directly again and forgets its SSH route.
+    #[arg(long)]
+    pub direct: bool,
 }
 
 #[derive(Debug, Args)]
@@ -690,4 +742,8 @@ pub struct HostAddSshArgs {
     /// Name this computer has on the server. Defaults to this computer's host name.
     #[arg(long, value_name = "NAME")]
     pub device_name: Option<String>,
+    /// Pairs, and dials the host from then on, through the same ssh target and --ssh-arg values, for a host only
+    /// ssh reaches (`host route`).
+    #[arg(long)]
+    pub tunnel: bool,
 }

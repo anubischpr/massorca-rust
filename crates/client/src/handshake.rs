@@ -51,7 +51,7 @@ pub(crate) async fn exchange(
         auth,
     };
     io.outbound
-        .send(hello)
+        .send(Frame::Message(hello))
         .await
         .map_err(|_| ClientError::Disconnected)?;
 

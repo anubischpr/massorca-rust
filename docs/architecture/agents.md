@@ -138,7 +138,8 @@ directory that does not exist has no kinds.
 ```
 
 - `prompt.mode`: `argv` | `flag` (with `flag`) | `none`. `separator` puts `--`
-  before the text. `paste`: `plain` | `bracketed`.
+  before the text. `paste`: `plain` | `bracketed`. `mention` (optional, decision 0172): how a file
+  attached to a prompt is named, with `{path}` for its path, for example `"@{path}"` for Claude.
 - `session_ref.assign`: args added at the first launch with a generated
   UUID as `{ref}`. `learn`: payload field that carries the agent's own id.
 - `resume`: args for a new run of an exited session; absent means not
@@ -303,7 +304,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
 | `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
-| `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
+| `agent.prompt` | workspace | `session`, `text`, `force?`, `attachments?` (`[{ path }]`, capability `agent-prompt-attachments/1`, decision 0172) | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.fork` | workspace | `session`, `prompt?`, `permission_mode?`, `title?` | `AgentSession`, the new session (capability `agent-fork/1`, decision 0168; the client refuses it before sending when the service does not offer it) |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
@@ -328,7 +329,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.fork_unavailable`,
+`agent.prompt_invalid`, `agent.attachment_invalid`, `agent.attachment_unsupported`, `agent.resume_unavailable`,
+`agent.resume_not_found`, `agent.fork_unavailable`,
 `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
@@ -531,6 +533,25 @@ session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 worktree; a folder workspace takes several writers (decision 0169).
 
+### Attachments (decision 0172)
+
+`agent.prompt` and `agent.queue` name up to 10 files of the session's workspace (`attachments: [{ path }]`). The path is
+relative to the workspace root, or absolute when it names a file inside it. `regular_file_inside` in
+`massorca-core-workspace` resolves it: a `..`, a path outside the root, a link that reaches outside it (symlink or
+junction), a missing file, a directory or a name that is not text is refused with `agent.attachment_invalid`, and the path
+is in `data`. The caps are consts in `core-agents/src/attachments.rs`: 1 MiB for a file that is not an image, 3 MiB for an
+image.
+
+- A terminal run types the text, then a mention per file: the kind's `prompt.mention` template with `{path}` (`@{path}`
+  for Claude), or the plain paths, one to a line, for a kind without one. It refuses every image with
+  `agent.attachment_unsupported`.
+- A chat run mentions its text files the same way. Each image is a stream-json image block, after the text block; the
+  media type comes from the extension (png, jpeg, gif, webp). Other image formats are refused.
+- A queued prompt checks its files when queued and again when typed. The names are kept in
+  `agent_prompt_queue.attachments_json`. A prompt whose files no longer check is failed with the refusal as its reason.
+- Capability `agent-prompt-attachments/1`. The client refuses a request with attachments before sending it to a service
+  that does not offer the capability.
+
 ### Fork (decision 0168)
 
 `agent.fork` starts a new session from a copy of an exited session's conversation. A kind declares its fork form as
@@ -602,8 +623,8 @@ enable, so a release build carries neither the points nor the variable;
 A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
 `agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
 
-- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
-  returns the prompt it queued then.
+- `agent.queue {session, text, request_id?, attachments?}` queues a prompt and returns it. A `request_id` the session
+  already queued returns the prompt it queued then. `attachments` are checked when queued (decision 0172).
 - `agent.queue.list {session}` returns `{session, items}`, head first.
 - `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
   A prompt being sent is refused with `agent.busy`.

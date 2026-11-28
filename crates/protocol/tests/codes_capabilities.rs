@@ -66,6 +66,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
     (codes::WORKSPACE_PATH_TAKEN, "workspace.path_taken"),
+    (codes::WORKSPACE_PATH_TOO_LONG, "workspace.path_too_long"),
     (codes::WORKSPACE_DIRTY, "workspace.dirty"),
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
@@ -145,6 +146,11 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::AGENT_QUEUE_ALREADY_DELIVERED,
         "agent.queue_already_delivered",
     ),
+    (codes::AGENT_ATTACHMENT_INVALID, "agent.attachment_invalid"),
+    (
+        codes::AGENT_ATTACHMENT_UNSUPPORTED,
+        "agent.attachment_unsupported",
+    ),
     (codes::AGENT_ARCHIVE_FAILED, "agent.archive_failed"),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
@@ -208,6 +214,10 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::AGENT_RELEASE, "agent-release/1");
     assert_eq!(capabilities::AGENT_ARCHIVE, "agent-archive/1");
+    assert_eq!(
+        capabilities::AGENT_PROMPT_ATTACHMENTS,
+        "agent-prompt-attachments/1"
+    );
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
