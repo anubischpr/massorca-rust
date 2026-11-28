@@ -27,6 +27,8 @@ const INLINE_ORDER: [Region; 3] = [
 /// What the shell shows and what the user has changed by acting on it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellModel {
+    /// Whether the Session summary is offered (`appearance.session_summary`); the person's open choice is kept apart.
+    session_summary_offered: bool,
     /// The paired remote hosts and their states, listed under the projects in the Sidebar (D-HO-01).
     remote_hosts: Vec<(String, HostState)>,
     /// The agent sessions each paired host runs, listed under its row (STAT-16).
@@ -69,6 +71,7 @@ impl ShellModel {
     /// A shell on its home page with the default regions (Sidebar open).
     pub fn new(snapshot: ShellSnapshot, window_width: f32) -> Self {
         Self {
+            session_summary_offered: true,
             snapshot,
             navigation: Navigation::default(),
             regions: RegionState::default(),
@@ -210,6 +213,9 @@ impl ShellModel {
         if self.navigation.mode == Mode::BotTeams && region != Region::Sidebar {
             return false;
         }
+        if !self.region_offered(region) {
+            return false;
+        }
         match self.placement(region) {
             Placement::Inline => true,
             Placement::Collapsed => self.regions.overlay() == Some(region),
@@ -218,6 +224,15 @@ impl ShellModel {
     }
 
     /// Opens or closes a region. A collapsed region toggles the overlay instead (X1).
+    /// Whether the settings offer `region`: the Session summary only while `appearance.session_summary` is on.
+    pub fn region_offered(&self, region: Region) -> bool {
+        region != Region::SessionSummary || self.session_summary_offered
+    }
+
+    pub fn set_session_summary_offered(&mut self, offered: bool) {
+        self.session_summary_offered = offered;
+    }
+
     pub fn toggle_region(&mut self, region: Region) {
         self.regions.toggle(region, self.window_width);
     }

@@ -98,6 +98,7 @@ fn transcript(_: &mut Window, _: &mut App) -> AnyElement {
         TranscriptRow::Turn {
             id: "turn".into(),
             state: TurnState::Running,
+            usage: Some("18.2k tokens so far · 16.9k in (12k cached) · 1.3k out".into()),
         },
     ];
     div()

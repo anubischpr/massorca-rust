@@ -8,8 +8,8 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentMarkSeenParams,
-    AgentModeSet, AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams,
-    AgentStartParams, BringBackResult, PromptReceipt,
+    AgentModeSet, AgentOptionsSet, AgentPromptParams, AgentResumeParams, AgentSession,
+    AgentSetModeParams, AgentSetOptionsParams, AgentStartParams, BringBackResult, PromptReceipt,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -132,6 +132,16 @@ impl ServiceHandle {
         params: AgentSetModeParams,
     ) -> Result<AgentModeSet, Refusal> {
         self.ask(|reply| Command::AgentSetMode { params, reply })
+            .await
+    }
+
+    /// `agent.set_options` (decision 0171): changes the session's model, effort or fast mode now or at its next resume.
+    /// The store takes the session from the answer.
+    pub async fn agent_set_options(
+        &self,
+        params: AgentSetOptionsParams,
+    ) -> Result<AgentOptionsSet, Refusal> {
+        self.ask(|reply| Command::AgentSetOptions { params, reply })
             .await
     }
 
@@ -347,6 +357,27 @@ pub(super) fn spawn_set_mode(
     tokio::spawn(async move {
         let result = client
             .agent_set_mode(&params)
+            .await
+            .map_err(|error| Refusal::from(&error));
+        if let Ok(set) = &result {
+            let _ = updates.send(StoreUpdate::AgentChanged(Box::new(set.session.clone())));
+        }
+        let _ = reply.send(result);
+    });
+}
+
+/// Sets a session's options on its own task. The store hears of the session before the caller.
+pub(super) fn spawn_set_options(
+    client: &Client,
+    params: AgentSetOptionsParams,
+    reply: oneshot::Sender<Result<AgentOptionsSet, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        let result = client
+            .agent_set_options(&params)
             .await
             .map_err(|error| Refusal::from(&error));
         if let Ok(set) = &result {
