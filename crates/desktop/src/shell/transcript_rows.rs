@@ -110,10 +110,12 @@ fn item_row(item: &wire::ChatItem) -> Option<TranscriptRow> {
             level: notice_level(*level),
             text: text.clone().into(),
         },
-        wire::ChatItemBody::Turn(turn) => TranscriptRow::Turn {
-            id,
-            state: turn_state(turn.state)?,
-        },
+        wire::ChatItemBody::Turn(turn) => {
+            let usage = turn.usage.as_ref().map(|usage| usage_line(usage).into());
+            let state =
+                turn_state(turn.state).or(usage.is_some().then_some(TurnState::Completed))?;
+            TranscriptRow::Turn { id, state, usage }
+        }
         wire::ChatItemBody::Unknown => return None,
     })
 }
@@ -164,6 +166,48 @@ fn notice_level(level: wire::NoticeLevel) -> NoticeLevel {
         wire::NoticeLevel::Warning | wire::NoticeLevel::Unknown => NoticeLevel::Warning,
         wire::NoticeLevel::Error => NoticeLevel::Error,
     }
+}
+
+/// The token counts a CLI reported (decision 0173). They are running totals for the conversation, so the line says
+/// "so far"; a part that is zero is left out.
+fn usage_line(usage: &wire::TokenUsage) -> String {
+    let total = if usage.total_tokens > 0 {
+        usage.total_tokens
+    } else {
+        usage.input_tokens.saturating_add(usage.output_tokens)
+    };
+    let part = |count: u64, of: u64, what: &str| {
+        let mut text = format!("{} {what}", compact(count));
+        if of > 0 {
+            text.push_str(&format!(
+                " ({} {})",
+                compact(of),
+                if what == "in" { "cached" } else { "reasoning" }
+            ));
+        }
+        text
+    };
+    format!(
+        "{} tokens so far · {} · {}",
+        compact(total),
+        part(usage.input_tokens, usage.cached_input_tokens, "in"),
+        part(usage.output_tokens, usage.reasoning_output_tokens, "out"),
+    )
+}
+
+/// 950, 12.4k, 1.2M: one decimal under ten units, none above.
+fn compact(count: u64) -> String {
+    let (value, unit) = match count {
+        0..1_000 => return count.to_string(),
+        1_000..1_000_000 => (count as f64 / 1_000.0, "k"),
+        _ => (count as f64 / 1_000_000.0, "M"),
+    };
+    let text = if value < 10.0 {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.0}")
+    };
+    format!("{}{unit}", text.trim_end_matches(".0"))
 }
 
 /// A completed turn has no footer; the others say how they stand, and an unknown state is unverifiable.
@@ -519,6 +563,70 @@ mod tests {
             &rows[0],
             TranscriptRow::Notice { level, .. } if *level == NoticeLevel::Warning
         ));
+    }
+
+    fn with_usage(mut item: ChatItem, usage: wire::TokenUsage) -> ChatItem {
+        if let wire::ChatItemBody::Turn(turn) = &mut item.body {
+            turn.usage = Some(usage);
+        }
+        item
+    }
+
+    #[test]
+    fn a_turn_with_token_counts_shows_them_in_its_footer_even_when_completed() {
+        let usage = wire::TokenUsage {
+            input_tokens: 16_940,
+            cached_input_tokens: 12_000,
+            output_tokens: 1_260,
+            reasoning_output_tokens: 0,
+            total_tokens: 18_200,
+        };
+        let completed = transcript(
+            vec![with_usage(turn("t1", 1, wire::TurnState::Completed), usage)],
+            None,
+        );
+        let rows = transcript_rows(&completed);
+        let [
+            TranscriptRow::Turn {
+                state, usage: line, ..
+            },
+        ] = rows.as_slice()
+        else {
+            panic!("expected one turn row, found {rows:?}");
+        };
+        assert_eq!(*state, TurnState::Completed);
+        assert_eq!(
+            line.as_deref(),
+            Some("18k tokens so far · 17k in (12k cached) · 1.3k out")
+        );
+
+        let running = transcript(
+            vec![with_usage(
+                turn("t2", 1, wire::TurnState::Running),
+                wire::TokenUsage {
+                    input_tokens: 900,
+                    output_tokens: 40,
+                    reasoning_output_tokens: 12,
+                    ..wire::TokenUsage::default()
+                },
+            )],
+            None,
+        );
+        let rows = transcript_rows(&running);
+        let [
+            TranscriptRow::Turn {
+                state, usage: line, ..
+            },
+        ] = rows.as_slice()
+        else {
+            panic!("expected one turn row, found {rows:?}");
+        };
+        assert_eq!(*state, TurnState::Running);
+        assert_eq!(
+            line.as_deref(),
+            Some("940 tokens so far · 900 in · 40 out (12 reasoning)"),
+            "no total reported: in plus out"
+        );
     }
 
     #[test]

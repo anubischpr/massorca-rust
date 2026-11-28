@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use massorca_protocol::MAX_FRAME_LEN_NETWORK;
 use rustls::pki_types::ServerName;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_tungstenite::WebSocketStream;
@@ -17,7 +18,9 @@ use crate::{NetError, Pin, TlsIdentity, WS_PATH, client_tls_config};
 /// The server end of a network connection.
 pub type ServerWs = WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>;
 /// The client end of a network connection.
-pub type ClientWs = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+pub type ClientWs = ClientWsOver<TcpStream>;
+/// The client end of a network connection over any byte stream.
+pub type ClientWsOver<S> = WebSocketStream<tokio_rustls::client::TlsStream<S>>;
 
 /// A server-side connection after TLS and the WebSocket upgrade.
 pub struct Accepted {
@@ -106,11 +109,38 @@ pub async fn connect(
 }
 
 async fn connect_one(address: &str, connector: &TlsConnector) -> Result<ClientWs, NetError> {
-    let server_name = server_name(address)?;
+    server_name(address)?;
     let tcp = TcpStream::connect(address).await?;
     tcp.set_nodelay(true)?;
+    upgrade(tcp, address, connector).await
+}
+
+/// TLS with the pinned server key and the WebSocket upgrade over a byte stream that already reaches the server at
+/// `address`, such as an SSH stdio forward (decision 0133). The pin is checked exactly as on a direct connection; the
+/// stream is trusted for nothing. The caller bounds the time.
+pub async fn connect_stream<S>(
+    stream: S,
+    address: &str,
+    server_pin: Pin,
+    identity: &TlsIdentity,
+) -> Result<ClientWsOver<S>, NetError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let connector = TlsConnector::from(client_tls_config(server_pin, identity)?);
+    upgrade(stream, address, &connector).await
+}
+
+async fn upgrade<S>(
+    stream: S,
+    address: &str,
+    connector: &TlsConnector,
+) -> Result<ClientWsOver<S>, NetError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let tls = connector
-        .connect(server_name, tcp)
+        .connect(server_name(address)?, stream)
         .await
         .map_err(pin_mismatch_or_io)?;
     let url = format!("wss://{address}{WS_PATH}");

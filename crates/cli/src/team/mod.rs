@@ -4,7 +4,9 @@ mod routine;
 mod text;
 
 mod delegate;
+mod message;
 use delegate::DelegateArgs;
+use message::{InboxArgs, MessageCommand};
 use routine::RoutineCommand;
 
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
@@ -73,6 +75,13 @@ pub enum TeamCommand {
     },
     /// Hands a task to a teammate from inside a bot's agent run: the child starts in its own workspace (decision 0128).
     Delegate(DelegateArgs),
+    /// Sends and answers messages between delegation bots from inside a bot's agent run (decision 0129).
+    Message {
+        #[command(subcommand)]
+        command: MessageCommand,
+    },
+    /// Lists the unread messages of this bot run's task, oldest first (decision 0129).
+    Inbox(InboxArgs),
     /// Lists, adds, changes, pauses, runs and removes a team's routines: schedules that start a bot on a task.
     Routine {
         #[command(subcommand)]
@@ -459,9 +468,14 @@ pub async fn execute(
     output: Output,
 ) -> Result<(), CliError> {
     // Checked before connecting: outside an agent run there is no service call to make.
-    if let TeamCommand::Delegate(args) = command {
-        return delegate::run(target, autostart, args, output).await;
-    }
+    let command = match command {
+        TeamCommand::Delegate(args) => return delegate::run(target, autostart, args, output).await,
+        TeamCommand::Message { command } => {
+            return message::run(target, autostart, command, output).await;
+        }
+        TeamCommand::Inbox(args) => return message::inbox(target, autostart, args, output).await,
+        other => other,
+    };
     let client = connect(target, autostart).await?;
     match command {
         TeamCommand::Create(args) => {
@@ -509,7 +523,9 @@ pub async fn execute(
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
         TeamCommand::Room { command } => run_room(&client, command, output).await?,
         TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
-        TeamCommand::Delegate(_) => unreachable!("team delegate is handled before connecting"),
+        TeamCommand::Delegate(_) | TeamCommand::Message { .. } | TeamCommand::Inbox(_) => {
+            unreachable!("run-only team commands are handled before connecting")
+        }
         TeamCommand::Board {
             team,
             project,

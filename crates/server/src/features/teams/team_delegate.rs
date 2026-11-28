@@ -30,6 +30,7 @@ use crate::registry::RegistrationHandle;
 use super::task::{new_task_row, view_of};
 use super::task_start::{Changes, publish_changes, start_gate, start_task, team_mode};
 use super::task_state;
+use super::team_message::child_report;
 use super::{blocking, non_blank, optional_text, selectors, store_error};
 
 /// The longest title a child task takes from its text, in Unicode scalar values.
@@ -247,14 +248,30 @@ fn caller(
     agents: &Agents,
     params: &TeamDelegateParams,
 ) -> Result<(TaskRow, BotRow), ErrorBody> {
-    let not_a_bot = || {
-        ErrorBody::new(
-            codes::TEAM_DELEGATE_NOT_A_BOT,
-            "only a bot's agent run can delegate, with its own session and run token",
-        )
-    };
-    let (Some(session), Some(token)) = (params.session.as_deref(), params.agent_token.as_deref())
-    else {
+    bot_run(
+        store,
+        agents,
+        params.session.as_deref(),
+        params.agent_token.as_deref(),
+        || {
+            ErrorBody::new(
+                codes::TEAM_DELEGATE_NOT_A_BOT,
+                "only a bot's agent run can delegate, with its own session and run token",
+            )
+        },
+    )
+}
+
+/// The task and bot of a live bot run: `token` must be the run token of a live run of `session`
+/// (`permission.denied` otherwise), and that session must be a task's with a bot (`not_a_bot` otherwise).
+pub(super) fn bot_run(
+    store: &Store,
+    agents: &Agents,
+    session: Option<&str>,
+    token: Option<&str>,
+    not_a_bot: impl Fn() -> ErrorBody,
+) -> Result<(TaskRow, BotRow), ErrorBody> {
+    let (Some(session), Some(token)) = (session, token) else {
         return Err(not_a_bot());
     };
     if !agents.run_token_matches(session, token) {
@@ -263,14 +280,14 @@ fn caller(
             "the agent token does not match a live run of that session",
         ));
     }
-    let parent = store
+    let task = store
         .find_task_by_session(session)
         .map_err(store_error)?
-        .ok_or_else(not_a_bot)?;
-    let bot_id = parent.bot_id.clone().ok_or_else(not_a_bot)?;
-    let team = selectors::team(store, &parent.team_id)?;
-    let caller = selectors::bot(store, &team, &bot_id)?;
-    Ok((parent, caller))
+        .ok_or_else(&not_a_bot)?;
+    let bot_id = task.bot_id.clone().ok_or_else(&not_a_bot)?;
+    let team = selectors::team(store, &task.team_id)?;
+    let bot = selectors::bot(store, &team, &bot_id)?;
+    Ok((task, bot))
 }
 
 /// The bot competence picks for `text` when none is named: the teammate whose job or skills share the most words with
@@ -364,6 +381,7 @@ fn delegation_list(
                 parent: parent.id.clone(),
                 read_only: child.read_only,
                 child: child.task,
+                report: child.report,
             });
         }
     }
@@ -389,6 +407,7 @@ fn children_of(
         children.push(DelegationChild {
             task: view_of(&row, &task_state::load(agents, &row)?),
             read_only,
+            report: child_report(store, &id, parent)?,
         });
     }
     Ok(children)

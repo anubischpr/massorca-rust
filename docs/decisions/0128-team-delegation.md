@@ -66,7 +66,8 @@ Status: accepted, 2026-11-26.
 
 - The parent does not wait for a writing child that shares its folder (placement rule 3). A writing child in a folder
   project or in the team's folder runs beside its parent, as those folders already allow for tasks.
-- A delegated child's result is not sent as a prompt to the lead's run; the lead reads it from the tree or the room.
+- A delegated child's result is not sent as a prompt to the lead's run by itself; the lead reads it from the tree or the
+  room. A child that sends `worker_done` (decision 0129) wakes a live lead run.
 - Only a task run can delegate. A bot's reply run in the Conference room cannot yet.
 - Automatic routing by usage (ACC-26) is not built.
 - No end-to-end test covers a live bot run that calls `team delegate`: the fake agent cannot run the CLI. The run-token,

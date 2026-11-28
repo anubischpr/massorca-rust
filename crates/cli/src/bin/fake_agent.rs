@@ -139,6 +139,7 @@ fn main() -> ExitCode {
         Some("whoami-json") => return whoami_json(),
         Some("logout") => return logout(),
         Some("hang") => return hang(),
+        Some("dev-server") => return dev_server(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
         Some("app-server") => return codex_app_server(),
@@ -677,7 +678,8 @@ const LISTING_COUNT_ENV: &str = "FAKE_AGENT_MODELS_COUNT";
 const LISTING_FAIL_ENV: &str = "FAKE_AGENT_MODELS_FAIL";
 /// Set to any value, a listing sleeps far past any test's time limit: a vendor CLI that hangs.
 const LISTING_HANG_ENV: &str = "FAKE_AGENT_MODELS_HANG";
-/// The token's field that names the account's models, as `id:label` strings.
+/// The token's field that names the account's models, as `id:label` strings, or `id:label:resolved` where `resolved` is
+/// the model id the vendor says the alias runs now (a Claude listing's `resolvedModel`).
 const LISTING_FIELD: &str = "listing";
 
 /// `models`: the account's listing as `id<TAB>label` lines, the shape of `agy models` (decision 0166).
@@ -692,7 +694,7 @@ fn models() -> ExitCode {
     let mut out = io::stdout().lock();
     match listing_from_home() {
         Some(models) => {
-            for (id, label) in models {
+            for (id, label, _) in models {
                 let _ = writeln!(out, "{id}\t{label}");
             }
         }
@@ -716,8 +718,12 @@ fn claude_models() -> ExitCode {
         Some(models) => {
             let rows: Vec<Value> = models
                 .iter()
-                .map(|(id, label)| {
-                    serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false })
+                .map(|(id, label, resolved)| {
+                    let mut row = serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false });
+                    if let Some(resolved) = resolved {
+                        row["resolvedModel"] = Value::from(resolved.as_str());
+                    }
+                    row
                 })
                 .collect();
             serde_json::json!({
@@ -738,8 +744,9 @@ fn claude_models() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The listing the account's token names, as `(id, label)` pairs; `None` when there is no home, token or listing.
-fn listing_from_home() -> Option<Vec<(String, String)>> {
+/// The listing the account's token names, as `(id, label, resolved)` rows; `None` when there is no home, token or
+/// listing.
+fn listing_from_home() -> Option<Vec<(String, String, Option<String>)>> {
     let home = PathBuf::from(env::var_os(CREDENTIAL_HOME_ENV)?);
     let token: Value =
         serde_json::from_str(&fs::read_to_string(home.join(CREDENTIAL_FILE)).ok()?).ok()?;
@@ -747,8 +754,13 @@ fn listing_from_home() -> Option<Vec<(String, String)>> {
         .as_array()?
         .iter()
         .map(|entry| {
-            let (id, label) = entry.as_str()?.split_once(':')?;
-            Some((id.to_owned(), label.to_owned()))
+            let mut parts = entry.as_str()?.splitn(3, ':');
+            let (id, label) = (parts.next()?, parts.next()?);
+            Some((
+                id.to_owned(),
+                label.to_owned(),
+                parts.next().map(str::to_owned),
+            ))
         })
         .collect()
 }
@@ -1021,6 +1033,35 @@ fn logout() -> ExitCode {
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
+    }
+    ExitCode::SUCCESS
+}
+
+/// A dev server for the port tests (decision 0131): it listens on a free loopback port, prints its URL as Vite does, and
+/// echoes each connection until the other side ends its data, for five minutes.
+fn dev_server() -> ExitCode {
+    let Ok(listener) = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(address) = listener.local_addr() else {
+        return ExitCode::FAILURE;
+    };
+    say(&format!(
+        "  Local:   http://localhost:{}/app/",
+        address.port()
+    ));
+    thread::spawn(|| {
+        thread::sleep(Duration::from_secs(300));
+        std::process::exit(0);
+    });
+    for connection in listener.incoming().flatten() {
+        thread::spawn(move || {
+            let mut connection = connection;
+            if let Ok(mut reader) = connection.try_clone() {
+                let _ = io::copy(&mut reader, &mut connection);
+                let _ = connection.shutdown(std::net::Shutdown::Write);
+            }
+        });
     }
     ExitCode::SUCCESS
 }

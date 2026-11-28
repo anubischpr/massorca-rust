@@ -58,7 +58,7 @@ async fn react(state: &Arc<AppState>, change: Change) {
             Some(ReplyEnd::Forgotten),
             Some(ReplyEnd::Forgotten),
         ),
-        Change::Account(_) | Change::Queue(_) | Change::Chat(_) => return,
+        Change::Account(_) | Change::Models(_) | Change::Queue(_) | Change::Chat(_) => return,
     };
     let route_session = session_id.clone();
     let linked = blocking_state(state, move |store, agents| {
@@ -179,7 +179,7 @@ fn tell_room(
 }
 
 /// The word a room line opens with for a latched outcome, as the Board's card states read.
-fn outcome_word(outcome: TaskOutcome) -> &'static str {
+pub(super) fn outcome_word(outcome: TaskOutcome) -> &'static str {
     match outcome {
         TaskOutcome::Success => "Done",
         TaskOutcome::Failure => "Stuck",

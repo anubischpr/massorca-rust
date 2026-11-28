@@ -39,6 +39,7 @@ use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, Workspace
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
+use crate::attachments::{self, Attachment};
 use crate::catalog::Catalog;
 use crate::instructions::{self, DELEGATION_INSTRUCTIONS};
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
@@ -122,6 +123,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
+    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment); the kind id. Announced
+    /// as an account change of the kind, so a client reads the kinds again. Watchers do not get it.
+    Models(String),
     /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
     /// of the session do.
     Chat(Box<crate::chat::ChatChanged>),
@@ -342,8 +346,9 @@ struct Inner {
     merging: Mutex<HashSet<String>>,
     /// Transcripts the resume state found (decision 0160), cleared when a run starts or exits.
     found_transcripts: resume_state::FoundTranscripts,
-    /// The model listings the service keeps (decision 0166), held in memory.
-    models: crate::model_catalog::ModelCache,
+    /// The model listings the service keeps (decision 0166), held in memory. Shared, so a background listing's guard can
+    /// hold it on its own thread.
+    models: Arc<crate::model_catalog::ModelCache>,
     /// The fast mode `agent.set_options` chose for each session, which its next resume launches with (decision 0171). The
     /// model and the effort are stored with the session (decision 0168); fast mode has no column, so it is held here, in
     /// memory: the service forgets it when it stops.
@@ -402,6 +407,8 @@ struct PromptRules {
     has_status: bool,
     paste: PasteMode,
     submit: String,
+    /// How the kind names an attached file, `{path}` standing for its path (decision 0172).
+    mention: Option<String>,
 }
 
 impl PromptRules {
@@ -410,6 +417,7 @@ impl PromptRules {
             has_status: decl.status.mechanism != StatusMechanism::None,
             paste: decl.prompt.paste,
             submit: decl.prompt.submit.clone(),
+            mention: decl.prompt.mention.clone(),
         }
     }
 }
@@ -438,7 +446,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Agents {
     /// The model listings the service keeps (decision 0166).
-    pub(crate) fn model_cache(&self) -> &crate::model_catalog::ModelCache {
+    pub(crate) fn model_cache(&self) -> &Arc<crate::model_catalog::ModelCache> {
         &self.inner.models
     }
 
@@ -462,7 +470,7 @@ impl Agents {
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
                 found_transcripts: resume_state::FoundTranscripts::default(),
-                models: crate::model_catalog::ModelCache::default(),
+                models: Arc::default(),
                 chosen_fast: Mutex::new(HashMap::new()),
                 started: Mutex::new(HashMap::new()),
                 listing_timeout: crate::model_catalog::listing_timeout_from(
@@ -560,12 +568,14 @@ impl Agents {
     /// Every declared kind, read again from the profile, with programs resolved on the program search (decision 0164).
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
-        let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
-            .views(profile_dir, &self.program_search());
+        let catalog = Catalog::load(self.kind_packages(), profile_dir);
+        let mut kinds = catalog.views(profile_dir, &self.program_search());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
         }
+        // A model the catalog's last listing resolves reads as its version (decision 0166, amendment).
+        self.version_kind_labels(&catalog, &mut kinds);
         AgentKinds { kinds }
     }
 
@@ -851,7 +861,14 @@ impl Agents {
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
                 .map(Started::Terminal),
             RunStart::Chat(adapter) => self
-                .spawn_chat_run(&session_id, plan, &workspace.id, &workspace.path, adapter)
+                .spawn_chat_run(
+                    &session_id,
+                    plan,
+                    &workspace.id,
+                    &workspace.path,
+                    adapter,
+                    decl.prompt.mention.clone(),
+                )
                 .map(Started::Chat),
         }
         .inspect_err(|_| {
@@ -1193,7 +1210,14 @@ impl Agents {
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
                 .map(Started::Terminal),
             Some(adapter) => self
-                .spawn_chat_run(&row.id, plan, &workspace.id, &workspace.path, adapter)
+                .spawn_chat_run(
+                    &row.id,
+                    plan,
+                    &workspace.id,
+                    &workspace.path,
+                    adapter,
+                    decl.prompt.mention.clone(),
+                )
                 .map(Started::Chat),
         }
         .inspect_err(|_| {
@@ -1480,7 +1504,50 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<PromptReceipt, AgentError> {
-        self.send_prompt(selector, text, force, true)
+        self.send_prompt(selector, text, force, true, &[])
+    }
+
+    /// `agent.prompt` with files of the session's workspace (decision 0172). Each file is named in the text: a terminal run
+    /// types a mention for it, and a chat run sends the same mention in its message. The names are checked here, against
+    /// the workspace of the session, and again when a queued prompt is typed.
+    pub fn prompt_with_attachments(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+        attachments: &[String],
+    ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, true, attachments)
+    }
+
+    /// The files a prompt names, resolved inside the workspace `workspace_id` and checked for the kind of run it goes to: a
+    /// terminal run takes no images (decision 0172).
+    pub(crate) fn attachments_in(
+        &self,
+        workspace_id: &str,
+        names: &[String],
+        chat: bool,
+    ) -> Result<Vec<Attachment>, AgentError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let workspace = self.inner.config.workspaces.show_workspace(workspace_id)?;
+        let files = attachments::resolve(Path::new(&workspace.path), names)?;
+        if !chat {
+            attachments::refuse_images(&files, attachments::TERMINAL_IMAGE_REFUSAL)?;
+        }
+        Ok(files)
+    }
+
+    /// Types a system prompt, such as a teammate's message (decision 0129). Unlike [`Agents::prompt`] it does not lift
+    /// the session's queue pauses and is not announced as the person's prompt.
+    pub fn system_prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+    ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, false)
     }
 
     /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
@@ -1491,10 +1558,11 @@ impl Agents {
         text: &str,
         force: bool,
         lift_queue_pauses: bool,
+        attachments: &[String],
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
-        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses)?;
+        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses, attachments)?;
         // Only the person's prompts are announced: a system prompt, such as a delegated child's report, is not work.
         if lift_queue_pauses {
             self.announce_prompt(&row.id, text);
@@ -1502,21 +1570,25 @@ impl Agents {
         Ok(receipt)
     }
 
-    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does.
+    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does, with the
+    /// workspace files `attachments` names.
     fn type_prompt(
         &self,
         row: &AgentSessionRow,
         text: &str,
         force: bool,
         lift_queue_pauses: bool,
+        attachments: &[String],
     ) -> Result<PromptReceipt, AgentError> {
+        let chat = self.run_type_of(&row.id)? == RunType::Chat;
+        let files = self.attachments_in(&row.workspace_id, attachments, chat)?;
         // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
         // writing child as a terminal one does (decision 0170).
-        if self.run_type_of(&row.id)? == RunType::Chat {
+        if chat {
             if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), row) {
                 return Err(child_writing(&row.id, &child));
             }
-            return self.chat_prompt(row, text, force, lift_queue_pauses);
+            return self.chat_prompt(row, text, &files, force, lift_queue_pauses);
         }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.
@@ -1538,7 +1610,9 @@ impl Agents {
             if let Some(refusal) = input_refusal(run, &session.id, state, force) {
                 return Err(refusal);
             }
-            let bytes = prompt::input_bytes(text, run.prompt.paste, &run.prompt.submit);
+            let typed = attachments::with_mentions(text, run.prompt.mention.as_deref(), &files);
+            launch::check_prompt(&typed)?;
+            let bytes = prompt::input_bytes(&typed, run.prompt.paste, &run.prompt.submit);
             let Some(terminal) = session.terminal_id.clone() else {
                 return Err(not_live(&session.id));
             };
@@ -3303,6 +3377,7 @@ pub(crate) mod tests {
             token: "t".to_owned(),
             rules: HookRules::default(),
             prompt: PromptRules {
+                mention: None,
                 has_status: true,
                 paste: PasteMode::Plain,
                 submit: "\r".to_owned(),
@@ -3352,6 +3427,7 @@ pub(crate) mod tests {
             token: "t".to_owned(),
             rules: HookRules::default(),
             prompt: PromptRules {
+                mention: None,
                 has_status: true,
                 paste: PasteMode::Plain,
                 submit: "\r".to_owned(),
@@ -3398,6 +3474,7 @@ pub(crate) mod tests {
                 token: "t".to_owned(),
                 rules: HookRules::default(),
                 prompt: PromptRules {
+                    mention: None,
                     has_status: true,
                     paste: PasteMode::Plain,
                     submit: "\r".to_owned(),
@@ -3592,6 +3669,7 @@ pub(crate) mod tests {
                 token: "t".to_owned(),
                 rules: HookRules::default(),
                 prompt: PromptRules {
+                    mention: None,
                     has_status: true,
                     paste: PasteMode::Plain,
                     submit: "\r".to_owned(),

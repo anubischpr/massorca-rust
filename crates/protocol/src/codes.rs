@@ -19,6 +19,18 @@ pub const STREAM_OVERFLOW: &str = "stream.overflow";
 pub const STREAM_ITEM_TOO_LARGE: &str = "stream.item_too_large";
 /// The method sends stream-bytes frames and the client did not negotiate `binary-frames/1`.
 pub const STREAM_BINARY_FRAMES_REQUIRED: &str = "stream.binary_frames_required";
+/// The client sent more stream bytes than the stream accepts unread; the stream ends with this error.
+pub const STREAM_INBOUND_OVERFLOW: &str = "stream.inbound_overflow";
+/// The client sent a payload larger than the stream takes; it is refused unqueued and the stream ends with this error.
+pub const STREAM_INBOUND_TOO_LARGE: &str = "stream.inbound_too_large";
+/// No open forward of this connection has the id (decision 0131).
+pub const FORWARD_NOT_FOUND: &str = "forward.not_found";
+/// A forward's target is not a loopback address on the host.
+pub const FORWARD_TARGET_NOT_LOOPBACK: &str = "forward.target_not_loopback";
+/// Nothing accepted the connection on the forward's port on the host.
+pub const FORWARD_CONNECT_FAILED: &str = "forward.connect_failed";
+/// The connection holds the most forwards, or the forward carries the most connections, allowed at a time.
+pub const FORWARD_LIMIT: &str = "forward.limit";
 /// A reply is larger than a frame; only the request that asked for it fails.
 pub const RESPONSE_TOO_LARGE: &str = "response.too_large";
 pub const PATH_NOT_UTF8: &str = "path.not_utf8";
@@ -265,6 +277,12 @@ pub const AGENT_QUEUE_FULL: &str = "agent.queue_full";
 pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 /// The request id belongs to a prompt the session already delivered, so it is not typed again (decision 0084).
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
+/// A file a prompt names is not a regular file inside the session's workspace, is over its size cap, or the prompt names
+/// more files than it may (decision 0172); the message names the file or the cap.
+pub const AGENT_ATTACHMENT_INVALID: &str = "agent.attachment_invalid";
+/// The run cannot take a file of that kind: an image on a terminal run, or an image type a chat run does not take
+/// (decision 0172); the message names the file.
+pub const AGENT_ATTACHMENT_UNSUPPORTED: &str = "agent.attachment_unsupported";
 /// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
 pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
 /// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The
@@ -433,3 +451,15 @@ pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown
 pub const TEAM_ROOM_MENTION_UNKNOWN: &str = "team.room_mention_unknown";
 /// A room line's `@file:` mention leaves its project's folder, through `..`, an absolute path or a link (AUTO-13).
 pub const TEAM_ROOM_FILE_OUTSIDE: &str = "team.room_file_outside";
+/// A team message call that is not an agent run of a bot's task with its run token (decision 0129).
+pub const TEAM_MESSAGE_NOT_A_BOT: &str = "team.message_not_a_bot";
+/// A team message to a task that is neither the sender's parent nor one of its children (decision 0129).
+pub const TEAM_MESSAGE_NO_EDGE: &str = "team.message_no_edge";
+/// A `worker_done` naming a task that does not exist.
+pub const TEAM_MESSAGE_UNKNOWN_TASK: &str = "team.message_unknown_task";
+/// A `worker_done` naming a task that is not the sender's own task delegated by the recipient.
+pub const TEAM_MESSAGE_NOT_YOUR_CHILD: &str = "team.message_not_your_child";
+/// A `worker_done` for a task that already ended with another outcome; its data names that outcome.
+pub const TEAM_MESSAGE_ALREADY_SETTLED: &str = "team.message_already_settled";
+/// A reply to, or a `reply_to` naming, a message that is not in the caller's conversations.
+pub const TEAM_MESSAGE_UNKNOWN: &str = "team.message_unknown";

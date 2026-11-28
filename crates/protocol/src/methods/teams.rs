@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::methods::projects::ProjectKind;
 use crate::methods::tasks::{CardState, Column, Task};
+use crate::methods::team_room::WorkerOutcome;
 
 /// Params: [`TeamCreateParams`]. Result: [`Team`].
 pub const CREATE: &str = "team.create";
@@ -699,6 +700,9 @@ pub struct DelegationLink {
     pub parent: String,
     pub read_only: bool,
     pub child: Task,
+    /// The child's last report to its parent (decision 0129); absent from older hosts.
+    #[serde(default, skip_serializing_if = "ChildReport::is_empty")]
+    pub report: ChildReport,
 }
 
 /// One child in a delegation tree. Its status is the task's own: its column and outcome.
@@ -707,4 +711,23 @@ pub struct DelegationChild {
     pub task: Task,
     /// The child only read in its parent's workspace.
     pub read_only: bool,
+    /// The child's last report to its parent (decision 0129); absent from older hosts.
+    #[serde(default, skip_serializing_if = "ChildReport::is_empty")]
+    pub report: ChildReport,
+}
+
+/// What a delegated child last told its parent (decision 0129): the subject of its latest `status` message, and the
+/// outcome of its `worker_done`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WorkerOutcome>,
+}
+
+impl ChildReport {
+    pub fn is_empty(&self) -> bool {
+        self.status.is_none() && self.outcome.is_none()
+    }
 }

@@ -237,6 +237,34 @@ pub enum RoomMentionKind {
     Unknown,
 }
 
+/// Params: [`TeamMessageSendParams`]. Result: [`TeamMessageSent`]. Called by a bot's run (capability `team-messages/1`).
+pub const MESSAGE_SEND: &str = "team.message_send";
+/// Params: [`TeamMessageReplyParams`]. Result: [`TeamMessageSent`]. Answers a message in the caller's inbox.
+pub const MESSAGE_REPLY: &str = "team.message_reply";
+/// Params: [`TeamInboxParams`]. Result: [`TeamInbox`], the caller's unread messages, oldest first.
+pub const INBOX: &str = "team.inbox";
+/// The address of a run's parent task in [`TeamMessageSendParams::to`].
+pub const TO_PARENT: &str = "parent";
+/// The most bytes a message body holds, so a delivered message fits one agent prompt.
+pub const MAX_MESSAGE_BODY_BYTES: usize = 6000;
+/// The most characters a message subject holds.
+pub const MAX_MESSAGE_SUBJECT_CHARS: usize = 200;
+
+/// What a message between bots is (decision 0129). A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageType {
+    Status,
+    Question,
+    /// A child's report that its task ended; it carries an outcome and settles that task.
+    WorkerDone,
+    Handoff,
+    Escalation,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
 /// One mention: what it names and the text that names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomMention {
@@ -276,6 +304,196 @@ pub struct TeamRoomResolveParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomMentions {
     pub mentions: Vec<RoomMention>,
+}
+
+/// How soon a message wants its reader. `high` and `urgent` wake a live parent run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePriority {
+    #[default]
+    Normal,
+    High,
+    Urgent,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The outcome a `worker_done` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerOutcome {
+    Succeeded,
+    Failed,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Where a message went: the recipient's inbox only, or also its live run's prompt queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageDelivery {
+    #[default]
+    Inbox,
+    /// Handed to the recipient's live run as a prompt; it stays in the inbox too.
+    Run,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Params of `team.message_send`. The run names its own `session` and `agent_token`; the sender is that run's task and
+/// bot. `body` is never logged.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMessageSendParams {
+    /// [`TO_PARENT`], or the id of a child task the sender's task delegated.
+    pub to: String,
+    #[serde(rename = "type")]
+    pub kind: MessageType,
+    #[serde(default)]
+    pub priority: MessagePriority,
+    pub subject: String,
+    pub body: String,
+    /// Required on `worker_done`, refused on any other type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WorkerOutcome>,
+    /// The task a `worker_done` settles. Absent: the sender's own task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// The thread the message continues. Absent: a new thread, named by the message's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+    /// The message this one answers; its thread is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The run token of `session`. `Debug` never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+impl fmt::Debug for TeamMessageSendParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeamMessageSendParams")
+            .field("to", &self.to)
+            .field("kind", &self.kind)
+            .field("priority", &self.priority)
+            .field("subject", &self.subject)
+            .field("body", &"[redacted]")
+            .field("outcome", &self.outcome)
+            .field("task", &self.task)
+            .field("thread", &self.thread)
+            .field("reply_to", &self.reply_to)
+            .field("session", &self.session)
+            .field("agent_token", &redacted(self.agent_token.as_ref()))
+            .finish()
+    }
+}
+
+/// Params of `team.message_reply`: answers `message`, which must be in the caller's inbox, on its thread.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMessageReplyParams {
+    pub message: String,
+    pub body: String,
+    /// Absent: `status`.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MessageType>,
+    #[serde(default)]
+    pub priority: MessagePriority,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+impl fmt::Debug for TeamMessageReplyParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeamMessageReplyParams")
+            .field("message", &self.message)
+            .field("body", &"[redacted]")
+            .field("kind", &self.kind)
+            .field("priority", &self.priority)
+            .field("session", &self.session)
+            .field("agent_token", &redacted(self.agent_token.as_ref()))
+            .finish()
+    }
+}
+
+/// Params of `team.inbox`. `mark_read` marks the listed messages read after listing them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamInboxParams {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mark_read: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+impl fmt::Debug for TeamInboxParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeamInboxParams")
+            .field("mark_read", &self.mark_read)
+            .field("session", &self.session)
+            .field("agent_token", &redacted(self.agent_token.as_ref()))
+            .finish()
+    }
+}
+
+fn redacted(token: Option<&String>) -> Option<&'static str> {
+    token.map(|_| "[redacted]")
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// One message between two bots of a delegation (decision 0129).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMessage {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: MessageType,
+    pub priority: MessagePriority,
+    pub subject: String,
+    pub body: String,
+    pub thread: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WorkerOutcome>,
+    /// The task a `worker_done` settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settles: Option<String>,
+    pub from_task: String,
+    /// The sending bot's name; absent once it was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_bot: Option<String>,
+    pub to_task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_bot: Option<String>,
+    #[serde(default)]
+    pub delivery: MessageDelivery,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read: bool,
+    pub created_at_ms: i64,
+}
+
+/// Result of `team.message_send` and `team.message_reply`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMessageSent {
+    pub message: TeamMessage,
+    /// `true` when a `worker_done` repeated one already stored: `message` is the first one, and nothing changed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub duplicate: bool,
+}
+
+/// Result of `team.inbox`: the caller's unread messages, oldest first, as they were before `mark_read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamInbox {
+    pub messages: Vec<TeamMessage>,
 }
 
 #[cfg(test)]

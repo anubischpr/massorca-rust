@@ -693,18 +693,13 @@ fn task_card(
     )
 }
 
-/// One child a task card lists: its title, its state, and that it reads in its parent's workspace.
+/// One child a task card lists: its title, its state, where it works, and its last report (decision 0129).
 fn delegated_child_row(child: &RoomChild, theme: &Theme) -> impl IntoElement {
-    let reads = if child.read_only {
-        " · reads in the parent's workspace"
-    } else {
-        ""
-    };
     div()
         .text_style(TYPE_CAPTION)
         .text_color(theme.palette.text.secondary)
         .debug_selector(|| "room-delegated-child".to_owned())
-        .child(format!("{} · {}{}", child.title, child.column, reads))
+        .child(child.row_text())
 }
 
 /// The "Routine created" card of a routine a line scheduled (audit C5), with the way to the team's Routines.

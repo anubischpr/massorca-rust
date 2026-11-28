@@ -4,10 +4,20 @@
 
 use massorca_ui::assets::{FONT_MONO, FONT_SANS};
 
+use super::setting_rows::Live;
+
 /// The service setting behind the workspace folder row.
 pub const WORKSPACE_FOLDER_KEY: &str = "workspaces.default_root";
 /// Where conversations without a project are kept (A95). The service has no setting for it yet.
 pub const CONVERSATIONS_FOLDER: &str = "~/MassOrca/Conversations";
+/// The row that waits for the Advanced switch (D-ST-10).
+const DEVELOPER_TOOLS: &str = "Developer tools";
+
+/// Whether a row stays off the page: Developer tools while `advanced.enabled` is off.
+pub fn hidden(row: &RowSpec, advanced: bool) -> bool {
+    row.label == DEVELOPER_TOOLS && !advanced
+}
+
 /// The status of a row whose layer is not built yet.
 pub const NOT_AVAILABLE: &str = "Not available yet";
 
@@ -137,6 +147,8 @@ pub enum RowBody {
     AddHost,
     /// This computer's Git, as its service reported it on connect (GIT-01).
     GitAvailability,
+    /// A core setting, read from the store and written through `config.set` and `config.reset` (SET-01).
+    Setting(Live),
     Planned(Planned),
 }
 
@@ -172,10 +184,11 @@ const GENERAL: &[RowSpec] = &[
     RowSpec {
         label: "Updates",
         helper: "Release channel for MassOrca.",
-        body: RowBody::Planned(Planned::ChoiceAction(
-            &["Stable", "Preview"],
-            "Check for updates",
-        )),
+        body: RowBody::Setting(Live::Choice {
+            key: "updates.channel",
+            options: &[("stable", "Stable"), ("preview", "Preview")],
+            action: Some("Check for updates"),
+        }),
     },
     RowSpec {
         label: "Setup checklist",
@@ -198,29 +211,30 @@ const AGENTS: &[RowSpec] = &[
     RowSpec {
         label: "Computer use",
         helper: "Lets an agent use the screen, mouse and keyboard.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("agents.computer_use")),
     },
     RowSpec {
         label: "Browser access",
         helper: "Lets an agent drive the browser.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("agents.browser_access")),
     },
     RowSpec {
         label: "Keep the computer awake",
         helper: "Stops the PC from sleeping while an agent runs.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("agents.keep_awake")),
     },
     RowSpec {
         label: "Session search",
         helper: "Searches inside past agent sessions.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("sessions.search")),
     },
     RowSpec {
         label: "Delegation depth limit",
         helper: "How many levels of child sessions an agent may start, from 1 to 5.",
-        body: RowBody::Planned(Planned::Number {
-            value: Some("3"),
+        body: RowBody::Setting(Live::Number {
+            key: "agents.delegation_depth",
             unit: "levels",
+            step: 1,
         }),
     },
 ];
@@ -249,14 +263,23 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Density",
         helper: "How much space rows take.",
-        body: RowBody::Planned(Planned::Choice(&["Compact", "Default", "Comfortable"])),
+        body: RowBody::Setting(Live::Choice {
+            key: "appearance.density",
+            options: &[
+                ("compact", "Compact"),
+                ("default", "Default"),
+                ("comfortable", "Comfortable"),
+            ],
+            action: None,
+        }),
     },
     RowSpec {
         label: "Text size",
         helper: "Scales the interface text from 90% to 130%.",
-        body: RowBody::Planned(Planned::Slider {
-            value: "100%",
-            percent: 25,
+        body: RowBody::Setting(Live::Number {
+            key: "appearance.text_size",
+            unit: "%",
+            step: 5,
         }),
     },
     RowSpec {
@@ -272,18 +295,21 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Session summary",
         helper: "Shows only the cards that have information.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("appearance.session_summary")),
     },
     RowSpec {
         label: "Status bar items",
         helper: "What the status bar shows.",
-        body: RowBody::Planned(Planned::Checkboxes(&[
-            "Agent status",
-            "Memory",
-            "Terminals",
-            "Ports",
-            "Hosts",
-        ])),
+        body: RowBody::Setting(Live::Checkboxes {
+            key: "appearance.status_bar",
+            options: &[
+                ("agent_status", "Agent status"),
+                ("memory", "Memory"),
+                ("terminals", "Terminals"),
+                ("ports", "Ports"),
+                ("hosts", "Hosts"),
+            ],
+        }),
     },
 ];
 
@@ -291,9 +317,10 @@ const INPUT: &[RowSpec] = &[
     RowSpec {
         label: "Tab width",
         helper: "Spaces inserted for a tab in the code editor.",
-        body: RowBody::Planned(Planned::Number {
-            value: Some("4"),
+        body: RowBody::Setting(Live::Number {
+            key: "editor.tab_width",
             unit: "spaces",
+            step: 1,
         }),
     },
     RowSpec {
@@ -337,10 +364,10 @@ const TERMINAL: &[RowSpec] = &[
     RowSpec {
         label: "Scrollback lines",
         helper: "How many lines a terminal keeps.",
-        // The terminal keeps SCROLLBACK_ROWS rows by default (crates/core-terminal).
-        body: RowBody::Planned(Planned::Number {
-            value: Some("1000"),
+        body: RowBody::Setting(Live::Number {
+            key: "terminal.scrollback",
             unit: "lines",
+            step: 500,
         }),
     },
     RowSpec {
@@ -402,7 +429,7 @@ const SOURCES: &[RowSpec] = &[
     RowSpec {
         label: "Fetch on focus",
         helper: "Fetches the remote when a workspace gains focus.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("git.fetch_on_focus")),
     },
     RowSpec {
         label: "API budget",
@@ -441,27 +468,27 @@ const NOTIFICATIONS: &[RowSpec] = &[
     RowSpec {
         label: "Agent finished",
         helper: "Tells you when an agent ends a run you started.",
-        body: RowBody::Planned(Planned::SwitchSelect),
+        body: RowBody::Setting(Live::SwitchSound("notifications.agent_finished")),
     },
     RowSpec {
         label: "Waiting for you",
         helper: "Tells you when an agent needs an answer.",
-        body: RowBody::Planned(Planned::SwitchSelect),
+        body: RowBody::Setting(Live::SwitchSound("notifications.waiting")),
     },
     RowSpec {
         label: "Routine ran",
         helper: "Tells you when a scheduled routine runs.",
-        body: RowBody::Planned(Planned::SwitchSelect),
+        body: RowBody::Setting(Live::SwitchSound("notifications.routine_ran")),
     },
     RowSpec {
         label: "Extension notices",
         helper: "Tells you about updates and problems from extensions.",
-        body: RowBody::Planned(Planned::SwitchSelect),
+        body: RowBody::Setting(Live::SwitchSound("notifications.extension_notices")),
     },
     RowSpec {
         label: "Dictation",
         helper: "Turns speech into text in the composer.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("voice.dictation")),
     },
     RowSpec {
         label: "Speech model",
@@ -484,7 +511,7 @@ const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Telemetry",
         helper: "Usage statistics. Off unless you turn it on.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("privacy.telemetry")),
     },
     RowSpec {
         label: "Diagnostic export",
@@ -519,10 +546,10 @@ const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Advanced",
         helper: "Shows developer tools. Off by default.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Setting(Live::Switch("advanced.enabled")),
     },
     RowSpec {
-        label: "Developer tools",
+        label: DEVELOPER_TOOLS,
         helper: "Tools for building and debugging MassOrca.",
         body: RowBody::Planned(Planned::Link),
     },
@@ -713,21 +740,56 @@ mod tests {
     fn the_appearance_section_lists_the_spec_control_types() {
         let appearance = bodies(SettingsSection::Appearance);
         assert!(appearance.contains(&RowBody::Planned(Planned::Swatches)));
-        assert!(appearance.contains(&RowBody::Planned(Planned::Slider {
-            value: "100%",
-            percent: 25,
-        })));
         assert!(appearance.contains(&RowBody::Planned(Planned::SelectAction(
             None,
             "Save as preset"
         ))));
-        assert!(appearance.contains(&RowBody::Planned(Planned::Checkboxes(&[
-            "Agent status",
-            "Memory",
-            "Terminals",
-            "Ports",
-            "Hosts",
-        ]))));
+        assert!(appearance.iter().any(|body| matches!(
+            body,
+            RowBody::Setting(Live::Checkboxes { key: "appearance.status_bar", options })
+                if options.len() == 5
+        )));
+    }
+
+    /// The keys of every row backed by a core setting.
+    fn setting_keys() -> Vec<&'static str> {
+        SettingsSection::ALL
+            .into_iter()
+            .flat_map(rows)
+            .filter_map(|row| match row.body {
+                RowBody::Setting(live) => Some(live.key()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_setting_with_a_designed_control_has_one_live_row() {
+        let keys = setting_keys();
+        for key in [
+            "updates.channel",
+            "agents.computer_use",
+            "agents.browser_access",
+            "agents.keep_awake",
+            "sessions.search",
+            "agents.delegation_depth",
+            "appearance.density",
+            "appearance.text_size",
+            "appearance.session_summary",
+            "appearance.status_bar",
+            "editor.tab_width",
+            "terminal.scrollback",
+            "git.fetch_on_focus",
+            "notifications.agent_finished",
+            "notifications.waiting",
+            "notifications.routine_ran",
+            "notifications.extension_notices",
+            "voice.dictation",
+            "privacy.telemetry",
+            "advanced.enabled",
+        ] {
+            assert_eq!(keys.iter().filter(|held| **held == key).count(), 1, "{key}");
+        }
     }
 
     #[test]
