@@ -34,6 +34,8 @@ pub const WORKSPACE_NOT_FOUND: &str = "workspace.not_found";
 pub const WORKSPACE_NAME_TAKEN: &str = "workspace.name_taken";
 pub const WORKSPACE_NAME_INVALID: &str = "workspace.name_invalid";
 pub const WORKSPACE_PATH_TAKEN: &str = "workspace.path_taken";
+/// The worktree path would pass the Windows path limit; another workspaces root fixes it (decision 0183).
+pub const WORKSPACE_PATH_TOO_LONG: &str = "workspace.path_too_long";
 pub const WORKSPACE_DIRTY: &str = "workspace.dirty";
 pub const WORKSPACE_LOCKED: &str = "workspace.locked";
 pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";

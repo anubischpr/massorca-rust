@@ -66,6 +66,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
     (codes::WORKSPACE_PATH_TAKEN, "workspace.path_taken"),
+    (codes::WORKSPACE_PATH_TOO_LONG, "workspace.path_too_long"),
     (codes::WORKSPACE_DIRTY, "workspace.dirty"),
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),

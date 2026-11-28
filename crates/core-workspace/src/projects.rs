@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use massorca_core_git::discard_new_repository;
+use massorca_core_git::{WORKTREES_FOLDER, discard_new_repository};
 use massorca_core_store::{ProjectKind as StoreKind, ProjectRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
@@ -102,7 +102,7 @@ impl Workspaces {
                 paths::absolute(&text)?;
                 text
             }
-            None => self.default_workspaces_root(&name)?,
+            None => self.default_workspaces_root(&name, &root, kind)?,
         };
         let icon = icon.or_else(|| detect_project_icon(&root));
         let row = ProjectRow {
@@ -199,9 +199,18 @@ impl Workspaces {
         }
     }
 
-    /// The workspaces root a project named `name` gets when it names none: its own folder under the default root in the
-    /// nested layout, the default root itself in the flat one.
-    fn default_workspaces_root(&self, name: &str) -> Result<String, DomainError> {
+    /// The workspaces root a project named `name` at `dir` gets when it names none: `<dir>/.worktrees` for a git project
+    /// in the in-project layout (decision 0183), its own folder under the default root in the nested layout (and for a
+    /// folder project, which has no worktrees), the default root itself in the flat one.
+    fn default_workspaces_root(
+        &self,
+        name: &str,
+        dir: &Path,
+        kind: StoreKind,
+    ) -> Result<String, DomainError> {
+        if self.layout == WorkspaceLayout::InProject && kind == StoreKind::Git {
+            return paths::path_text(&dir.join(WORKTREES_FOLDER));
+        }
         if !self.default_root.is_absolute() {
             return Err(DomainError::new(
                 codes::REQUEST_INVALID_PARAMS,
@@ -209,7 +218,7 @@ impl Workspaces {
             ));
         }
         let root = match self.layout {
-            WorkspaceLayout::Nested => self.default_root.join(name),
+            WorkspaceLayout::Nested | WorkspaceLayout::InProject => self.default_root.join(name),
             WorkspaceLayout::Flat => self.default_root.clone(),
         };
         paths::path_text(&root)
@@ -334,7 +343,7 @@ impl Workspaces {
                 format!("{} is inside a git repository", dir.display()),
             ));
         }
-        let workspaces_root = self.default_workspaces_root(&row.name)?;
+        let workspaces_root = self.default_workspaces_root(&row.name, &dir, StoreKind::Git)?;
         self.git.init_repository(&dir)?;
         match self.store.set_project_git(&row.id, &workspaces_root) {
             Ok(true) => {}

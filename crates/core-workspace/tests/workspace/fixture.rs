@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use massorca_core_git::Git;
 use massorca_core_store::Store;
-use massorca_core_workspace::{DomainError, RemovalWaivers, Workspaces};
+use massorca_core_workspace::{DomainError, RemovalWaivers, WorkspaceLayout, Workspaces};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceRemoved};
 use tempfile::TempDir;
@@ -26,11 +26,11 @@ impl Fixture {
         init_repo(&root.path().join("repo"), "README.md", "hello\n");
         let store = Store::open(root.path().join("store.db")).expect("open store");
         let git = Git::discover().expect("git is on PATH");
-        let workspaces = Arc::new(Workspaces::new(
-            store.clone(),
-            git,
-            root.path().join("defaults"),
-        ));
+        // The nested layout keeps most tests' paths under `defaults`; `in_project_layout` covers the default.
+        let workspaces = Arc::new(
+            Workspaces::new(store.clone(), git, root.path().join("defaults"))
+                .with_layout(WorkspaceLayout::Nested),
+        );
         Self {
             root,
             store,
