@@ -34,6 +34,7 @@ mod secret_requests;
 mod service_banner;
 mod session_child_wait;
 mod session_grid;
+mod session_options;
 mod session_rename;
 mod session_view;
 mod setting_rows;
@@ -149,6 +150,8 @@ mod service_tests;
 mod session_chat_tests;
 #[cfg(test)]
 mod session_menu_tests;
+#[cfg(test)]
+mod session_options_tests;
 #[cfg(test)]
 mod session_view_tests;
 #[cfg(test)]
@@ -268,6 +271,8 @@ pub struct Shell {
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// Each session's model chip changes in flight and the notes their answers left (decision 0171).
+    session_live_options: session_options::LiveOptions,
     /// The session row whose title is being edited in place (A97 Rename).
     session_rename: Option<session_rename::SessionRename>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
@@ -717,6 +722,7 @@ impl Shell {
             session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            session_live_options: session_options::LiveOptions::default(),
             session_rename: None,
             chat_transcripts: HashMap::new(),
             chat_watched: None,

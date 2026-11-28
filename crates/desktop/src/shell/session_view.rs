@@ -597,6 +597,7 @@ impl Shell {
                 }
             }
         });
+        self.sync_session_options(&id, &composer, cx);
         let terminal_arm = is_terminal_arm(&session) && transcript.is_none();
         let (mode_chip, mode_note) = match (&modes, terminal_arm) {
             (Some(modes), true) => (
@@ -831,6 +832,7 @@ impl Shell {
                 ComposerEvent::Stop => shell.stop_session(&id, cx),
                 ComposerEvent::Resume => shell.resume_session(&id, cx),
                 ComposerEvent::AccessChanged(index) => shell.set_session_mode(&id, *index, cx),
+                ComposerEvent::ModelChanged(choice) => shell.set_session_options(&id, choice, cx),
                 _ => {}
             },
         );
@@ -1109,6 +1111,7 @@ impl Shell {
         let Some(service) = self.begin_session_call(session, SessionCall::Resuming, cx) else {
             return;
         };
+        self.session_live_options.resumed(session);
         let mode = self.pending_bypass(session, cx);
         // A chat has no terminal, so its run starts with no grid.
         let chat = self.is_chat_session(session, cx);

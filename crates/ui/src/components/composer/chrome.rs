@@ -636,7 +636,16 @@ impl Render for Composer {
             .when_some(leading, |row, leading| row.child(leading))
             .child(div().flex_1())
             .when(self.model_picker_offered, |row| {
-                row.child(self.picker.clone())
+                row.when_some(self.model_note.clone(), |row, note| {
+                    row.child(
+                        div()
+                            .debug_selector(|| "composer-model-note".to_owned())
+                            .text_style(TYPE_CAPTION)
+                            .text_color(p.text.secondary)
+                            .child(note),
+                    )
+                })
+                .child(self.picker.clone())
             });
         if self.voice {
             let dictate = move |_: &mut Window, cx: &mut App| {

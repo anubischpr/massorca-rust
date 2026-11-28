@@ -201,21 +201,38 @@ pub fn notice(level: NoticeLevel, text: &SharedString, p: Palette) -> AnyElement
         .into_any_element()
 }
 
-/// The footer of a turn that is running, was interrupted, or ended without a result.
-pub fn turn_footer(state: TurnState, p: Palette) -> AnyElement {
-    let (agent, word) = match state {
-        TurnState::Running => (Some(AgentState::Running), "Working"),
-        TurnState::Interrupted => (Some(AgentState::Idle), "Interrupted"),
-        TurnState::Unverifiable => (None, "Status unknown"),
+/// The footer of a turn that is running, was interrupted, or ended without a result, with its token counts under it
+/// when the CLI reported them. A completed turn shows only the counts.
+pub fn turn_footer(state: TurnState, usage: Option<&SharedString>, p: Palette) -> AnyElement {
+    let status = match state {
+        TurnState::Completed => None,
+        TurnState::Running => Some((Some(AgentState::Running), "Working")),
+        TurnState::Interrupted => Some((Some(AgentState::Idle), "Interrupted")),
+        TurnState::Unverifiable => Some((None, "Status unknown")),
     };
     div()
         .flex()
-        .items_center()
-        .gap(px(SPACE_2))
-        .when_some(agent, |row, agent| {
-            row.child(AgentStatus::new(agent).size(AgentStatusSize::Small))
+        .flex_col()
+        .gap(px(SPACE_1))
+        .when_some(status, |column, (agent, word)| {
+            column.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .when_some(agent, |row, agent| {
+                        row.child(AgentStatus::new(agent).size(AgentStatusSize::Small))
+                    })
+                    .child(caption(word, p)),
+            )
         })
-        .child(caption(word, p))
+        .when_some(usage.cloned(), |column, usage| {
+            column.child(
+                div()
+                    .debug_selector(|| "transcript-turn-usage".to_owned())
+                    .child(caption(usage, p)),
+            )
+        })
         .into_any_element()
 }
 
