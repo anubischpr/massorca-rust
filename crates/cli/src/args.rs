@@ -637,6 +637,9 @@ pub enum HostCommand {
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
     AddSsh(HostAddSshArgs),
+    /// Sets how a paired host is dialed: through ssh (`ssh -W`), for a host only a bastion reaches, or directly.
+    /// Makes no connection.
+    Route(HostRouteArgs),
     /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
     Memory,
     /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them, with the
@@ -685,6 +688,30 @@ pub struct HostRemoveArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("how").required(true).args(["ssh", "direct"])))]
+pub struct HostRouteArgs {
+    /// Host name.
+    pub name: String,
+    /// SSH destination to dial through, as ssh takes it: [user@]host or a ~/.ssh/config alias.
+    #[arg(long, value_name = "TARGET")]
+    pub ssh: Option<String>,
+    /// Extra option for ssh, repeatable: --ssh-arg -J --ssh-arg bastion.
+    #[arg(
+        long = "ssh-arg",
+        value_name = "ARG",
+        allow_hyphen_values = true,
+        requires = "ssh"
+    )]
+    pub ssh_arg: Vec<String>,
+    /// HOST:PORT the SSH target connects to. Defaults to the host's first address.
+    #[arg(long, value_name = "HOST:PORT", requires = "ssh")]
+    pub forward: Option<String>,
+    /// Dials the host directly again and forgets its SSH route.
+    #[arg(long)]
+    pub direct: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct HostAddSshArgs {
     /// SSH destination, as ssh takes it: [user@]host.
     pub target: String,
@@ -703,4 +730,8 @@ pub struct HostAddSshArgs {
     /// Name this computer has on the server. Defaults to this computer's host name.
     #[arg(long, value_name = "NAME")]
     pub device_name: Option<String>,
+    /// Pairs, and dials the host from then on, through the same ssh target and --ssh-arg values, for a host only
+    /// ssh reaches (`host route`).
+    #[arg(long)]
+    pub tunnel: bool,
 }

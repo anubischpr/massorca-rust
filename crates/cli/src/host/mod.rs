@@ -6,6 +6,7 @@ pub mod forward;
 pub mod memory;
 pub mod ports;
 pub mod records;
+pub mod route;
 pub mod self_test;
 pub mod status;
 pub mod status_watch;
@@ -35,6 +36,7 @@ pub fn command_path(command: &HostCommand) -> &'static str {
         HostCommand::SelfTest { .. } => "host self-test",
         HostCommand::Discover => "host discover",
         HostCommand::AddSsh(_) => "host add-ssh",
+        HostCommand::Route(_) => "host route",
         HostCommand::Memory => "host memory",
         HostCommand::Ports => "host ports",
         HostCommand::Forward(_) => "host forward",
@@ -63,6 +65,7 @@ pub async fn execute(
         }
         HostCommand::Discover => discover::execute(profile, output).await,
         HostCommand::AddSsh(args) => add_ssh::execute(profile, &args, output).await,
+        HostCommand::Route(args) => route::execute(profile, &args, output),
         HostCommand::Memory => Err(CliError::new(
             "internal",
             "host memory addresses a service; it does not run on the hosts list",
