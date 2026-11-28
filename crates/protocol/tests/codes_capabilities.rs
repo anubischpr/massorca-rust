@@ -146,6 +146,11 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::AGENT_QUEUE_ALREADY_DELIVERED,
         "agent.queue_already_delivered",
     ),
+    (codes::AGENT_ATTACHMENT_INVALID, "agent.attachment_invalid"),
+    (
+        codes::AGENT_ATTACHMENT_UNSUPPORTED,
+        "agent.attachment_unsupported",
+    ),
     (codes::AGENT_ARCHIVE_FAILED, "agent.archive_failed"),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
@@ -207,6 +212,10 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::AGENT_RELEASE, "agent-release/1");
     assert_eq!(capabilities::AGENT_ARCHIVE, "agent-archive/1");
+    assert_eq!(
+        capabilities::AGENT_PROMPT_ATTACHMENTS,
+        "agent-prompt-attachments/1"
+    );
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");

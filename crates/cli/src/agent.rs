@@ -13,6 +13,7 @@ use massorca_protocol::methods::agents::{
     AgentKind, AgentListParams, AgentModels, AgentModelsParams, AgentPromptParams,
     AgentResumeParams, AgentSession, AgentSessionList, AgentSetModeParams, AgentSetOptionsParams,
     AgentStartParams, AgentWatchEvent, AgentWatchParams, KindEffort, KindModel, ModelSource,
+    PromptAttachment,
 };
 use massorca_protocol::methods::agents::{AgentQueueEditParams, AgentQueueParams};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -373,6 +374,10 @@ pub struct AgentPromptArgs {
     /// Type the text even while the agent works or waits, for example to answer its question.
     #[arg(long)]
     pub force: bool,
+    /// A file of the session's workspace to send with the prompt, by its path from the workspace root. Repeat it for more,
+    /// up to 10. A terminal run names each file in the text; an image goes to a chat session only.
+    #[arg(long = "attach", value_name = "PATH")]
+    pub attach: Vec<String>,
 }
 
 /// The prompt queue's subcommands (decision 0084).
@@ -620,6 +625,11 @@ pub async fn execute(
                     session: args.session,
                     text: args.text,
                     force: args.force,
+                    attachments: args
+                        .attach
+                        .into_iter()
+                        .map(|path| PromptAttachment { path })
+                        .collect(),
                 })
                 .await?;
             let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
@@ -861,6 +871,7 @@ async fn queue_command(
                     session,
                     text,
                     request_id: None,
+                    attachments: Vec::new(),
                 })
                 .await?;
             output.success(&queued, &agent_text::queued_lines(&queued));

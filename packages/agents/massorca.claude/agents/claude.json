@@ -4,7 +4,7 @@
   "icon": "claude",
   "program": ["claude"],
   "args": [],
-  "prompt": { "mode": "argv", "separator": false, "paste": "bracketed", "submit": "\r" },
+  "prompt": { "mode": "argv", "separator": false, "paste": "bracketed", "submit": "\r", "mention": "@{path}" },
   "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
   "resume": ["--resume", "{ref}"],
   "fork": ["--resume", "{ref}", "--fork-session"],

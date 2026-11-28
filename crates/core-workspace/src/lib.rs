@@ -34,6 +34,7 @@ pub use branch_prefix::BranchPrefix;
 pub use create::Created;
 pub use error::DomainError;
 pub use layout::WorkspaceLayout;
+pub use paths::{ContainedFile, FileRefusal, regular_file_inside};
 pub use projects::RemovedProject;
 pub use remove::{RemovalPreview, RemovalWaivers};
 pub use workspaces::Workspaces;
