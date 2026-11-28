@@ -418,6 +418,18 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("workspace"),
         ),
         command(
+            "workspace.sessions",
+            "List a workspace's agent sessions and terminals, or stop them with --stop",
+            "agent.list",
+            selector("workspace"),
+        ),
+        command(
+            "workspace.stop_runs",
+            "Stop every agent run and terminal of a workspace, keeping the workspace",
+            "workspace.stop_runs",
+            selector("workspace"),
+        ),
+        command(
             "terminal.create",
             "Start a terminal in a workspace",
             "terminal.create",

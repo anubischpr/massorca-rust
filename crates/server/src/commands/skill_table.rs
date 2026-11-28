@@ -1,5 +1,5 @@
-//! The skill commands: `skills installed` and `skills roots` (SKL-01), placing skills for agent tools (SKL-02), and the skills
-//! MassOrca ships (SKL-04).
+//! The skill commands: `skills installed` and `skills roots` (SKL-01), placing skills for agent tools in the home folder or
+//! one workspace (SKL-02, decision 0150), and the skills MassOrca ships (SKL-04).
 
 use serde_json::{Value, json};
 
@@ -40,9 +40,17 @@ pub(super) fn skill_commands() -> Vec<CommandDescriptor> {
                 "required": ["name"],
                 "properties": {
                     "name": { "type": "string" },
-                    "agents": { "type": "array", "items": { "enum": PLACEMENT_AGENTS } }
+                    "agents": { "type": "array", "items": { "enum": PLACEMENT_AGENTS } },
+                    "scope": { "enum": PLACEMENT_SCOPES },
+                    "workspace_id": { "type": "string" }
                 }
             }),
+        ),
+        command(
+            "skills.agents",
+            "Add agents to, or drop agents from, a placed skill, without re-placing the others",
+            "skills.agents",
+            agents_args(),
         ),
         command(
             "skills.managed",
@@ -104,13 +112,32 @@ const PLACEMENT_AGENTS: [&str; 11] = [
     "zcode",
 ];
 
+/// The scopes a placement accepts; `global` is the default when `scope` is absent.
+const PLACEMENT_SCOPES: [&str; 2] = ["global", "workspace"];
+
 fn place_args() -> Value {
     json!({
         "type": "object",
         "required": ["skill_id", "agents"],
         "properties": {
             "skill_id": { "type": "string" },
-            "agents": { "type": "array", "minItems": 1, "items": { "enum": PLACEMENT_AGENTS } }
+            "agents": { "type": "array", "minItems": 1, "items": { "enum": PLACEMENT_AGENTS } },
+            "scope": { "enum": PLACEMENT_SCOPES },
+            "workspace_id": { "type": "string" }
+        }
+    })
+}
+
+fn agents_args() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "name": { "type": "string" },
+            "add": { "type": "array", "items": { "enum": PLACEMENT_AGENTS } },
+            "drop": { "type": "array", "items": { "enum": PLACEMENT_AGENTS } },
+            "scope": { "enum": PLACEMENT_SCOPES },
+            "workspace_id": { "type": "string" }
         }
     })
 }

@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use massorca_core_extensions::skills::{
     AgentOutcome, LinkMode, ManagedSkill, Outcome, PlacementAgent, PlacementError, PlacementReport,
-    PlacementStore, Plan, SkipCause, Topology, managed_placements, place_skill, place_skill_with,
-    preview_placement, unplace_skill,
+    PlacementScope, PlacementStore, Plan, SkipCause, Topology, managed_placements, place_skill,
+    place_skill_in, place_skill_with, preview_placement, switch_agents_in, unplace_skill,
+    unplace_skill_in,
 };
 use tempfile::TempDir;
 
@@ -502,4 +503,186 @@ fn a_source_holding_a_link_is_refused_and_nothing_is_written() {
 
     assert!(matches!(err, PlacementError::Unsupported { .. }));
     assert!(!fx.home.join(".agents").exists());
+}
+
+/// A folder workspace under the fake home, where a workspace placement is written.
+fn workspace_folder(fx: &Fixture) -> PathBuf {
+    let workspace = fx.home.join("work").join("app");
+    fs::create_dir_all(&workspace).expect("the workspace folder");
+    workspace
+}
+
+#[test]
+fn a_workspace_placement_puts_the_canonical_copy_and_the_agent_folders_under_the_workspace_root() {
+    let fx = fixture();
+    let source = claude_skill(&fx.home, "release-notes");
+    let workspace = workspace_folder(&fx);
+    let scope = PlacementScope::Workspace("ws-app".to_owned());
+    let agents = [PlacementAgent::Claude, PlacementAgent::Cursor];
+
+    let report = place_skill_in(&workspace, &scope, &fx.store, &source, &agents).expect("placed");
+
+    assert_eq!(
+        report.canonical,
+        workspace.join(".agents/skills/release-notes")
+    );
+    assert_eq!(
+        outcome_of(&report, PlacementAgent::Cursor),
+        Outcome::Placed(Topology::Alias)
+    );
+    assert_eq!(
+        read(&workspace.join(".cursor/skills/release-notes/SKILL.md")),
+        read(&source.join("SKILL.md"))
+    );
+    assert!(
+        !fx.home.join(".agents/skills/release-notes").exists(),
+        "the global canonical copy is not written"
+    );
+    assert!(
+        !fx.home.join(".cursor").exists(),
+        "no agent folder under the home folder is written"
+    );
+}
+
+#[test]
+fn a_global_and_a_workspace_placement_of_one_name_are_recorded_and_removed_apart() {
+    let fx = fixture();
+    let source = claude_skill(&fx.home, "release-notes");
+    let workspace = workspace_folder(&fx);
+    let scope = PlacementScope::Workspace("ws-app".to_owned());
+    place_skill(&fx.home, &fx.store, &source, &[PlacementAgent::Cursor]).expect("placed globally");
+    place_skill_in(
+        &workspace,
+        &scope,
+        &fx.store,
+        &source,
+        &[PlacementAgent::Cursor],
+    )
+    .expect("placed for the workspace");
+
+    let records = managed_placements(&fx.store).expect("the record reads");
+    assert_eq!(records.len(), 2, "one record per scope: {records:?}");
+
+    unplace_skill_in(&workspace, &scope, &fx.store, "release-notes", &[]).expect("removed");
+
+    assert!(!workspace.join(".agents/skills/release-notes").exists());
+    assert!(
+        fx.home
+            .join(".agents/skills/release-notes/SKILL.md")
+            .is_file()
+    );
+    assert!(fx.home.join(".cursor/skills/release-notes").exists());
+    let left = managed_placements(&fx.store).expect("the record reads");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].scope, PlacementScope::Global);
+}
+
+#[test]
+fn unplacing_a_workspace_that_holds_no_placement_is_refused_even_when_global_has_one() {
+    let fx = fixture();
+    let source = claude_skill(&fx.home, "release-notes");
+    let workspace = workspace_folder(&fx);
+    let scope = PlacementScope::Workspace("ws-app".to_owned());
+    place_skill(&fx.home, &fx.store, &source, &[PlacementAgent::Cursor]).expect("placed globally");
+
+    let result = unplace_skill_in(&workspace, &scope, &fx.store, "release-notes", &[]);
+
+    assert!(matches!(result, Err(PlacementError::NotPlaced(_))));
+    assert!(fx.home.join(".cursor/skills/release-notes").exists());
+}
+
+#[test]
+fn a_record_written_before_scopes_existed_reads_as_a_global_placement() {
+    let fx = fixture();
+    write(
+        fx.store.path(),
+        r#"{"skills":[{"name":"release-notes","canonical":"/x","digest":"d","agents":[]}]}"#,
+    );
+
+    let skills = managed_placements(&fx.store).expect("the record reads");
+
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].scope, PlacementScope::Global);
+}
+
+#[test]
+fn switching_agents_adds_one_folder_and_drops_one_alias_within_its_scope_only() {
+    let fx = fixture();
+    let source = claude_skill(&fx.home, "release-notes");
+    let workspace = workspace_folder(&fx);
+    let scope = PlacementScope::Workspace("ws-app".to_owned());
+    place_skill_in(
+        &workspace,
+        &scope,
+        &fx.store,
+        &source,
+        &[PlacementAgent::Claude],
+    )
+    .expect("placed for the workspace");
+    place_skill(&fx.home, &fx.store, &source, &[PlacementAgent::Gemini]).expect("placed globally");
+
+    let report = switch_agents_in(
+        &workspace,
+        &scope,
+        &fx.store,
+        "release-notes",
+        &[PlacementAgent::Cursor],
+        &[PlacementAgent::Claude],
+    )
+    .expect("switched");
+
+    assert_eq!(
+        outcome_of(&report, PlacementAgent::Cursor),
+        Outcome::Placed(Topology::Alias)
+    );
+    assert_eq!(
+        outcome_of(&report, PlacementAgent::Claude),
+        Outcome::Removed
+    );
+    assert!(
+        workspace
+            .join(".cursor/skills/release-notes/SKILL.md")
+            .is_file()
+    );
+    assert!(!workspace.join(".claude/skills/release-notes").exists());
+    assert!(
+        workspace.join(".agents/skills/release-notes").is_dir(),
+        "the canonical copy stays while the cursor alias reaches it"
+    );
+    assert!(
+        !workspace.join(".gemini").exists(),
+        "no other folder is made"
+    );
+    assert!(
+        fx.home.join(".gemini/skills/release-notes").exists(),
+        "the global placement is untouched"
+    );
+    let record = managed_placements(&fx.store).expect("the record reads");
+    let workspace_row = record
+        .iter()
+        .find(|skill| skill.scope == scope)
+        .expect("the workspace record");
+    let agents: Vec<PlacementAgent> = workspace_row.agents.iter().map(|row| row.agent).collect();
+    assert_eq!(agents, [PlacementAgent::Cursor]);
+}
+
+#[test]
+fn switching_a_skill_not_placed_in_that_scope_is_refused() {
+    let fx = fixture();
+    let source = claude_skill(&fx.home, "release-notes");
+    let workspace = workspace_folder(&fx);
+    let scope = PlacementScope::Workspace("ws-app".to_owned());
+    place_skill(&fx.home, &fx.store, &source, &[PlacementAgent::Cursor]).expect("placed globally");
+
+    let result = switch_agents_in(
+        &workspace,
+        &scope,
+        &fx.store,
+        "release-notes",
+        &[PlacementAgent::Gemini],
+        &[],
+    );
+
+    assert!(matches!(result, Err(PlacementError::NotPlaced(_))));
+    assert!(!workspace.join(".gemini").exists());
 }

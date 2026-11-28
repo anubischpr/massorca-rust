@@ -9,6 +9,7 @@ mod errors;
 mod fixture;
 mod generated_names;
 mod in_place;
+mod in_project_layout;
 mod inspect;
 mod interrupted_create;
 mod layout;

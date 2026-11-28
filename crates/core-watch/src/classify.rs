@@ -63,6 +63,10 @@ impl WatchSpec {
         {
             return None;
         }
+        // In-project worktrees (decision 0183) are watched as their own work trees.
+        if inside.starts_with(".worktrees") {
+            return None;
+        }
         Some(WatchKind::Worktree)
     }
 }
@@ -119,6 +123,8 @@ mod tests {
         assert_eq!(kind("/w/repo/.git/logs/HEAD"), None);
         assert_eq!(kind("/w/repo/vendor/sub/.git/index"), None);
         assert_eq!(kind("/elsewhere/file"), None);
+        assert_eq!(kind("/w/repo/.worktrees/feature/a.txt"), None);
+        assert_eq!(kind("/w/repo/src/.worktrees"), Some(WatchKind::Worktree));
     }
 
     #[test]

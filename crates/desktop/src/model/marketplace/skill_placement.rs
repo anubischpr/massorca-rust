@@ -299,6 +299,7 @@ mod tests {
             ManagedSkill {
                 name: "Zeta".to_owned(),
                 canonical_path: None,
+                workspace_id: None,
                 agents: vec![ManagedAgent {
                     agent: PlacementAgent::Cursor,
                     path: Some("/h/.cursor/skills/zeta".to_owned()),
@@ -309,6 +310,7 @@ mod tests {
             ManagedSkill {
                 name: "alpha".to_owned(),
                 canonical_path: None,
+                workspace_id: None,
                 agents: Vec::new(),
             },
         ];

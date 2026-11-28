@@ -1,17 +1,21 @@
-//! `skills.place-preview`, `skills.place`, `skills.unplace` and `skills.managed` (capability `skills-place/1`, SKL-02): copy a
-//! home skill that discovery found into the folders of the chosen agents, and remove only the copies MassOrca placed and
-//! left unchanged. The preview and the list only read; the two writes need host administration and run one at a time.
+//! `skills.place-preview`, `skills.place`, `skills.unplace` and `skills.managed` (capability `skills-place/1`, SKL-02) and
+//! `skills.agents` (capability `skills-place/2`, decision 0150): copy a home skill that discovery found into the folders of
+//! the chosen agents, in the home folder (`global`) or one workspace's root (`workspace`); add or drop agents of a placed
+//! skill; and remove only the copies MassOrca placed and left unchanged. The preview and the list only read; the writes
+//! need host administration and run one at a time.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 
 use massorca_core_extensions::skills::{self as core, PlacementError, PlacementStore};
 use massorca_protocol::methods::skill_placement::{self as wire};
+use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::skills::discovery_request;
+use crate::features::workspace_domain::{blocking, shared};
 use crate::owner::Owner;
 use crate::permission::{Permission, authorize};
 use crate::registry::RegistrationHandle;
@@ -21,8 +25,10 @@ const RECORD: [&str; 2] = ["skills", "placements.json"];
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let cap = capabilities::SKILLS_PLACE;
+    let scopes = capabilities::SKILLS_PLACE_SCOPES;
     Ok(vec![
         registries.capabilities.register(cap, Owner::Core)?,
+        registries.capabilities.register(scopes, Owner::Core)?,
         registries
             .methods
             .register(Owner::Core, wire::PREVIEW, cap, Permission::Read, preview)?,
@@ -39,6 +45,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .methods
             .register(Owner::Core, wire::MANAGED, cap, Permission::Read, managed)?,
+        registries.methods.register(
+            Owner::Core,
+            wire::AGENTS,
+            scopes,
+            Permission::HostAdmin,
+            agents,
+        )?,
     ])
 }
 
@@ -47,11 +60,12 @@ async fn preview(
     params: wire::SkillPlaceParams,
 ) -> Result<wire::SkillPlacementResult, ErrorBody> {
     let show_paths = authorize(&ctx.principal, Permission::HostAdmin).is_ok();
-    let target = resolve(&ctx, &params, false).await?;
+    let agents = core_agents(&params.agents)?;
+    let (root, scope) = scope_of(&ctx, &params.target).await?;
+    let source = resolve(&ctx, &params.skill_id, false).await?;
     let store = record(&ctx);
     let preview =
-        run(move || core::preview_placement(&target.home, &store, &target.source, &target.agents))
-            .await?;
+        run(move || core::preview_placement_in(&root, &scope, &store, &source, &agents)).await?;
     Ok(preview_to_wire(&preview, show_paths))
 }
 
@@ -59,12 +73,14 @@ async fn place(
     ctx: RequestCtx,
     params: wire::SkillPlaceParams,
 ) -> Result<wire::SkillPlacementResult, ErrorBody> {
-    let target = resolve(&ctx, &params, true).await?;
+    let agents = core_agents(&params.agents)?;
+    let (root, scope) = scope_of(&ctx, &params.target).await?;
+    let source = resolve(&ctx, &params.skill_id, true).await?;
     let store = record(&ctx);
     let lock = Arc::clone(&ctx.state.skills.placements);
     let report = run(move || {
         let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        core::place_skill(&target.home, &store, &target.source, &target.agents)
+        core::place_skill_in(&root, &scope, &store, &source, &agents)
     })
     .await?;
     Ok(report_to_wire(&report, true))
@@ -74,14 +90,46 @@ async fn unplace(
     ctx: RequestCtx,
     params: wire::SkillUnplaceParams,
 ) -> Result<wire::SkillPlacementResult, ErrorBody> {
-    let home = ctx.state.skills.home()?;
     let agents = core_agents(&params.agents)?;
+    let (root, scope) = scope_of(&ctx, &params.target).await?;
     let store = record(&ctx);
     let lock = Arc::clone(&ctx.state.skills.placements);
     let name = params.name;
     let report = run(move || {
         let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        core::unplace_skill(&home, &store, &name, &agents)
+        core::unplace_skill_in(&root, &scope, &store, &name, &agents)
+    })
+    .await?;
+    Ok(report_to_wire(&report, true))
+}
+
+/// Adds agents to a placed skill and drops others, in one scope. Adding needs the skill placed already: its canonical copy
+/// is what the new folders are made from.
+async fn agents(
+    ctx: RequestCtx,
+    params: wire::SkillAgentsParams,
+) -> Result<wire::SkillPlacementResult, ErrorBody> {
+    let to_add = core_agents(&params.add)?;
+    let to_drop = core_agents(&params.drop)?;
+    if to_add.is_empty() && to_drop.is_empty() {
+        return Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            "choose an agent to add or to drop",
+        ));
+    }
+    if to_add.iter().any(|agent| to_drop.contains(agent)) {
+        return Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            "an agent cannot be both added and dropped",
+        ));
+    }
+    let (root, scope) = scope_of(&ctx, &params.target).await?;
+    let store = record(&ctx);
+    let lock = Arc::clone(&ctx.state.skills.placements);
+    let name = params.name;
+    let report = run(move || {
+        let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        core::switch_agents_in(&root, &scope, &store, &name, &to_add, &to_drop)
     })
     .await?;
     Ok(report_to_wire(&report, true))
@@ -102,38 +150,77 @@ async fn managed(
     })
 }
 
-/// What a placement works on: the home folder, the skill's folder, and the agents chosen.
-struct Target {
-    home: PathBuf,
-    source: PathBuf,
-    agents: Vec<core::PlacementAgent>,
+/// The root a placement works under and its scope: the home folder for `global`, or the root of the workspace a
+/// `workspace` scope names. A workspace is named by its id and resolved here, on the host that owns it.
+async fn scope_of(
+    ctx: &RequestCtx,
+    target: &wire::PlacementTarget,
+) -> Result<(PathBuf, core::PlacementScope), ErrorBody> {
+    match (target.scope, target.workspace_id.as_deref()) {
+        (wire::PlacementScope::Global, None) => {
+            Ok((ctx.state.skills.home()?, core::PlacementScope::Global))
+        }
+        (wire::PlacementScope::Global, Some(_)) => Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            "a global placement names no workspace",
+        )),
+        (wire::PlacementScope::Workspace, Some(id)) if !id.is_empty() => {
+            let root = workspace_root(ctx, id).await?;
+            Ok((root, core::PlacementScope::Workspace(id.to_owned())))
+        }
+        (wire::PlacementScope::Workspace, _) => Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            "a workspace placement names its workspace_id",
+        )),
+        (wire::PlacementScope::Unknown, _) => Err(ErrorBody::new(
+            codes::REQUEST_INVALID_PARAMS,
+            "`scope` names a scope this build does not know",
+        )),
+    }
+}
+
+/// The folder of the workspace `id` names. The id must match exactly, and a workspace being removed or whose folder is
+/// missing is refused, as the git and terminal features refuse them.
+async fn workspace_root(ctx: &RequestCtx, id: &str) -> Result<PathBuf, ErrorBody> {
+    let domain = shared(ctx);
+    let selector = id.to_owned();
+    let workspace = blocking(move || domain.show_workspace(&selector)).await?;
+    if workspace.id != id {
+        return Err(ErrorBody::new(
+            codes::WORKSPACE_NOT_FOUND,
+            "no workspace with that id is found on this host",
+        ));
+    }
+    if workspace.state == WorkspaceState::Removing {
+        return Err(ErrorBody::new(
+            codes::WORKSPACE_NOT_FOUND,
+            "that workspace is being removed",
+        ));
+    }
+    if workspace.missing {
+        return Err(ErrorBody::new(
+            codes::PATH_NOT_FOUND,
+            "the folder of that workspace is missing",
+        ));
+    }
+    Ok(PathBuf::from(workspace.path))
 }
 
 /// Finds the skill the request names: an extension's skill by its point key (`<package id>/<skill id>`), else among
 /// those discovery lists on this host. Of the discovered skills, only one in an agent tool's own home folder is placed:
 /// bundled, repository and plugin skills are not copied. Only a placement forces a fresh scan; a preview, which any
 /// reader may ask for, reuses the shared one.
-async fn resolve(
-    ctx: &RequestCtx,
-    params: &wire::SkillPlaceParams,
-    refresh: bool,
-) -> Result<Target, ErrorBody> {
-    let agents = core_agents(&params.agents)?;
-    let home = ctx.state.skills.home()?;
+async fn resolve(ctx: &RequestCtx, skill_id: &str, refresh: bool) -> Result<PathBuf, ErrorBody> {
     // A skill an enabled package contributes is placed from its trusted package folder (decision 0153).
-    if let Some(entry) = ctx.state.extension_points.skills.get(&params.skill_id) {
-        return Ok(Target {
-            home,
-            source: entry.value.directory.clone(),
-            agents,
-        });
+    if let Some(entry) = ctx.state.extension_points.skills.get(skill_id) {
+        return Ok(entry.value.directory.clone());
     }
     let request = discovery_request(ctx, Vec::new()).await?;
     let scan = ctx.state.skills.scan(request, refresh).await?;
     let skill = scan
         .skills
         .iter()
-        .find(|skill| skill.id == params.skill_id)
+        .find(|skill| skill.id == skill_id)
         .ok_or_else(|| {
             ErrorBody::new(
                 codes::SKILL_NOT_FOUND,
@@ -146,11 +233,7 @@ async fn resolve(
             "only a skill in an agent tool's home folder can be placed",
         ));
     }
-    Ok(Target {
-        home,
-        source: skill.directory_path.clone(),
-        agents,
-    })
+    Ok(skill.directory_path.clone())
 }
 
 pub(crate) fn record(ctx: &RequestCtx) -> PlacementStore {
@@ -353,6 +436,10 @@ fn managed_to_wire(skill: &core::ManagedSkill, show_paths: bool) -> wire::Manage
                 topology: Some(wire_topology(row.topology)),
             })
             .collect(),
+        workspace_id: match &skill.scope {
+            core::PlacementScope::Global => None,
+            core::PlacementScope::Workspace(id) => Some(id.clone()),
+        },
     }
 }
 

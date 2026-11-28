@@ -440,6 +440,18 @@ pub enum WorkspaceCommand {
         /// Workspace id, name or path.
         workspace: String,
     },
+    /// Lists a workspace's agent sessions and terminals, or with --stop ends every live run and terminal in it; the
+    /// workspace itself stays.
+    Sessions(WorkspaceSessionsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceSessionsArgs {
+    /// Workspace id, name or path.
+    pub workspace: String,
+    /// Stop every live agent run and terminal in the workspace, and keep the workspace.
+    #[arg(long)]
+    pub stop: bool,
 }
 
 #[derive(Debug, Args)]

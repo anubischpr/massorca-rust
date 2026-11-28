@@ -10,8 +10,9 @@ use massorca_protocol::methods::skill_bundled::{
     BundledSkill, BundledSkillState, SkillsBundledInstallParams, SkillsBundledNameParams,
 };
 use massorca_protocol::methods::skill_placement::{
-    PlacementAgent, PlacementState, PlacementTopology, SkillPlaceParams, SkillPlacementResult,
-    SkillUnplaceParams, SkillsManagedParams, SkillsManagedResult,
+    PlacementAgent, PlacementScope, PlacementState, PlacementTarget, PlacementTopology,
+    SkillAgentsParams, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
+    SkillsManagedParams, SkillsManagedResult,
 };
 use massorca_protocol::methods::skills::{
     DiscoveredSkill, SkillSource, SkillsDiscoverParams, SkipReason,
@@ -36,6 +37,8 @@ pub enum SkillCommand {
     Place(PlaceArgs),
     /// Removes the copies MassOrca placed for a skill. A copy the user changed is kept.
     Unplace(UnplaceArgs),
+    /// Adds agents to, or drops agents from, a placed skill in one scope; the agents not named stay as they are.
+    Agents(AgentsArgs),
     /// Lists the skills MassOrca placed on this host.
     Managed,
     /// The skills MassOrca ships: list them, install, refresh or remove one, or show its text (SKL-04).
@@ -79,6 +82,9 @@ pub struct PlaceArgs {
     /// An agent to place the skill for; repeat for several.
     #[arg(long = "agent", value_enum, required = true)]
     pub agents: Vec<AgentArg>,
+    /// Place the skill in this MassOrca workspace (its id) instead of the home folder.
+    #[arg(long = "workspace")]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -88,6 +94,24 @@ pub struct UnplaceArgs {
     /// Remove only this agent's copy; repeat for several. Without it, every copy MassOrca placed goes.
     #[arg(long = "agent", value_enum)]
     pub agents: Vec<AgentArg>,
+    /// Remove the copies of this MassOrca workspace (its id) instead of the home folder's.
+    #[arg(long = "workspace")]
+    pub workspace: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AgentsArgs {
+    /// The skill's name, as `skills managed` shows it.
+    pub name: String,
+    /// An agent to add to the placed skill, which gets its own folder; repeat for several.
+    #[arg(long = "add", value_enum)]
+    pub add: Vec<AgentArg>,
+    /// An agent to drop from the placed skill, which loses its own copy; repeat for several.
+    #[arg(long = "drop", value_enum)]
+    pub drop: Vec<AgentArg>,
+    /// The MassOrca workspace (its id) whose copies change; without it, the home folder's.
+    #[arg(long = "workspace")]
+    pub workspace: Option<String>,
 }
 
 /// An agent tool a skill can be placed for.
@@ -175,6 +199,18 @@ async fn run_service_command(
                 .skills_unplace(&SkillUnplaceParams {
                     name: args.name,
                     agents: wire_agents(&args.agents),
+                    target: target_of(args.workspace),
+                })
+                .await?;
+            output.success(&result, &placement_lines(&result));
+        }
+        SkillCommand::Agents(args) => {
+            let result = client
+                .skills_agents(&SkillAgentsParams {
+                    name: args.name,
+                    add: wire_agents(&args.add),
+                    drop: wire_agents(&args.drop),
+                    target: target_of(args.workspace),
                 })
                 .await?;
             output.success(&result, &placement_lines(&result));
@@ -287,6 +323,18 @@ fn place_params(args: PlaceArgs) -> SkillPlaceParams {
     SkillPlaceParams {
         skill_id: args.skill_id,
         agents: wire_agents(&args.agents),
+        target: target_of(args.workspace),
+    }
+}
+
+/// The scope a `--workspace` id names: the workspace's folder, else the home folder.
+fn target_of(workspace: Option<String>) -> PlacementTarget {
+    match workspace {
+        Some(id) => PlacementTarget {
+            scope: PlacementScope::Workspace,
+            workspace_id: Some(id),
+        },
+        None => PlacementTarget::default(),
     }
 }
 
