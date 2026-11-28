@@ -14,8 +14,8 @@ use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentMarkSeenParams, AgentModeSet,
-    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
-    BringBackResult, PromptReceipt,
+    AgentOptionsSet, AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams,
+    AgentSetOptionsParams, AgentStartParams, BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -247,6 +247,11 @@ pub(crate) enum Command {
     AgentSetMode {
         params: AgentSetModeParams,
         reply: oneshot::Sender<Result<AgentModeSet, Refusal>>,
+    },
+    /// `agent.set_options` (decision 0171), answered with where each changed option took effect.
+    AgentSetOptions {
+        params: AgentSetOptionsParams,
+        reply: oneshot::Sender<Result<AgentOptionsSet, Refusal>>,
     },
     /// A prompt queue call (decision 0084), answered on its oneshot.
     AgentQueue(QueueCommand),
@@ -1008,6 +1013,9 @@ impl Link {
         self.emit(StoreUpdate::AgentFastOffered(
             client.has_capability(AGENT_FAST_CAPABILITY),
         ));
+        self.emit(StoreUpdate::AgentOptionsLiveOffered(client.has_capability(
+            massorca_protocol::capabilities::AGENT_OPTIONS_LIVE,
+        )));
         self.emit(StoreUpdate::WorkspaceUniqueNameOffered(
             client.has_capability(massorca_protocol::capabilities::WORKSPACE_UNIQUE_NAME),
         ));
@@ -1553,6 +1561,9 @@ fn spawn_call(
         Command::AgentSetMode { params, reply } => {
             agents::spawn_set_mode(&client, params, reply, updates);
         }
+        Command::AgentSetOptions { params, reply } => {
+            agents::spawn_set_options(&client, params, reply, updates);
+        }
         Command::MarkSeen { params, reply } => agents::spawn_mark_seen(&client, params, reply),
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
@@ -1680,6 +1691,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AgentSetMode { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentSetOptions { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Delegate { reply, .. } => {
