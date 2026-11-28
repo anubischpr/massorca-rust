@@ -755,6 +755,7 @@ async fn run_room(
                     } else {
                         task.then_some(false)
                     },
+                    route: None,
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));

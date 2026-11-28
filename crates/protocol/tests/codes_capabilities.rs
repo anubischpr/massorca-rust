@@ -159,6 +159,8 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TEAM_ROOM_CARD_NOT_FOUND, "team.room_card_not_found"),
     (codes::TEAM_ROOM_CARD_ANSWERED, "team.room_card_answered"),
     (codes::TEAM_ROOM_LINE_NOT_FOUND, "team.room_line_not_found"),
+    (codes::TEAM_ROOM_MENTION_UNKNOWN, "team.room_mention_unknown"),
+    (codes::TEAM_ROOM_FILE_OUTSIDE, "team.room_file_outside"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
@@ -217,5 +219,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::TEAMS, "teams/1");
     assert_eq!(capabilities::EXTENSION_POINTS, "extension-points/1");
     assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");
+    assert_eq!(capabilities::TEAM_ROOM_ROUTING, "team-room/4");
     assert_eq!(capabilities::AUTOMATIONS, "automations/1");
 }

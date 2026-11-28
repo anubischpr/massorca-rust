@@ -304,6 +304,7 @@ impl Shell {
             start: self.room_page.hold.then_some(false),
             reply_to,
             ask: (self.room_page.ask && replies).then_some(true),
+            route: None,
         };
         cx.spawn(async move |this, cx| {
             let answer = service.post_to_team_room(params).await;
