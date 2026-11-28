@@ -192,17 +192,26 @@ pub(super) fn spawn_placement(
 async fn placement(client: &Client, call: PlacementCall) -> PlacementOutcome {
     let answered = match call {
         PlacementCall::Preview { skill_id, agents } => client
-            .skills_place_preview(&SkillPlaceParams { skill_id, agents })
+            .skills_place_preview(&SkillPlaceParams {
+                skill_id,
+                agents,
+                target: Default::default(),
+            })
             .await
             .map(PlacementOutcome::Preview),
         PlacementCall::Place { skill_id, agents } => client
-            .skills_place(&SkillPlaceParams { skill_id, agents })
+            .skills_place(&SkillPlaceParams {
+                skill_id,
+                agents,
+                target: Default::default(),
+            })
             .await
             .map(PlacementOutcome::Changed),
         PlacementCall::Unplace { name } => client
             .skills_unplace(&SkillUnplaceParams {
                 name,
                 agents: Vec::new(),
+                target: Default::default(),
             })
             .await
             .map(PlacementOutcome::Changed),

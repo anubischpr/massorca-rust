@@ -112,6 +112,9 @@ pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 pub const SKILLS: &str = "skills/1";
 /// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
 pub const SKILLS_PLACE: &str = "skills-place/1";
+/// Workspace scope for placements and the agent switch (`skills.agents`, decision 0150). A client sends `scope: workspace`
+/// only to a service that offers it.
+pub const SKILLS_PLACE_SCOPES: &str = "skills-place/2";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).

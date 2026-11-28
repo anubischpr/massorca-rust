@@ -71,6 +71,7 @@ async fn placing_copies_a_home_skill_for_the_chosen_agents_and_unplacing_removes
     let params = SkillPlaceParams {
         skill_id,
         agents: vec![PlacementAgent::Codex, PlacementAgent::Cursor],
+        target: Default::default(),
     };
 
     let preview: SkillPlacementResult = client
@@ -128,6 +129,7 @@ async fn placing_copies_a_home_skill_for_the_chosen_agents_and_unplacing_removes
             &SkillUnplaceParams {
                 name: "notes".to_owned(),
                 agents: Vec::new(),
+                target: Default::default(),
             },
         )
         .await
@@ -184,6 +186,7 @@ async fn a_name_the_user_already_uses_is_refused_with_its_code_and_nothing_is_wr
             &SkillPlaceParams {
                 skill_id: claude_copy,
                 agents: vec![PlacementAgent::Cursor],
+                target: Default::default(),
             },
         )
         .await
@@ -215,6 +218,7 @@ async fn an_unknown_skill_or_agent_is_refused_with_its_code() {
             &SkillPlaceParams {
                 skill_id: "0000000000000000".to_owned(),
                 agents: vec![PlacementAgent::Cursor],
+                target: Default::default(),
             },
         )
         .await
@@ -272,6 +276,7 @@ async fn a_skill_in_a_registered_folder_is_not_copied_and_the_capability_is_offe
             &SkillPlaceParams {
                 skill_id: beta,
                 agents: vec![PlacementAgent::Cursor],
+                target: Default::default(),
             },
         )
         .await
@@ -319,6 +324,7 @@ async fn a_preview_reuses_the_recent_scan_instead_of_forcing_a_new_one() {
             &SkillPlaceParams {
                 skill_id,
                 agents: vec![PlacementAgent::Cursor],
+                target: Default::default(),
             },
         )
         .await

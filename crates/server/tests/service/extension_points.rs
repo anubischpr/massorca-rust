@@ -115,6 +115,7 @@ async fn a_package_on_every_point_registers_under_its_owner_and_leaves_none_once
             &SkillPlaceParams {
                 skill_id: "acme.all/review".to_owned(),
                 agents: vec![PlacementAgent::Codex],
+                target: Default::default(),
             },
         )
         .await

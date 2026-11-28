@@ -1,8 +1,8 @@
-//! Typed helpers over the `skills/1` and `skills-place/1` methods (SKL-01, SKL-02).
+//! Typed helpers over the `skills/1`, `skills-place/1` and `skills-place/2` methods (SKL-01, SKL-02, decision 0150).
 
 use massorca_protocol::methods::skill_placement::{
-    self as placement, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
-    SkillsManagedParams, SkillsManagedResult,
+    self as placement, SkillAgentsParams, SkillPlaceParams, SkillPlacementResult,
+    SkillUnplaceParams, SkillsManagedParams, SkillsManagedResult,
 };
 use massorca_protocol::methods::skills::{self, SkillDiscovery, SkillsDiscoverParams};
 
@@ -40,6 +40,14 @@ impl Client {
         params: &SkillUnplaceParams,
     ) -> Result<SkillPlacementResult, ClientError> {
         self.call(placement::UNPLACE, params).await
+    }
+
+    /// `skills.agents` (capability `skills-place/2`): adds agents to and drops agents from a placed skill in one scope.
+    pub async fn skills_agents(
+        &self,
+        params: &SkillAgentsParams,
+    ) -> Result<SkillPlacementResult, ClientError> {
+        self.call(placement::AGENTS, params).await
     }
 
     /// `skills.managed`: the skills MassOrca placed on this host.
