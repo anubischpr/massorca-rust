@@ -115,3 +115,57 @@ just to read a date.
 - A line that only mentions a date, such as a deadline with no time, still becomes a task.
 - A time written as a bare morning-or-evening hour ("at 9"), or one only mentioned, is not read as a time. The rule
   prefers a missed schedule, which the person sees at once as a started task, over a wrong one.
+
+## 2026-11-27: Request routing and typed mentions (AUTO-13)
+
+The coverage audit refused AUTO-13 for two gaps: no `@team`, `@project` or `@file` mentions, and no team routing.
+This section closes both. A host that does it advertises `team-room/4` and keeps `team-room/1` to `/3`.
+
+### Mentions
+
+- `@Name` names a bot of the team, as before. `@team:Name` names another team, `@project:Name` a project of the team,
+  and `@file:path` a file inside the folder of one of the team's projects: the folder of the project the line names,
+  else each project's folder in team order. Names match in any letter case, the longest name wins, and the mention
+  must start a word.
+- A typed mention that names nothing is refused with `team.room_mention_unknown`, whose `data` names the mention and
+  its kind; nothing is stored. A file mention that leaves its project's folder (`..`, an absolute path, a drive or a
+  link whose target is outside) is refused with `team.room_file_outside`. A plain `@word` that names no bot stays
+  text, so addresses and handles in a line keep working.
+- A mention steers the line: a bot of the team takes it; else a team mention sends it to that team's Todo, the way a
+  card's team option does; a project mention links the task to that project. The project and file mentions are
+  added to the task's body, or to a conversation reply's prompt, under "Mentioned in the room:". A choice card's
+  answer reads the line's mentions again.
+- `team.room_mentions` lists what an `@` typed so far can name (the bots, the other teams, the projects and `@file:`;
+  with `file:` the entries of one folder of the projects' folders, hidden entries left out), and `team.room_resolve`
+  shows what each mention of a line names. Both need only read access, like the room itself. The CLI has
+  `team room mentions` and `team room resolve`; the desktop composer (artboard bt-conference-room) shows the
+  suggestions above the field while its last word starts with `@`, and a picked one replaces that word.
+
+### Routing
+
+- A person's line posted with `route` that names no bot or team, has no receiver and is not a conversation waits for
+  one routing query. The query runs the agent Settings names as default (`agents.default_kind`, else its old name
+  `agents.default`, else `claude`) in the team's folder, read-only, with no vault variables and in the vendor's default
+  mode. Its prompt lists the team's bots and jobs and the other teams, and asks for one line: `route=bot:<name>`,
+  `route=team:<name>`, `route=conversation` or `route=unclear`. The last `route=` of the answer decides, so
+  instructions echoed before it never do.
+- A bot answer gives the line to that bot as the room would (a task, or a one-time routine), starting it unless the
+  line was posted with start off. A team answer files it in that team's Todo. A conversation answer makes it a
+  conversation of the lead, else the first bot. An unclear answer, a name that is no bot or team, a query that does
+  not start and a run that ends without a result get a choice card saying the room could not tell who should take it.
+- The waiting line is kept in `team_room_routes` with the query's session, whether its task starts at once and
+  whether its author held host-admin scope; a routed bot gets vault variables only when that author did. The route
+  settles once, by the session listener when the query's turn ends or by the post when the run ended at once, and the
+  query's run is stopped.
+- "Other teams reachable from this team" are every other team, as a card offers them. Team delegation
+  (`team.delegate`, decision 0128) needs a parent task and a bot's run, which a person's line has neither of, so a
+  routed team request goes to that team's Todo instead.
+- The desktop sends `route` when the person picked no receiver; a host that routes then gets no receiver, and an
+  older host gets the lead as before. The CLI sends it with `team room post --route`.
+
+### Gaps
+
+- The room shows no "routing…" line while the query runs; the person's line stands alone until it is placed.
+- A routed team request is not started there; it waits in that team's Todo like a card's team option.
+- Mentions of Workspaces projects that are not projects of the team, and folders other than project folders, are not
+  read.
