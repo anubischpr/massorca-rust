@@ -7,6 +7,8 @@
 //! backslash, a percent sign, an IPv6 literal or a trailing dot in the host is refused, not interpreted.
 //!
 //! The table is code, not kind data: a kind declared in a profile or a package never names where a credential goes.
+//! Nothing else is consulted either: not standing kind settings, not a `*_BASE_URL` variable such as
+//! `ANTHROPIC_BASE_URL`, not proxy variables. Those reach agent runs only.
 
 /// The official origin of each kind whose credential may leave the machine. A kind not listed has none, and its
 /// credential is never read for a vendor request.
@@ -48,8 +50,33 @@ pub fn official_origin(kind: &str) -> Option<String> {
         .map(|(_, origin)| (*origin).to_owned())
 }
 
+/// A URL that [`check_url`] accepted for one kind: https, on that kind's official origin. It can only be made by the
+/// check, so holding one proves the check ran.
+///
+/// The check covers this URL only. The request that carries the credential must not follow redirects: a redirect
+/// could send the credential to another origin. No HTTP client is a dependency of this workspace yet, so the caller
+/// builds its client with redirects disabled (`reqwest::redirect::Policy::none()`, ureq's `max_redirects(0)` or the
+/// like), https only and proxy variables ignored (reqwest's `.no_proxy()`), and treats any 3xx answer as a failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedUrl {
+    kind: String,
+    url: String,
+}
+
+impl CheckedUrl {
+    /// The URL exactly as it was checked.
+    pub fn as_str(&self) -> &str {
+        &self.url
+    }
+
+    /// The kind whose official origin it is on.
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+}
+
 /// Accepts `url` only when it is https and its origin is exactly `kind`'s official origin.
-pub fn check_url(kind: &str, url: &str) -> Result<(), EndpointRefused> {
+pub fn check_url(kind: &str, url: &str) -> Result<CheckedUrl, EndpointRefused> {
     let official = official_origin(kind).ok_or_else(|| EndpointRefused::NoOfficialOrigin {
         kind: kind.to_owned(),
     })?;
@@ -74,7 +101,10 @@ pub fn check_url(kind: &str, url: &str) -> Result<(), EndpointRefused> {
             official,
         });
     }
-    Ok(())
+    Ok(CheckedUrl {
+        kind: kind.to_owned(),
+        url: url.to_owned(),
+    })
 }
 
 /// A URL's scheme, lowercase host and port (the scheme's default when none is written).
@@ -203,6 +233,70 @@ pub mod test_hooks {
 mod tests {
     use super::*;
 
+    /// [`check_url`] without the accepted URL.
+    fn checked(kind: &str, url: &str) -> Result<(), EndpointRefused> {
+        check_url(kind, url).map(drop)
+    }
+
+    /// Set in the child run of [`a_base_url_in_the_environment_never_moves_the_official_origin`].
+    const BASE_URL_CHILD: &str = "MASSORCA_TEST_BASE_URL_CHILD";
+    const FAKE_BASE_URL: &str = "http://127.0.0.1:9";
+
+    /// A standing `ANTHROPIC_BASE_URL` (AG-11) or a proxy variable is for agent runs only: the check reads the code table.
+    /// The variables are set on a child run of this test, since this process's environment cannot be changed safely.
+    #[test]
+    fn a_base_url_in_the_environment_never_moves_the_official_origin() {
+        if std::env::var_os(BASE_URL_CHILD).is_some() {
+            assert_eq!(
+                std::env::var("ANTHROPIC_BASE_URL").as_deref(),
+                Ok(FAKE_BASE_URL)
+            );
+            assert_eq!(
+                official_origin("claude").as_deref(),
+                Some("https://api.anthropic.com")
+            );
+            assert_eq!(
+                checked("claude", "http://127.0.0.1:9/api/oauth/usage"),
+                Err(EndpointRefused::NotHttps)
+            );
+            assert!(matches!(
+                checked("claude", "https://127.0.0.1:9/api/oauth/usage"),
+                Err(EndpointRefused::OtherOrigin { .. })
+            ));
+            assert_eq!(
+                checked("claude", "https://api.anthropic.com/api/oauth/usage"),
+                Ok(())
+            );
+            return;
+        }
+        let output = massorca_process::command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "vendor_endpoint::tests::a_base_url_in_the_environment_never_moves_the_official_origin",
+                "--test-threads=1",
+            ])
+            .env(BASE_URL_CHILD, "1")
+            .env("ANTHROPIC_BASE_URL", FAKE_BASE_URL)
+            .env("HTTPS_PROXY", FAKE_BASE_URL)
+            .env("ALL_PROXY", FAKE_BASE_URL)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran the test: {stdout}"
+        );
+    }
+
+    #[test]
+    fn an_accepted_url_is_kept_exactly_with_its_kind() {
+        let url = "https://api.anthropic.com/api/oauth/usage?x=1";
+        let accepted = check_url("claude", url).unwrap();
+        assert_eq!(accepted.as_str(), url);
+        assert_eq!(accepted.kind(), "claude");
+    }
+
     #[test]
     fn each_credential_kind_has_an_https_origin_and_others_have_none() {
         assert_eq!(
@@ -230,10 +324,10 @@ mod tests {
             "HTTPS://API.Anthropic.COM/api/oauth/usage",
             "https://api.anthropic.com/@elsewhere.example",
         ] {
-            assert_eq!(check_url("claude", url), Ok(()), "{url}");
+            assert_eq!(checked("claude", url), Ok(()), "{url}");
         }
         assert_eq!(
-            check_url("codex", "https://chatgpt.com/backend-api/wham/usage"),
+            checked("codex", "https://chatgpt.com/backend-api/wham/usage"),
             Ok(())
         );
     }
@@ -247,7 +341,7 @@ mod tests {
             "wss://api.anthropic.com/",
         ] {
             assert_eq!(
-                check_url("claude", url),
+                checked("claude", url),
                 Err(EndpointRefused::NotHttps),
                 "{url}"
             );
@@ -270,7 +364,7 @@ mod tests {
             "https://api.anthropic.co/",
             "https://api.anthropic.com:8443/",
         ] {
-            assert_eq!(check_url("claude", url), Err(other()), "{url}");
+            assert_eq!(checked("claude", url), Err(other()), "{url}");
         }
         for url in [
             "https://api.anthropic.com@example.com/",
@@ -293,7 +387,7 @@ mod tests {
             "",
         ] {
             assert_eq!(
-                check_url("claude", url),
+                checked("claude", url),
                 Err(EndpointRefused::Malformed),
                 "{url:?}"
             );
@@ -303,7 +397,7 @@ mod tests {
     #[test]
     fn a_kind_without_an_official_origin_refuses_every_url() {
         assert_eq!(
-            check_url("antigravity", "https://api.anthropic.com/"),
+            checked("antigravity", "https://api.anthropic.com/"),
             Err(EndpointRefused::NoOfficialOrigin {
                 kind: "antigravity".to_owned()
             })
@@ -313,7 +407,7 @@ mod tests {
     #[test]
     fn the_refusal_never_repeats_the_url() {
         let url = "https://example.com/?token=fake-secret";
-        let message = check_url("claude", url).unwrap_err().to_string();
+        let message = checked("claude", url).unwrap_err().to_string();
         assert!(!message.contains("fake-secret"), "{message}");
         assert!(!message.contains("example.com"), "{message}");
     }
@@ -324,13 +418,13 @@ mod tests {
         assert_eq!(official_origin(kind), None);
         {
             let _fake = test_hooks::override_origin(kind, "http://127.0.0.1:9");
-            assert_eq!(check_url(kind, "http://127.0.0.1:9/usage"), Ok(()));
+            assert_eq!(checked(kind, "http://127.0.0.1:9/usage"), Ok(()));
             assert!(matches!(
-                check_url(kind, "http://127.0.0.1:10/usage"),
+                checked(kind, "http://127.0.0.1:10/usage"),
                 Err(EndpointRefused::OtherOrigin { .. })
             ));
             assert!(matches!(
-                check_url(kind, "https://api.anthropic.com/"),
+                checked(kind, "https://api.anthropic.com/"),
                 Err(EndpointRefused::OtherOrigin { .. })
             ));
         }
