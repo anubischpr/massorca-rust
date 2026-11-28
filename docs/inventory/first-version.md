@@ -277,7 +277,7 @@ The three XL items are the structured chat platform (AG-15), the Claude chat ada
 | Relay and cloud services | SRV-13, CLD-01 to CLD-18 | Owner accepted default: relay pairing is not in the first version (design open question 5). |
 | Multi-server orchestration and orchestration over SSH | AUTO-22, AUTO-23, AUTO-09 | Orchestration runs on one host first. |
 | Team memory and file versions, web address triggers | AUTO-31, AUTO-36, AUTO-29 | Not defined by the owner yet, or a network entry point without security rules. |
-| Prototype editing, merging and the project design system | PROTO-06 to PROTO-13 | Prototypes is core (decided on the owner's behalf), but request, list and viewer are enough behind the Sidebar entry. |
+| Prototype editing, merging and the project design system | PROTO-06 to PROTO-13 | Prototypes is core (owner-confirmed 2026-11-27), but request, list and viewer are enough behind the Sidebar entry. |
 | Editor, notebooks, AI text generation, usage analytics | SET-16, SET-25, AG-27, GIT-10, ACC-19 | Not needed for daily agent work; the editor is a Phase 5 item. |
 | Auto-update | PLAT-03 | Manual updates first; signed builds come with PLAT-01. |
 
@@ -285,7 +285,7 @@ The three XL items are the structured chat platform (AG-15), the Claude chat ada
 
 The owner was not asked tonight. These assumptions shape the list; each is easy to reverse.
 
-1. **Decisions "on the owner's behalf" count as decided.** `docs/design/pending-owner-review.md` records them. The one that moves features here is prototypes as core (item 12): it puts PROTO-01, PROTO-02, PROTO-04, PROTO-05 and WS-41 in the first version. If the owner restores the extension default, those five go back to later.
+1. **Decisions "on the owner's behalf" count as decided.** `docs/design/pending-owner-review.md` records them. The one that moved features here was prototypes as core (item 12), which put PROTO-01, PROTO-02, PROTO-04, PROTO-05 and WS-41 in the first version. The owner confirmed it on 2026-11-27: the first version carries only PROTO-01, PROTO-02, PROTO-04 and PROTO-05, at the lowest priority; PROTO-03 and PROTO-06 to PROTO-14 stay later.
 2. **Owner direction beats pv96 behaviour.** pv96 routes Conference room requests without a lead bot and runs routines on their own scheduler. The list keeps the owner's lead bot and one schedule engine; the difference is an open question.
 3. **Every core feature in the first version gets its CLI entry point** (PLAN: the CLI is the test harness). This is why CLI-12, CLI-14, CLI-23 and CLI-32 are in.
 4. **Mobile emulator tab:** assumed to start as a mobile web view in a device frame (design A37), using the browser pane (BRW-01, BRW-07). Full emulator control stays later.
