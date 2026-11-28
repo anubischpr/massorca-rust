@@ -23,7 +23,9 @@ use crate::service::Refusal;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
 };
-use massorca_protocol::methods::projects::{Project, ProjectKind};
+use massorca_protocol::methods::projects::{
+    Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
+};
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::WorkspaceKind;
 use massorca_ui::IconName;
@@ -591,6 +593,51 @@ impl Shell {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = handle.add_project(params).await;
+            this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Initialize Git in the warning (WS-31): the folder is added as a folder project, then `project.init_git` turns it
+    /// into a git project. A refused init removes that folder again, so nothing is added and the warning keeps the reason.
+    pub(super) fn initialize_plain_folder_git(&mut self, cx: &mut Context<Self>) {
+        let (Some(handle), Some(dialog)) =
+            (self.service.clone(), self.dialogs.add_project.as_mut())
+        else {
+            return;
+        };
+        let Some(path) = dialog.form.plain_folder.clone() else {
+            return;
+        };
+        dialog.form.begin();
+        let icon = dialog.form.icon.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let folder = handle
+                .add_project(ProjectAddParams {
+                    icon,
+                    path,
+                    name: None,
+                    kind: Some(ProjectKind::Folder),
+                    workspaces_root: None,
+                })
+                .await;
+            let result = match folder {
+                Ok(folder) => match handle.init_git_project(folder.id.clone()).await {
+                    Ok(project) => Ok(project),
+                    Err(refusal) => {
+                        let _ = handle
+                            .remove_project(ProjectRemoveParams {
+                                project: folder.id,
+                                forget_workspaces: false,
+                            })
+                            .await;
+                        Err(refusal)
+                    }
+                },
+                Err(refusal) => Err(refusal),
+            };
             this.update(cx, |shell, cx| shell.finish_add_project(result, cx))
                 .ok();
         })

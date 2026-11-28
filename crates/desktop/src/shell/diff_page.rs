@@ -11,6 +11,7 @@ use massorca_ui::tokens::{SPACE_2, SPACE_3, TYPE_BODY_STRONG};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 use super::Shell;
+use super::diff_image_preview::image_preview_panel;
 use super::source_control::{DiffLoad, OpenFile};
 use crate::model::source_control_diff::file_status;
 
@@ -63,6 +64,8 @@ pub(super) fn diff_page(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> 
             }
         }
     };
+    // A binary change's note gives way to its image previews, which say what the file holds (GIT-06).
+    let binary = matches!(status, DiffStatus::Binary { .. });
     let view = DiffView::new("source-control-diff", model)
         .status(status)
         .disconnected(!connected)
@@ -86,6 +89,13 @@ pub(super) fn diff_page(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> 
             BannerVariant::Warning,
             "This diff is cut at the size limit.",
         ));
+    }
+    let images = shell.source_control.images.as_ref();
+    if let Some(preview) = images {
+        page = page.child(image_preview_panel(preview, cx));
+    }
+    if binary && images.is_some() {
+        return page.into_any_element();
     }
     page.child(view).into_any_element()
 }

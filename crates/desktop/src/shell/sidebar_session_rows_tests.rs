@@ -33,6 +33,35 @@ fn created_without_a_session(rig: &Rig, cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn only_an_in_place_workspace_marks_its_placeholder_row(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    created_without_a_session(&rig, cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w2").is_some());
+    assert!(
+        cx.debug_bounds("sidebar-in-place-w2").is_none(),
+        "a worktree is not marked in place"
+    );
+    let mut checkout = workspace("w3", "p1", "alpha", 3);
+    checkout.in_place = true;
+    rig.updates
+        .send(StoreUpdate::WorkspaceKindChosen {
+            workspace: "w3".into(),
+            kind: "claude".into(),
+        })
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::WorkspaceChanged(checkout))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar-placeholder-w3").is_some());
+    assert!(
+        cx.debug_bounds("sidebar-in-place-w3").is_some(),
+        "the project's own checkout is marked in place"
+    );
+}
+
+#[gpui::test]
 fn a_workspace_created_without_a_session_is_drawn_as_a_placeholder_row(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[("p1", "alpha")]);
     assert!(

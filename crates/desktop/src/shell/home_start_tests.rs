@@ -12,7 +12,7 @@ use crate::model::start_page::StartMode;
 use crate::model::workspace_flow::{NO_PROJECT_LABEL, ProjectChoice};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{ChatCommand, Command, KindChat, Refusal, Script, StoreUpdate};
-use gpui::{Focusable, TestAppContext, VisualTestContext};
+use gpui::{Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
 use massorca_protocol::methods::agents::{AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
@@ -546,6 +546,88 @@ fn picking_a_branch_starts_the_new_worktree_from_it(cx: &mut TestAppContext) {
     );
     assert_eq!(create.branch, None);
     assert!(!create.existing_branch);
+}
+
+/// Takes the `git.branches` call the popover sends for a project's own checkout, answering with the project it named.
+fn expect_git_project_branches(
+    script: &mut Script,
+) -> (String, oneshot::Sender<Result<Vec<String>, Refusal>>) {
+    loop {
+        match script.next() {
+            Some(Command::GitProjectBranches { project, reply }) => return (project, reply),
+            Some(_) => {}
+            None => panic!("a git.branches call for the project was expected"),
+        }
+    }
+}
+
+#[gpui::test]
+fn the_branch_list_asks_for_the_project_when_the_service_offers_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::GitProjectBranchesOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "home-start-branch");
+    draw(cx);
+    let (project, reply) = expect_git_project_branches(&mut rig.script);
+    assert_eq!(
+        project, "p1",
+        "the project the page creates in is named, with no workspace"
+    );
+    reply
+        .send(Ok(vec!["main".to_owned(), "release".to_owned()]))
+        .expect("the shell waits for the branches");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("home-start-branch-row-1").is_some(),
+        "every local branch the service lists is in the list"
+    );
+}
+
+/// Clicks the New worktree switch's track, which sits at the right end of its row after the label.
+fn click_new_worktree_track(cx: &mut VisualTestContext) {
+    draw(cx);
+    let bounds = cx
+        .debug_bounds("home-start-new-worktree")
+        .expect("the New worktree switch is drawn");
+    let track = point(
+        bounds.origin.x + bounds.size.width - px(8.),
+        bounds.center().y,
+    );
+    cx.simulate_click(track, Modifiers::default());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn turning_the_new_worktree_switch_off_registers_the_projects_checkout_in_place(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = home_rig(cx);
+    rig.updates
+        .send(StoreUpdate::WorkspaceInPlaceOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "home-start-branch");
+    draw(cx);
+    click_new_worktree_track(cx);
+    offer_chat(&rig);
+    type_and_send(&rig, cx, "Fix the login bug");
+    let (create, _reply) = expect_create(&mut rig.script);
+    assert!(
+        create.in_place,
+        "the switch off asks for the project's own checkout"
+    );
+    assert_eq!(create.project, "p1");
+    assert_eq!(
+        create.name, "",
+        "the in-place workspace takes the project's name"
+    );
+    assert_eq!(create.base, None);
+    assert_eq!(create.branch, None);
+    assert!(!create.existing_branch);
+    assert!(!create.unique_name && !create.name_generated);
 }
 
 #[gpui::test]

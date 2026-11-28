@@ -103,7 +103,7 @@ pub fn name_for_try(base: &str, attempt: usize) -> String {
 
 /// Whether the start page derives the workspace's name from the prompt: a name the person typed is never changed.
 pub fn name_is_derived(details: &WorkspaceDetails) -> bool {
-    details.name.trim().is_empty()
+    !details.in_place && details.name.trim().is_empty()
 }
 
 /// The project the page creates in: the chosen one while the service lists it, else the first.
@@ -162,6 +162,8 @@ pub struct WorkspaceDetails {
     pub name: String,
     /// The branch the new worktree starts from; blank takes the project's base.
     pub base: String,
+    /// The "New worktree" switch is off: Send registers the project's own checkout instead (`workspace-in-place/1`).
+    pub in_place: bool,
 }
 
 /// The branch pill's two labels: the branch Send creates or reuses, and where a new worktree starts (D-AG-01).
@@ -180,6 +182,17 @@ pub fn branch_pill(details: &WorkspaceDetails, project_base: Option<&str>) -> Br
     BranchPill {
         label: "New worktree".to_owned(),
         detail: format!("from {base}"),
+    }
+}
+
+/// The popover's note with the switch off: the project's own checkout is used, so no branch is picked here.
+pub const IN_PLACE_NOTE: &str = "The project's own checkout is used. Its branch is read from the checkout, which the service never switches.";
+
+/// The branch pill with the switch off: Send registers the project's own checkout, with no new worktree or branch.
+pub fn in_place_branch_pill() -> BranchPill {
+    BranchPill {
+        label: "In place".to_owned(),
+        detail: "the project's checkout".to_owned(),
     }
 }
 
@@ -209,11 +222,21 @@ pub fn create_params(
 ) -> WorkspaceCreateParams {
     let typed = non_empty(&details.name);
     let mut params = WorkspaceCreateParams {
-        in_place: false,
+        in_place: details.in_place,
         project: project.to_owned(),
-        name: typed.unwrap_or_else(|| workspace_name_seed(prompt)),
+        name: typed.unwrap_or_else(|| {
+            if details.in_place {
+                String::new()
+            } else {
+                workspace_name_seed(prompt)
+            }
+        }),
         branch: None,
-        base: non_empty(&details.base),
+        base: if details.in_place {
+            None
+        } else {
+            non_empty(&details.base)
+        },
         existing_branch: false,
         refresh_base: false,
         path: None,
@@ -404,6 +427,7 @@ mod tests {
         let details = WorkspaceDetails {
             name: String::new(),
             base: " release ".into(),
+            in_place: false,
         };
         let offers = NameOffers {
             unique_name: false,
@@ -425,6 +449,30 @@ mod tests {
         assert_eq!(
             create_params("p1", "fix the login", &details, NameOffers::default()).name,
             "login-fix"
+        );
+    }
+
+    #[test]
+    fn an_in_place_create_names_nothing_and_derives_nothing() {
+        let details = WorkspaceDetails {
+            in_place: true,
+            ..WorkspaceDetails::default()
+        };
+        let offers = NameOffers {
+            unique_name: true,
+            rename: true,
+        };
+        let params = create_params("p1", "fix the login", &details, offers);
+        assert!(params.in_place, "the switch off registers the checkout");
+        assert_eq!(
+            params.name, "",
+            "the project's name is the service's to give"
+        );
+        assert_eq!(params.base, None);
+        assert!(!params.unique_name && !params.name_generated);
+        assert!(
+            !name_is_derived(&details),
+            "no name is derived from the prompt"
         );
     }
 

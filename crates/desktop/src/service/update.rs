@@ -84,6 +84,12 @@ pub enum StoreUpdate {
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
     WorkspaceRenameOffered(bool),
+    /// Whether the service registers a project's own checkout as a workspace (`workspace-in-place/1`), read on each connect.
+    WorkspaceInPlaceOffered(bool),
+    /// Whether the service lists a project's local branches without a workspace (`git-project-branches/1`), read on each connect.
+    GitProjectBranchesOffered(bool),
+    /// Whether the service turns a folder project into a git project (`project-init-git/1`), read on each connect.
+    ProjectInitGitOffered(bool),
     /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
     GitSyncOffered(bool),
     /// Whether the service offers `projects/1`: Remove project and the project's base branch.
@@ -336,6 +342,14 @@ pub struct StoreState {
     pub workspace_unique_name: bool,
     /// Whether the service renames a name it chose (`workspace-rename/1`); without it a derived name is not marked as renamable.
     pub workspace_rename: bool,
+    /// Whether the service registers a project's own checkout as a workspace (`workspace-in-place/1`); without it the
+    /// "New worktree" switch stays on.
+    pub workspace_in_place: bool,
+    /// Whether the service lists a project's local branches without a workspace (`git-project-branches/1`).
+    pub git_project_branches: bool,
+    /// Whether the service turns a folder project into a git project (`project-init-git/1`), so the No Git warning
+    /// offers Initialize Git.
+    pub project_init_git: bool,
     /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
     pub git_sync: bool,
     /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
@@ -398,6 +412,9 @@ impl Default for StoreState {
             agent_options_live: false,
             workspace_unique_name: false,
             workspace_rename: false,
+            workspace_in_place: false,
+            git_project_branches: false,
+            project_init_git: false,
             git_sync: false,
             project_edits: false,
             agent_archive: false,
@@ -517,6 +534,9 @@ impl StoreState {
                 self.workspace_unique_name = offered;
             }
             StoreUpdate::WorkspaceRenameOffered(offered) => self.workspace_rename = offered,
+            StoreUpdate::WorkspaceInPlaceOffered(offered) => self.workspace_in_place = offered,
+            StoreUpdate::GitProjectBranchesOffered(offered) => self.git_project_branches = offered,
+            StoreUpdate::ProjectInitGitOffered(offered) => self.project_init_git = offered,
             StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
             StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,

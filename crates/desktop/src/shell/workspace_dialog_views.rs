@@ -11,6 +11,7 @@ use crate::model::workspace_flow::{DialogCopy, DialogKind, KEEP_BRANCH_LATER, Re
 use gpui::{AnyElement, App, Focusable, SharedString, WeakEntity, Window, div, prelude::*, px};
 use massorca_protocol::methods::projects::ProjectIcon;
 use massorca_ui::ActiveTheme;
+use massorca_ui::components::button::Button;
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
 use massorca_ui::components::project_icon_popover::ProjectIconControl;
@@ -21,10 +22,11 @@ use massorca_ui::tokens::SPACE_3;
 pub(super) fn add_project_dialog(
     dialog: &AddProjectDialog,
     shell: &WeakEntity<Shell>,
+    init_git_offered: bool,
     cx: &App,
 ) -> Dialog {
     if dialog.form.plain_folder.is_some() {
-        return plain_folder_dialog(shell, cx);
+        return plain_folder_dialog(dialog, shell, init_git_offered, cx);
     }
     let form = &dialog.form;
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
@@ -81,14 +83,29 @@ fn add_project_icon_row(form: &AddProjectForm, shell: &WeakEntity<Shell>) -> imp
 }
 
 /// The warning for a folder that is not a Git repository: what it loses, then Continue without Git or Cancel back
-/// to the path (WS-31). Initialize Git is not offered until the service can run git init.
-fn plain_folder_dialog(shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
+/// to the path (WS-31). Initialize Git sits under the copy when the service can run git init (`project-init-git/1`).
+fn plain_folder_dialog(
+    dialog: &AddProjectDialog,
+    shell: &WeakEntity<Shell>,
+    init_git_offered: bool,
+    cx: &App,
+) -> Dialog {
+    let form = &dialog.form;
     let (on_continue, on_cancel) = (shell.clone(), shell.clone());
+    let init_git = init_git_offered.then(|| {
+        let on_init = shell.clone();
+        Button::new("add-project-init-git", "Initialize Git")
+            .disabled(form.busy)
+            .on_click(move |_, cx| {
+                let _ = on_init.update(cx, |shell, cx| shell.initialize_plain_folder_git(cx));
+            })
+            .into_any_element()
+    });
     flow_dialog(
         "add-project-plain-folder",
         plain_folder_copy(),
-        false,
-        None,
+        form.busy,
+        form.error.as_deref().or(form.path_error.as_deref()),
         cx,
         (
             move |_: &mut Window, cx: &mut App| {
@@ -100,7 +117,7 @@ fn plain_folder_dialog(shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
                 let _ = on_cancel.update(cx, |shell, cx| shell.cancel_plain_folder(cx));
             },
         ),
-        None,
+        init_git,
     )
 }
 

@@ -13,7 +13,7 @@ use massorca_desktop::service::{
 };
 use massorca_profile::Profile;
 use massorca_protocol::methods::git::commit::GitCommitParams;
-use massorca_protocol::methods::git::diff::GitDiffFileParams;
+use massorca_protocol::methods::git::diff::{FileSide, GitDiffFileParams, GitFileContentParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitPathsParams};
 use massorca_protocol::methods::git::remote::{
     GitFetchParams, GitPullParams, GitPulled, GitPushParams, PullMode, PushOutcome,
@@ -826,6 +826,67 @@ async fn the_base_branch_is_set_and_cleared_through_the_service() {
         .await
         .expect("the base is cleared");
     assert_eq!(cleared.base_ref, None);
+    session.stop().await;
+}
+
+#[tokio::test]
+async fn an_image_side_comes_back_as_its_bytes_or_as_its_size_alone() {
+    let home = temp_home();
+    let (session, worktree) = Session::start(&home).await;
+    // An image committed, then changed in the worktree; a file over the cap that git has not seen.
+    std::fs::write(worktree.join("pic.png"), b"\x89PNG committed").expect("an image");
+    git(&worktree, &["add", "pic.png"]);
+    git(&worktree, &["commit", "-q", "-m", "image"]);
+    std::fs::write(worktree.join("pic.png"), b"\x89PNG changed").expect("the change");
+    let over_the_cap = (4 << 20) + 1;
+    std::fs::write(worktree.join("big.png"), vec![7_u8; over_the_cap]).expect("a large image");
+
+    let workspace = session.id().to_owned();
+    let read = |side: FileSide, path: &str| GitFileContentParams {
+        workspace: workspace.clone(),
+        side,
+        path: path.to_owned(),
+        max_bytes: None,
+    };
+    let committed = session
+        .handle
+        .git_file_content(read(
+            FileSide::Revision {
+                rev: "HEAD".to_owned(),
+            },
+            "pic.png",
+        ))
+        .await
+        .expect("HEAD is read");
+    assert_eq!(
+        committed.decoded().as_deref(),
+        Some(&b"\x89PNG committed"[..])
+    );
+    assert_eq!(committed.mime.as_deref(), Some("image/png"));
+
+    let changed = session
+        .handle
+        .git_file_content(read(FileSide::Worktree, "pic.png"))
+        .await
+        .expect("the worktree is read");
+    assert_eq!(changed.decoded().as_deref(), Some(&b"\x89PNG changed"[..]));
+
+    let large = session
+        .handle
+        .git_file_content(read(FileSide::Worktree, "big.png"))
+        .await
+        .expect("the large file is answered");
+    assert!(large.too_large, "a file over the cap is named, not sent");
+    assert_eq!(large.size, Some(over_the_cap as u64));
+    assert_eq!(large.content_base64, None);
+
+    let absent = session
+        .handle
+        .git_file_content(read(FileSide::Worktree, "gone.png"))
+        .await
+        .expect("an absent file is answered");
+    assert_eq!(absent.size, None, "a side with no file has no size");
+
     session.stop().await;
 }
 

@@ -70,6 +70,14 @@ fn no_git_marker(project_id: &str) -> impl IntoElement {
         .child(Badge::text("No Git").tone(BadgeTone::Warning))
 }
 
+/// The In place marker of a workspace row whose workspace is the project's own checkout, found by its selector.
+fn in_place_marker(workspace_id: &str) -> impl IntoElement {
+    let selector = format!("sidebar-in-place-{workspace_id}");
+    div()
+        .debug_selector(move || selector)
+        .child(Badge::text("In place").tone(BadgeTone::Neutral))
+}
+
 /// One row of the project tree, identified by its position in the list.
 pub(super) fn tree_row(
     row: &TreeRow,
@@ -172,6 +180,7 @@ pub(super) fn tree_row(
         }
         TreeRow::Placeholder {
             workspace_id,
+            in_place,
             title,
             agent,
             tooltip,
@@ -186,6 +195,9 @@ pub(super) fn tree_row(
             }
             if *dimmed {
                 row = row.dimmed(true);
+            }
+            if *in_place {
+                row = row.trailing(in_place_marker(workspace_id));
             }
             // Right click opens the workspace's menu while it has no session, as a session row does (A97).
             let (menu_shell, menu_workspace) = (shell.clone(), workspace_id.clone());

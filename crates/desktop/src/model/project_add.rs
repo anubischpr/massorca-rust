@@ -14,7 +14,7 @@ pub const ADD_PROJECT_LABEL: &str = "Add a project\u{2026}";
 pub const NO_PROJECTS_LABEL: &str = "No projects on This PC yet";
 
 /// The warning before a folder that is not a Git repository is added (WS-31): what it loses, and the
-/// action that adds it without Git. "Initialize Git" is left out until the service can run git init.
+/// action that adds it without Git. "Initialize Git" is offered when the service runs git init (`project-init-git/1`).
 pub fn plain_folder_copy() -> DialogCopy {
     DialogCopy {
         kind: DialogKind::Confirm,

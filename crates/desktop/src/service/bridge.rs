@@ -99,6 +99,22 @@ pub(crate) enum Command {
         workspace: String,
         reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
+    /// `git.branches` for a project's own checkout, with no workspace (`git-project-branches/1`).
+    GitProjectBranches {
+        project: String,
+        reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
+    },
+    /// `git.file_content`: one side of a file, as bytes when they fit the cap (GIT-06 image previews).
+    GitFileContent {
+        params: massorca_protocol::methods::git::diff::GitFileContentParams,
+        reply:
+            oneshot::Sender<Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal>>,
+    },
+    /// `project.init_git`: turns a folder project into a git project; the answer is the updated project.
+    InitGitProject {
+        project: String,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
     Remove {
         params: WorkspaceRemoveParams,
         reply: oneshot::Sender<Result<WorkspaceRemoved, Refusal>>,
@@ -439,6 +455,28 @@ impl ServiceHandle {
     /// repository, so any workspace of the project lists them all.
     pub async fn git_branches(&self, workspace: String) -> Result<Vec<String>, Refusal> {
         self.ask(|reply| Command::GitBranches { workspace, reply })
+            .await
+    }
+
+    /// `git.branches` for a project's own checkout, with no workspace (`git-project-branches/1`).
+    pub async fn git_project_branches(&self, project: String) -> Result<Vec<String>, Refusal> {
+        self.ask(|reply| Command::GitProjectBranches { project, reply })
+            .await
+    }
+
+    /// `git.file_content`: one side of a file, as bytes when they fit the cap (GIT-06 image previews).
+    pub async fn git_file_content(
+        &self,
+        params: massorca_protocol::methods::git::diff::GitFileContentParams,
+    ) -> Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal> {
+        self.ask(|reply| Command::GitFileContent { params, reply })
+            .await
+    }
+
+    /// `project.init_git`: turns a folder project into a git project. The project list changes through the
+    /// `project.changed` event, and the answer carries the updated project.
+    pub async fn init_git_project(&self, project: String) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::InitGitProject { project, reply })
             .await
     }
 
@@ -1022,6 +1060,15 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
             massorca_protocol::capabilities::WORKSPACE_RENAME,
         )));
+        self.emit(StoreUpdate::WorkspaceInPlaceOffered(client.has_capability(
+            massorca_protocol::capabilities::WORKSPACE_IN_PLACE,
+        )));
+        self.emit(StoreUpdate::GitProjectBranchesOffered(
+            client.has_capability(massorca_protocol::capabilities::GIT_PROJECT_BRANCHES),
+        ));
+        self.emit(StoreUpdate::ProjectInitGitOffered(client.has_capability(
+            massorca_protocol::capabilities::PROJECT_INIT_GIT,
+        )));
         self.emit(StoreUpdate::GitSyncOffered(
             client.has_capability(massorca_protocol::capabilities::GIT),
         ));
@@ -1350,6 +1397,29 @@ fn gone_if_missing(
     }
 }
 
+/// Runs `git.branches` on its own task and answers with the local branch names.
+fn spawn_branches(
+    client: &Client,
+    params: massorca_protocol::methods::git::branch::GitBranchesParams,
+    reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let result = client
+            .git_branches(&params)
+            .await
+            .map(|listed| {
+                listed
+                    .branches
+                    .into_iter()
+                    .map(|branch| branch.name)
+                    .collect()
+            })
+            .map_err(|error| Refusal::from(&error));
+        let _ = reply.send(result);
+    });
+}
+
 /// Runs a call on its own task so a slow one never holds up events.
 fn spawn_call(
     client: &Client,
@@ -1360,24 +1430,43 @@ fn spawn_call(
     let client = client.clone();
     match command {
         Command::GitBranches { workspace, reply } => {
+            spawn_branches(
+                &client,
+                massorca_protocol::methods::git::branch::GitBranchesParams {
+                    workspace: Some(workspace),
+                    project: None,
+                },
+                reply,
+            );
+        }
+        Command::GitProjectBranches { project, reply } => {
+            spawn_branches(
+                &client,
+                massorca_protocol::methods::git::branch::GitBranchesParams {
+                    workspace: None,
+                    project: Some(project),
+                },
+                reply,
+            );
+        }
+        Command::GitFileContent { params, reply } => {
             tokio::spawn(async move {
-                let result = client
-                    .git_branches(
-                        &massorca_protocol::methods::git::branch::GitBranchesParams {
-                            workspace: Some(workspace),
-                            project: None,
-                        },
+                let answer: Result<massorca_protocol::methods::git::diff::GitFileContent, _> =
+                    client
+                        .call(massorca_protocol::methods::git::diff::FILE_CONTENT, &params)
+                        .await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
+            });
+        }
+        Command::InitGitProject { project, reply } => {
+            tokio::spawn(async move {
+                let answer: Result<Project, _> = client
+                    .call(
+                        massorca_protocol::methods::projects::INIT_GIT,
+                        &massorca_protocol::methods::projects::ProjectRef { project },
                     )
-                    .await
-                    .map(|listed| {
-                        listed
-                            .branches
-                            .into_iter()
-                            .map(|branch| branch.name)
-                            .collect()
-                    })
-                    .map_err(|error| Refusal::from(&error));
-                let _ = reply.send(result);
+                    .await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
             });
         }
         Command::Create { params, reply } => {

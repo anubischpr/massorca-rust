@@ -198,6 +198,56 @@ async fn inspecting_a_path_adds_nothing_and_a_plain_folder_is_added_as_a_folder(
     stop_service(service).await;
 }
 
+#[tokio::test]
+async fn initializing_git_turns_a_folder_into_a_git_project_and_a_second_try_is_refused() {
+    let home = temp_home();
+    let notes = home.path().join("notes");
+    std::fs::create_dir_all(&notes).expect("a plain folder");
+    let service = start_service(home.path()).await;
+
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the service is connected and offers project-init-git/1",
+        |s| s.connection.is_connected() && s.loaded && s.project_init_git,
+    )
+    .await;
+
+    let folder = handle
+        .add_project(ProjectAddParams {
+            path: notes.display().to_string(),
+            kind: Some(ProjectKind::Folder),
+            ..base_project_add_params()
+        })
+        .await
+        .expect("the folder is added as a folder");
+    assert_eq!(folder.kind, ProjectKind::Folder);
+
+    // The folder becomes a git project under the same id, and git init runs in it.
+    let git = handle
+        .init_git_project(folder.id.clone())
+        .await
+        .expect("the folder is turned into a git project");
+    assert_eq!(git.kind, ProjectKind::Git);
+    assert_eq!(git.id, folder.id);
+    assert!(notes.join(".git").exists(), "git init ran in the folder");
+
+    // A git project is refused as already git, with the service's own sentence.
+    let again = handle
+        .init_git_project(folder.id)
+        .await
+        .expect_err("a git project is refused");
+    assert!(
+        matches!(&again, Refusal::Failed { code, .. } if code == "project.already_git"),
+        "got {again:?}"
+    );
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
 /// Every `PeerInfo` field at its usual value; tests override the fields they vary.
 fn base_peer_info() -> massorca_protocol::PeerInfo {
     massorca_protocol::PeerInfo {

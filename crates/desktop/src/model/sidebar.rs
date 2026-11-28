@@ -85,6 +85,8 @@ pub enum TreeRow {
     Placeholder {
         /// The workspace it stands for, for the row menu.
         workspace_id: String,
+        /// The project's own checkout, which the row marks as in place.
+        in_place: bool,
         /// The branch, or the folder's name for a plain folder.
         title: String,
         agent: Agent,
@@ -233,6 +235,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             for placeholder in &host.placeholders {
                 rows.push(TreeRow::Placeholder {
                     workspace_id: placeholder.workspace_id.clone(),
+                    in_place: placeholder.in_place,
                     title: placeholder.title.clone(),
                     agent: placeholder.agent,
                     tooltip: tooltip_for(
@@ -367,6 +370,7 @@ mod tests {
             agent: Agent::Codex,
             branch: Some("feat/new".into()),
             path: Some("D:/new".into()),
+            in_place: false,
         }
     }
 
@@ -615,6 +619,7 @@ mod tests {
             rows[3],
             TreeRow::Placeholder {
                 workspace_id: "w9".into(),
+                in_place: false,
                 title: "feat/new".into(),
                 agent: Agent::Codex,
                 tooltip: Some("feat/new · D:/new".into()),
