@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use super::placement::valid_name;
 use super::placement_agents::PlacementAgent;
 use super::placement_error::PlacementError;
-use super::placement_model::{ManagedAgent, ManagedSkill, PlacementStore, Topology};
+use super::placement_model::{
+    ManagedAgent, ManagedSkill, PlacementScope, PlacementStore, Topology,
+};
 use crate::lockfile::write_atomic;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -22,6 +24,9 @@ struct RecordFile {
 #[derive(Debug, Serialize, Deserialize)]
 struct RecordSkill {
     name: String,
+    /// Absent for a global placement, so a record written before scopes existed reads as global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<String>,
     canonical: PathBuf,
     digest: String,
     #[serde(default)]
@@ -86,8 +91,18 @@ fn into_managed(skill: RecordSkill) -> Result<ManagedSkill, PlacementError> {
             })
         })
         .collect::<Result<Vec<_>, PlacementError>>()?;
+    let scope = match skill.workspace {
+        None => PlacementScope::Global,
+        Some(id) if !id.is_empty() => PlacementScope::Workspace(id),
+        Some(_) => {
+            return Err(PlacementError::InvalidRecord(
+                "a workspace id that is empty".to_owned(),
+            ));
+        }
+    };
     Ok(ManagedSkill {
         name: skill.name,
+        scope,
         canonical: skill.canonical,
         digest: skill.digest,
         agents,
@@ -97,6 +112,10 @@ fn into_managed(skill: RecordSkill) -> Result<ManagedSkill, PlacementError> {
 fn from_managed(skill: &ManagedSkill) -> RecordSkill {
     RecordSkill {
         name: skill.name.clone(),
+        workspace: match &skill.scope {
+            PlacementScope::Global => None,
+            PlacementScope::Workspace(id) => Some(id.clone()),
+        },
         canonical: skill.canonical.clone(),
         digest: skill.digest.clone(),
         agents: skill

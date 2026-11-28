@@ -104,10 +104,19 @@ pub struct PlacementPreview {
     pub agents: Vec<PlannedAgent>,
 }
 
+/// Where a placement is made (decision 0150): the home folder's global folders, or one workspace's folders under its root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlacementScope {
+    Global,
+    /// The MassOrca workspace id; the caller resolves its root on the host that owns it.
+    Workspace(String),
+}
+
 /// One skill MassOrca placed, with its canonical copy and each agent's folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedSkill {
     pub name: String,
+    pub scope: PlacementScope,
     pub canonical: PathBuf,
     pub digest: String,
     pub agents: Vec<ManagedAgent>,
