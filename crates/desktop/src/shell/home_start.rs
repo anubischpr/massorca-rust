@@ -30,10 +30,11 @@ use super::start_page::{
 use super::start_placement::{host_pill, off_pill, pill, pill_focus, placement_card};
 use super::workspace_dialogs::{MenuTarget, ProjectMenuChoice, project_menu};
 use crate::model::home_start::{
-    BranchPill, CHOOSE_A_PROJECT, FOLDER_NO_GIT_REASON, HOME_START, NEW_WORKTREE_REASON,
-    NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, NameOffers, WorkspaceDetails, branch_pill,
-    create_params, folder_start_workspace, home_choice, home_start_params, name_is_derived,
-    no_project_branch_pill, no_project_start_params,
+    BranchPill, CHOOSE_A_PROJECT, FOLDER_NO_GIT_REASON, HOME_START, IN_PLACE_NOTE,
+    NEW_WORKTREE_REASON, NO_PROJECT_NEEDS_SERVICE, NO_WORKTREE_REASON, NameOffers,
+    WorkspaceDetails, branch_pill, create_params, folder_start_workspace, home_choice,
+    home_start_params, in_place_branch_pill, name_is_derived, no_project_branch_pill,
+    no_project_start_params,
 };
 use crate::model::service_view::LOCAL_HOST;
 use crate::model::start_page::{StartMode, StartingSession, TERMINAL_NOTE};
@@ -62,6 +63,8 @@ pub(super) struct HomeFrame {
     pub branches: Vec<String>,
     /// The branch popover's selection and whether it is open.
     pub details: HomeDetails,
+    /// Whether the service registers a project's own checkout (`workspace-in-place/1`); without it the switch stays on.
+    pub in_place_offered: bool,
 }
 
 /// The branch popover of the start page with no workspace (D-AG-01): whether it is open, the base the person picked,
@@ -71,6 +74,8 @@ pub(super) struct HomeDetails {
     pub branch_menu: bool,
     /// The branch the new worktree starts from, once picked; `None` takes the project's base.
     pub base: Option<String>,
+    /// Whether the "New worktree" switch is on; off, Send registers the project's own checkout (`workspace-in-place/1`).
+    pub new_worktree: bool,
     /// The branches a workspace of the project listed, with the project they belong to.
     pub listed: Option<(String, Vec<String>)>,
     pub search: Entity<TextField>,
@@ -90,6 +95,7 @@ impl HomeDetails {
         Self {
             branch_menu: false,
             base: None,
+            new_worktree: true,
             listed: None,
             search,
             _search_events: Rc::new(events),
@@ -101,6 +107,7 @@ impl HomeDetails {
         WorkspaceDetails {
             name: String::new(),
             base: self.base.clone().unwrap_or_default(),
+            in_place: !self.new_worktree,
         }
     }
 }
@@ -165,6 +172,8 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
             label: "No Git".to_owned(),
             detail: "folder".to_owned(),
         }
+    } else if !frame.details.new_worktree {
+        in_place_branch_pill()
     } else {
         branch_pill(&frame.details.values(), frame.project_base.as_deref())
     };
@@ -234,6 +243,7 @@ pub(super) fn home_page(frame: HomeFrame, window: &mut Window, cx: &mut App) -> 
             frame.project_base.as_deref(),
             frame.shell.clone(),
             &theme,
+            frame.in_place_offered,
             cx,
         );
         let dismiss = frame.shell.clone();
@@ -298,6 +308,7 @@ fn branch_popover(
     project_base: Option<&str>,
     shell: WeakEntity<Shell>,
     theme: &Theme,
+    in_place_offered: bool,
     cx: &App,
 ) -> impl IntoElement {
     let p = &theme.palette;
@@ -309,13 +320,25 @@ fn branch_popover(
     let current = picked
         .clone()
         .unwrap_or_else(|| "the default branch".to_owned());
-    let switch = TooltipTrigger::new(
-        "home-start-new-worktree-reason",
-        NEW_WORKTREE_REASON,
-        Switch::new("home-start-new-worktree", true)
-            .label("New worktree")
-            .disabled(true),
-    );
+    let in_place = !details.new_worktree;
+    let switch_shell = shell.clone();
+    let switch = Switch::new("home-start-new-worktree", details.new_worktree)
+        .label("New worktree")
+        .disabled(!in_place_offered)
+        .on_change(move |on, _, cx| {
+            let _ = switch_shell.update(cx, |shell, cx| shell.set_new_worktree(on, cx));
+        });
+    // Until the service registers a project's own checkout the switch stays on, disabled, with its reason.
+    let switch = if in_place_offered {
+        switch.into_any_element()
+    } else {
+        TooltipTrigger::new(
+            "home-start-new-worktree-reason",
+            NEW_WORKTREE_REASON,
+            switch,
+        )
+        .into_any_element()
+    };
     let rows = branches
         .iter()
         .filter(|branch| query.is_empty() || branch.to_lowercase().contains(&query))
@@ -362,20 +385,31 @@ fn branch_popover(
                 .debug_selector(|| "home-start-new-worktree".to_owned())
                 .child(switch),
         )
-        .child(
-            div()
-                .text_style(TYPE_CAPTION)
-                .text_color(p.text.secondary)
-                .child(format!("Branch: {current}")),
-        )
-        .child(details.search.clone())
-        .child(
-            div()
-                .debug_selector(|| "home-start-branch-list".to_owned())
-                .flex()
-                .flex_col()
-                .children(rows),
-        )
+        .when(in_place, |column| {
+            column.child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.secondary)
+                    .child(IN_PLACE_NOTE),
+            )
+        })
+        .when(!in_place, |column| {
+            column
+                .child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.secondary)
+                        .child(format!("Branch: {current}")),
+                )
+                .child(details.search.clone())
+                .child(
+                    div()
+                        .debug_selector(|| "home-start-branch-list".to_owned())
+                        .flex()
+                        .flex_col()
+                        .children(rows),
+                )
+        })
 }
 
 impl Shell {
@@ -418,8 +452,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Lists the project's branches for the popover through one of its workspaces: branches belong to the repository,
-    /// so any workspace of the project lists them all. Without a workspace the popover keeps the project's base.
+    /// Lists the project's local branches for the popover: through the project's own checkout when the service offers
+    /// `git-project-branches/1`, else through any workspace of the project, since branches belong to the repository.
     fn list_home_branches(&mut self, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
@@ -430,6 +464,7 @@ impl Shell {
         ) else {
             return;
         };
+        let by_project = self.store.read(cx).state().git_project_branches;
         let workspace = self
             .store
             .read(cx)
@@ -438,11 +473,15 @@ impl Shell {
             .iter()
             .find(|workspace| workspace.project_id == project)
             .map(|workspace| workspace.id.clone());
-        let Some(workspace) = workspace else {
+        if !by_project && workspace.is_none() {
             return;
-        };
+        }
         cx.spawn(async move |shell, cx| {
-            if let Ok(names) = service.git_branches(workspace).await {
+            let names = match workspace {
+                Some(workspace) if !by_project => service.git_branches(workspace).await,
+                _ => service.git_project_branches(project.clone()).await,
+            };
+            if let Ok(names) = names {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.home_details.listed = Some((project, names));
                     cx.notify();
@@ -478,6 +517,12 @@ impl Shell {
     pub(super) fn set_home_base(&mut self, base: Option<String>, cx: &mut Context<Self>) {
         self.home_details.base = base;
         self.home_details.branch_menu = false;
+        cx.notify();
+    }
+
+    /// Turns the "New worktree" switch on or off, and keeps the popover open: off, Send registers the project's checkout.
+    pub(super) fn set_new_worktree(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.home_details.new_worktree = on;
         cx.notify();
     }
 
@@ -520,6 +565,7 @@ impl Shell {
             folder,
             branches,
             details: self.home_details.clone(),
+            in_place_offered: self.store.read(cx).state().workspace_in_place,
             composer,
         })
     }
@@ -564,7 +610,9 @@ impl Shell {
             Ok(chosen) => chosen,
             Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let details = self.home_details.values();
+        let mut details = self.home_details.values();
+        // The switch is off only where the service registers the project's own checkout (`workspace-in-place/1`).
+        details.in_place &= self.store.read(cx).state().workspace_in_place;
         let chat = self.start_mode(HOME_START, cx) == StartMode::Chat;
         self.start_pending = Some(StartingSession {
             workspace: HOME_START.to_owned(),
