@@ -1547,7 +1547,7 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<PromptReceipt, AgentError> {
-        self.send_prompt(selector, text, force, false)
+        self.send_prompt(selector, text, force, false, &[])
     }
 
     /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
