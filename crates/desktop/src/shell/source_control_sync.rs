@@ -10,7 +10,23 @@ use massorca_protocol::methods::git::remote::{
 use super::Shell;
 use crate::model::source_control_sync::{SyncAction, SyncNote, fetched, pulled, pushed};
 
+/// Fetch when the window gains focus (SET-01).
+const FETCH_ON_FOCUS_KEY: &str = "git.fetch_on_focus";
+
 impl Shell {
+    /// The window gained focus: fetches the workspace the Source control panel shows while `git.fetch_on_focus` is on
+    /// and the service offers git sync.
+    pub(super) fn fetch_on_focus(&mut self, cx: &mut Context<Self>) {
+        let state = self.store.read(cx).state();
+        let on = state
+            .config_value(FETCH_ON_FOCUS_KEY)
+            .and_then(|config| config.value.as_bool())
+            .unwrap_or(false);
+        if on && state.git_sync {
+            self.run_sync(SyncAction::Fetch, cx);
+        }
+    }
+
     /// Runs one remote action for the workspace the panel shows. One call is out at a time.
     pub(super) fn run_sync(&mut self, action: SyncAction, cx: &mut Context<Self>) {
         let (Some(workspace), Some(handle)) =
