@@ -1,11 +1,12 @@
 //! The icon a project takes from its repository's files when it is added without one (decisions 0091 and 0180): the
 //! first conventional PNG or WebP image, else the icon an HTML entry page or a JSX route root declares, else the `icon`
-//! of `package.json`. Bounded reads, every one inside the repository; nothing is spawned.
+//! of `package.json`. Bounded reads, every one inside the repository and outside its `.worktrees`; nothing is spawned.
 
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
+use massorca_core_git::WORKTREES_FOLDER;
 use massorca_protocol::methods::projects::{
     MAX_PROJECT_ICON_IMAGE_BYTES, ProjectIcon, ProjectIconSource,
 };
@@ -98,7 +99,8 @@ fn package_json_icon(root: &Path) -> Option<ProjectIcon> {
 /// else, including a file that a symbolic link leads outside `root`.
 fn read_bounded(root: &Path, relative: &str, limit: u64) -> Option<Vec<u8>> {
     let path = dunce::canonicalize(root.join(relative)).ok()?;
-    if !path.starts_with(root) {
+    // Another checkout's files are not the project's (decision 0183).
+    if !path.starts_with(root) || path.starts_with(root.join(WORKTREES_FOLDER)) {
         return None;
     }
     let metadata = fs::metadata(&path).ok()?;

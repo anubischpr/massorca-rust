@@ -51,7 +51,7 @@ machine.
 | `config list` | Lists every setting. |
 | `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR] [--icon ICON]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. When neither is given and the directory is not inside a repository, a warning on stderr says it was added as a plain folder (text mode only). `--icon ICON` sets the icon: `emoji:<emoji>`, `lucide:<name>` or `image:<PNG file>`, and the CLI sends the file as an upload. Without it, the icon is detected from the repository's files when there is one: the first PNG or WebP at a conventional location, else the icon an `index.html` or a JSX route root (`app/root.tsx`) declares, else the `icon` of `package.json` (a PNG or WebP path inside the repository, or a data URI). Every file read stays inside the repository (decisions 0091 and 0180). |
 | `project list` | Lists every project, ordered by name, with its icon in an `ICON` column and the owner of its remote in an `OWNER` column (`-` when there is none). |
-| `project show <PROJECT>` | Shows one project, with its icon when it has one and its remote owner as `owner:` when it has one. The owner is the first path segment group of the primary network remote (`origin` when it is a network remote, else the first network remote, as `git remotes` marks it), such as `acme` for `git@github.com:acme/widgets.git` or `group/sub` for a nested GitLab group; it is absent for a folder project or when no remote is a network remote. It is read from git on every call, so a changed remote shows at once. `PROJECT` is its id, name or path. |
+| `project show <PROJECT>` | Shows one project, with its workspaces root (`workspaces root:`; `workspaces_root` in JSON), its icon when it has one and its remote owner as `owner:` when it has one. The owner is the first path segment group of the primary network remote (`origin` when it is a network remote, else the first network remote, as `git remotes` marks it), such as `acme` for `git@github.com:acme/widgets.git` or `group/sub` for a nested GitLab group; it is absent for a folder project or when no remote is a network remote. It is read from git on every call, so a changed remote shows at once. `PROJECT` is its id, name or path. |
 | `project update <PROJECT> (--icon ICON \| --clear-icon)` | Sets the project's icon with `--icon`, which takes the forms of `project add --icon`, or removes it with `--clear-icon`, so the project shows the default icon. A Lucide icon takes a colour as `lucide:<name>:<colour>`, where `<colour>` is `usage-1` to `usage-6` or `neutral`; without one it is neutral. Prints the icon. |
 | `project scripts <PROJECT> [--workspace WORKSPACE]` | Shows the scripts as `project trust-scripts` without `--hash` does, and changes nothing. |
 | `project trust-scripts <PROJECT> [--workspace WORKSPACE] [--hash HASH]...` | Shows the `setup` and `archive` scripts of the project's `orca.yaml`, or of `WORKSPACE`'s copy (its `setup` only: removal reads `archive` from the project's), each with its SHA-256 and whether it is `trusted`, `not trusted` or `changed since it was trusted`, and the command that trusts it. `--hash` trusts the shown script with that hash; repeat it for both. A hash no shown script has exits 2 with `usage.unknown_script_hash`, and one that no longer matches the file is refused with `script.changed`. Trusting needs host-admin. A script runs only while its exact content is trusted (decision 0095). |
@@ -163,8 +163,12 @@ A relative path given to `project add`, `workspace create --path`, or `--workspa
 is taken from the directory the command runs in. A selector that is a path (it contains a
 separator, or starts with a dot, such as `.` or `../wt`) is made absolute the same way; ids and
 names are sent as typed. Workspaces of a project go under its
-workspaces root, which defaults to `workspaces.default_root` (a folder named after the
-project) at the time the project is added.
+workspaces root, which `workspaces.layout` decides at the time the project is added:
+`in_project` (the default) gives a git project `<project>/.worktrees`, kept out of git by a
+line in `.git/info/exclude`; `nested` gives a folder named after the project under
+`workspaces.default_root`; `flat` gives `workspaces.default_root` itself. On Windows a worktree
+path inside `.worktrees` longer than 260 characters is refused with `workspace.path_too_long`
+(decision 0183).
 
 `workspace rm` behaves as follows:
 

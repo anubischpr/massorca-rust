@@ -14,6 +14,7 @@ mod generated_names;
 mod in_place;
 mod layout;
 mod names;
+mod path_limit;
 mod paths;
 mod project_icon_detection;
 mod projects;
