@@ -38,7 +38,10 @@ fn in_project_is_the_default_layout_of_a_new_handle() {
         .add_project(project_add(&fx.repo()))
         .expect("add project");
 
-    assert_eq!(project.workspaces_root, text(&fx.repo().join(".worktrees")));
+    assert_eq!(
+        project.workspaces_root,
+        text(&Path::new(&project.path).join(".worktrees"))
+    );
 }
 
 #[test]
@@ -49,7 +52,10 @@ fn adding_a_project_records_the_root_but_creates_nothing() {
         .add_project(project_add(&fx.repo()))
         .expect("add project");
 
-    assert_eq!(project.workspaces_root, text(&fx.repo().join(".worktrees")));
+    assert_eq!(
+        project.workspaces_root,
+        text(&Path::new(&project.path).join(".worktrees"))
+    );
     assert!(!fx.repo().join(".worktrees").exists());
     assert_eq!(exclude_lines(&fx.repo()), 0);
 }
@@ -149,7 +155,10 @@ fn a_folder_project_keeps_a_root_under_the_default_root_until_git_is_initialized
     assert!(!dir.join(".worktrees").exists());
 
     let git = domain.init_project_git(&folder.id).expect("initialize git");
-    assert_eq!(git.workspaces_root, text(&dir.join(".worktrees")));
+    assert_eq!(
+        git.workspaces_root,
+        text(&Path::new(&git.path).join(".worktrees"))
+    );
 }
 
 #[test]
