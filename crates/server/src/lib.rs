@@ -40,7 +40,8 @@ pub use context::{AppState, Registries, RequestCtx};
 pub use error::ServiceError;
 pub use event_bus::{EventBus, EventSubscription};
 pub use method::{
-    ByteStreamSource, MethodError, MethodInfo, MethodRegistry, StreamItem, StreamSource,
+    ByteStreamSource, DuplexSource, MethodError, MethodInfo, MethodRegistry, StreamItem,
+    StreamSource,
 };
 pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, identity_paths};
 pub use owner::Owner;

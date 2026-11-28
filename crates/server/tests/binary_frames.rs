@@ -419,3 +419,65 @@ async fn byte_streams_are_refused_to_a_client_without_binary_frames() {
     );
     stop(running).await;
 }
+
+/// A stream-bytes payload larger than a forward chunk is refused when it arrives, before it is queued: one network frame
+/// may hold 1 MiB, and queueing such frames per tunnel would let one device pin a great deal of memory (decision 0131).
+#[tokio::test]
+async fn an_oversized_payload_on_a_forward_stream_ends_it_before_it_is_queued() {
+    use massorca_protocol::methods::forwards::{self, Chunk, MAX_CHUNK};
+
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let target = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a target listener");
+    let port = target.local_addr().expect("its address").port();
+    let _accepting = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = target.accept().await {
+            held.push(socket);
+        }
+    });
+
+    let mut raw = RawFrames::open(home.path()).await;
+    raw.handshake(&[capabilities::BINARY_FRAMES]).await;
+    raw.send(&request(1, forwards::FORWARD, json!({ "port": port })))
+        .await;
+    let forward_stream = result_of_stream(&mut raw, 1).await;
+    let forward = loop {
+        if let Frame::Message(Message::Event { stream, data }) = raw.recv().await
+            && stream == forward_stream
+        {
+            break data["forward"]["id"]
+                .as_str()
+                .expect("the forward id")
+                .to_owned();
+        }
+    };
+    raw.send(&request(
+        2,
+        forwards::FORWARD_CONNECT,
+        json!({ "forward": forward }),
+    ))
+    .await;
+    let tunnel = result_of_stream(&mut raw, 2).await;
+
+    let oversized = Chunk::Data(&vec![7; MAX_CHUNK]).encode();
+    let mut payload = oversized;
+    payload.extend_from_slice(&[7; 1024]);
+    raw.send(&Frame::StreamBytes {
+        stream: tunnel,
+        payload,
+    })
+    .await;
+    let error = loop {
+        if let Frame::Message(Message::End { stream, error }) = raw.recv().await
+            && stream == tunnel
+        {
+            break error;
+        }
+    };
+    let error = error.expect("the tunnel ends with the reason");
+    assert_eq!(error.code, codes::STREAM_INBOUND_TOO_LARGE);
+    stop(running).await;
+}

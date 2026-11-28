@@ -26,6 +26,7 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "host.discover",
     "host.list",
     "host.remove",
+    "host.route",
     "host.show",
     "host.status",
     "open",

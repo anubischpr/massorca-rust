@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use massorca_client::{
-    Client, HostRecord, Hosts, SshInstall, default_device_name, validate_host_name,
+    Client, HostRecord, Hosts, SshInstall, SshRoute, default_device_name, validate_host_name,
 };
 use massorca_core_remote::bootstrap::{BootstrapPlan, BootstrapReport, install_over_ssh};
 use massorca_profile::Profile;
@@ -15,6 +15,7 @@ use crate::connect::peer;
 use crate::cwd_path;
 use crate::error::CliError;
 use crate::host::records::record_lines;
+use crate::host::route;
 use crate::host::status::{self, HostStatus};
 use crate::output::Output;
 use crate::service::unit::listen_addresses;
@@ -46,6 +47,7 @@ pub async fn execute(
     if let Some(name) = &args.name {
         validate_host_name(name)?;
     }
+    tunnel_route(args)?;
     let listen = listen_addresses(&args.listen)?;
     let device_name = args.device_name.clone().unwrap_or_else(default_device_name);
     let plan = BootstrapPlan::for_ssh_host(
@@ -60,7 +62,16 @@ pub async fn execute(
     if hosts.exists(&name) {
         return upgrade(&hosts, &name, args, &installed, output).await;
     }
-    let paired = Client::pair(&hosts, &offer, &name, &device_name, &peer()).await;
+    let tunnel = tunnel_route(args)?;
+    let paired = Client::pair_through(
+        &hosts,
+        &offer,
+        &name,
+        &device_name,
+        &peer(),
+        tunnel.as_ref(),
+    )
+    .await;
     let (client, record) = paired.map_err(|error| {
         let mut error = CliError::from(error);
         error.message = format!(
@@ -71,6 +82,14 @@ pub async fn execute(
     })?;
     drop(client);
     note_install(&hosts, &name, args, output);
+    if let Some(route) = &tunnel
+        && let Err(error) = hosts.set_route(&name, Some(route))
+    {
+        output.progress(&format!(
+            "warning: the SSH route of host {name} was not saved, so it is dialed directly: {error}; run `massorca host route {name} --ssh {}`",
+            args.target
+        ));
+    }
     let mut lines = install_lines(&installed, &args.target);
     lines.extend(record_lines(&record));
     let report = install_report(&args.target, &installed, "paired", Some(record), None);
@@ -86,6 +105,9 @@ async fn upgrade(
     installed: &BootstrapReport,
     output: Output,
 ) -> Result<(), CliError> {
+    if let Some(route) = tunnel_route(args)? {
+        hosts.set_route(name, Some(&route))?;
+    }
     match status::check(hosts, name).await {
         Ok(connected) => {
             note_install(hosts, name, args, output);
@@ -108,6 +130,21 @@ async fn upgrade(
             Err(error)
         }
     }
+}
+
+/// The route `--tunnel` asks for: the install's own ssh target and options.
+/// Checked as `host route` checks a route, before anything runs, so a refused option uses up no install or offer.
+fn tunnel_route(args: &HostAddSshArgs) -> Result<Option<SshRoute>, CliError> {
+    if !args.tunnel {
+        return Ok(None);
+    }
+    let route = SshRoute {
+        ssh_target: args.target.clone(),
+        ssh_args: args.ssh_arg.clone(),
+        forward: None,
+    };
+    route::check_options(&route)?;
+    Ok(Some(route))
 }
 
 /// Records how host `name` was installed, for the self-test's log hint. A note that cannot be written is only a warning:
@@ -173,5 +210,35 @@ fn install_report(
         outcome,
         host,
         status,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::tunnel_route;
+    use crate::args::HostAddSshArgs;
+
+    fn args(ssh_arg: &[&str]) -> HostAddSshArgs {
+        HostAddSshArgs {
+            target: "deploy@vps.example.ts.net".to_owned(),
+            binary: PathBuf::from("massorca"),
+            name: None,
+            listen: Vec::new(),
+            ssh_arg: ssh_arg.iter().map(|arg| (*arg).to_owned()).collect(),
+            device_name: None,
+            tunnel: true,
+        }
+    }
+
+    #[test]
+    fn a_tunnel_route_ssh_would_misread_or_background_is_refused_before_anything_runs() {
+        let refused = tunnel_route(&args(&["-f"])).expect_err("-f is refused");
+        assert_eq!(refused.code, "usage.invalid_ssh_target");
+        let route = tunnel_route(&args(&["-J", "bastion"]))
+            .expect("a valid route")
+            .expect("--tunnel asks for one");
+        assert_eq!(route.ssh_args, ["-J", "bastion"]);
     }
 }

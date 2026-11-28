@@ -993,7 +993,7 @@ Clients receive catalog snapshots stamped with a catalog version, plus change no
 
 **Proposal.** Later. Size S. Reason: outside the workspace flow; the prototypes feature decides its own scope.
 
-**Owner direction (consistency pass, 2026-11-12):** Proposal: first version. Owner direction (2026-11-12): the Workspaces Sidebar shows a Prototypes entry with its count (design D-WS-01; prototypes core, decided on the owner's behalf, pending review).
+**Owner direction (consistency pass, 2026-11-12):** Proposal: first version. Owner direction (2026-11-12): the Workspaces Sidebar shows a Prototypes entry with its count (design D-WS-01; prototypes core, owner-confirmed 2026-11-27).
 
 ### WS-42 Show bot teams filter in Workspaces
 

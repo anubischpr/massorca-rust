@@ -78,6 +78,8 @@ pub enum StoreUpdate {
     AgentChatOffered(bool),
     /// Whether the service offers a fast speed on `agent.start` (`agent-fast/1`), read on each connect.
     AgentFastOffered(bool),
+    /// Whether the service changes a session's model, effort and fast mode while it runs (`agent-options-live/1`).
+    AgentOptionsLiveOffered(bool),
     /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`), read on each connect.
     WorkspaceUniqueNameOffered(bool),
     /// Whether the service renames a name it chose (`workspace-rename/1`), read on each connect.
@@ -329,6 +331,8 @@ pub struct StoreState {
     pub agent_chat: bool,
     /// Whether the service offers a fast speed (`agent-fast/1`); without it Fast is off, with its reason.
     pub agent_fast: bool,
+    /// Whether the service offers `agent.set_options` (`agent-options-live/1`); without it a session has no picker.
+    pub agent_options_live: bool,
     /// Whether the service makes a taken workspace name unique itself (`workspace-unique-name/1`); without it a derived
     /// name is retried with a suffix on the client.
     pub workspace_unique_name: bool,
@@ -394,6 +398,7 @@ impl Default for StoreState {
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
+            agent_options_live: false,
             workspace_unique_name: false,
             workspace_rename: false,
             git_sync: false,
@@ -510,6 +515,7 @@ impl StoreState {
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
+            StoreUpdate::AgentOptionsLiveOffered(offered) => self.agent_options_live = offered,
             StoreUpdate::WorkspaceUniqueNameOffered(offered) => {
                 self.workspace_unique_name = offered;
             }
@@ -1027,6 +1033,14 @@ pub(crate) mod fixtures {
     pub fn base_agent_mode_set() -> massorca_protocol::methods::agents::AgentModeSet {
         massorca_protocol::methods::agents::AgentModeSet {
             applied: massorca_protocol::methods::agents::ModeApplied::NextResume,
+            session: crate::service::fixtures::base_agent_session(),
+        }
+    }
+
+    /// An `agent.set_options` answer that changed nothing; tests set the options they apply.
+    pub fn base_agent_options_set() -> massorca_protocol::methods::agents::AgentOptionsSet {
+        massorca_protocol::methods::agents::AgentOptionsSet {
+            applied: massorca_protocol::methods::agents::OptionsApplied::default(),
             session: crate::service::fixtures::base_agent_session(),
         }
     }
@@ -1953,6 +1967,14 @@ mod tests {
         );
         state.apply(StoreUpdate::AgentOptionsOffered(true), Instant::now());
         assert!(state.agent_options);
+    }
+
+    #[test]
+    fn the_store_holds_whether_the_service_offers_live_agent_options() {
+        let mut state = StoreState::default();
+        assert!(!state.agent_options_live, "no read yet: no session picker");
+        state.apply(StoreUpdate::AgentOptionsLiveOffered(true), Instant::now());
+        assert!(state.agent_options_live);
     }
 
     #[test]

@@ -97,6 +97,99 @@ impl RemoteShell for SystemSsh {
     }
 }
 
+/// The arguments of `ssh -W <forward> <destination>`, OpenSSH's stdio forward, which a client dials a paired host
+/// through (decision 0133): batch mode, the route's own options such as `-J bastion`, then the forward. `-W` implies
+/// no TTY, no remote command and no other forwardings. Each value stays one argument, so no shell reads it.
+pub fn stdio_forward_arguments(
+    destination: &str,
+    extra_args: &[String],
+    forward: &str,
+) -> Result<Vec<String>, SshError> {
+    check_destination(destination)?;
+    check_forward(forward)?;
+    check_route_options(extra_args)?;
+    let mut args: Vec<String> = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+        .map(str::to_owned)
+        .to_vec();
+    args.extend(extra_args.iter().cloned());
+    args.extend([
+        "-W".to_owned(),
+        forward.to_owned(),
+        "--".to_owned(),
+        destination.to_owned(),
+    ]);
+    Ok(args)
+}
+
+/// The `ssh` a client dials a host through: the absolute path in `MASSORCA_SSH` when set, as `MASSORCA_GIT` names
+/// git, else the system `ssh` as `SystemSsh` finds it.
+pub fn find_system_ssh() -> Result<PathBuf, SshError> {
+    ssh_program_from(std::env::var_os(SSH_PROGRAM_ENV))
+}
+
+/// A relative `MASSORCA_SSH` is refused rather than ignored, so a typo never falls back to another ssh.
+fn ssh_program_from(named: Option<std::ffi::OsString>) -> Result<PathBuf, SshError> {
+    match named.map(PathBuf::from) {
+        Some(program) if program.is_absolute() => Ok(program),
+        Some(program) => Err(SshError::Refused(format!(
+            "{SSH_PROGRAM_ENV} must be an absolute path, not {}",
+            program.display()
+        ))),
+        None => find_ssh().ok_or(SshError::NotFound),
+    }
+}
+
+/// ssh options that take a value, so the next argument, or the rest of a cluster, is that value.
+const SSH_OPTIONS_WITH_VALUE: &str = "BbcDEeFIiJLlmOoPpQRSWw";
+
+/// Refuses route options that would leave ssh running after the connection ends: `-f`, alone or in a cluster such as
+/// `-fN`, and `-o ForkAfterAuthentication`.
+pub fn check_route_options(extra_args: &[String]) -> Result<(), SshError> {
+    let refused = |what: &str| {
+        Err(SshError::Refused(format!(
+            "the ssh option {what} would keep ssh running after the connection ends"
+        )))
+    };
+    let mut value_of: Option<char> = None;
+    for arg in extra_args {
+        if let Some(option) = value_of.take() {
+            if option == 'o' && forks(arg) {
+                return refused(arg);
+            }
+            continue;
+        }
+        let Some(cluster) = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-')) else {
+            continue;
+        };
+        for (at, letter) in cluster.char_indices() {
+            if letter == 'f' {
+                return refused(arg);
+            }
+            if SSH_OPTIONS_WITH_VALUE.contains(letter) {
+                let value = &cluster[at + letter.len_utf8()..];
+                if value.is_empty() {
+                    value_of = Some(letter);
+                } else if letter == 'o' && forks(value) {
+                    return refused(arg);
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether an `-o` value turns on `ForkAfterAuthentication`; ssh reads option names in any case.
+fn forks(value: &str) -> bool {
+    value
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("forkafterauthentication")
+}
+
+/// Names the ssh program of `find_system_ssh`.
+pub const SSH_PROGRAM_ENV: &str = "MASSORCA_SSH";
+
 /// Quotes `value` as one POSIX shell word, so the remote shell reads it literally.
 pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
@@ -121,6 +214,22 @@ fn check_destination(destination: &str) -> Result<(), SshError> {
         )));
     }
     Ok(())
+}
+
+/// Refuses a forward that is not one `host:port` word ssh would read as such.
+fn check_forward(forward: &str) -> Result<(), SshError> {
+    let well_formed = !forward.starts_with('-')
+        && !forward.chars().any(|c| c.is_whitespace() || c.is_control())
+        && forward
+            .rsplit_once(':')
+            .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok());
+    if well_formed {
+        Ok(())
+    } else {
+        Err(SshError::Refused(format!(
+            "the forward {forward:?} is not host:port"
+        )))
+    }
 }
 
 /// `ssh` on `PATH`, then the Windows OpenSSH feature location.
@@ -159,6 +268,113 @@ mod tests {
                 "uname -sm",
             ]
         );
+    }
+
+    #[test]
+    fn a_relative_massorca_ssh_is_refused_and_an_absolute_one_is_used() {
+        match ssh_program_from(Some("bin/ssh".into())) {
+            Err(SshError::Refused(message)) => {
+                assert!(
+                    message.contains("MASSORCA_SSH must be an absolute path"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        let absolute = std::env::temp_dir().join("ssh");
+        assert_eq!(
+            ssh_program_from(Some(absolute.clone().into_os_string())).expect("used"),
+            absolute
+        );
+    }
+
+    #[test]
+    fn a_route_option_that_backgrounds_ssh_is_refused() {
+        let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        for args in [
+            &["-f"][..],
+            &["-fN"],
+            &["-Nf"],
+            &["-4", "-f"],
+            &["-o", "ForkAfterAuthentication=yes"],
+            &["-oforkafterauthentication yes"],
+        ] {
+            assert!(
+                matches!(check_route_options(&owned(args)), Err(SshError::Refused(_))),
+                "{args:?}"
+            );
+            assert!(
+                stdio_forward_arguments("vps", &owned(args), "127.0.0.1:7347").is_err(),
+                "{args:?}"
+            );
+        }
+        for args in [
+            &["-J", "f"][..],
+            &["-p", "2222"],
+            &["-i", "/home/f/key"],
+            &["-vv", "-4"],
+            &["-o", "User=f"],
+        ] {
+            assert!(check_route_options(&owned(args)).is_ok(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_stdio_forward_is_batch_mode_then_the_route_options_then_the_forward_and_the_destination() {
+        let route_args = ["-J", "bastion", "-o", "User=$(id) x"].map(str::to_owned);
+        let args =
+            stdio_forward_arguments("deploy@vps.example.ts.net", &route_args, "100.64.0.10:7347")
+                .expect("a valid route");
+        assert_eq!(
+            args,
+            [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                "-J",
+                "bastion",
+                "-o",
+                "User=$(id) x",
+                "-W",
+                "100.64.0.10:7347",
+                "--",
+                "deploy@vps.example.ts.net",
+            ],
+            "every value stays one argument, unquoted and unexpanded"
+        );
+        let bracketed = stdio_forward_arguments("vps", &[], "[::1]:7347").expect("an IPv6 forward");
+        assert_eq!(bracketed[bracketed.len() - 3], "[::1]:7347");
+    }
+
+    #[test]
+    fn a_destination_or_forward_ssh_could_misread_is_refused() {
+        for destination in ["", "-oProxyCommand=evil", "vps extra", "vps\tx"] {
+            assert!(
+                matches!(
+                    stdio_forward_arguments(destination, &[], "127.0.0.1:7347"),
+                    Err(SshError::Refused(_))
+                ),
+                "{destination:?}"
+            );
+        }
+        for forward in [
+            "",
+            "-W",
+            "127.0.0.1",
+            "127.0.0.1:port",
+            ":7347",
+            "a b:7347",
+            "127.0.0.1:99999",
+        ] {
+            assert!(
+                matches!(
+                    stdio_forward_arguments("vps", &[], forward),
+                    Err(SshError::Refused(_))
+                ),
+                "{forward:?}"
+            );
+        }
     }
 
     #[cfg(unix)]

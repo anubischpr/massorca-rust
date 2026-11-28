@@ -87,7 +87,7 @@ Exclusion from other lists:
 - Client requests: creates a request through `prototypes.createRequest` (chat, agent, prompt, count, design-system choice). A chat with no local record, or a remote location, is answered `unsupported`, and the message is sent as typed. A host that does not know the method is detected and the message is sent as typed.
 - Persisted: the count setting (mode and count) in global settings. The request folder is PROTO-02.
 - Depends on: AG-15 and AG-16 (chat send), PROTO-02, PROTO-11 (card after the count card), PROTO-12.
-- Owner direction for the new product (2026-11-12): extension (A4). The composer interception needs an extension point. Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: first version.
+- Owner direction for the new product (2026-11-12): extension (A4). The composer interception needs an extension point. Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: first version.
 - Source: pv96 (unmerged). The count setting, the request lexicon, the count card and `prototypes.createRequest` already exist on custom/integration. The rules above are as the pv96 records describe them; the diff of the lexicon against custom/integration was not run.
 
 ### PROTO-02 Request folder and capture contract
@@ -104,7 +104,7 @@ Exclusion from other lists:
 - Client requests: none directly. Reads go through PROTO-03.
 - Persisted: the folder and its files on the host that runs the chat, in the chat's visuals folder.
 - Depends on: AG-16 (chat visuals folder), AG-08 (chat create and send), AUTO-25 to AUTO-27 (artifacts), PROTO-03.
-- Owner direction for the new product (2026-11-12): extension (A4). The visuals folder itself is core. Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: first version.
+- Owner direction for the new product (2026-11-12): extension (A4). The visuals folder itself is core. Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: first version.
 - Source: pv96 (unmerged). The request folder, `request.json`, the request disk and listing modules and the Gentle Shell binding already exist on custom/integration (`prototype-request-folder.ts`, `prototype-request-disk.ts`, `prototype-requests.ts`). pv96 adds `directions.json`, `merge-plan.json`, the Gentle Shell binding saved on first resolution, and the Artifacts exclusion, as the record describes.
 
 ### PROTO-03 Cross-chat list and owner-host reads
@@ -121,7 +121,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.list`, `prototypes.readFile`, `prototypes.writeAttachment`, `prototypes.createRequest`, `prototypes.readDesignSystem`.
 - Persisted: none new.
 - Depends on: PROTO-02; remote hosts (SSH relay and paired runtimes, `remote-hosts.md` and `server-and-pairing.md`).
-- Owner direction for the new product (2026-11-12): extension (A4). Owner-host routing is core RPC. Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Owner-host routing is core RPC. Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). `prototypes.list`, `createRequest`, `readFile`, `writeAttachment` and `readDesignSystem` already exist on custom/integration. pv96 adds the per-chat scan cap, owner-runtime routing, the refresh timing and the unsupported answer for remote chats, as the record describes.
 
 ### PROTO-04 Prototypes list and set view
@@ -136,7 +136,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.list`, and `prototypes.readFile` for each direction shown.
 - Persisted: none. The open set and its selection are in memory.
 - Depends on: PROTO-03, PROTO-05, PROTO-08, PROTO-09, PROTO-10.
-- Owner direction for the new product (2026-11-12): extension view on slot D-SL-04 (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: first version.
+- Owner direction for the new product (2026-11-12): extension view on slot D-SL-04 (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: first version.
 - Source: pv96 (unmerged). The Prototypes page, the list panel, the side panel and the mobile list and set screens already exist on custom/integration (`PrototypesPage.tsx`, `PrototypeListPanel.tsx`, `PrototypeSidePanel.tsx`, `MobilePrototypeListScreen.tsx`, `MobilePrototypeSetScreen.tsx`). pv96 deletes the list panel and adds the sidebar tree, the set grid, the set rows, the archived group and the main-first strip.
 
 ### PROTO-05 Viewer: viewports, browse and annotate
@@ -152,7 +152,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.readFile`.
 - Persisted: none. Pins and edits stay in the set's state until sent (PROTO-07).
 - Depends on: PROTO-02, PROTO-03, PROTO-06, PROTO-07; the chat visual frame and annotate bridge shared with chat visuals.
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: first version.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: first version.
 - Source: pv96 (unmerged). The viewer, the frame and the shared annotate module already exist on custom/integration (`PrototypeViewer.tsx`, `PrototypeFrame.tsx`, `native-chat-visual-annotate.ts`). pv96 adds the element-pick overrides, the pin persistence rule, the climb to the nearest control, the icon-only header and the collapsible panel.
 
 ### PROTO-06 Element edits, notes and note screenshots
@@ -171,7 +171,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.writeAttachment` (a PNG; a base name of letters, digits, - and _; about 1.5 MB at most).
 - Persisted: uploaded note images in the request folder. The draft is in memory only.
 - Depends on: PROTO-05, PROTO-07, PROTO-10 (token bindings).
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The edit panel, number field, colour picker and the mobile draft and pin sheets already exist on custom/integration (`PrototypeEditPanel.tsx`, `PrototypeNumberField.tsx`, `PrototypeColorPicker.tsx`, `MobilePrototypeDraftSheet.tsx`, `MobilePrototypePinSheet.tsx`). The mobile capture library is already a dependency there too. pv96 adds element locators and per-kind rows, token chips, the clamp rules and note screenshots uploaded on Send.
 
 ### PROTO-07 Iterate and send to the originating chat
@@ -187,7 +187,7 @@ Exclusion from other lists:
 - Client requests: the chat's normal send path (AG-15), with the hidden block.
 - Persisted: the chat transcript records the visible text. The hidden block stays out of the bubble (PROTO-02 rules).
 - Depends on: AG-15, PROTO-02, PROTO-05, PROTO-06, PROTO-08.
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The outgoing and host-chat send modules already exist on custom/integration (`mobile-prototype-outgoing.ts`, `mobile-prototype-host-chat-send.ts`). pv96 adds the item format with sibling items, the disabled-send rule and the failure line as the record describes.
 
 ### PROTO-08 Main direction, stars and merge
@@ -203,7 +203,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.readFile` for the plan; the merge request goes through the chat send path (PROTO-07).
 - Persisted: the plan and the merged direction are files in the request folder. Whether stars and the main persist across restarts was not traced.
 - Depends on: PROTO-02, PROTO-04, PROTO-05, PROTO-07.
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The single active direction and the set state already exist on custom/integration (`prototype-set-state.ts`). Stars, the main-direction rule, read-only siblings, the merge plan and the merge review are new in pv96 (`prototype-merge-plan.ts`, `prototype-merge-state.ts`, `PrototypeMergeReview.tsx`, and the mobile merge sheets).
 
 ### PROTO-09 Versions, archive and delete
@@ -217,7 +217,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.restoreVersion`, `prototypes.archive`, `prototypes.unarchive`, `prototypes.delete`.
 - Persisted: the archive flag, the title and the version files, kept with the request on the host. Exact storage not traced.
 - Depends on: PROTO-02, PROTO-03, PROTO-04, PROTO-13.
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The archive and restore-version methods have no references on custom/integration, and their modules are new (`prototype-archived-sets.ts`, `prototype-version-restore.ts`, `prototype-set-title.ts`). The request folder that they act on already exists.
 
 ### PROTO-10 Project design system
@@ -237,7 +237,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.readDesignSystem`, `prototypes.listDesignSystemVersions`, `prototypes.readDesignSystemVersion`, `prototypes.restoreDesignSystemVersion`. Summaries come in `prototypes.list`.
 - Persisted: `design/system/*` in the project, written by the agent. Version history in a host store. The components view choice is kept per viewer in local browser storage.
 - Depends on: PROTO-02, PROTO-03, PROTO-06, PROTO-11, AG-15 (send); remote hosts (the host reads the files).
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The design system files, the view, the tokens and the palettes tabs, and the `design/system` reader already exist on custom/integration (`prototype-design-system-files.ts`, `PrototypeDesignSystemView.tsx`, `PrototypeDesignSystemTokens.tsx`, `PrototypeDesignSystemPalettes.tsx`). pv96 adds the Components tab with live element editing, Grid, Collage and List, the version history and restore, the incremental and rebuild send, and the whole mobile design system screen.
 
 ### PROTO-11 Design system in prototype requests
@@ -253,7 +253,7 @@ Exclusion from other lists:
 - Client requests: `prototypes.createRequest` with the design-system choice (use, propose or skip).
 - Persisted: request mode and version in `request.json`.
 - Depends on: PROTO-01, PROTO-02, PROTO-10.
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The request mode, the system card model and the proposal fields already exist on custom/integration (`prototype-design-system-card.ts`, `prototype-request-folder.ts`, and the "Propose one first" text). pv96 adds the incremental-update rule, the palette approval send, the review-first path and the mobile instruction. Whether the proposal link card existed on custom/integration was not checked.
 
 ### PROTO-12 Prototypes from child sessions, with attribution
@@ -269,7 +269,7 @@ Exclusion from other lists:
 - Client requests: the list row carries the origin (record).
 - Persisted: the parent chat is stored with the request as its origin.
 - Depends on: AG-26 (delegated child sessions), AUTO-20 (delegation from chat), PROTO-01, PROTO-04.
-- Owner direction for the new product (2026-11-12): extension (A4). Delegation itself is in the first version. Proposal: later for the prototype part. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Delegation itself is in the first version. Proposal: later for the prototype part. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The delegation and bot-team prototype choice modules and the delegated-ask helper are new in pv96 (`delegation-prototype-choices.ts`, `prototype-delegated-ask.ts`, `bot-team-task-prototype.ts`).
 - Owner direction for the new product (2026-11-12, child placement rules from the design session): the child placement rules apply to a prototype child like any delegated child: own worktree by default; the current worktree only for read-only work, a plain folder, or the user's manual pick; parallel prototype children always get their own worktree. Proposal unchanged.
 
@@ -286,7 +286,7 @@ Exclusion from other lists:
 - Client requests: the same host methods as the views (PROTO-03, PROTO-09, PROTO-10).
 - Persisted: none beyond the host effects.
 - Depends on: PROTO-03, PROTO-09, PROTO-10; the CLI domain (`cli.md`).
-- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. The baseline check is a candidate to drop, since it serves one workflow. Superseded: Owner decision taken on the owner's behalf, pending review (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), prototypes is core. Proposal now: later.
+- Owner direction for the new product (2026-11-12): extension (A4). Proposal: later. The baseline check is a candidate to drop, since it serves one workflow. Superseded: Owner decision taken on the owner's behalf (2026-11-12, `docs/design/pending-owner-review.md` item 12 and screen-inventory open question 16), owner-confirmed 2026-11-27: prototypes is core. Proposal now: later.
 - Source: pv96 (unmerged). The `orca prototypes` command group is new in pv96 (`src/cli/specs/prototypes.ts`, `src/cli/handlers/prototypes*.ts`). custom/integration has no prototype CLI commands.
 
 ### PROTO-14 Design system shared between projects by link

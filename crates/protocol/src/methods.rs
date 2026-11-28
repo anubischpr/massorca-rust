@@ -13,6 +13,7 @@ pub mod devices;
 pub mod events;
 pub mod extension_points;
 pub mod extensions;
+pub mod forwards;
 pub mod git;
 pub mod host;
 pub mod hosted_services;
