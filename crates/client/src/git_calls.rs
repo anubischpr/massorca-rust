@@ -15,6 +15,7 @@ use massorca_protocol::methods::git::index::{
     self, GitDiscardParams, GitDiscarded, GitPathsParams,
 };
 use massorca_protocol::methods::git::log::{self, GitLog, GitLogParams};
+use massorca_protocol::methods::git::rebase::{self, GitRebaseBaseParams, GitRebased};
 use massorca_protocol::methods::git::remote::{
     self, GitAborted, GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams,
     GitPushed,
@@ -83,6 +84,14 @@ impl Client {
     /// `git.abort`: aborts the merge, rebase, cherry-pick or revert in progress.
     pub async fn git_abort(&self, params: &GitWorkspaceRef) -> Result<GitAborted, ClientError> {
         self.call(remote::ABORT, params).await
+    }
+
+    /// `git.rebase_base`: rebases the branch onto its base; a conflict is an outcome, and the rebase is aborted.
+    pub async fn git_rebase_base(
+        &self,
+        params: &GitRebaseBaseParams,
+    ) -> Result<GitRebased, ClientError> {
+        self.call(rebase::REBASE_BASE, params).await
     }
 
     /// `git.watch`: a stream of what changes; the first item says whether working-tree edits are observed.

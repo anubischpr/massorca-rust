@@ -44,8 +44,8 @@ async fn the_list_describes_each_kind() {
     let list = client.config_list().await.expect("config.list answers");
     assert_eq!(
         list.values.len(),
-        36,
-        "32 keys of 0070 and the first-prompt rename, the workspace root, the workspace layout and the two branch prefix keys"
+        38,
+        "32 keys of 0070, terminal.theme, the first-prompt rename, the workspace root and layout, two branch prefix keys, usage.enabled"
     );
     let find = |name: &str| {
         list.values
@@ -87,9 +87,15 @@ async fn the_list_describes_each_kind() {
     assert_eq!(layout.kind.as_deref(), Some("choice"));
     assert_eq!(
         layout.choices.as_deref(),
-        Some(&["nested".to_owned(), "flat".to_owned()][..])
+        Some(
+            &[
+                "nested".to_owned(),
+                "flat".to_owned(),
+                "in_project".to_owned()
+            ][..]
+        )
     );
-    assert_eq!(layout.value, json!("nested"));
+    assert_eq!(layout.value, json!("in_project"));
     stop(running).await;
 }
 

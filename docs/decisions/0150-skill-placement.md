@@ -20,8 +20,8 @@ through the extension install, so placement has its own methods.
   and hyphens, at most 64 characters.
 - **Destinations.** pv96's global folders for the eleven agents: `.claude/skills`, `.cursor/skills`, `.gemini/skills`,
   `.factory/skills` (droid), `.continue/skills`, `.trae-cn/skills`, `.grok/skills`, `.augment/skills` (aug) and
-  `.zcode/skills`. Codex and Muse read the canonical root and need no folder. Scope is global only; a workspace scope is
-  not built.
+  `.zcode/skills`. Codex and Muse read the canonical root and need no folder. Scope is `global` by default: these folders
+  sit under the home folder. Scope `workspace` places in one workspace's root instead (see Workspace scope below).
 - **Agents are chosen, not detected.** The CLI requires `--agent`. The desktop offers the agents whose folder exists on
   this computer (the discovery roots report that) and shows the folders before anything is written.
 - **Alias first (pv96).** Each agent folder is an alias to the canonical copy:
@@ -50,7 +50,18 @@ through the extension install, so placement has its own methods.
   (`skipped_existing`). A canonical copy the user made refuses the whole placement (`skill.name_taken`), so no agent
   folder points at a copy MassOrca does not own. A link is created only where no path exists, so an unowned folder is
   never replaced.
-- **Managed record.** `<profile>/skills/placements.json` records each placed skill, its digest, and each agent's folder
+- **Workspace scope.** A placement for a workspace uses the same canonical copy and folder rules, with the workspace's
+  root in place of the home folder: `<root>/.agents/skills/<name>` and each agent's folder under `<root>` (for example
+  `<root>/.cursor/skills/<name>`). The request names the workspace by its MassOrca id, never by a free path. The service
+  resolves the id to the workspace's folder on the host that owns it, matching the id exactly; a workspace being removed
+  is refused (`workspace.not_found`) and a workspace whose folder is missing is refused (`path.not_found`). A git worktree
+  and a folder workspace are both roots, since only the folder matters.
+- **Switch agents.** `skills.agents` adds agents to, and drops agents from, a placed skill in one scope, under the same
+  lock as the other writes. Adding creates only the new agents' folders, placed from the canonical copy; the agents
+  already placed are left as they are. Dropping removes only the dropped agents' copies, under the removal checks above;
+  the canonical copy stays while another placement still reaches it. A skill that is not placed in that scope is refused
+  (`skill.not_placed`); an agent named in both lists, or no agent at all, is refused (`request.invalid_params`).
+- **Managed record.** `<profile>/skills/placements.json` records each placed skill, its scope (no workspace is global, so a record from before scopes reads as global), its digest, and each agent's folder
   and topology. The record is replaced atomically; an unreadable record, or one holding a skill name the name rule refuses, refuses
   removal (`skill.record_invalid`).
 - **Digest.** The digest covers every directory and file by relative path and bytes. A source whose digest differs from
@@ -62,6 +73,10 @@ through the extension install, so placement has its own methods.
   placement. A skill is limited to 2,000 files, 64 MiB and 16 folders deep.
 - **Permissions and capability.** `skills.place-preview` and `skills.managed` read; `skills.place` and `skills.unplace`
   need host administration. The capability is `skills-place/1`, separate from `skills/1`.
+  `skills-place/2` adds the workspace scope (the optional `scope` and `workspace_id` fields of the place, unplace and
+  preview params) and `skills.agents`, which needs host administration too. A field a service of `/1` does not know is
+  ignored, so a client sends `scope: workspace` only to a service that offers `/2`; a client that sends nothing gets
+  `global`, and a `scope` value this build does not know is refused.
 
 ## Alternatives
 
@@ -76,7 +91,7 @@ through the extension install, so placement has its own methods.
 
 - Placed skills are visible to every agent listed. An agent that edits its alias edits the canonical copy, as pv96 does.
 - The record lives in one profile; placements made by another profile are not known to this one.
-- Not built: bundle install and its update (SKL-03, SKL-06, SKL-07), workspace scope, provider root overrides, and
+- Not built: bundle install and its update (SKL-03, SKL-06, SKL-07), provider root overrides, and
   paired-host, SSH and WSL placement (SKL-15 to SKL-17).
 - On Unix a narrow race remains: a folder created in the instant before the placement can be replaced if it is empty. The
   check before the placement narrows the window; it does not close it.

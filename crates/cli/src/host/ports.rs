@@ -97,11 +97,21 @@ fn lines(answer: &HostPorts) -> Vec<String> {
                     process,
                     port.workspace_id.clone(),
                     port.session_id.clone().unwrap_or_else(|| "-".to_owned()),
+                    port.url.clone().unwrap_or_else(|| "-".to_owned()),
+                    if port.forwarded { "yes" } else { "-" }.to_owned(),
                 ]
             })
             .collect();
         lines.extend(workspace_text::table(
-            &["PORT", "ADDRESS", "PROCESS", "WORKSPACE", "SESSION"],
+            &[
+                "PORT",
+                "ADDRESS",
+                "PROCESS",
+                "WORKSPACE",
+                "SESSION",
+                "URL",
+                "FORWARDED",
+            ],
             rows,
         ));
     }
@@ -138,6 +148,9 @@ mod tests {
             terminal_id: "t-1".to_owned(),
             workspace_id: "w-1".to_owned(),
             session_id: session.map(str::to_owned),
+            url: Some(format!("http://localhost:{number}/")),
+            url_printed: false,
+            forwarded: number == 3000,
         }
     }
 
@@ -173,7 +186,15 @@ mod tests {
         let header = text.lines().next().unwrap_or_default();
         assert_eq!(
             header.split_whitespace().collect::<Vec<_>>(),
-            ["PORT", "ADDRESS", "PROCESS", "WORKSPACE", "SESSION"],
+            [
+                "PORT",
+                "ADDRESS",
+                "PROCESS",
+                "WORKSPACE",
+                "SESSION",
+                "URL",
+                "FORWARDED"
+            ],
             "{text}"
         );
         let first = text
@@ -182,14 +203,27 @@ mod tests {
             .unwrap_or_else(|| panic!("{text}"));
         assert_eq!(
             first.split_whitespace().collect::<Vec<_>>(),
-            ["3000", "0.0.0.0", "node", "(42)", "w-1", "s-1"],
+            [
+                "3000",
+                "0.0.0.0",
+                "node",
+                "(42)",
+                "w-1",
+                "s-1",
+                "http://localhost:3000/",
+                "yes"
+            ],
             "{first}"
         );
         let second = text
             .lines()
             .find(|line| line.starts_with("5173"))
             .unwrap_or_else(|| panic!("{text}"));
-        assert!(second.trim_end().ends_with("-"), "{second}");
+        assert_eq!(
+            second.split_whitespace().collect::<Vec<_>>()[5..],
+            ["-", "http://localhost:5173/", "-"],
+            "{second}"
+        );
     }
 
     #[test]

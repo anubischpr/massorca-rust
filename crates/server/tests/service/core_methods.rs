@@ -152,7 +152,12 @@ const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
 
 /// The skill methods this build registers: discovery (`skills/1`), and placement (`skills-place/1`, where the writes need
 /// host administration and the preview and the list only read).
-const SKILL_METHODS: [(&str, &str, Permission); 5] = [
+const SKILL_METHODS: [(&str, &str, Permission); 6] = [
+    (
+        placement::AGENTS,
+        capabilities::SKILLS_PLACE_SCOPES,
+        Permission::HostAdmin,
+    ),
     (skills::DISCOVER, capabilities::SKILLS, Permission::Read),
     (
         placement::PREVIEW,
@@ -224,6 +229,7 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "secret.decline",
     "secret.reset-key",
     "agent-context",
+    "usage",
 ];
 
 #[tokio::test]

@@ -361,17 +361,26 @@ async fn a_new_default_root_applies_to_the_next_project_without_restarting() {
     let elsewhere: PathBuf = home.path().join("elsewhere");
     let running = start(home.path(), "default").await;
     let client = connect(home.path(), "default").await;
-    client
-        .call::<_, Value>(
-            config::SET,
-            &ConfigSet {
-                owner: None,
-                key: "workspaces.default_root".to_owned(),
-                value: json!(elsewhere.to_str().expect("utf-8")),
-            },
-        )
-        .await
-        .expect("config.set");
+    // The in-project default ignores the default root for a git project (decision 0183).
+    for (key, value) in [
+        (
+            "workspaces.default_root",
+            json!(elsewhere.to_str().expect("utf-8")),
+        ),
+        ("workspaces.layout", json!("nested")),
+    ] {
+        client
+            .call::<_, Value>(
+                config::SET,
+                &ConfigSet {
+                    owner: None,
+                    key: key.to_owned(),
+                    value,
+                },
+            )
+            .await
+            .expect("config.set");
+    }
 
     let project: Project = client
         .call(projects::ADD, &add_params(&repo))
@@ -419,6 +428,31 @@ async fn a_flat_layout_puts_the_next_projects_workspaces_in_the_default_root() {
         .expect("add");
 
     assert_eq!(Path::new(&project.workspaces_root), elsewhere.as_path());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn by_default_the_next_projects_workspaces_go_in_its_own_worktrees_folder() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("add");
+
+    let root = Path::new(&project.workspaces_root);
+    assert_eq!(
+        root.file_name().and_then(|name| name.to_str()),
+        Some(".worktrees")
+    );
+    assert_eq!(
+        dunce::canonicalize(root.parent().expect("parent")).expect("repo"),
+        dunce::canonicalize(&repo).expect("repo")
+    );
     stop(running).await;
 }
 

@@ -25,6 +25,8 @@ pub const WORKSPACE_UNIQUE_NAME: &str = "workspace-unique-name/1";
 pub const WORKSPACE_RENAME: &str = "workspace-rename/1";
 /// `in_place` on `workspace.create` (decision 0112): the project's own checkout becomes its workspace, and removal only forgets it.
 pub const WORKSPACE_IN_PLACE: &str = "workspace-in-place/1";
+/// `workspace.stop_runs`: stopping every agent run and terminal of a workspace while the workspace stays.
+pub const WORKSPACE_STOP_RUNS: &str = "workspace-stop-runs/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).
@@ -61,6 +63,9 @@ pub const AGENT_ARCHIVE: &str = "agent-archive/1";
 pub const AGENT_NO_PROJECT: &str = "agent-no-project/1";
 /// `model` and `effort` on `agent.start` (decision 0094): passed to the flags the kind declares for them.
 pub const AGENT_OPTIONS: &str = "agent-options/1";
+/// `attachments` on `agent.prompt` and `agent.queue` (decision 0172): files of the session's workspace sent with a prompt,
+/// typed as mentions on a terminal run and sent with a chat run.
+pub const AGENT_PROMPT_ATTACHMENTS: &str = "agent-prompt-attachments/1";
 /// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
 /// where its kind declares a live command for them, and kept for the session's next resume otherwise.
 pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
@@ -85,6 +90,8 @@ pub const GIT: &str = "git/1";
 pub const GIT_PROJECT_BRANCHES: &str = "git-project-branches/1";
 /// The hosting identity of a repository's remotes (`git.remotes`, decision 0114).
 pub const GIT_REMOTE_IDENTITY: &str = "git-remote-identity/1";
+/// `git.rebase_base`: rebasing a worktree's branch onto its base branch (decision 0181).
+pub const GIT_REBASE_BASE: &str = "git-rebase-base/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
@@ -106,16 +113,24 @@ pub const EXTENSIONS_ROLLBACK: &str = "extensions-rollback/1";
 pub const EXTENSIONS_PROGRAMS: &str = "extensions-programs/1";
 /// What each owner registered on the tool, skill, view, theme and status-rule points (`extensions.points`, decision 0153).
 pub const EXTENSION_POINTS: &str = "extension-points/1";
+/// Usage and limits of each agent account, read on the host that runs the agent (`usage.list`, `usage.refresh` and the
+/// `usage.changed` topic, decision 0154).
+pub const USAGE: &str = "usage/1";
 /// The run log of a package (`extensions.log`).
 pub const EXTENSIONS_LOG: &str = "extensions-log/1";
 /// Skill discovery (`skills.discover`, SKL-01): the skills agent tools and registered folders keep on this host.
 pub const SKILLS: &str = "skills/1";
 /// Skill placement (`skills.place`, `skills.unplace`, `skills.managed`, SKL-02): copies of skills in agent tools' folders.
 pub const SKILLS_PLACE: &str = "skills-place/1";
+/// Workspace scope for placements and the agent switch (`skills.agents`, decision 0150). A client sends `scope: workspace`
+/// only to a service that offers it.
+pub const SKILLS_PLACE_SCOPES: &str = "skills-place/2";
 /// Hosted-service connections (`marketplace.service.*`, SKL-35, decision 0097).
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
+/// Port forwards to loopback ports on the host (`host.forward*`, decision 0131): needs `binary-frames/1` too.
+pub const PORT_FORWARD: &str = "port-forward/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
 /// Scheduled automation definitions (`automation.*`, decision 0123). Not offered by a service that predates them.

@@ -713,13 +713,33 @@ pub(crate) fn migrate_observed(
     observe("store migration lock");
     // Nothing is backed up before the first change to a database this run created empty.
     let mut backed_up = false;
-    if found == 0 && create_fresh(connection, file, steps)? {
+    if found == 0 && create_fresh(connection, file, steps, files)? {
         observe("store schema");
         backed_up = true;
     } else {
         apply_frozen(connection, file, steps, supported, &mut backed_up, observe)?;
     }
     migration_files::apply_pending(connection, file, files, !checked, &mut backed_up, observe)
+}
+
+/// Builds the latest schema into `connection`, a brand-new file nobody else has opened (decision 0184): no lock and no
+/// backup. The frozen steps and migration files run in one transaction unless a step needs foreign keys off.
+pub(crate) fn build_new_observed(
+    connection: &mut Connection,
+    steps: &[Migration],
+    files: &[FileMigration],
+    observe: &mut dyn FnMut(&'static str),
+) -> Result<(), StoreError> {
+    let mut backed_up = true;
+    if !steps.iter().any(|step| step.foreign_keys_off)
+        && create_in_one_transaction(connection, steps, files)?
+    {
+        observe("store schema");
+    } else {
+        let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+        apply_frozen(connection, None, steps, supported, &mut backed_up, observe)?;
+    }
+    migration_files::apply_pending(connection, None, files, false, &mut backed_up, observe)
 }
 
 /// Runs the frozen steps newer than `user_version`, one transaction each.
@@ -745,24 +765,27 @@ fn apply_frozen(
     }
 }
 
-/// Builds the whole schema of a new, empty database file in one transaction: one commit and one sync instead of one per
-/// step, which on a busy disk made a first start take longer than the client waits. Nothing is lost if it fails: the
-/// database was empty. Returns `false`, changing nothing, for an in-memory database, one that already holds objects or
-/// a version, or steps that need foreign keys switched off; those run one transaction per step, as an upgrade does.
+/// Builds the whole schema of a new, empty database file in one transaction, migration files included: one commit and
+/// one sync instead of one per step, which on a busy disk made a first start take longer than the client waits.
+/// Nothing is lost if it fails: the database was empty. Returns `false`, changing nothing, for an in-memory database,
+/// one that already holds objects or a version, or frozen steps that need foreign keys switched off; those run one
+/// transaction per step, as an upgrade does. Migration files are left to that path when one needs foreign keys off.
 fn create_fresh(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
+    files: &[FileMigration],
 ) -> Result<bool, StoreError> {
     if file.is_none() || steps.iter().any(|step| step.foreign_keys_off) {
         return Ok(false);
     }
-    create_in_one_transaction(connection, steps)
+    create_in_one_transaction(connection, steps, files)
 }
 
 fn create_in_one_transaction(
     connection: &mut Connection,
     steps: &[Migration],
+    files: &[FileMigration],
 ) -> Result<bool, StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if user_version(&transaction)? != 0 || backup::holds_objects(&transaction)? {
@@ -771,13 +794,17 @@ fn create_in_one_transaction(
     for step in steps {
         transaction.execute_batch(step.sql)?;
     }
+    let failed_file_step = migration_files::apply_all_in(&transaction, files)?;
     let version = i64::try_from(steps.len()).unwrap_or(i64::MAX);
     if let Some(table) = first_foreign_key_violation(&transaction)? {
         return Err(StoreError::ForeignKeyViolation { version, table });
     }
     transaction.execute_batch(&format!("PRAGMA user_version = {version}"))?;
     transaction.commit()?;
-    Ok(true)
+    match failed_file_step {
+        Some(error) => Err(error),
+        None => Ok(true),
+    }
 }
 
 /// Runs one frozen step, with foreign keys switched off around its transaction when the step asks for that.
@@ -879,7 +906,7 @@ fn upgrade_lock_wait() -> Duration {
 
 /// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish. The wait is
 /// bounded, so a lock that is never released fails the open with a message instead of hanging it.
-fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
+pub(crate) fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
     let mut name = file.as_os_str().to_owned();
     name.push(".migrating");
     let path = PathBuf::from(name);

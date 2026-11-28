@@ -5,6 +5,7 @@ mod commit;
 mod diff;
 mod index;
 mod log;
+mod rebase;
 mod remote;
 mod remotes;
 mod show_file;
@@ -41,6 +42,8 @@ pub enum GitCommand {
     Remotes(remotes::RemotesArgs),
     /// Aborts the merge, rebase, cherry-pick or revert in progress.
     Abort(WorkspaceArg),
+    /// Rebases the branch onto its base; a conflict aborts the rebase and lists the files.
+    RebaseBase(rebase::RebaseBaseArgs),
     /// Prints what changes in a workspace (working tree, index, HEAD, refs) until interrupted.
     Watch(watch::WatchArgs),
     /// Lists the files a comparison changes, with line counts.
@@ -97,6 +100,7 @@ pub async fn execute(
         GitCommand::Push(args) => remote::run_push(&client, args, output).await,
         GitCommand::Remotes(args) => remotes::run(&client, args, output).await,
         GitCommand::Abort(workspace) => remote::run_abort(&client, workspace, output).await,
+        GitCommand::RebaseBase(args) => rebase::run_rebase_base(&client, args, output).await,
         GitCommand::Watch(args) => watch::run(target, &client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,

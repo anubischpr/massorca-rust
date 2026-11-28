@@ -138,7 +138,8 @@ directory that does not exist has no kinds.
 ```
 
 - `prompt.mode`: `argv` | `flag` (with `flag`) | `none`. `separator` puts `--`
-  before the text. `paste`: `plain` | `bracketed`.
+  before the text. `paste`: `plain` | `bracketed`. `mention` (optional, decision 0172): how a file
+  attached to a prompt is named, with `{path}` for its path, for example `"@{path}"` for Claude.
 - `session_ref.assign`: args added at the first launch with a generated
   UUID as `{ref}`. `learn`: payload field that carries the agent's own id.
 - `resume`: args for a new run of an exited session; absent means not
@@ -243,6 +244,19 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 - Refusals: a kind that is not enabled is refused with `agent.kind_not_enabled`, as a start refuses it. An account of
   another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
   `agent.credentials_invalid`.
+- Versioned labels (decision 0166, amendment): a declared model whose listed row names the model the vendor resolves
+  it to (Claude's `resolvedModel`) shows a label derived from that id: the family word title-cased, then the version
+  numbers joined by dots, so `claude-opus-5-5` reads as `Opus 5.5`. A trailing eight-digit date and a bracketed variant
+  are dropped. Any other shape, or no resolved id, keeps the declared label. `agent.models` shows it on the declared row,
+  and `agent.kinds` shows it on `model.choices[].label` from the last listing of the kind's active account (or of the
+  usual home when the kind has never had an account). A discovered row keeps the vendor's own label.
+- Background listing (decision 0166, amendment): when a detected, enabled kind that declares `model.discover` has an
+  active account whose listing is missing or stale (the cache would not answer it fresh), `agent.kinds` starts one
+  listing for that account on its own thread and answers at once with the labels it has. A second call while that
+  listing is under way starts none. The listing runs as `agent.models` runs it (account home, time limit, failure
+  rules). An answered listing is announced as `agent.accounts_changed` for the kind, so a client reads `agent.kinds`
+  again and gets the versioned label; a failure is not announced and the label stays declared. The usual home is never
+  listed in the background.
 
 ## Session record (`AgentSession`)
 
@@ -290,7 +304,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.release` | workspace | `session` | `AgentSession`, marked `released` (must be exited; a live run is refused with `agent.busy`; capability `agent-release/1`, decision 0090) |
 | `agent.retain` | workspace | `session`, `retained` | `AgentSession` with its `retained` flag (capability `agent-release/1`, decision 0090) |
 | `agent.archive` | read | `session` | `{ session, released, text?, truncated, withheld? }`: the archived output of a released session, withheld from callers below host-admin scope for a run holding secrets (capability `agent-release/1`, decision 0090) |
-| `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
+| `agent.prompt` | workspace | `session`, `text`, `force?`, `attachments?` (`[{ path }]`, capability `agent-prompt-attachments/1`, decision 0172) | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
 | `agent.fork` | workspace | `session`, `prompt?`, `permission_mode?`, `title?` | `AgentSession`, the new session (capability `agent-fork/1`, decision 0168; the client refuses it before sending when the service does not offer it) |
 | `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
@@ -315,7 +329,8 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
-`agent.prompt_invalid`, `agent.resume_unavailable`, `agent.resume_not_found`, `agent.fork_unavailable`,
+`agent.prompt_invalid`, `agent.attachment_invalid`, `agent.attachment_unsupported`, `agent.resume_unavailable`,
+`agent.resume_not_found`, `agent.fork_unavailable`,
 `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
@@ -518,6 +533,25 @@ session's `resume` state says so (below); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 worktree; a folder workspace takes several writers (decision 0169).
 
+### Attachments (decision 0172)
+
+`agent.prompt` and `agent.queue` name up to 10 files of the session's workspace (`attachments: [{ path }]`). The path is
+relative to the workspace root, or absolute when it names a file inside it. `regular_file_inside` in
+`massorca-core-workspace` resolves it: a `..`, a path outside the root, a link that reaches outside it (symlink or
+junction), a missing file, a directory or a name that is not text is refused with `agent.attachment_invalid`, and the path
+is in `data`. The caps are consts in `core-agents/src/attachments.rs`: 1 MiB for a file that is not an image, 3 MiB for an
+image.
+
+- A terminal run types the text, then a mention per file: the kind's `prompt.mention` template with `{path}` (`@{path}`
+  for Claude), or the plain paths, one to a line, for a kind without one. It refuses every image with
+  `agent.attachment_unsupported`.
+- A chat run mentions its text files the same way. Each image is a stream-json image block, after the text block; the
+  media type comes from the extension (png, jpeg, gif, webp). Other image formats are refused.
+- A queued prompt checks its files when queued and again when typed. The names are kept in
+  `agent_prompt_queue.attachments_json`. A prompt whose files no longer check is failed with the refusal as its reason.
+- Capability `agent-prompt-attachments/1`. The client refuses a request with attachments before sending it to a service
+  that does not offer the capability.
+
 ### Fork (decision 0168)
 
 `agent.fork` starts a new session from a copy of an exited session's conversation. A kind declares its fork form as
@@ -589,8 +623,8 @@ enable, so a release build carries neither the points nor the variable;
 A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
 `agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
 
-- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
-  returns the prompt it queued then.
+- `agent.queue {session, text, request_id?, attachments?}` queues a prompt and returns it. A `request_id` the session
+  already queued returns the prompt it queued then. `attachments` are checked when queued (decision 0172).
 - `agent.queue.list {session}` returns `{session, items}`, head first.
 - `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
   A prompt being sent is refused with `agent.busy`.
@@ -1165,7 +1199,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   left undecided, or refused and deleted); a check that changes the state; an import (kept, or
   refused and deleted); an activation (the account made active, or chosen by a project); a removal
   (the removed account, with the state it had); and a migration or adoption. A refused sign-in or
-  import is announced with the state its check found. An import that creates no account announces
+  import is announced with the state its check found. A background model listing that `agent.kinds` started is
+  announced under this topic too (decision 0166, amendment), and the desktop reads the kinds again on it. An import that creates no account announces
   nothing.
 - **Origin**: `origin` is `sign_in`, `import` or `migrated`, from the row's origin column. A value
   this build does not know, or a summary from a peer that omits the field, reads as `unknown`.

@@ -66,6 +66,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
     (codes::WORKSPACE_PATH_TAKEN, "workspace.path_taken"),
+    (codes::WORKSPACE_PATH_TOO_LONG, "workspace.path_too_long"),
     (codes::WORKSPACE_DIRTY, "workspace.dirty"),
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
     (codes::WORKSPACE_BUSY, "workspace.busy"),
@@ -145,6 +146,11 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::AGENT_QUEUE_ALREADY_DELIVERED,
         "agent.queue_already_delivered",
     ),
+    (codes::AGENT_ATTACHMENT_INVALID, "agent.attachment_invalid"),
+    (
+        codes::AGENT_ATTACHMENT_UNSUPPORTED,
+        "agent.attachment_unsupported",
+    ),
     (codes::AGENT_ARCHIVE_FAILED, "agent.archive_failed"),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
@@ -195,7 +201,9 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
     assert_eq!(capabilities::WORKSPACE_RENAME, "workspace-rename/1");
+    assert_eq!(capabilities::WORKSPACE_STOP_RUNS, "workspace-stop-runs/1");
     assert_eq!(capabilities::GIT, "git/1");
+    assert_eq!(capabilities::GIT_REBASE_BASE, "git-rebase-base/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
     assert_eq!(capabilities::TERMINALS, "terminals/1");
@@ -206,8 +214,13 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::AGENT_RELEASE, "agent-release/1");
     assert_eq!(capabilities::AGENT_ARCHIVE, "agent-archive/1");
+    assert_eq!(
+        capabilities::AGENT_PROMPT_ATTACHMENTS,
+        "agent-prompt-attachments/1"
+    );
     assert_eq!(capabilities::AGENT_NO_PROJECT, "agent-no-project/1");
     assert_eq!(capabilities::AGENT_OPTIONS, "agent-options/1");
+    assert_eq!(capabilities::SKILLS_PLACE_SCOPES, "skills-place/2");
     assert_eq!(capabilities::AGENT_FAST, "agent-fast/1");
     assert_eq!(capabilities::AGENT_CHAT, "agent-chat/1");
     assert_eq!(capabilities::AGENT_IMPORT_DETECT, "agent-import-detect/1");
@@ -218,4 +231,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::EXTENSION_POINTS, "extension-points/1");
     assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");
     assert_eq!(capabilities::AUTOMATIONS, "automations/1");
+    assert_eq!(capabilities::USAGE, "usage/1");
 }

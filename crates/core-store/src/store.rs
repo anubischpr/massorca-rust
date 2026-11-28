@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, OptionalExtension, Params, Row};
 
 use crate::error::StoreError;
+use crate::fresh_store;
 use crate::migration_files::FILE_MIGRATIONS;
 use crate::migrations::{self, MIGRATIONS};
 
@@ -36,6 +37,8 @@ impl Store {
         mut step: impl FnMut(&'static str),
     ) -> Result<Self, StoreError> {
         let path = path.as_ref();
+        // A missing file is built aside and renamed into place (decision 0184); the open below then finds it current.
+        fresh_store::create_if_missing(path, MIGRATIONS, FILE_MIGRATIONS, &mut step)?;
         let mut connection = Connection::open(path)?;
         configure(&connection)?;
         step("store file");
@@ -175,16 +178,57 @@ mod tests {
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
-        // The frozen list is built in one step; each migration file then reports its own step.
-        let mut expected = vec!["store file", "store migration lock", "store schema"];
-        expected.extend(std::iter::repeat_n(
-            "store schema step",
+        // A missing file is built aside in one step, then opened under its real name.
+        assert_eq!(
+            parts,
+            [
+                "store migration lock",
+                "store schema",
+                "store file",
+                "store wal"
+            ],
+            "a new database is built in one step"
+        );
+        let recorded: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM store_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            usize::try_from(recorded).unwrap(),
             super::FILE_MIGRATIONS.len(),
-        ));
-        expected.push("store wal");
-        assert_eq!(parts, expected, "a new database is built in one step");
+            "every migration file is recorded as applied"
+        );
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
         assert_eq!(parts, ["store file", "store wal"]);
+    }
+
+    /// Timing probe for decision 0184: `cargo test -p massorca-core-store fresh_store_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe, run by hand"]
+    fn fresh_store_timing() {
+        use std::io::Write as _;
+        for run in 1..=3 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("store.db");
+            let start = std::time::Instant::now();
+            let mut last = start;
+            let mut parts = Vec::new();
+            super::Store::open_observed(&path, |part| {
+                let now = std::time::Instant::now();
+                parts.push(format!("{part} {}ms", (now - last).as_millis()));
+                last = now;
+            })
+            .unwrap();
+            writeln!(
+                std::io::stdout(),
+                "run {run}: total {}ms [{}]",
+                start.elapsed().as_millis(),
+                parts.join(", ")
+            )
+            .unwrap();
+        }
     }
 }

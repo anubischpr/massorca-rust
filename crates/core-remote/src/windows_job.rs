@@ -30,6 +30,9 @@ unsafe extern "system" {
 pub fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Child, Option<Job>)> {
     let Ok(job) = Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())
     else {
+        tracing::warn!(
+            "no kill-on-close job could be created; the child runs alone, and only it can be killed"
+        );
         massorca_process::creation_flags(command, flags);
         return Ok((command.spawn()?, None));
     };
@@ -46,7 +49,7 @@ pub fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Child, Opt
         let _ = child.kill();
         let _ = child.wait();
         return Err(io::Error::other(format!(
-            "the suspended git process could not be resumed (NTSTATUS {status:#x})"
+            "the suspended child process could not be resumed (NTSTATUS {status:#x})"
         )));
     }
     Ok((child, job))

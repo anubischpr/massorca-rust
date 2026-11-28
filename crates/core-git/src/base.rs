@@ -64,6 +64,18 @@ impl Git {
             }))
     }
 
+    /// The base a branch starts from: `named` qualified as `qualify_base` does, else the repository's default base.
+    pub fn base_or_default(
+        &self,
+        repo: &Path,
+        named: Option<&str>,
+    ) -> Result<Option<Base>, GitError> {
+        match named {
+            Some(name) => self.qualify_base(repo, name).map(Some),
+            None => self.default_base(repo),
+        }
+    }
+
     /// The ref a named base means: a name with a `/` is a remote-tracking branch first, then a local branch; a plain
     /// name is a local branch. A full `refs/` name, a commit id or anything else is passed through unchanged.
     pub fn qualify_base(&self, repo: &Path, name: &str) -> Result<Base, GitError> {

@@ -15,10 +15,12 @@ mod extension_points;
 pub(crate) mod extension_process;
 mod extensions;
 pub(crate) mod first_prompt_rename;
+mod forwards;
 mod git;
 mod glab_login;
 mod host;
 mod hosted_services;
+mod port_urls;
 mod projects;
 mod script_trust;
 mod secret_params;
@@ -31,6 +33,7 @@ mod teams;
 mod terminal_attach;
 mod terminals;
 mod tools;
+mod usage;
 mod workspace_archive;
 mod workspace_domain;
 mod workspace_setup;
@@ -39,6 +42,7 @@ mod workspaces;
 pub(crate) use config::{default_workspace_root, stored_terminal_theme};
 pub(crate) use service::info_of;
 pub(crate) use teams::{follow_routines, follow_task_outcomes};
+pub(crate) use usage::{UsageBook, follow_usage};
 
 use serde::Deserialize;
 
@@ -65,6 +69,7 @@ pub(crate) fn register_core(
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
     handles.extend(host::register(registries)?);
+    handles.extend(usage::register(registries)?);
     handles.extend(tools::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);

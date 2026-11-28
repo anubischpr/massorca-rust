@@ -1,6 +1,6 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
 //! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
-//! `workspace.current` (`workspace-current/1`), `workspace.rename` (`workspace-rename/1`, decision 0111). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.current` (`workspace-current/1`), `workspace.rename` (`workspace-rename/1`, decision 0111), `workspace.stop_runs` (`workspace-stop-runs/1`). `workspace-unique-name/1` says `workspace.create` honours `unique_name`. Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086); a removal runs the project's
 //! archive script in the worktree first (decision 0095). With `with_children`, the workspaces of delegated children are
 //! removed first, each the same way (decision 0110).
@@ -15,7 +15,8 @@ use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceArchive, WorkspaceCheck, WorkspaceCreateParams,
     WorkspaceCurrentParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceUpdateParams,
+    WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceRenameParams, WorkspaceRunsStopped,
+    WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde_json::json;
@@ -109,6 +110,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::WORKSPACE_IN_PLACE, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_STOP_RUNS, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::STOP_RUNS,
+            capabilities::WORKSPACE_STOP_RUNS,
+            Permission::Workspace,
+            stop_runs_request,
+        )?,
     ])
 }
 
@@ -145,13 +156,30 @@ async fn list(ctx: RequestCtx, params: WorkspaceListParams) -> Result<WorkspaceL
 /// appear after the first pass; none can start after it.
 const STOP_PASSES: usize = 3;
 
+/// `workspace.stop_runs`: stops the runs of the workspace `params` names, which stays. See [`stop_runs`].
+async fn stop_runs_request(
+    ctx: RequestCtx,
+    params: WorkspaceRef,
+) -> Result<WorkspaceRunsStopped, ErrorBody> {
+    let domain = shared(&ctx);
+    let id = blocking(move || {
+        domain
+            .show_workspace(&params.workspace)
+            .map(|shown| shown.id)
+    })
+    .await?;
+    stop_runs(&ctx, &id).await
+}
+
 /// Stops every agent run, then every terminal, of the workspace `id`, so its folder is removed with nothing running in
-/// it. A run that does not stop refuses the removal, which stays `removing`, so `rm` again retries it.
-async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
+/// it. A run that does not stop refuses the removal, which stays `removing`, so `rm` again retries it. Returns the ids
+/// it asked to stop.
+async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<WorkspaceRunsStopped, ErrorBody> {
     let agents = ctx.state.agents.clone();
     let terminals = ctx.state.terminals.clone();
     let id = id.to_owned();
     tokio::task::spawn_blocking(move || {
+        let mut stopped = WorkspaceRunsStopped::default();
         for _ in 0..STOP_PASSES {
             let live: Vec<_> = agents
                 .list(Some(&id))
@@ -159,14 +187,18 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
                 .into_iter()
                 .filter(|session| session.execution.state != TerminalState::Exited)
                 .collect();
-            for session in &live {
-                agents.stop(&session.id, false).map_err(ErrorBody::from)?;
-            }
+            // Listed before any run stops, so an agent's own terminal counts as running here, as it is.
             let running: Vec<_> = terminals
                 .list(Some(&id))
                 .into_iter()
                 .filter(|terminal| terminal.exit.is_none())
                 .collect();
+            for session in &live {
+                agents.stop(&session.id, false).map_err(ErrorBody::from)?;
+                if !stopped.agents.contains(&session.id) {
+                    stopped.agents.push(session.id.clone());
+                }
+            }
             for terminal in &running {
                 let info = match terminals.kill(&terminal.id, false) {
                     Ok(info) if info.exit.is_none() => terminals.kill(&terminal.id, true),
@@ -183,9 +215,12 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
                         ),
                     ));
                 }
+                if !stopped.terminals.contains(&terminal.id) {
+                    stopped.terminals.push(terminal.id.clone());
+                }
             }
             if live.is_empty() && running.is_empty() {
-                return Ok(());
+                return Ok(stopped);
             }
         }
         Err(ErrorBody::new(

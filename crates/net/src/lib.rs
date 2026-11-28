@@ -2,6 +2,7 @@
 //! frame transport. Only this crate handles keys, certificates and TLS configuration.
 
 mod error;
+mod forward_splice;
 mod frames;
 mod identity;
 mod log_guard;
@@ -12,6 +13,7 @@ mod trace_log;
 mod transport;
 
 pub use error::NetError;
+pub use forward_splice::{SpliceEnd, SpliceLimits, SpliceReport, splice};
 pub use frames::{
     Keepalive, PreAuthGate, PreAuthOpener, pre_auth_gate, spawn_frame_tasks,
     spawn_gated_frame_tasks,
@@ -24,7 +26,7 @@ pub use tls::{client_tls_config, server_tls_config};
 pub use trace_log::{
     DESKTOP_LOG_PREFIX, KEPT_LOG_FILES, SERVICE_LOG_PREFIX, daily_log_file, newest_log_file,
 };
-pub use transport::{Accepted, ClientWs, ServerWs, accept, connect};
+pub use transport::{Accepted, ClientWs, ClientWsOver, ServerWs, accept, connect, connect_stream};
 
 /// The only path a server upgrades to WebSocket.
 pub const WS_PATH: &str = "/massorca/v1";

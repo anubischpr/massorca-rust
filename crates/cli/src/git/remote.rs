@@ -143,7 +143,7 @@ pub(super) async fn run_abort(
 
 /// Prints `line` as a success, or, when the operation did not do what was asked, fails with `refusal` (exit 1) and the
 /// result as the error data, so scripts and `--json` callers see the typed outcome.
-fn finish<T: Serialize>(
+pub(super) fn finish<T: Serialize>(
     output: Output,
     result: &T,
     line: String,
@@ -158,7 +158,7 @@ fn finish<T: Serialize>(
     Err(error)
 }
 
-fn short(id: &str) -> &str {
+pub(super) fn short(id: &str) -> &str {
     &id[..id.len().min(12)]
 }
 

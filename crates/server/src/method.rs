@@ -42,10 +42,22 @@ type CallFn = dyn Fn(RequestCtx, Value) -> BoxFuture<Result<Value, ErrorBody>> +
 type StreamFn =
     dyn Fn(RequestCtx, Value) -> BoxFuture<Result<OpenedSource, ErrorBody>> + Send + Sync;
 
+/// Both ends of a stream whose client also sends bytes (decision 0131): the items for the client, and where the client's
+/// stream-bytes payloads go. A client that fills `inbound` ends the stream with `stream.inbound_overflow`.
+#[derive(Debug)]
+pub struct DuplexSource {
+    pub items: ByteStreamSource,
+    pub inbound: mpsc::Sender<Vec<u8>>,
+    /// The largest payload the stream takes. A larger one is refused before it is queued, and ends the stream with
+    /// `stream.inbound_too_large`.
+    pub max_payload: usize,
+}
+
 /// The source a stream handler opened, as the dispatcher forwards it.
 pub(crate) enum OpenedSource {
     Events(StreamSource),
     Items(ByteStreamSource),
+    Duplex(DuplexSource),
 }
 
 /// What runs when a method is called.
@@ -165,6 +177,31 @@ impl MethodRegistry {
             capability,
             permission,
             stream_handler(handler, OpenedSource::Items),
+            true,
+        )
+    }
+
+    /// Registers a byte stream whose client also sends stream-bytes frames on it; it needs `binary-frames/1` as
+    /// `register_byte_stream` does. Bytes a client sends on any other stream are dropped.
+    pub fn register_duplex_stream<P, F, Fut>(
+        &self,
+        owner: Owner,
+        method: &str,
+        capability: &str,
+        permission: Permission,
+        handler: F,
+    ) -> Result<RegistrationHandle, MethodError>
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(RequestCtx, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<DuplexSource, ErrorBody>> + Send + 'static,
+    {
+        self.insert(
+            owner,
+            method,
+            capability,
+            permission,
+            stream_handler(handler, OpenedSource::Duplex),
             true,
         )
     }

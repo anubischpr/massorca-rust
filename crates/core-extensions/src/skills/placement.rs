@@ -1,7 +1,8 @@
 //! Placing a skill for agent tools (SKL-02, as pv96 places it): one canonical copy at `.agents/skills/<name>`, then in each
 //! chosen agent's folder an alias to that copy (a relative symlink on Unix, a junction on Windows), or a verified copy when
 //! an alias is refused. Removal checks each placement by how it was made: an alias by its target, a copy by its digest. A
-//! folder the user already has is never overwritten.
+//! folder the user already has is never overwritten. The root is the home folder for a global placement, or a workspace's
+//! root for a workspace placement (decision 0150); the same rules apply to both.
 
 use std::fs;
 use std::io;
@@ -12,19 +13,30 @@ use super::placement_error::PlacementError;
 use super::placement_link::{create_link, link_points_to, remove_link};
 use super::placement_model::{
     AgentOutcome, LinkMode, ManagedAgent, ManagedSkill, Outcome, PlacementPreview, PlacementReport,
-    PlacementStore, Plan, PlannedAgent, SkipCause, Topology,
+    PlacementScope, PlacementStore, Plan, PlannedAgent, SkipCause, Topology,
 };
 use super::placement_record::{load, save};
 use super::placement_tree::{is_link, is_plain_folder, place_copy, sweep_staging, tree_digest};
 
-/// What placing `source` would do, and the refusals that would stop it. Writes nothing.
+/// What placing `source` in the global folders would do, and the refusals that would stop it. Writes nothing.
 pub fn preview_placement(
     home: &Path,
     store: &PlacementStore,
     source: &Path,
     agents: &[PlacementAgent],
 ) -> Result<PlacementPreview, PlacementError> {
-    let prepared = prepare(home, store, source, agents)?;
+    preview_placement_in(home, &PlacementScope::Global, store, source, agents)
+}
+
+/// What placing `source` under `root` for `scope` would do. Writes nothing.
+pub fn preview_placement_in(
+    root: &Path,
+    scope: &PlacementScope,
+    store: &PlacementStore,
+    source: &Path,
+    agents: &[PlacementAgent],
+) -> Result<PlacementPreview, PlacementError> {
+    let prepared = prepare(root, scope, store, source, agents)?;
     Ok(PlacementPreview {
         name: prepared.name,
         canonical: prepared.canonical,
@@ -40,18 +52,30 @@ pub fn preview_placement(
     })
 }
 
-/// Places `source` with links where the filesystem allows them, and copies elsewhere.
+/// Places `source` in the global folders, with links where the filesystem allows them, and copies elsewhere.
 pub fn place_skill(
     home: &Path,
     store: &PlacementStore,
     source: &Path,
     agents: &[PlacementAgent],
 ) -> Result<PlacementReport, PlacementError> {
-    place_skill_with(home, store, source, agents, LinkMode::Prefer)
+    place_skill_in(home, &PlacementScope::Global, store, source, agents)
 }
 
-/// Places `source` as the canonical copy and in each chosen agent's folder. A folder that cannot take a link is copied
-/// and verified; one that cannot be placed is skipped and reported, and the canonical copy and the rest stand.
+/// Places `source` under `root` for `scope`, with links where the filesystem allows them, and copies elsewhere.
+pub fn place_skill_in(
+    root: &Path,
+    scope: &PlacementScope,
+    store: &PlacementStore,
+    source: &Path,
+    agents: &[PlacementAgent],
+) -> Result<PlacementReport, PlacementError> {
+    place_skill_with_in(root, scope, store, source, agents, LinkMode::Prefer)
+}
+
+/// Places `source` in the global folders as the canonical copy and in each chosen agent's folder. A folder that cannot take
+/// a link is copied and verified; one that cannot be placed is skipped and reported, and the canonical copy and the rest
+/// stand.
 pub fn place_skill_with(
     home: &Path,
     store: &PlacementStore,
@@ -59,8 +83,20 @@ pub fn place_skill_with(
     agents: &[PlacementAgent],
     links: LinkMode,
 ) -> Result<PlacementReport, PlacementError> {
-    let prepared = prepare(home, store, source, agents)?;
-    for folder in skill_folders(home) {
+    place_skill_with_in(home, &PlacementScope::Global, store, source, agents, links)
+}
+
+/// Places `source` under `root` for `scope`; see [`place_skill_with`].
+pub fn place_skill_with_in(
+    root: &Path,
+    scope: &PlacementScope,
+    store: &PlacementStore,
+    source: &Path,
+    agents: &[PlacementAgent],
+    links: LinkMode,
+) -> Result<PlacementReport, PlacementError> {
+    let prepared = prepare(root, scope, store, source, agents)?;
+    for folder in skill_folders(root) {
         sweep_staging(&folder, &prepared.name);
     }
     if !prepared.canonical_managed {
@@ -79,7 +115,7 @@ pub fn place_skill_with(
     let mut skills = load(store)?;
     let previous = skills
         .iter()
-        .position(|skill| skill.name == prepared.name)
+        .position(|skill| skill.name == prepared.name && skill.scope == *scope)
         .map(|index| skills.remove(index))
         .map_or_else(Vec::new, |skill| skill.agents);
     let mut agents_now: Vec<ManagedAgent> = previous
@@ -101,6 +137,7 @@ pub fn place_skill_with(
     }
     skills.push(ManagedSkill {
         name: prepared.name.clone(),
+        scope: scope.clone(),
         canonical: prepared.canonical.clone(),
         digest: prepared.digest,
         agents: agents_now,
@@ -113,11 +150,22 @@ pub fn place_skill_with(
     })
 }
 
-/// Removes the MassOrca placements of `name` for `agents`; an empty list means every agent MassOrca placed for. A link is
-/// removed as a link, never through to the canonical copy; a copy the user changed is kept and reported. The canonical copy
-/// goes once no placement depends on it.
+/// Removes the global MassOrca placements of `name` for `agents`; see [`unplace_skill_in`].
 pub fn unplace_skill(
     home: &Path,
+    store: &PlacementStore,
+    name: &str,
+    agents: &[PlacementAgent],
+) -> Result<PlacementReport, PlacementError> {
+    unplace_skill_in(home, &PlacementScope::Global, store, name, agents)
+}
+
+/// Removes the MassOrca placements of `name` for `scope` under `root`, for `agents`; an empty list means every agent MassOrca
+/// placed for. A link is removed as a link, never through to the canonical copy; a copy the user changed is kept and
+/// reported. The canonical copy goes once no placement in the same scope depends on it.
+pub fn unplace_skill_in(
+    root: &Path,
+    scope: &PlacementScope,
     store: &PlacementStore,
     name: &str,
     agents: &[PlacementAgent],
@@ -125,11 +173,11 @@ pub fn unplace_skill(
     let mut skills = load(store)?;
     let index = skills
         .iter()
-        .position(|skill| skill.name == name)
+        .position(|skill| skill.name == name && skill.scope == *scope)
         .ok_or_else(|| PlacementError::NotPlaced(name.to_owned()))?;
     let mut skill = skills.remove(index);
-    let canonical = canonical_path(home, name);
-    for folder in skill_folders(home) {
+    let canonical = canonical_path(root, name);
+    for folder in skill_folders(root) {
         sweep_staging(&folder, name);
     }
     let wanted: Vec<PlacementAgent> = if agents.is_empty() {
@@ -145,7 +193,7 @@ pub fn unplace_skill(
             kept.push(row);
             continue;
         }
-        let expected = agent_folder(home, row.agent, name);
+        let expected = agent_folder(root, row.agent, name);
         // Why: the record never names what is deleted; only the folder this agent reads can go.
         let outcome = if row.path != expected {
             Outcome::Skipped(SkipCause::Modified)
@@ -203,7 +251,41 @@ pub fn unplace_skill(
     })
 }
 
-/// The skills MassOrca placed, as recorded.
+/// Adds `add` agents to a placed skill and drops `drop` agents, in one scope under `root`. The canonical copy is what an
+/// added folder is placed from, so no discovered skill is needed. Adding creates only the new agents' folders; dropping
+/// removes only their copies, and the canonical copy stays while another agent still reaches it.
+pub fn switch_agents_in(
+    root: &Path,
+    scope: &PlacementScope,
+    store: &PlacementStore,
+    name: &str,
+    add: &[PlacementAgent],
+    drop: &[PlacementAgent],
+) -> Result<PlacementReport, PlacementError> {
+    let placed = load(store)?
+        .iter()
+        .any(|skill| skill.name == name && skill.scope == *scope);
+    if !placed {
+        return Err(PlacementError::NotPlaced(name.to_owned()));
+    }
+    let canonical = canonical_path(root, name);
+    let mut rows = Vec::new();
+    if !add.is_empty() {
+        let added = place_skill_with_in(root, scope, store, &canonical, add, LinkMode::Prefer)?;
+        rows.extend(added.agents);
+    }
+    if !drop.is_empty() {
+        let dropped = unplace_skill_in(root, scope, store, name, drop)?;
+        rows.extend(dropped.agents);
+    }
+    Ok(PlacementReport {
+        name: name.to_owned(),
+        canonical,
+        agents: rows,
+    })
+}
+
+/// The skills MassOrca placed, as recorded, in every scope.
 pub fn managed_placements(store: &PlacementStore) -> Result<Vec<ManagedSkill>, PlacementError> {
     load(store)
 }
@@ -224,7 +306,8 @@ struct Slot {
 }
 
 fn prepare(
-    home: &Path,
+    root: &Path,
+    scope: &PlacementScope,
     store: &PlacementStore,
     source: &Path,
     agents: &[PlacementAgent],
@@ -240,7 +323,9 @@ fn prepare(
     }
     let name = source_name(source)?;
     let digest = tree_digest(source)?;
-    let recorded = load(store)?.into_iter().find(|skill| skill.name == name);
+    let recorded = load(store)?
+        .into_iter()
+        .find(|skill| skill.name == name && skill.scope == *scope);
     if recorded
         .as_ref()
         .is_some_and(|skill| skill.digest != digest)
@@ -248,7 +333,7 @@ fn prepare(
         return Err(PlacementError::ContentChanged(name));
     }
 
-    let canonical = canonical_path(home, &name);
+    let canonical = canonical_path(root, &name);
     let canonical_managed = if fs::symlink_metadata(&canonical).is_ok() {
         // A record whose digest equals `digest` (checked above) and a canonical copy that still matches it.
         let ours =
@@ -263,7 +348,7 @@ fn prepare(
 
     let slots = wanted
         .into_iter()
-        .map(|agent| match agent_folder(home, agent, &name) {
+        .map(|agent| match agent_folder(root, agent, &name) {
             None => Slot {
                 agent,
                 path: None,
@@ -451,28 +536,28 @@ pub(super) fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
-fn canonical_path(home: &Path, name: &str) -> PathBuf {
-    home.join(".agents").join("skills").join(name)
+fn canonical_path(root: &Path, name: &str) -> PathBuf {
+    root.join(".agents").join("skills").join(name)
 }
 
-fn agent_folder(home: &Path, agent: PlacementAgent, name: &str) -> Option<PathBuf> {
+fn agent_folder(root: &Path, agent: PlacementAgent, name: &str) -> Option<PathBuf> {
     agent.home_folder().map(|segments| {
         segments
             .iter()
-            .fold(home.to_path_buf(), |dir, part| dir.join(part))
+            .fold(root.to_path_buf(), |dir, part| dir.join(part))
             .join(name)
     })
 }
 
-/// The folders a placement of any skill can write into: the canonical root and each agent's own folder.
-fn skill_folders(home: &Path) -> Vec<PathBuf> {
-    let mut folders = vec![home.join(".agents").join("skills")];
+/// The folders a placement of any skill can write into under `root`: the canonical root and each agent's own folder.
+fn skill_folders(root: &Path) -> Vec<PathBuf> {
+    let mut folders = vec![root.join(".agents").join("skills")];
     for agent in PlacementAgent::ALL {
         if let Some(segments) = agent.home_folder() {
             folders.push(
                 segments
                     .iter()
-                    .fold(home.to_path_buf(), |dir, part| dir.join(part)),
+                    .fold(root.to_path_buf(), |dir, part| dir.join(part)),
             );
         }
     }
