@@ -181,6 +181,7 @@ fn placeholder_rows(state: &StoreState, keep: impl Fn(&Workspace) -> bool) -> Ve
                     .unwrap_or(Agent::Unknown),
                 branch: workspace.branch.clone(),
                 path: Some(workspace.path.clone()),
+                in_place: workspace.in_place,
             })
         })
         .collect()
@@ -423,6 +424,7 @@ mod tests {
                 agent: Agent::Codex,
                 branch: Some("feat/four".into()),
                 path: Some("/repos/four".into()),
+                in_place: false,
             }]
         );
     }

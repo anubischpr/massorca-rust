@@ -80,6 +80,8 @@ pub struct PlaceholderRow {
     pub branch: Option<String>,
     /// The worktree's path, or the folder's path.
     pub path: Option<String>,
+    /// The project's own checkout, registered in place (`workspace-in-place/1`), which the row marks.
+    pub in_place: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
