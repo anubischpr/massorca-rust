@@ -43,6 +43,7 @@ pub mod service_view;
 pub mod session_delete;
 pub mod session_ended;
 pub mod session_menu;
+pub mod setting_rows;
 pub mod settings;
 pub mod settings_sections;
 pub mod setup;

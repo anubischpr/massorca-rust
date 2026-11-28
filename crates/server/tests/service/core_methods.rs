@@ -224,6 +224,7 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "secret.decline",
     "secret.reset-key",
     "agent-context",
+    "usage",
 ];
 
 #[tokio::test]

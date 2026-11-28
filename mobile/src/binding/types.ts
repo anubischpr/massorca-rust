@@ -92,6 +92,58 @@ export interface AgentSessionSummary {
   readonly updatedAtMs: bigint;
 }
 
+/** A team of the host. Its bots, projects and routines are read through it. */
+export interface TeamSummary {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** A bot of a team: the one that does the work of its routines. */
+export interface BotSummary {
+  readonly id: string;
+  readonly teamId: string;
+  readonly name: string;
+  readonly lead: boolean;
+}
+
+/**
+ * A routine of a team: a schedule that starts its bot on a task each time it is due. `cadence` is `daily`, `weekly`,
+ * `monthly`, `once` or `unknown`; `weekday` is the day of a weekly routine, `monthDay` of a monthly one.
+ */
+export interface RoutineSummary {
+  readonly id: string;
+  readonly teamId: string;
+  /** Absent once the routine's bot is removed. */
+  readonly botId: string | undefined;
+  readonly name: string;
+  readonly cadence: string;
+  /** The time of day, `HH:MM`, 24-hour. */
+  readonly time: string;
+  readonly weekday: string | undefined;
+  readonly monthDay: number | undefined;
+  /** `YYYY-MM-DD`, the date of a once routine. */
+  readonly runDate: string | undefined;
+  /** An IANA zone name; absent means the host's zone. */
+  readonly zone: string | undefined;
+  readonly paused: boolean;
+  /** Absent while paused, and once a one-time routine has run. */
+  readonly nextRunAtMs: bigint | undefined;
+  readonly createdAtMs: bigint;
+}
+
+/** One run of a routine: an occurrence it claimed, or a run made now. Its task is absent when none was made. */
+export interface RoutineRunSummary {
+  readonly id: string;
+  readonly routineId: string;
+  readonly scheduledForMs: bigint;
+  readonly taskId: string | undefined;
+  /** Why the run or its task did not start, as a sentence. */
+  readonly error: string | undefined;
+  /** The protocol code of `error`, such as `bot.not_found`. */
+  readonly errorCode: string | undefined;
+  readonly createdAtMs: bigint;
+}
+
 export type AgentItem =
   | { readonly tag: 'Snapshot'; readonly sessions: readonly AgentSessionSummary[] }
   | { readonly tag: 'Changed'; readonly session: AgentSessionSummary };
@@ -161,6 +213,18 @@ export interface Host {
   whoami(): Promise<WhoAmI>;
   protocol(): ProtocolInfo;
   workspaces(project?: string): Promise<WorkspaceSummary[]>;
+  /** The teams of the host, by name. */
+  teams(): Promise<TeamSummary[]>;
+  /** The bots of `team` (its id or exact name). */
+  teamBots(team: string): Promise<BotSummary[]>;
+  /** The routines of `team` (its id or exact name), in creation order. */
+  teamRoutines(team: string): Promise<RoutineSummary[]>;
+  /** The newest `limit` runs of a routine, newest first; the host's default when `limit` is absent. */
+  routineRuns(team: string, routine: string, limit?: number): Promise<RoutineRunSummary[]>;
+  pauseRoutine(team: string, routine: string): Promise<RoutineSummary>;
+  resumeRoutine(team: string, routine: string): Promise<RoutineSummary>;
+  /** Makes one run of a routine now; the routine's schedule does not move. */
+  runRoutine(team: string, routine: string): Promise<RoutineRunSummary>;
   /** The terminals of every workspace, or only those of `workspace` (its id), live and exited. */
   terminals(workspace?: string): Promise<TerminalSummary[]>;
   gitStatus(workspace: string): Promise<GitStatusSummary>;

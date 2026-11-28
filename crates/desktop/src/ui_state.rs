@@ -1,13 +1,15 @@
 //! The desktop's remembered UI state (SET-02): the theme last applied, the regions left open, the rail mode, the
-//! projects the Sidebar keeps collapsed and the Calendar's Show done switch. It is saved in
-//! `desktop/state/ui-state.json` of the profile, so the first frame of a start already uses the saved theme.
+//! projects the Sidebar keeps collapsed, the window's place and size and the Calendar's Show done switch. It is saved
+//! in `desktop/state/ui-state.json` of the profile, so the first frame of a start already uses the saved theme.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
-use gpui::{App, Global};
+use std::time::Duration;
+
+use gpui::{App, Bounds, Global, Pixels, WindowBounds, point, px, size};
 use massorca_profile::{Profile, UI_STATE_FILE, open_desktop_state_dir};
 use massorca_ui::{ActiveTheme as _, Appearance, Theme};
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,66 @@ use crate::model::regions::{Region, RegionState};
 const VERSION: u8 = 1;
 /// A file larger than this is not read.
 const MAX_BYTES: u64 = 64 * 1024;
+/// A window side longer than this, in logical pixels, is a damaged value.
+const MAX_WINDOW_SIDE: i32 = 100_000;
+/// How much of a restored window must lie on one display, across and down, for its saved place to be used.
+const MIN_VISIBLE: f32 = 64.0;
+/// A window move or resize is saved once the window has been still this long, so a drag writes the file once.
+const WINDOW_SAVE_DELAY: Duration = Duration::from_millis(500);
+
+/// The window's place and size in logical pixels (its restore bounds), and whether it was maximized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowLayout {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub maximized: bool,
+}
+
+impl WindowLayout {
+    /// The layout of `bounds` as the window reports them; a full-screen window keeps its restore bounds.
+    pub fn of(bounds: WindowBounds) -> Self {
+        let (rect, maximized) = match bounds {
+            WindowBounds::Windowed(rect) | WindowBounds::Fullscreen(rect) => (rect, false),
+            WindowBounds::Maximized(rect) => (rect, true),
+        };
+        Self {
+            x: rounded(rect.origin.x),
+            y: rounded(rect.origin.y),
+            width: rounded(rect.size.width),
+            height: rounded(rect.size.height),
+            maximized,
+        }
+    }
+
+    /// The bounds a start opens with: the saved ones, grown to at least `min`, when enough of them lies on one of
+    /// `displays`. `None` otherwise, and the window opens at its default place.
+    pub fn restored(self, displays: &[Bounds<Pixels>], min: (f32, f32)) -> Option<WindowBounds> {
+        let rect = Bounds::new(
+            point(px(self.x as f32), px(self.y as f32)),
+            size(
+                px((self.width as f32).max(min.0)),
+                px((self.height as f32).max(min.1)),
+            ),
+        );
+        let visible = displays.iter().any(|display| {
+            let shared = display.intersect(&rect);
+            f32::from(shared.size.width) >= MIN_VISIBLE
+                && f32::from(shared.size.height) >= MIN_VISIBLE
+        });
+        visible.then_some(if self.maximized {
+            WindowBounds::Maximized(rect)
+        } else {
+            WindowBounds::Windowed(rect)
+        })
+    }
+}
+
+/// A coordinate in whole logical pixels; `as` saturates, so a huge value cannot wrap.
+fn rounded(value: Pixels) -> i32 {
+    f32::from(value).round() as i32
+}
 
 /// What the desktop remembers between starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +96,8 @@ pub struct UiState {
     pub mode: Mode,
     /// The projects the Sidebar keeps collapsed, by project id.
     pub collapsed_projects: BTreeSet<String>,
+    /// The window's place and size at the last save; None until the window has moved or been resized once.
+    pub window: Option<WindowLayout>,
     /// The Calendar's Show done switch as the viewer last left it; off until it is switched on.
     pub calendar_show_done: bool,
 }
@@ -47,6 +111,7 @@ impl Default for UiState {
             start_permission_modes: BTreeMap::new(),
             mode: Mode::default(),
             collapsed_projects: BTreeSet::new(),
+            window: None,
             calendar_show_done: false,
         }
     }
@@ -56,6 +121,8 @@ impl Default for UiState {
 struct UiStateStore {
     profile: Profile,
     saved: UiState,
+    /// Whether a window layout waits for its delayed save.
+    window_save_pending: bool,
 }
 
 impl Global for UiStateStore {}
@@ -66,6 +133,7 @@ pub fn install(cx: &mut App, profile: Profile, loaded: UiState) {
     cx.set_global(UiStateStore {
         profile,
         saved: loaded,
+        window_save_pending: false,
     });
     cx.observe_global::<Theme>(|cx| {
         let appearance = cx.theme().appearance;
@@ -88,6 +156,33 @@ pub fn remember(cx: &mut App, change: impl FnOnce(&mut UiState)) {
     store.saved = next.clone();
     // A failed save leaves the file as it was; the next change saves again.
     let _ = save(&store.profile, &next);
+}
+
+/// Keeps `layout` as the window's place and size, and saves it once the window has been still for a moment. Does
+/// nothing when no profile is kept.
+pub fn remember_window(cx: &mut App, layout: WindowLayout) {
+    if !cx.has_global::<UiStateStore>() {
+        return;
+    }
+    let store = cx.global_mut::<UiStateStore>();
+    if store.saved.window == Some(layout) {
+        return;
+    }
+    store.saved.window = Some(layout);
+    if store.window_save_pending {
+        return;
+    }
+    store.window_save_pending = true;
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(WINDOW_SAVE_DELAY).await;
+        cx.update(|cx| {
+            let store = cx.global_mut::<UiStateStore>();
+            store.window_save_pending = false;
+            // A failed save leaves the file as it was; the next change saves again.
+            let _ = save(&store.profile, &store.saved);
+        });
+    })
+    .detach();
 }
 
 /// The profile's remembered state. A missing, unreadable, oversized or damaged file gives the defaults.
@@ -117,8 +212,8 @@ pub fn saved_start_mode(cx: &App, kind: &str) -> Option<String> {
         .flatten()
 }
 
-/// Hook for the Sidebar's project collapse state, which is not wired yet: remembers whether the project `project`
-/// (its id) stays collapsed. Does nothing when no profile is kept.
+/// Remembers whether the project `project` (its id) stays collapsed in the Sidebar. Does nothing when no profile is
+/// kept.
 pub fn remember_project_collapsed(cx: &mut App, project: &str, collapsed: bool) {
     let project = project.to_owned();
     remember(cx, move |state| {
@@ -215,6 +310,13 @@ struct Stored {
         skip_serializing_if = "Option::is_none"
     )]
     collapsed_projects: Option<Vec<String>>,
+    /// The window's restore bounds and whether it was maximized; absent until the window has moved or been resized.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    window: Option<StoredWindow>,
     /// The Calendar's Show done switch, written only while it is on.
     #[serde(
         default,
@@ -222,6 +324,30 @@ struct Stored {
         skip_serializing_if = "Option::is_none"
     )]
     calendar_show_done: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredWindow {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    #[serde(default)]
+    maximized: bool,
+}
+
+impl StoredWindow {
+    /// The layout this describes, or `None` when a side is not positive or is far too long.
+    fn layout(&self) -> Option<WindowLayout> {
+        let sides = 1..=MAX_WINDOW_SIDE;
+        (sides.contains(&self.width) && sides.contains(&self.height)).then_some(WindowLayout {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+            maximized: self.maximized,
+        })
+    }
 }
 
 /// A member of the wrong type reads as missing, so the others still apply.
@@ -251,6 +377,13 @@ fn encode(state: &UiState) -> String {
         mode: Some(mode_key(state.mode).to_owned()),
         collapsed_projects: (!state.collapsed_projects.is_empty())
             .then(|| state.collapsed_projects.iter().cloned().collect()),
+        window: state.window.map(|layout| StoredWindow {
+            x: layout.x,
+            y: layout.y,
+            width: layout.width,
+            height: layout.height,
+            maximized: layout.maximized,
+        }),
         calendar_show_done: state.calendar_show_done.then_some(true),
     };
     let mut text = serde_json::to_string_pretty(&stored).unwrap_or_default();
@@ -307,6 +440,7 @@ fn decode(text: &str) -> Option<UiState> {
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        window: stored.window.as_ref().and_then(StoredWindow::layout),
         calendar_show_done: stored.calendar_show_done.unwrap_or(false),
     })
 }
@@ -381,6 +515,13 @@ mod tests {
             start_permission_modes: BTreeMap::from([("claude".to_owned(), "plan".to_owned())]),
             mode: Mode::BotTeams,
             collapsed_projects: BTreeSet::from(["p1".to_owned()]),
+            window: Some(WindowLayout {
+                x: -1200,
+                y: 40,
+                width: 1300,
+                height: 820,
+                maximized: true,
+            }),
             calendar_show_done: true,
             ..UiState::default()
         };
@@ -601,6 +742,111 @@ mod tests {
         assert_eq!(loaded.open_regions, vec![Region::WorkPanel]);
         assert_eq!(loaded.mode, Mode::Workspaces);
         assert!(loaded.collapsed_projects.is_empty());
+        assert_eq!(loaded.window, None);
+    }
+
+    #[test]
+    fn a_damaged_window_member_keeps_no_layout_and_the_others_still_apply() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        for window in [
+            r#""wide""#,
+            r#"{"x": 0, "y": 0, "width": 0, "height": 700}"#,
+            r#"{"x": 0, "y": 0, "width": 900, "height": 9999999}"#,
+            r#"{"x": 0, "y": 0, "width": 900}"#,
+        ] {
+            write_raw(
+                &profile,
+                &format!(r#"{{"version": 1, "theme": "light", "window": {window}}}"#),
+            );
+            let loaded = load(&profile);
+            assert_eq!(loaded.window, None, "{window}");
+            assert_eq!(loaded.theme, Appearance::Light, "{window}");
+        }
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "window": {"x": 10, "y": 20, "width": 900, "height": 700}}"#,
+        );
+        assert_eq!(
+            load(&profile).window,
+            Some(WindowLayout {
+                x: 10,
+                y: 20,
+                width: 900,
+                height: 700,
+                maximized: false,
+            }),
+            "maximized is optional"
+        );
+    }
+
+    fn display(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn a_saved_window_reopens_where_it_was_while_a_display_still_shows_it() {
+        let layout = WindowLayout {
+            x: 1950,
+            y: 100,
+            width: 1200,
+            height: 800,
+            maximized: false,
+        };
+        let two = [
+            display(0., 0., 1920., 1080.),
+            display(1920., 0., 2560., 1440.),
+        ];
+
+        assert_eq!(
+            layout.restored(&two, (960., 600.)),
+            Some(WindowBounds::Windowed(display(1950., 100., 1200., 800.)))
+        );
+        assert_eq!(
+            WindowLayout {
+                maximized: true,
+                ..layout
+            }
+            .restored(&two, (960., 600.)),
+            Some(WindowBounds::Maximized(display(1950., 100., 1200., 800.)))
+        );
+        // The second display is gone: the window opens at its default place instead.
+        assert_eq!(layout.restored(&two[..1], (960., 600.)), None);
+        assert_eq!(layout.restored(&[], (960., 600.)), None);
+    }
+
+    #[test]
+    fn a_saved_window_smaller_than_the_minimum_grows_to_it() {
+        let layout = WindowLayout {
+            x: 0,
+            y: 0,
+            width: 300,
+            height: 200,
+            maximized: false,
+        };
+        assert_eq!(
+            layout.restored(&[display(0., 0., 1920., 1080.)], (960., 600.)),
+            Some(WindowBounds::Windowed(display(0., 0., 960., 600.)))
+        );
+    }
+
+    #[test]
+    fn a_window_layout_reads_its_restore_bounds_from_each_state() {
+        let rect = display(10.4, 20.6, 1000., 700.);
+        let windowed = WindowLayout::of(WindowBounds::Windowed(rect));
+        assert_eq!(
+            windowed,
+            WindowLayout {
+                x: 10,
+                y: 21,
+                width: 1000,
+                height: 700,
+                maximized: false,
+            }
+        );
+        assert!(WindowLayout::of(WindowBounds::Maximized(rect)).maximized);
+        assert!(!WindowLayout::of(WindowBounds::Fullscreen(rect)).maximized);
     }
 
     #[test]
