@@ -108,6 +108,10 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 
 - `massorca server status`: Shows the listeners, server pin, devices and pending offers; on this computer also Tailscale.
 
+### usage
+
+- `massorca usage [--kind <KIND>] [--account <ID>] [--refresh]`: Shows each agent account's usage and limits, read on the host that runs the agents. Works with --host. Off until the setting usage.enabled is on.
+
 ### host
 
 - `massorca host list`: Lists the hosts this client paired with. Makes no connection.
@@ -116,9 +120,11 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca host status [NAME] [--watch]`: Connects to one host, or to every host, and reports whether it answers.
 - `massorca host self-test [NAME]`: Checks one paired host step by step (address, port, key, protocol, pairing, service, round trip) and names the step that fails and how to fix it. Without a name, checks this computer's own service. Exit code 0 only when every check passes.
 - `massorca host discover`: Lists the online Tailscale peers, and which of them run massorca.
-- `massorca host add-ssh <TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]`: Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
+- `massorca host add-ssh <TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>] [--tunnel]`: Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
+- `massorca host route <NAME> [--ssh <TARGET>] [--ssh-arg <ARG>]... [--forward <HOST:PORT>] [--direct]`: Sets how a paired host is dialed: through ssh (`ssh -W`), for a host only a bastion reaches, or directly. Makes no connection.
 - `massorca host memory`: Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
-- `massorca host ports`: Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them. Works with --host.
+- `massorca host ports`: Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them, with the URL each is opened at and whether a forward carries it. Works with --host.
+- `massorca host forward <NAME> [PORT] [--local <PORT>] [--bind <ADDRESS>] [--list] [--stop <FORWARD>]`: Listens on a local port and carries each connection to a loopback port on host NAME, until Ctrl+C or until the forward is stopped on the host. Needs host-admin on the host. With --list or --stop, reads or stops the host's forwards instead.
 
 ### agent-context
 
@@ -132,7 +138,7 @@ Notation: `<NAME>` is required, `[NAME]` is optional, `[--flag]` is an optional 
 - `massorca agent list [--workspace <WORKSPACE>] [--archived]`: Lists agent sessions, newest first: every session, or those of one workspace.
 - `massorca agent status [SESSION] [--watch] [--until <STATE>] [--timeout <SECS>]`: Shows one session's execution and activity, or every session's when none is named. `--until` takes working, waiting, idle, done, exited.
 - `massorca agent stop <SESSION> [--force]`: Ends a session's run. The session stays listed as exited until forgotten.
-- `massorca agent prompt <SESSION> <TEXT> [--force]`: Types a prompt into a session's terminal once its agent is idle or done, then submits it.
+- `massorca agent prompt <SESSION> <TEXT> [--force] [--attach <PATH>]...`: Types a prompt into a session's terminal once its agent is idle or done, then submits it.
 - `massorca agent resume <SESSION> [--mode <MODE>] [--cols <COLS>] [--rows <ROWS>]`: Starts a new run of an exited session with the agent's resume arguments; the session keeps its id.
 - `massorca agent fork <SESSION> [--prompt <PROMPT>] [--mode <MODE>] [--title <TITLE>]`: Starts a new session from a copy of an exited session's conversation, with the kind's fork arguments, in the same workspace. The source session keeps its own conversation.
 - `massorca agent mode <SESSION> <MODE> [--force]`: Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
