@@ -55,6 +55,7 @@ mod teams;
 mod terminal_secrets;
 mod terminal_wait;
 mod tools;
+mod usage;
 mod workspace_archive;
 mod workspace_children;
 mod workspace_setup;

@@ -32,6 +32,7 @@ mod teams;
 mod terminal_attach;
 mod terminals;
 mod tools;
+mod usage;
 mod workspace_archive;
 mod workspace_domain;
 mod workspace_setup;
@@ -40,6 +41,7 @@ mod workspaces;
 pub(crate) use config::{default_workspace_root, stored_terminal_theme};
 pub(crate) use service::info_of;
 pub(crate) use teams::{follow_routines, follow_task_outcomes};
+pub(crate) use usage::{UsageBook, follow_usage};
 
 use serde::Deserialize;
 
@@ -67,6 +69,7 @@ pub(crate) fn register_core(
     handles.extend(events::register(registries)?);
     handles.extend(host::register(registries)?);
     handles.extend(self_update::register(registries)?);
+    handles.extend(usage::register(registries)?);
     handles.extend(tools::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);

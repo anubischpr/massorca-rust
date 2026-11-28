@@ -12,6 +12,7 @@ use crate::skills::SkillCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
+use crate::usage::UsageArgs;
 
 /// `--version` after the program name: the version and the protocol range, which a self-update checks (decision 0132).
 pub fn version_text() -> &'static str {
@@ -125,6 +126,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Shows each agent account's usage and limits, read on the host that runs the agents. Works with --host. Off until
+    /// the setting usage.enabled is on.
+    Usage(UsageArgs),
     /// Lists, checks, removes and discovers the hosts this client paired with, and installs new ones over SSH.
     Host {
         #[command(subcommand)]

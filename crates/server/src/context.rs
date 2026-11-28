@@ -77,6 +77,8 @@ pub struct AppState {
     /// Listeners, pairing offers and open device connections; empty when the service is local only.
     pub network: NetworkState,
     pub started_at_ms: i64,
+    /// Each agent account's cached usage reading (decision 0154); filled by the usage refresher while usage is on.
+    pub(crate) usage: Arc<crate::features::UsageBook>,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
     pub(crate) activity: Activity,
     /// Which workspaces the first-prompt rename has decided (decision 0118); held in memory for the service's run.
