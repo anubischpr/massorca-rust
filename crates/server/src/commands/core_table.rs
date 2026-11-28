@@ -605,7 +605,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "session": { "type": "string" },
                     "text": { "type": "string" },
-                    "force": { "type": "boolean" }
+                    "force": { "type": "boolean" },
+                    "attachments": attachments_schema()
                 }
             }),
         ),
@@ -619,7 +620,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "session": { "type": "string" },
                     "text": { "type": "string" },
-                    "request_id": { "type": "string" }
+                    "request_id": { "type": "string" },
+                    "attachments": attachments_schema()
                 }
             }),
         ),
@@ -1116,4 +1118,17 @@ pub(super) fn selector(name: &str) -> Value {
     let mut properties = Map::new();
     properties.insert(name.to_owned(), json!({ "type": "string" }));
     json!({ "type": "object", "required": [name], "properties": properties })
+}
+
+/// The `attachments` of `agent.prompt` and `agent.queue.add`: files of the session's workspace (decision 0172).
+pub(super) fn attachments_schema() -> Value {
+    json!({
+        "type": "array",
+        "maxItems": 10,
+        "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": { "path": { "type": "string" } }
+        }
+    })
 }

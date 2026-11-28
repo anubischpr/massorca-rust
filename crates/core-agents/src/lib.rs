@@ -5,6 +5,7 @@
 
 pub mod account_check;
 pub mod accounts;
+mod attachments;
 pub mod catalog;
 pub mod chat;
 pub mod credentials;

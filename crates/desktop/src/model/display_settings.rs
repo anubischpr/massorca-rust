@@ -1,7 +1,8 @@
-//! The settings the window draws with (SET-01), read from the settings store: the Status bar's shown items and the text
-//! preferences. A value that is missing, of the wrong type or out of range keeps its default, so one damaged key never
+//! The settings the window draws with (SET-01), read from the settings store: the Status bar's shown items, the text
+//! preferences, the row density and whether the Session summary is offered. A value that is missing, of the wrong type or out of range keeps its default, so one damaged key never
 //! hides the others.
 
+use massorca_ui::components::list_row::RowDensity;
 use massorca_ui::text_preferences::{
     SCROLLBACK_MAX, SCROLLBACK_MIN, SIZE_PERCENT_MAX, SIZE_PERCENT_MIN, TextPreferences,
 };
@@ -15,6 +16,8 @@ const INTERFACE_FONT_KEY: &str = "appearance.font.interface";
 const MONOSPACE_FONT_KEY: &str = "appearance.font.monospace";
 const TERMINAL_FONT_KEY: &str = "terminal.font";
 const SCROLLBACK_KEY: &str = "terminal.scrollback";
+const DENSITY_KEY: &str = "appearance.density";
+const SESSION_SUMMARY_KEY: &str = "appearance.session_summary";
 
 /// The settings the window draws with.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +26,10 @@ pub struct DisplaySettings {
     pub status_items: Vec<StatusItem>,
     /// The text size, the families and the terminal scrollback.
     pub text: TextPreferences,
+    /// The height one-line rows take.
+    pub density: RowDensity,
+    /// Whether the Session summary region and its Title bar toggle are offered.
+    pub session_summary: bool,
 }
 
 impl Default for DisplaySettings {
@@ -30,6 +37,8 @@ impl Default for DisplaySettings {
         Self {
             status_items: StatusItem::ALL.to_vec(),
             text: TextPreferences::default(),
+            density: RowDensity::Default,
+            session_summary: true,
         }
     }
 }
@@ -53,7 +62,24 @@ impl DisplaySettings {
                     .and_then(scrollback_lines)
                     .unwrap_or(defaults.scrollback_lines),
             },
+            density: value(DENSITY_KEY)
+                .and_then(Value::as_str)
+                .and_then(density)
+                .unwrap_or(RowDensity::Default),
+            session_summary: value(SESSION_SUMMARY_KEY)
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         }
+    }
+}
+
+/// The density a setting word names.
+fn density(word: &str) -> Option<RowDensity> {
+    match word {
+        "compact" => Some(RowDensity::Compact),
+        "default" => Some(RowDensity::Default),
+        "comfortable" => Some(RowDensity::Comfortable),
+        _ => None,
     }
 }
 
