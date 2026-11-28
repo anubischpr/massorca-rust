@@ -257,6 +257,7 @@ async fn run_bundled(
                 .skills_unplace(&SkillUnplaceParams {
                     name: args.name,
                     agents: Vec::new(),
+                    target: Default::default(),
                 })
                 .await?;
             output.success(&result, &placement_lines(&result));
