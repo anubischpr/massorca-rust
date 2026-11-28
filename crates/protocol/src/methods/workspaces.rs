@@ -18,6 +18,8 @@ pub const UPDATE: &str = "workspace.update";
 pub const CHECK: &str = "workspace.check";
 /// Params: [`WorkspaceRenameParams`]. Result: [`Workspace`].
 pub const RENAME: &str = "workspace.rename";
+/// Params: [`WorkspaceRef`]. Result: [`WorkspaceRunsStopped`].
+pub const STOP_RUNS: &str = "workspace.stop_runs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +116,14 @@ pub struct UnregisteredWorktree {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRef {
     pub workspace: String,
+}
+
+/// Result of `workspace.stop_runs`: the ids of the agent sessions and the terminals it asked to stop. Both lists are
+/// empty when nothing was running.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WorkspaceRunsStopped {
+    pub agents: Vec<String>,
+    pub terminals: Vec<String>,
 }
 
 /// Params of `workspace.current`: the workspace whose path holds `path`, which must be absolute on the service's host.
