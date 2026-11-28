@@ -1023,6 +1023,8 @@ impl Agents {
         permission_mode: Option<&str>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        // No gate is held here, so a chat's pending version probe is waited for first.
+        self.prepare_chat_resume(selector);
         self.resume_at(selector, permission_mode, grant, None, None)
     }
 
@@ -1036,8 +1038,9 @@ impl Agents {
         rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
         let row = self.resolve(selector)?;
-        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run. Its kind's version probe can take
-        // seconds, so it runs before the start gate is taken; a chat resume needs the same support as a chat start.
+        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run; it needs the same support as a chat
+        // start. A caller may hold a gate, so the support is read from the cache with no wait: the caller waits for a
+        // pending probe before its gates with `prepare_chat_resume`, as `resume` does.
         let chat = self.run_type_of(&row.id)? == RunType::Chat;
         let mut adapter = if chat {
             let (decl, program) = self.resumable_kind(&row)?;

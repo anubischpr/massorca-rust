@@ -489,7 +489,8 @@ impl Agents {
     /// whose sign-in is open, or being decided, is busy. An account whose sign-in or import is still undecided in the store
     /// is decided by the check, as a sign-in's end decides it; any other account keeps what its check finds. A check
     /// stopped at its time limit decides nothing: the account keeps its last known state and the check is retried in the
-    /// background (decision 0059, amended 2026-11-27). This check supersedes a retry already waiting.
+    /// background (decision 0059, amended 2026-11-27). This check supersedes a retry already waiting, once it is let in: a
+    /// check refused as busy leaves a running retry, and the verdict it brings, alone.
     pub fn accounts_check(
         &self,
         kind: &str,
@@ -502,7 +503,6 @@ impl Agents {
                 .get_active_agent_account(kind)?
                 .ok_or_else(|| account_not_found(kind, "active"))?,
         };
-        self.cancel_check_retry(&id);
         let (summary, timed_out) = self.check_once(kind, &id, None)?;
         if timed_out {
             self.schedule_check_retry(kind, &id);
@@ -525,7 +525,7 @@ impl Agents {
 
     /// The body of a check of `id`, explicit or a retry of generation `retry`: its summary afterwards, and whether the check
     /// timed out. A timeout stores nothing. A retry stores its result only while it is still the retry wanted and the
-    /// account is not being removed.
+    /// account is not being removed. An explicit check cancels a retry only once its busy checks let it in.
     fn check_once(
         &self,
         kind: &str,
@@ -538,6 +538,9 @@ impl Agents {
         }
         if self.store_pending(id)? {
             return self.check_undecided(kind, id, retry);
+        }
+        if retry.is_none() {
+            self.cancel_check_retry(id);
         }
         let (decl, program) = self.runnable_kind(kind)?;
         let checked = self.check_verdict(&decl, &program, id, row.identity.as_deref());
@@ -620,6 +623,10 @@ impl Agents {
         if !self.store_pending(account)? {
             drop(mark);
             return self.check_once(kind, account, retry);
+        }
+        // Let in: a retry running for the account would hold the mark, so only a waiting one is cancelled.
+        if retry.is_none() {
+            self.cancel_check_retry(account);
         }
         let row = self.account_of(kind, account)?;
         let (decl, program) = self.runnable_kind(kind)?;

@@ -296,8 +296,13 @@ fn view(
         None
     };
     // Probed once per installed program (decision 0101, D10).
-    let probed =
-        crate::chat::version::kind_chat_with(decl, program_path.as_deref(), probe_timeout, runner);
+    let probed = crate::chat::version::kind_chat_with(
+        decl,
+        program_path.as_deref(),
+        probe_timeout,
+        runner,
+        false,
+    );
     let timed_out = probed.as_ref().is_some_and(|(_, timed_out)| *timed_out);
     let chat = probed.map(|(chat, _)| chat);
     let kind = AgentKind {

@@ -7,7 +7,8 @@
 //!   changed state with `agent.accounts_changed`. A newer explicit check supersedes a waiting retry, and a removal cancels
 //!   it.
 //! - A version probe's retry announces the kind ([`Change::Models`], published as `agent.accounts_changed` of the kind)
-//!   once it decides, so a client reads the kinds again. A chat start that finds the probe pending waits for it, bounded.
+//!   once it decides, so a client reads the kinds again. A chat start that finds the probe pending waits for it, bounded,
+//!   before it takes any gate; under a gate the support is read from the cache, a cached timeout included, with no wait.
 //!
 //! A decided verdict is never retried.
 
@@ -123,20 +124,13 @@ impl Agents {
         );
     }
 
-    /// The chat support of `decl` with its resolved `program`, as a chat start reads it: a probe stopped at its time limit
-    /// is retried in the background, and this waits for that retry, at most [`probe_wait`], before reading the support
-    /// again. `None` for a kind without a `chat` block.
+    /// The chat support of `decl` with its resolved `program`, as a chat start reads it before any gate: a probe stopped at
+    /// its time limit is retried in the background, and this waits for that retry, at most [`probe_wait`], before reading
+    /// the support again. It can wait for seconds, so it is never called under a gate; a gated read is
+    /// [`Self::chat_support_now`]. `None` for a kind without a `chat` block.
     pub(crate) fn chat_support(&self, decl: &KindDecl, program: &Path) -> Option<KindChat> {
         let settings = self.check_settings();
-        let probe = |settings: &CheckSettings| {
-            kind_chat_with(
-                decl,
-                Some(program),
-                settings.probe_timeout,
-                settings.runner.as_ref(),
-            )
-        };
-        let (chat, timed_out) = probe(&settings)?;
+        let (chat, timed_out) = probe_chat(decl, program, &settings, false)?;
         if !timed_out {
             return Some(chat);
         }
@@ -146,20 +140,27 @@ impl Agents {
         while self.check_retries().current.contains_key(&key) && Instant::now() < deadline {
             thread::sleep(RETRY_POLL);
         }
-        probe(&settings).map(|(chat, _)| chat)
+        // The retry's answer, or its last timeout, is cached: this look runs no program.
+        probe_chat(decl, program, &settings, false).map(|(chat, _)| chat)
+    }
+
+    /// The chat support of `decl` with its resolved `program`, as a read under a gate takes it: what the cache holds, a
+    /// cached timeout included, with no wait. A caller that waited with [`Self::chat_support`] before its gate finds the
+    /// cache filled. A timed-out probe is retried in the background, as `agent.kinds` retries it.
+    pub(crate) fn chat_support_now(&self, decl: &KindDecl, program: &Path) -> Option<KindChat> {
+        let settings = self.check_settings();
+        let (chat, timed_out) = probe_chat(decl, program, &settings, false)?;
+        if timed_out {
+            self.schedule_probe_retry(&decl.id);
+        }
+        Some(chat)
     }
 
     /// One retry of a kind's timed-out version probe. `Ok(true)` when it timed out again; a decided probe announces the
-    /// kind, so a client reads the kinds again.
+    /// kind, so a client reads the kinds again. It runs the program whatever is cached, since the cache holds the timeout.
     fn probe_for_retry(&self, kind: &str) -> Result<bool, AgentError> {
         let (decl, program) = self.runnable_kind(kind)?;
-        let settings = self.check_settings();
-        match kind_chat_with(
-            &decl,
-            Some(&program),
-            settings.probe_timeout,
-            settings.runner.as_ref(),
-        ) {
+        match probe_chat(&decl, &program, &self.check_settings(), true) {
             Some((_, true)) => Ok(true),
             Some((_, false)) => {
                 self.notify(Change::Models(kind.to_owned()));
@@ -235,6 +236,22 @@ impl Agents {
     }
 }
 
+/// The chat support of `decl` with `program`, probed with `settings`; `fresh` runs the program whatever is cached.
+fn probe_chat(
+    decl: &KindDecl,
+    program: &Path,
+    settings: &CheckSettings,
+    fresh: bool,
+) -> Option<(KindChat, bool)> {
+    kind_chat_with(
+        decl,
+        Some(program),
+        settings.probe_timeout,
+        settings.runner.as_ref(),
+        fresh,
+    )
+}
+
 /// How long a chat start waits for a pending probe: every retry's wait, and a probe's time limit for each run.
 fn probe_wait(settings: &CheckSettings) -> Duration {
     let runs = u32::try_from(settings.retry_delays.len()).unwrap_or(u32::MAX);
@@ -242,6 +259,22 @@ fn probe_wait(settings: &CheckSettings) -> Duration {
         + settings
             .probe_timeout
             .saturating_mul(runs.saturating_add(1))
+}
+
+/// A retry thread's hold on its entry: dropped when the thread ends, however it ends (a panicking run included), it ends
+/// the retry, so no entry and no thread count is left behind.
+struct RetryEntry<'a> {
+    weak: &'a WeakAgents,
+    key: &'a RetryKey,
+    generation: u64,
+}
+
+impl Drop for RetryEntry<'_> {
+    fn drop(&mut self) {
+        if let Some(agents) = self.weak.upgrade() {
+            agents.end_retry(self.key, self.generation);
+        }
+    }
 }
 
 /// The body of a retry thread: after each wait, one run of `attempt`, until a run decides, the retries run out, or the
@@ -253,6 +286,11 @@ fn retry_loop(
     delays: &[Duration],
     attempt: &Attempt,
 ) {
+    let _entry = RetryEntry {
+        weak,
+        key,
+        generation,
+    };
     for delay in delays {
         if !wait_while_current(weak, key, generation, *delay) {
             break;
@@ -268,9 +306,6 @@ fn retry_loop(
                 break;
             }
         }
-    }
-    if let Some(agents) = weak.upgrade() {
-        agents.end_retry(key, generation);
     }
 }
 
@@ -315,6 +350,30 @@ mod tests {
         SignedOut,
         /// Prints a CLI version inside the Claude chat range.
         Version,
+        /// Panics, as a bug in the run would.
+        Panic,
+    }
+
+    /// What one run of the stand-in check returns for `step`.
+    fn run_of(step: Step) -> CheckRun {
+        let (exit, output, timed_out) = match step {
+            Step::Hang => (None, "", true),
+            Step::SignedIn => (
+                Some(0),
+                r#"{"loggedIn":true,"email":"fake@example.test"}"#,
+                false,
+            ),
+            Step::SignedOut => (Some(1), r#"{"loggedIn":false}"#, false),
+            Step::Version => (Some(0), "2.1.300 (Claude Code)", false),
+            Step::Panic => panic!("a run panics on cue"),
+        };
+        CheckRun {
+            run: RunOutput {
+                exit,
+                output: output.to_owned(),
+            },
+            timed_out,
+        }
     }
 
     /// A stand-in check that takes `steps` in order, then repeats the last, and counts its runs.
@@ -324,24 +383,7 @@ mod tests {
         let counter = Arc::clone(&runs);
         let runner: CheckRunner = Arc::new(move |_program, _args| {
             let index = counter.fetch_add(1, Ordering::SeqCst);
-            let step = steps[index.min(steps.len() - 1)];
-            let (exit, output, timed_out) = match step {
-                Step::Hang => (None, "", true),
-                Step::SignedIn => (
-                    Some(0),
-                    r#"{"loggedIn":true,"email":"fake@example.test"}"#,
-                    false,
-                ),
-                Step::SignedOut => (Some(1), r#"{"loggedIn":false}"#, false),
-                Step::Version => (Some(0), "2.1.300 (Claude Code)", false),
-            };
-            CheckRun {
-                run: RunOutput {
-                    exit,
-                    output: output.to_owned(),
-                },
-                timed_out,
-            }
+            run_of(steps[index.min(steps.len() - 1)])
         });
         (runner, runs)
     }
@@ -660,6 +702,11 @@ mod tests {
         let (agents, _, profile) = service();
         let (runner, runs) = scripted(&[Step::Hang, Step::Version]);
         fake_chat_kind(&agents, profile.path(), runner, &QUICK);
+        // The stand-in answers at once, so a long limit only widens the wait's bound: on a loaded host the retry thread
+        // may start late, and the wait ends as soon as the retry does.
+        let mut settings = agents.check_settings();
+        settings.probe_timeout = Duration::from_secs(5);
+        agents.set_check_settings(settings);
         let (decl, program) = agents.runnable_kind("fakechat").expect("the kind runs");
 
         let chat = agents.chat_support(&decl, &program).expect("a chat block");
@@ -690,8 +737,144 @@ mod tests {
         retries_settle(&agents);
         assert_eq!(
             runs.load(Ordering::SeqCst),
-            5,
-            "the start's probe, three retries, and the start's last look"
+            4,
+            "the start's probe and three retries; the start's last look reads the cached timeout"
+        );
+    }
+
+    /// Waits up to `limit` for `done`, polling.
+    fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + limit;
+        while !done() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+
+    #[test]
+    fn a_gated_chat_read_does_not_wait_for_a_pending_probe() {
+        let (agents, _, profile) = service();
+        let (runner, runs) = scripted(&[Step::Hang]);
+        // A long wait: the retry stays pending for the whole test.
+        fake_chat_kind(&agents, profile.path(), runner, &[Duration::from_secs(30)]);
+        // The read before any gate: the probe times out, and a retry is pending.
+        listed_chat(&agents);
+        assert_eq!(agents.check_retry_threads(), 1, "a retry is pending");
+        let (decl, program) = agents.runnable_kind("fakechat").expect("the kind runs");
+        let gate = Arc::new(std::sync::Mutex::new(()));
+        let (entered, has_entered) = std::sync::mpsc::channel();
+
+        let held = {
+            let (gate, agents) = (Arc::clone(&gate), agents.clone());
+            thread::spawn(move || {
+                let _gate = gate.lock().unwrap();
+                entered.send(()).unwrap();
+                agents.chat_adapter_of(&decl, &program).map(drop)
+            })
+        };
+        has_entered.recv().unwrap();
+
+        assert!(
+            within(Duration::from_secs(3), || gate.try_lock().is_ok()),
+            "another gated operation waited for the pending probe"
+        );
+        let refused = held
+            .join()
+            .unwrap()
+            .expect_err("a timed-out probe is no support");
+        assert_eq!(
+            refused.code,
+            massorca_protocol::codes::AGENT_CHAT_UNSUPPORTED
+        );
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "the gated read ran no probe: the timeout is cached"
+        );
+    }
+
+    #[test]
+    fn an_explicit_check_during_a_running_retry_keeps_the_retrys_verdict() {
+        let (agents, _, profile) = service();
+        let (running, is_running) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (running, released) = (
+            std::sync::Mutex::new(running),
+            std::sync::Mutex::new(released),
+        );
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&runs);
+        // The import signs in, an explicit check times out, and its retry holds until released, then signs in.
+        let runner: CheckRunner =
+            Arc::new(
+                move |_program, _args| match counter.fetch_add(1, Ordering::SeqCst) {
+                    0 => run_of(Step::SignedIn),
+                    1 => run_of(Step::Hang),
+                    _ => {
+                        running.lock().unwrap().send(()).ok();
+                        released
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(30))
+                            .ok();
+                        run_of(Step::SignedIn)
+                    }
+                },
+            );
+        fake_kind(&agents, profile.path(), runner, &QUICK);
+        let source = source_with_token();
+        let account = agents
+            .accounts_import("fake", source.path().to_str(), None)
+            .expect("the import runs")
+            .account
+            .expect("kept");
+        // The account is undecided in the store, as a sign-in interrupted by a restart leaves it.
+        agents
+            .store()
+            .set_agent_account_pending(&account.id, true)
+            .expect("marked undecided");
+        agents
+            .accounts_check("fake", Some(&account.id))
+            .expect("the check runs and times out");
+        is_running
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the retry runs");
+
+        let busy = agents
+            .accounts_check("fake", Some(&account.id))
+            .expect_err("the retry holds the account");
+
+        assert_eq!(busy.code, massorca_protocol::codes::AGENT_BUSY);
+        release.send(()).unwrap();
+        retries_settle(&agents);
+        assert!(
+            !agents
+                .store_pending(&account.id)
+                .expect("the store answers"),
+            "the retry's verdict decided the account"
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_panicking_retry_leaves_no_entry() {
+        let (agents, _, profile) = service();
+        let (runner, _runs) = scripted(&[Step::Hang, Step::Panic]);
+        fake_chat_kind(&agents, profile.path(), runner, &QUICK);
+
+        listed_chat(&agents);
+
+        assert!(
+            within(Duration::from_secs(10), || agents.check_retry_threads()
+                == 0),
+            "the panicked retry's thread is still counted"
+        );
+        assert!(
+            agents.check_retries().current.is_empty(),
+            "the panicked retry's entry is gone"
         );
     }
 }

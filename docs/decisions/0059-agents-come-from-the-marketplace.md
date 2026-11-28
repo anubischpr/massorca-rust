@@ -398,15 +398,26 @@ existed, and nothing checked it again until an explicit `agent.accounts.check`.
   decided run ends the retries; after three timeouts the state stays as it was.
 - **Never a decided verdict.** `signed_in`, `needs_sign_in`, `expired` and `conflict` are never
   retried.
-- **Cancel and supersede.** A newer explicit check supersedes a waiting retry; removing the account,
-  or its package with its agent homes, cancels it. A retry stores nothing once it is superseded,
-  cancelled, or its account is being removed.
+- **Cancel and supersede.** A newer explicit check supersedes a waiting retry once the check is let
+  in; removing the account, or its package with its agent homes, cancels it. A retry stores nothing
+  once it is superseded, cancelled, or its account is being removed. An explicit check refused as busy
+  cancels nothing: a retry deciding an undecided account holds that account, so the check is refused
+  and the retry's verdict is kept.
+- **Ended however it ends.** A retry thread holds its entry through a guard whose drop ends it, as a
+  background model listing does, so a retry whose run panics leaves no entry and no thread counted.
 - **Known limit.** A retry applies its result as an explicit check does, so an imported account whose
   first check timed out is not compared with the kind's other logins (amendment 2026-11-24) when the
   retry finds it signed in.
 - **The version probe too.** A kind's `--version` probe killed at its limit read `version_unknown`, so a
   chat start was refused with `agent.chat_unsupported` on a loaded machine. The same rule applies: the
-  timed-out probe is not cached and is retried in the background with the same helper (at most one
-  retry per kind). A decided probe announces the kind as an account change of the kind, the event a
-  client reads the kinds again on. A chat start that finds the probe timed out waits for the retry,
-  bounded by every retry's wait plus one probe limit per run, before it refuses.
+  timed-out probe is retried in the background with the same helper (at most one retry per kind). It
+  is cached for 60 s, as a failed probe is, marked as a timeout, so a read of it still starts a retry;
+  a retry runs the program whatever is cached. A decided probe announces the kind as an account change
+  of the kind, the event a client reads the kinds again on. A chat start that finds the probe timed
+  out waits for the retry, bounded by every retry's wait plus one probe limit per run, before it
+  refuses.
+- **No wait under a gate.** That wait happens before any gate is taken: a chat start waits before the
+  service's start gate, and a resume waits in `prepare_chat_resume` before the server's task start gate
+  and the service's start gate. Under a gate the support is read from the cache, a cached timeout
+  included, with no wait, so a probe that keeps timing out never holds a gate for longer than one
+  read. A task start runs no version probe: it starts a terminal run.

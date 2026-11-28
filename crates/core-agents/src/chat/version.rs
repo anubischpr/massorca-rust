@@ -113,13 +113,15 @@ pub(crate) fn support(chat: &ChatDecl, probe: Option<&RunOutput>) -> KindChat {
 
 /// The chat support of `decl` with its resolved `program` (`None` when none resolves), probing for at most `timeout`
 /// with `runner` standing in for the program when it is set: `None` for a kind without a `chat` block. The probe is
-/// cached per program path and modified time. The flag says the probe was stopped at its time limit: the support then
-/// reads `version_unknown`, but it is no answer yet, and nothing is cached (decision 0059, amended 2026-11-27).
+/// cached per program path and modified time; `fresh` probes whatever is cached. The flag says the probe was stopped at
+/// its time limit: the support then reads `version_unknown`, but it is no answer yet, and it is cached marked as a
+/// timeout for [`crate::probe::FAILED_PROBE_TTL`] (decision 0059, amended 2026-11-27).
 pub(crate) fn kind_chat_with(
     decl: &KindDecl,
     program: Option<&Path>,
     timeout: Duration,
     runner: Option<&CheckRunner>,
+    fresh: bool,
 ) -> Option<(KindChat, bool)> {
     let chat = decl.chat.as_ref()?;
     let Some(program) = program else {
@@ -133,7 +135,7 @@ pub(crate) fn kind_chat_with(
         return Some((support(chat, Some(&not_run)), false));
     }
     let args: Vec<String> = VERSION_ARGS.iter().map(|&arg| arg.to_owned()).collect();
-    let probed = crate::probe::probe_with(decl, program, &args, timeout, runner);
+    let probed = crate::probe::probe_with(decl, program, &args, timeout, runner, fresh);
     Some((support(chat, Some(&probed.run)), probed.timed_out))
 }
 
@@ -237,11 +239,11 @@ mod tests {
         let missing = std::env::temp_dir().join("massorca-no-such-claude-for-a-version-probe.exe");
         let timeout = crate::probe::PROBE_TIMEOUT;
         let (chat, timed_out) =
-            kind_chat_with(&kind, Some(&missing), timeout, None).expect("a chat block");
+            kind_chat_with(&kind, Some(&missing), timeout, None, false).expect("a chat block");
         assert_eq!(chat.reason, Some(ChatUnsupportedReason::VersionUnknown));
         assert!(!timed_out, "a program that is not run did not time out");
         assert_eq!(
-            kind_chat_with(&kind, None, timeout, None).and_then(|(chat, _)| chat.reason),
+            kind_chat_with(&kind, None, timeout, None, false).and_then(|(chat, _)| chat.reason),
             Some(ChatUnsupportedReason::NotDetected)
         );
     }

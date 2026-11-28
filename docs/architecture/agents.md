@@ -803,12 +803,14 @@ and the result is kept per program path and modified time in the probe cache the
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
 A version probe still running at its 5 s limit is no answer yet (decision 0059, amendment 2026-11-27): the kind reads
-`version_unknown` for now, nothing is cached, and `agent.kinds` retries the probe in the background with the account
-check's retry (`check_retry.rs`: after 2 s, 5 s and 15 s, at most one retry per kind). When a retry decides, the kind is
-announced as `Change::Models`, published as `agent.accounts_changed` of the kind, so a client reads the kinds again. A
-chat start or resume whose probe times out starts that retry and waits for it, at most every retry's wait plus one probe
-limit per run, then reads the support again (`Agents::chat_support`); only then is it refused with
-`agent.chat_unsupported`.
+`version_unknown` for now, the timeout is cached for 60 s marked as a timeout, and `agent.kinds` retries the probe in
+the background with the account check's retry (`check_retry.rs`: after 2 s, 5 s and 15 s, at most one retry per kind; a
+retry runs the program whatever is cached). When a retry decides, the kind is announced as `Change::Models`, published
+as `agent.accounts_changed` of the kind, so a client reads the kinds again. A chat start or resume whose probe times out
+starts that retry and waits for it, at most every retry's wait plus one probe limit per run, then reads the support
+again (`Agents::chat_support`); only then is it refused with `agent.chat_unsupported`. That wait happens before any gate:
+a chat start waits before the start gate, a resume in `prepare_chat_resume` before the server's and the service's start
+gates. Under a gate the support is read from the cache with no wait (`Agents::chat_support_now`).
 
 ## Archive and delete (decision 0163)
 
@@ -1150,9 +1152,11 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   `agent.accounts.check` (`check_once`), so a decided result is stored the same way and a changed
   state is announced with `agent.accounts_changed`; the retries stop at the first decided run, and
   after the third timeout the state stays as it was. A decided verdict, `needs_sign_in` included, is
-  never retried. A newer `agent.accounts.check` supersedes a waiting retry, a removal (of the account
+  never retried. A newer `agent.accounts.check` supersedes a waiting retry once its busy checks let it
+  in (a check refused as busy leaves a running retry and its verdict alone), a removal (of the account
   or of its package) cancels it, and a retry stores nothing once it is superseded, cancelled, or its
-  account is being removed. Unit tests set the time limit, the waits and a stand-in for the program
+  account is being removed. A guard ends each retry thread's entry when the thread ends, a panicking
+  run included. Unit tests set the time limit, the waits and a stand-in for the program
   through `CheckSettings`.
 - **Import** copies the declared files into a new account (origin `import`), which stays undecided
   until its check decides it: a check that reports the login is not signed in deletes the new
