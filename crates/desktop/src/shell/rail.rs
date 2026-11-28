@@ -67,6 +67,13 @@ impl RailState {
             morph_count: 0,
         }
     }
+
+    /// Keeps a focus handle per rail item as the usage rings come and go with the accounts (ACC-09).
+    pub(super) fn sync_rings(&mut self, usage_rings: usize, cx: &mut App) {
+        let items = rail_items(usage_rings).len();
+        self.handles.resize_with(items, || cx.focus_handle());
+        self.roving = self.roving.min(items.saturating_sub(1));
+    }
 }
 
 impl Shell {
@@ -496,6 +503,8 @@ fn usage_reading(status: UsageStatus) -> UsageReading {
         UsageStatus::Failed { last } => UsageReading::Failed {
             last: last.map(f32::from),
         },
+        UsageStatus::Off => UsageReading::NotReported,
+        UsageStatus::NeedsNewerService => UsageReading::Unavailable,
     }
 }
 

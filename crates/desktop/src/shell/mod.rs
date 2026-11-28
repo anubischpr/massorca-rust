@@ -982,6 +982,7 @@ impl Render for Shell {
             &theme,
         )
         .track_focus(self.zones.get(Zone::TitleBar));
+        self.rail.sync_rings(self.model.snapshot().usage.len(), cx);
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);

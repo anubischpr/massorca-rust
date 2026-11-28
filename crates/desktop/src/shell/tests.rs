@@ -439,11 +439,13 @@ impl DataSource for UsageStates {
         snapshot.usage = states
             .into_iter()
             .enumerate()
-            .map(|(index, status)| UsageModel {
-                agent: Agent::Claude,
-                slot: u8::try_from(index + 1).unwrap_or(1),
-                status,
-                resets_in: String::new(),
+            .map(|(index, status)| {
+                UsageModel::new(
+                    Agent::Claude,
+                    u8::try_from(index + 1).unwrap_or(1),
+                    status,
+                    String::new(),
+                )
             })
             .collect();
         snapshot

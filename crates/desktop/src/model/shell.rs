@@ -132,6 +132,10 @@ pub enum UsageStatus {
     Unavailable,
     /// The reading failed; the last value stays.
     Failed { last: Option<u8> },
+    /// Usage is off on this computer: its setting is off, so nothing is read.
+    Off,
+    /// The service does not report usage (`usage/1`), so it needs a newer MassOrca.
+    NeedsNewerService,
 }
 
 impl UsageStatus {
@@ -148,6 +152,8 @@ impl UsageStatus {
                 "Usage could not be read. Last value {percent} percent"
             )),
             Self::Failed { last: None } => Some("Usage could not be read".into()),
+            Self::Off => Some("Usage is off on this computer".into()),
+            Self::NeedsNewerService => Some("Needs a newer MassOrca".into()),
         }
     }
 }
@@ -161,6 +167,66 @@ pub struct UsageModel {
     pub status: UsageStatus,
     /// Time until the window resets, such as "2 days". Empty when the provider does not say.
     pub resets_in: String,
+    /// The account's label, such as "work"; empty for a ring that is not an account.
+    pub label: String,
+    /// The account the ring reads, which a refresh names; `None` for a ring that is not an account.
+    pub account: Option<UsageAccount>,
+    /// The limit windows the account reports, in the order the service gives them.
+    pub windows: Vec<UsageWindowLine>,
+    /// How long ago the account was read, such as "3 min ago"; empty when it was never read.
+    pub read_text: String,
+    /// Why the last read failed; the ring then holds no numbers.
+    pub error: Option<String>,
+    /// What the popover offers besides the readings: the usage switch while usage is off.
+    pub control: UsageControl,
+}
+
+/// The account a usage ring reads, by agent kind and account id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageAccount {
+    pub kind: String,
+    pub account: String,
+}
+
+/// One limit window of an account, as the usage popover lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageWindowLine {
+    /// The window's name, such as "5-hour" or "Weekly".
+    pub title: String,
+    /// What the window holds: "62 % used", "1.2 M tokens", or "Not reported".
+    pub value: String,
+    /// When the window resets, such as "resets in 2 h"; empty when unknown.
+    pub resets: String,
+    /// The vendor reports the limit as reached in this window.
+    pub limited: bool,
+}
+
+/// What the usage popover offers besides the readings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageControl {
+    None,
+    /// The usage switch, which is the core setting `usage.enabled`, with its state.
+    Switch {
+        on: bool,
+    },
+}
+
+impl UsageModel {
+    /// A ring with its status and no account details, which the sample data and the placeholders use.
+    pub fn new(agent: Agent, slot: u8, status: UsageStatus, resets_in: String) -> Self {
+        Self {
+            agent,
+            slot,
+            status,
+            resets_in,
+            label: String::new(),
+            account: None,
+            windows: Vec::new(),
+            read_text: String::new(),
+            error: None,
+            control: UsageControl::None,
+        }
+    }
 }
 
 /// The Status bar items (D-SH-05). Memory and ports are `None` when no source reports them: their
