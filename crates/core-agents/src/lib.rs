@@ -4,6 +4,7 @@
 //! the service maps requests onto this crate.
 
 pub mod account_check;
+pub mod account_credential;
 pub mod accounts;
 pub mod catalog;
 pub mod chat;
@@ -34,6 +35,7 @@ pub mod status;
 pub mod title;
 pub mod vendor_endpoint;
 
+pub use account_credential::{CredentialAccessError, Secret, USAGE_ENABLED_SETTING, UsageGate};
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
 pub use event::{DoneOutcome, EventTarget};
 pub use kind::KindDecl;

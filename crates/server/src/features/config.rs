@@ -358,6 +358,22 @@ pub(crate) fn stored_terminal_theme(store: &Store) -> TerminalTheme {
     terminal_theme(stored.as_ref())
 }
 
+/// Whether the global `usage.enabled` switch is on (decision 0176): only a stored JSON `true` under the `core` owner is
+/// on. Unset, unreadable or any other value is off, so a broken store never lends an account credential. Read at every
+/// call through the agents service's [`massorca_core_agents::UsageGate`], never cached. The key is read by name: its
+/// declaration on the Settings page belongs to the usage feature.
+pub(crate) fn stored_usage_enabled(store: &Store) -> bool {
+    store
+        .get_setting(
+            config::DEFAULT_OWNER,
+            massorca_core_agents::USAGE_ENABLED_SETTING,
+        )
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+        .is_some_and(|value| value == Value::Bool(true))
+}
+
 /// Keeps the terminals' palette in step when `appearance.theme` changes.
 fn follow_theme(ctx: &RequestCtx, decl: &SettingDecl, after: &ConfigValue) {
     if decl.owner.to_string() == config::DEFAULT_OWNER && decl.key == APPEARANCE_THEME {
@@ -379,5 +395,38 @@ mod tests {
         assert_eq!(terminal_theme(Some(&json!("dark"))), TerminalTheme::Dark);
         assert_eq!(terminal_theme(Some(&json!("system"))), TerminalTheme::Dark);
         assert_eq!(terminal_theme(None), TerminalTheme::Dark);
+    }
+
+    #[test]
+    fn only_a_stored_true_turns_the_usage_switch_on_and_it_is_read_live() {
+        use massorca_core_agents::{USAGE_ENABLED_SETTING, UsageGate};
+        use massorca_core_store::Store;
+
+        use super::stored_usage_enabled;
+
+        let store = Store::open_in_memory().unwrap();
+        let live = store.clone();
+        let gate = UsageGate::new(move || stored_usage_enabled(&live));
+        assert!(!gate.is_on(), "unset is off");
+        for (stored, on) in [
+            ("true", true),
+            ("false", false),
+            ("\"true\"", false),
+            ("1", false),
+            ("null", false),
+            ("not json", false),
+        ] {
+            store
+                .replace_setting("core", USAGE_ENABLED_SETTING, stored, &[])
+                .unwrap();
+            assert_eq!(gate.is_on(), on, "{stored}");
+        }
+        store
+            .replace_setting("core", USAGE_ENABLED_SETTING, "false", &[])
+            .unwrap();
+        store
+            .replace_setting("ext.other", USAGE_ENABLED_SETTING, "true", &[])
+            .unwrap();
+        assert!(!gate.is_on(), "another owner's key is not the switch");
     }
 }

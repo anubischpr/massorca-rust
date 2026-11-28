@@ -36,7 +36,7 @@ mod workspace_domain;
 mod workspace_setup;
 mod workspaces;
 
-pub(crate) use config::{default_workspace_root, stored_terminal_theme};
+pub(crate) use config::{default_workspace_root, stored_terminal_theme, stored_usage_enabled};
 pub(crate) use service::info_of;
 pub(crate) use teams::{follow_routines, follow_task_outcomes};
 

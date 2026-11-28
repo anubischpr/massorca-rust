@@ -21,6 +21,7 @@ use massorca_protocol::methods::agents::{
     CredentialFile, CredentialsImported, CredentialsRemoved, CredentialsShown, ImportedFile,
 };
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 use crate::catalog::Catalog;
 use crate::kind::{KindDecl, valid_id};
@@ -651,6 +652,63 @@ pub fn usable_account_home(
     Ok((home_state(&home)? == HomeState::Directory).then_some(home))
 }
 
+/// The contents of the account's credential file (decision 0176): the first required file the kind declares. The
+/// checks are those of [`show_account`] and launch: a valid kind and account id, `<profile>/agents` and
+/// `accounts/<kind>` plain directories and the home a plain directory ([`usable_account_home`]), then the file a regular
+/// file opened without following a link, at most [`MAX_FILE_BYTES`] ([`read_capped_into`]). The caller holds
+/// [`lock_homes`]. The returned bytes are zeroed when dropped; an error names the file and why, never anything read.
+pub(crate) fn read_account_credential(
+    profile_dir: &Path,
+    packages: &dyn KindPackages,
+    kind: &str,
+    account: &str,
+) -> Result<Zeroizing<Vec<u8>>, AgentError> {
+    let decl = declared(profile_dir, packages, kind)?;
+    let name = decl
+        .credentials
+        .as_ref()
+        .and_then(|credentials| {
+            credentials
+                .files
+                .iter()
+                .find(|name| credentials.required(name))
+        })
+        .ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_CREDENTIALS_UNSUPPORTED,
+                format!("agent kind {kind} declares no credential file"),
+            )
+        })?;
+    let home = usable_account_home(profile_dir, &decl.id, account)?.ok_or_else(|| {
+        invalid(format!(
+            "account {account} of agent kind {kind} has no credential home"
+        ))
+    })?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    read_capped_into(&home.join(name), MAX_FILE_BYTES, &mut bytes).map_err(|reason| {
+        invalid(format!(
+            "the credential file {name} of account {account} of agent kind {kind} cannot be used: {reason}"
+        ))
+    })?;
+    Ok(bytes)
+}
+
+/// The refusal of a credential file that is not UTF-8 text; it names nothing of the contents.
+pub(crate) fn not_text(kind: &str, account: &str) -> AgentError {
+    invalid(format!(
+        "the credential file of account {account} of agent kind {kind} cannot be used: not text"
+    ))
+}
+
+/// The declaration of a known, valid kind: `agent.kind_not_found` or `agent.credentials_unsupported` otherwise.
+pub(crate) fn declared_kind(
+    profile_dir: &Path,
+    packages: &dyn KindPackages,
+    kind: &str,
+) -> Result<KindDecl, AgentError> {
+    declared(profile_dir, packages, kind)
+}
+
 /// Creates an empty, owner-only home for a new account, so a sign-in can write into it (decision 0059). The caller holds
 /// [`lock_homes`].
 pub(crate) fn create_account_home(
@@ -1005,6 +1063,14 @@ fn read_source(path: &Path) -> Result<Vec<u8>, String> {
 
 /// [`read_source`] with its own cap: the state file's source may be larger (decision 0099).
 pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    read_capped_into(path, cap, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// [`read_capped`] into `bytes`, reserved once at the file's size, so no reallocation leaves a copy of the contents behind
+/// unless the file grows while it is read. A caller that zeroes `bytes` afterwards (decision 0176) zeroes every copy.
+pub(crate) fn read_capped_into(path: &Path, cap: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
     let before = match fs::symlink_metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(MISSING.to_owned()),
         Err(_) => return Err(UNREADABLE.to_owned()),
@@ -1020,14 +1086,14 @@ pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
     if after.len() > cap {
         return Err(too_large(cap));
     }
-    let mut bytes = Vec::new();
+    bytes.reserve_exact(usize::try_from(after.len().saturating_add(1)).unwrap_or(0));
     file.take(cap + 1)
-        .read_to_end(&mut bytes)
+        .read_to_end(bytes)
         .map_err(|_| UNREADABLE.to_owned())?;
     if bytes.len() as u64 > cap {
         return Err(too_large(cap));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 /// The reason of a file over `cap`: `larger than 1 MiB`, `larger than 16 MiB`, or a byte count.

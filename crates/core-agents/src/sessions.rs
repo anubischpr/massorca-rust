@@ -307,6 +307,9 @@ pub struct AgentsConfig {
     /// The search path agent programs are found on when kinds are listed and started: the host's, as the extension
     /// install check searches it (decision 0164).
     pub vendor_search: VendorSearch,
+    /// The global `usage.enabled` switch, asked at every [`Agents::with_account_credential`] call (decision 0176);
+    /// [`crate::UsageGate::default`] is off.
+    pub usage_gate: crate::UsageGate,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -550,6 +553,10 @@ impl Agents {
     /// The packages that provide kinds (decision 0059).
     pub(crate) fn kind_packages(&self) -> &dyn KindPackages {
         self.inner.config.kind_packages.as_ref()
+    }
+
+    pub(crate) fn usage_gate(&self) -> &crate::UsageGate {
+        &self.inner.config.usage_gate
     }
 
     /// The search path agent programs are found on: the host's, or the one the config names (decision 0164).
@@ -3160,6 +3167,25 @@ pub(crate) mod tests {
         packages: Arc<dyn KindPackages>,
         vendor_search: VendorSearch,
     ) -> (Agents, String, tempfile::TempDir) {
+        service_built(packages, vendor_search, crate::UsageGate::default())
+    }
+
+    /// [`service`], with the `usage.enabled` switch asked through `usage_gate` (decision 0176).
+    pub(crate) fn service_gated(
+        usage_gate: crate::UsageGate,
+    ) -> (Agents, String, tempfile::TempDir) {
+        service_built(
+            Arc::new(crate::BuiltInPackages),
+            VendorSearch::fixed(SearchEnv::current()),
+            usage_gate,
+        )
+    }
+
+    fn service_built(
+        packages: Arc<dyn KindPackages>,
+        vendor_search: VendorSearch,
+        usage_gate: crate::UsageGate,
+    ) -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {
@@ -3207,6 +3233,7 @@ pub(crate) mod tests {
             kind_packages: packages,
             vendor_env: None,
             vendor_search,
+            usage_gate,
         });
         (agents, workspace.id, profile)
     }

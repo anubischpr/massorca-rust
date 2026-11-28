@@ -276,6 +276,13 @@ impl Service {
             vendor_env: Some(massorca_core_agents::VendorEnv::process()),
             // The host's search path, the one the extension install check uses (decision 0164).
             vendor_search: massorca_core_agents::VendorSearch::host(),
+            // The global `usage.enabled` switch, read from the settings store at every credential call (decision 0176).
+            usage_gate: {
+                let settings = store.clone();
+                massorca_core_agents::UsageGate::new(move || {
+                    crate::features::stored_usage_enabled(&settings)
+                })
+            },
         });
         // A package whose kind a live or resumable session uses is not removed, disabled or updated away (decision 0062).
         let guarded = agents.clone();
