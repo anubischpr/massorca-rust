@@ -26,9 +26,9 @@ use massorca_protocol::methods::projects::{
 };
 use massorca_protocol::methods::service::{self, ServiceInfo, ToolList, ToolsParams};
 use massorca_protocol::methods::terminals::{
-    self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalInputParams,
-    TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
-    TerminalWait, TerminalWaitParams,
+    self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalDetails,
+    TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
+    TerminalResizeParams, TerminalWait, TerminalWaitParams,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
@@ -218,6 +218,14 @@ impl Client {
 
     /// `terminal.show`: one terminal by id.
     pub async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError> {
+        self.call(terminals::SHOW, &terminal_ref(terminal)).await
+    }
+
+    /// `terminal.show` with where the terminal's PATH came from (TERM-17).
+    pub async fn terminal_show_details(
+        &self,
+        terminal: &str,
+    ) -> Result<TerminalDetails, ClientError> {
         self.call(terminals::SHOW, &terminal_ref(terminal)).await
     }
 

@@ -72,7 +72,7 @@ machine.
 | `git show-file <PATH> -w WORKSPACE [--index \| --rev REV] [--out FILE]` | Shows one file's bytes: the working tree file, or with `--index` its index entry, or with `--rev REV` the file at that revision. Prints its size and, for a previewable image, its type, such as `image/png`; a file over 4 MiB, or a side with no file, is said so. `--out FILE` writes the decoded bytes, and refuses with `git.no_bytes` when there are none (decision 0103). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
-| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. An agent run's terminal also shows `git credential guard: on`: git inside it never waits for a credential prompt. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. `path source` names where its PATH came from: `registry` (the machine and user PATH read when it started, see Terminals) or `inherited` (the service's own PATH). An agent run's terminal also shows `git credential guard: on`: git inside it never waits for a credential prompt. |
 | `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
 | `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
 | `terminal attach <TERMINAL>` | Interactive: shows the terminal and types into it. `Ctrl+]` detaches. |
@@ -211,6 +211,12 @@ connect and disconnect on their own.
 - `--cwd` is relative to the workspace root, or absolute. Unlike the paths above, a
   relative `--cwd` is not taken from the directory the command runs in.
 - `--shell` names the program the terminal runs. Text typed into a shell is `terminal send`.
+- On Windows a terminal's PATH is the machine and user `Path` read from the registry when the
+  terminal starts, so a tool installed after the service started is found; entries only the
+  service's own PATH lists come after them. Elsewhere the terminal keeps the service's PATH.
+- A default Windows terminal runs `pwsh` 7 when it is on PATH, else Windows PowerShell 5.1. It
+  starts without `-NoProfile`, so the user's PowerShell profile loads as in any console, and its
+  errors are shown in the terminal.
 - `terminal screen` waits up to 5 seconds for the terminal's screen. It replays the screen
   in a local emulator, so colours and cursor movement are not printed, only the text.
 - `terminal attach` needs a terminal on stdin and stdout, else it exits 2 before starting

@@ -58,3 +58,29 @@ working-directory tracking, TERM-11) and startup commands come with agents.
   run types it, or sends it with `massorca terminal send`.
 - Shell integration and directory tracking can be added later without
   changing how the shell is chosen.
+
+## Amendment, 2026-11-28: registry PATH (TERM-17)
+
+This amendment replaces the Windows PATH bullet above. Nothing else in this decision changes.
+
+- **Source.** On Windows the terminal's PATH is read at every start from the machine `Path`
+  (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`) and the user `Path`
+  (`HKCU\Environment`), so a tool installed after the service started is found.
+- **Order.** Machine entries, then user entries, as Explorer builds a new process's
+  environment. Empty entries are dropped.
+- **Expansion.** A `REG_EXPAND_SZ` value expands its `%NAME%` references from the service's
+  environment; a reference that does not resolve stays as written. A `REG_SZ` value is used
+  as it is.
+- **Service entries.** Entries only the service's own PATH lists come after the registry
+  entries, so nothing the service added is dropped.
+- **Dedupe.** A service entry that a registry entry already lists is not repeated. Entries
+  compare without regard to ASCII case or a trailing `\` or `/`. Registry entries are not
+  deduplicated among themselves.
+- **Unreadable values.** A value that cannot be read counts as not set. When neither value is
+  set, the terminal keeps the service's PATH and reports `inherited`.
+- **Other platforms.** The registry is read only on Windows (`cfg(windows)`). Elsewhere the
+  terminal keeps the service's PATH unchanged and reports `inherited`.
+- **Shell.** The default shell and an explicit `--shell` name resolve against the merged PATH,
+  so a `pwsh` installed after the service started is preferred.
+- **Visibility.** `terminal.show` returns `path_source` (decision 0035, amendment of the same
+  date). `massorca terminal show` prints `path source: registry` or `path source: inherited`.

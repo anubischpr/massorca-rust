@@ -66,6 +66,25 @@ fn a_terminal_is_created_in_a_workspace_listed_and_shown() {
 }
 
 #[test]
+fn show_names_the_path_source_of_the_terminal() {
+    let sandbox = Sandbox::new();
+    let _ = folder_workspace(&sandbox);
+    let created = create_terminal(&sandbox);
+    let id = created["id"].as_str().expect("terminal id").to_owned();
+
+    let expected = if cfg!(windows) {
+        "registry"
+    } else {
+        "inherited"
+    };
+    assert_eq!(show(&sandbox, &id)["path_source"], expected);
+    sandbox
+        .run("default", &["terminal", "show", &id])
+        .success()
+        .stdout(contains(format!("path source: {expected}")));
+}
+
+#[test]
 fn the_json_envelope_holds_the_terminal_record_and_text_mode_has_no_envelope() {
     let sandbox = Sandbox::new();
     folder_workspace(&sandbox);

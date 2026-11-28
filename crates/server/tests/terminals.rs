@@ -12,7 +12,7 @@ use massorca_profile::{Profile, local_socket_name};
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::{
     AttachMode, MAX_INPUT_BYTES, Terminal, TerminalAttachParams, TerminalCreateParams,
-    TerminalResizeParams, TerminalState,
+    TerminalPathSource, TerminalResizeParams, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{
@@ -310,6 +310,36 @@ async fn a_terminal_is_created_in_its_workspace_listed_and_shown() {
         .await
         .expect("the terminal is shown");
     assert_eq!(without_title(shown), without_title(created.clone()));
+
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn show_names_where_the_terminal_path_came_from() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created: Terminal = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let details = client
+        .terminal_show_details(&created.id)
+        .await
+        .expect("the terminal is shown with its details");
+    assert_eq!(details.terminal.id, created.id);
+    let expected = if cfg!(windows) {
+        TerminalPathSource::Registry
+    } else {
+        TerminalPathSource::Inherited
+    };
+    assert_eq!(details.path_source, Some(expected));
 
     client
         .terminal_close(&created.id)

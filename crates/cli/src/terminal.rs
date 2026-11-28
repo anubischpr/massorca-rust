@@ -10,8 +10,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
 use massorca_core_terminal::screen::SCROLLBACK_ROWS;
 use massorca_protocol::methods::terminals::{
-    ExitReason, ShellSpec, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
-    TerminalResizeParams, TerminalState,
+    ExitReason, ShellSpec, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalDetails,
+    TerminalExit, TerminalPathSource, TerminalResizeParams, TerminalState,
 };
 use serde::Serialize;
 
@@ -212,8 +212,8 @@ pub async fn execute(
             output.success(&list, &lines);
         }
         TerminalCommand::Show { terminal } => {
-            let shown = client.terminal_show(&terminal).await?;
-            output.success(&shown, &terminal_details(&shown));
+            let shown = client.terminal_show_details(&terminal).await?;
+            output.success(&shown, &shown_details(&shown));
         }
         TerminalCommand::Send(args) => {
             let bytes = typed_bytes(&args.text, args.no_enter);
@@ -413,6 +413,23 @@ pub fn terminal_details(terminal: &Terminal) -> Vec<String> {
         lines.push("git credential guard: on".to_owned());
     }
     lines
+}
+
+/// The fields `show` prints: `terminal_details`, then where the terminal's PATH came from (TERM-17).
+pub fn shown_details(details: &TerminalDetails) -> Vec<String> {
+    let mut lines = terminal_details(&details.terminal);
+    if let Some(source) = details.path_source {
+        lines.push(format!("path source: {}", path_source_text(source)));
+    }
+    lines
+}
+
+fn path_source_text(source: TerminalPathSource) -> &'static str {
+    match source {
+        TerminalPathSource::Registry => "registry",
+        TerminalPathSource::Inherited => "inherited",
+        TerminalPathSource::Unknown => "unknown",
+    }
 }
 
 fn terminal_table(terminals: &[Terminal]) -> Vec<String> {

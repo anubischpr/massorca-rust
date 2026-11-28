@@ -6,14 +6,16 @@ use std::time::Duration;
 
 use massorca_core_agents::sign_in::SIGN_IN_SCOPE;
 use massorca_core_terminal::pty::PtySize;
+use massorca_core_terminal::terminal_path::PathSource;
 use massorca_core_terminal::{
     CreateSpec, ExitReason as CoreExitReason, ExitRecord, ExitWait, ShellChoice, TerminalError,
     TerminalInfo, TerminalState as CoreTerminalState,
 };
 use massorca_protocol::methods::terminals::{
-    self, DEFAULT_COLS, DEFAULT_ROWS, ExitReason, Terminal, TerminalCreateParams, TerminalExit,
-    TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
-    TerminalResizeParams, TerminalState, TerminalWait, TerminalWaitCondition, TerminalWaitParams,
+    self, DEFAULT_COLS, DEFAULT_ROWS, ExitReason, Terminal, TerminalCreateParams, TerminalDetails,
+    TerminalExit, TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams,
+    TerminalPathSource, TerminalRef, TerminalResizeParams, TerminalState, TerminalWait,
+    TerminalWaitCondition, TerminalWaitParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -153,11 +155,14 @@ async fn list(ctx: RequestCtx, params: TerminalListParams) -> Result<TerminalLis
     Ok(TerminalList { terminals })
 }
 
-async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBody> {
+async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<TerminalDetails, ErrorBody> {
     ctx.state
         .terminals
         .get(&params.terminal)
-        .map(|info| terminal_for(&ctx.principal, info))
+        .map(|info| TerminalDetails {
+            path_source: Some(path_source_of(info.path_source)),
+            terminal: terminal_for(&ctx.principal, info),
+        })
         .map_err(error_of)
 }
 
@@ -324,6 +329,14 @@ pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
         exit: info.exit.map(exit_of),
         holds_secrets: info.holds_secrets,
         git_credential_guard: info.git_credential_guard,
+    }
+}
+
+/// The protocol's name for where a terminal's PATH came from (TERM-17).
+fn path_source_of(source: PathSource) -> TerminalPathSource {
+    match source {
+        PathSource::Registry => TerminalPathSource::Registry,
+        PathSource::Inherited => TerminalPathSource::Inherited,
     }
 }
 

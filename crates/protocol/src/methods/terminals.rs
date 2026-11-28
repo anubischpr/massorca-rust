@@ -254,6 +254,29 @@ pub struct Terminal {
     pub git_credential_guard: bool,
 }
 
+/// Where a terminal's PATH came from (TERM-17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalPathSource {
+    /// The machine and user PATH from the registry, merged with the service's own.
+    Registry,
+    /// The service's own PATH: the registry was not read.
+    Inherited,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The result of `terminal.show`: the terminal and where its PATH came from. The terminal's fields stay at the top
+/// level, so a peer that does not know `path_source` reads the terminal alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalDetails {
+    #[serde(flatten)]
+    pub terminal: Terminal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_source: Option<TerminalPathSource>,
+}
+
 /// How an attach starts: output resumes from `since`, or a snapshot redraws the screen first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

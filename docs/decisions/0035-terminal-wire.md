@@ -91,3 +91,11 @@ to the meaning of a field gets `terminals/2`.
   and kill terminals; it just cannot attach.
 - A browser client later reads the same frames from WebSocket binary
   messages.
+
+## Amendment, 2026-11-28: `terminal.show` names the PATH source (TERM-17)
+
+`terminal.show` returns a `TerminalDetails`: the terminal's fields at the top level, as in the
+table above, plus `path_source`, which is `registry` or `inherited` (decision 0032, amendment).
+A service from a newer build may send another value, which reads as `unknown`. The key is
+optional on the wire, so a client that predates it decodes the terminal alone, because unknown
+keys are ignored. `terminal.create`, `terminal.list` and the other methods are unchanged.

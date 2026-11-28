@@ -412,3 +412,33 @@ fn unknown_fields_are_ignored() {
     let terminal: terminals::Terminal = serde_json::from_value(value).expect("decodes");
     assert_eq!(terminal, sample_terminal());
 }
+
+#[test]
+fn terminal_details_keep_the_terminal_fields_flat_and_name_the_path_source() {
+    let details = terminals::TerminalDetails {
+        terminal: sample_terminal(),
+        path_source: Some(terminals::TerminalPathSource::Registry),
+    };
+    let mut expected = sample_terminal_json();
+    expected["path_source"] = json!("registry");
+    assert_wire(&details, &expected);
+}
+
+#[test]
+fn a_service_that_omits_the_path_source_decodes_as_none() {
+    let details: terminals::TerminalDetails =
+        serde_json::from_value(sample_terminal_json()).expect("decodes");
+    assert_eq!(details.terminal, sample_terminal());
+    assert_eq!(details.path_source, None);
+}
+
+#[test]
+fn an_unknown_path_source_decodes_as_unknown() {
+    let mut value = sample_terminal_json();
+    value["path_source"] = json!("vaporized");
+    let details: terminals::TerminalDetails = serde_json::from_value(value).expect("decodes");
+    assert_eq!(
+        details.path_source,
+        Some(terminals::TerminalPathSource::Unknown)
+    );
+}
