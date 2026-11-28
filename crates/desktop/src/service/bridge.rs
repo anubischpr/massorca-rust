@@ -110,6 +110,11 @@ pub(crate) enum Command {
         reply:
             oneshot::Sender<Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal>>,
     },
+    /// `usage.refresh`: reads the selected accounts again and answers with their readings (ACC-15, on demand).
+    UsageRefresh {
+        params: massorca_protocol::methods::usage::UsageParams,
+        reply: oneshot::Sender<Result<massorca_protocol::methods::usage::UsageList, Refusal>>,
+    },
     /// `project.init_git`: turns a folder project into a git project; the answer is the updated project.
     InitGitProject {
         project: String,
@@ -470,6 +475,15 @@ impl ServiceHandle {
         params: massorca_protocol::methods::git::diff::GitFileContentParams,
     ) -> Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal> {
         self.ask(|reply| Command::GitFileContent { params, reply })
+            .await
+    }
+
+    /// `usage.refresh`: reads the selected accounts again and answers with their readings. The store takes them too.
+    pub async fn usage_refresh(
+        &self,
+        params: massorca_protocol::methods::usage::UsageParams,
+    ) -> Result<massorca_protocol::methods::usage::UsageList, Refusal> {
+        self.ask(|reply| Command::UsageRefresh { params, reply })
             .await
     }
 
@@ -1069,6 +1083,9 @@ impl Link {
         self.emit(StoreUpdate::ProjectInitGitOffered(client.has_capability(
             massorca_protocol::capabilities::PROJECT_INIT_GIT,
         )));
+        self.emit(StoreUpdate::UsageOffered(
+            client.has_capability(massorca_protocol::capabilities::USAGE),
+        ));
         self.emit(StoreUpdate::GitSyncOffered(
             client.has_capability(massorca_protocol::capabilities::GIT),
         ));
@@ -1081,6 +1098,15 @@ impl Link {
         self.emit(StoreUpdate::ProgramUpdateOffered(client.has_capability(
             massorca_protocol::capabilities::EXTENSIONS_PROGRAMS,
         )));
+        // Usage is read from the service's cache, which never fetches (decision 0154). A failed read is left for the next
+        // change to answer, so it never fails the connect.
+        if client.has_capability(massorca_protocol::capabilities::USAGE)
+            && let Ok(list) = client
+                .usage_list(&massorca_protocol::methods::usage::UsageParams::default())
+                .await
+        {
+            self.emit(StoreUpdate::UsageResync(list));
+        }
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -1266,10 +1292,15 @@ impl Link {
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }
+            // The event names the kind; its whole account list is read again. The kinds are read again too: an account
+            // change moves a kind's `imported` mark, and a background model listing is announced under this topic so a
+            // model choice shows its versioned label (decision 0166, amendment).
             TOPIC_ACCOUNTS_CHANGED => {
-                // The event names the kind; its whole list is read again.
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
-                return Outcome::Continue;
+                agents::list_kinds(client).await.map(|kinds| {
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
+                    StoreUpdate::AgentKindsResync(kinds)
+                })
             }
             // A rename or comment change is read again too: the event names the workspace, not its name.
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
@@ -1330,6 +1361,15 @@ impl Link {
                 let Some((owner, key)) = id.split_once('/') else {
                     return Outcome::Continue;
                 };
+                // The usage setting changes what the cache holds, which an event of its own may not say, so usage is read too.
+                if owner == "core"
+                    && key == massorca_protocol::methods::usage::SETTING_ENABLED
+                    && let Ok(list) = client
+                        .usage_list(&massorca_protocol::methods::usage::UsageParams::default())
+                        .await
+                {
+                    self.emit(StoreUpdate::UsageResync(list));
+                }
                 client
                     .config_get(&ConfigKey {
                         owner: Some(owner.to_owned()),
@@ -1338,6 +1378,11 @@ impl Link {
                     .await
                     .map(StoreUpdate::ConfigChanged)
             }
+            // The event names an account; its reading is read again with the rest, which the cache answers without a fetch.
+            massorca_protocol::methods::usage::TOPIC_USAGE_CHANGED => client
+                .usage_list(&massorca_protocol::methods::usage::UsageParams::default())
+                .await
+                .map(StoreUpdate::UsageResync),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             TOPIC_AGENT_CHANGED => client
@@ -1443,6 +1488,19 @@ fn spawn_call(
                 },
                 reply,
             );
+        }
+        Command::UsageRefresh { params, reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .usage_refresh(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error))
+                    .inspect(|list| {
+                        let _ = updates.send(StoreUpdate::UsageResync(list.clone()));
+                    });
+                let _ = reply.send(result);
+            });
         }
         Command::GitFileContent { params, reply } => {
             tokio::spawn(async move {

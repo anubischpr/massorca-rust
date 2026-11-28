@@ -35,6 +35,11 @@ doc = false
 name = "massorca-fake-vendor"
 path = "examples/massorca-fake-vendor.rs"
 
+# The stand-in for `ssh -W` in the tests of dialing a host through SSH (decision 0133); never shipped.
+[[example]]
+name = "massorca-fake-ssh"
+path = "examples/massorca-fake-ssh.rs"
+
 [dependencies]
 qrcode.workspace = true
 massorca-process.workspace = true

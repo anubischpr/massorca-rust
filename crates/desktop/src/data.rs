@@ -143,24 +143,14 @@ impl DataSource for SampleDataSource {
                 },
             ],
             usage: vec![
-                UsageModel {
-                    agent: Agent::Claude,
-                    status: UsageStatus::Percent(62),
-                    slot: 1,
-                    resets_in: "2 days".into(),
-                },
-                UsageModel {
-                    agent: Agent::Codex,
-                    status: UsageStatus::Percent(35),
-                    slot: 2,
-                    resets_in: "5 days".into(),
-                },
-                UsageModel {
-                    agent: Agent::Antigravity,
-                    status: UsageStatus::Percent(10),
-                    slot: 3,
-                    resets_in: "6 days".into(),
-                },
+                UsageModel::new(Agent::Claude, 1, UsageStatus::Percent(62), "2 days".into()),
+                UsageModel::new(Agent::Codex, 2, UsageStatus::Percent(35), "5 days".into()),
+                UsageModel::new(
+                    Agent::Antigravity,
+                    3,
+                    UsageStatus::Percent(10),
+                    "6 days".into(),
+                ),
             ],
             status: StatusBarModel {
                 waiting: 1,

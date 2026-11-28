@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::client::Client;
 use crate::error::ClientError;
-use crate::host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
+use crate::host_storage::{HostRecord, HostRemoved, HostStorage, SshRoute, validate_host_name};
 use massorca_net::TlsIdentity;
 use massorca_profile::Profile;
 use massorca_protocol::methods::devices::DeviceRevokeParams;
@@ -26,6 +26,8 @@ const HOST_FILE: &str = "host.json";
 const KEY_FILE: &str = "device.key";
 const CERT_FILE: &str = "device.crt";
 const INSTALL_FILE: &str = "install.json";
+/// The SSH route of decision 0133; `null` once cleared, so clearing needs no file removal.
+const ROUTE_FILE: &str = "route.json";
 
 /// How `host add-ssh` installed a host: the SSH target and the `ssh` options it was given, kept beside the host file so
 /// `host self-test` can name the log command. The host record itself does not change.
@@ -123,6 +125,32 @@ impl Hosts {
         match fs::read(self.dir.join(name).join(INSTALL_FILE)) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .map(Some)
+                .map_err(|error| ClientError::Protocol(format!("{name}: {error}"))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Sets how host `name` is dialed: through `route`, or directly with `None` (decision 0133).
+    pub fn set_route(&self, name: &str, route: Option<&SshRoute>) -> Result<(), ClientError> {
+        validate_host_name(name)?;
+        if !self.exists(name) {
+            return Err(ClientError::HostNotFound(name.to_owned()));
+        }
+        massorca_profile::secure_root(&self.profile)?;
+        let hosts = open_hosts(&self.dir)?;
+        let _lock = hosts.lock().map_err(busy)?;
+        let json = serde_json::to_vec_pretty(&route)
+            .map_err(|error| ClientError::Protocol(error.to_string()))?;
+        hosts.child(name)?.write_file(ROUTE_FILE, &json)?;
+        Ok(())
+    }
+
+    /// The SSH route of host `name`, or `None` when it is dialed directly.
+    pub fn route(&self, name: &str) -> Result<Option<SshRoute>, ClientError> {
+        validate_host_name(name)?;
+        match fs::read(self.dir.join(name).join(ROUTE_FILE)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|error| ClientError::Protocol(format!("{name}: {error}"))),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
@@ -323,6 +351,10 @@ impl HostStorage for Hosts {
     fn remove(&self, name: &str) -> Result<HostRemoved, ClientError> {
         Hosts::remove(self, name)
     }
+
+    fn route(&self, name: &str) -> Result<Option<SshRoute>, ClientError> {
+        Hosts::route(self, name)
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +362,7 @@ mod tests {
     use massorca_net::TlsIdentity;
     use massorca_profile::Profile;
 
-    use super::{HostRecord, Hosts, SshInstall};
+    use super::{HostRecord, Hosts, SshInstall, SshRoute};
 
     #[test]
     fn a_new_host_folder_is_private_before_the_device_key_is_written() {
@@ -411,6 +443,38 @@ mod tests {
             .expect("the note is replaced");
         assert_eq!(hosts.ssh_install("office").expect("readable"), Some(second));
         assert!(hosts.get("office").is_ok(), "the host record is unchanged");
+    }
+
+    #[test]
+    fn an_ssh_route_is_set_read_back_by_another_reader_and_cleared() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let hosts = Hosts::of(&profile);
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        hosts.add(&office(), &identity).expect("the host is stored");
+        assert_eq!(hosts.route("office").expect("readable"), None);
+
+        let route = SshRoute {
+            ssh_target: "deploy@vps.example.ts.net".to_owned(),
+            ssh_args: vec!["-J".to_owned(), "bastion".to_owned()],
+            forward: None,
+        };
+        hosts
+            .set_route("office", Some(&route))
+            .expect("the route is saved");
+        assert_eq!(
+            Hosts::of(&profile).route("office").expect("readable"),
+            Some(route)
+        );
+        hosts
+            .set_route("office", None)
+            .expect("the route is cleared");
+        assert_eq!(Hosts::of(&profile).route("office").expect("readable"), None);
+        assert_eq!(hosts.get("office").expect("the record"), office());
+        assert!(matches!(
+            hosts.set_route("nowhere", None),
+            Err(crate::ClientError::HostNotFound(_))
+        ));
     }
 
     fn office() -> HostRecord {

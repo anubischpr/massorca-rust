@@ -55,6 +55,7 @@ mod teams;
 mod title_bar;
 mod tooltip;
 mod transcript_rows;
+mod usage_sidebar;
 mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
@@ -181,6 +182,8 @@ mod tests;
 mod title_bar_tests;
 #[cfg(test)]
 mod ui_state_tests;
+#[cfg(test)]
+mod usage_sidebar_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
@@ -982,6 +985,7 @@ impl Render for Shell {
             &theme,
         )
         .track_focus(self.zones.get(Zone::TitleBar));
+        self.rail.sync_rings(self.model.snapshot().usage.len(), cx);
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);

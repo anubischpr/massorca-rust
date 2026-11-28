@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the massorca service on the runner for the Android emulator flow (decision 0080, task A11). It listens on
 # localhost:7347, which the emulator reaches at 10.0.2.2, and holds the folder project, its workspace and one terminal
-# in that workspace, which the flow opens.
+# in that workspace, which the flow opens, and a team with one bot and one monthly routine, which the Routines screen lists.
 # Later steps read the paths and the CLI location from the job environment.
 set -euo pipefail
 
@@ -48,4 +48,13 @@ test -n "$workspace_id"
 terminal_id="$("$bin" --json terminal create "$workspace_id" --shell /bin/bash | jq -r '.result.id')"
 test -n "$terminal_id"
 printf 'MASSORCA_E2E_TERMINAL=%s\n' "$terminal_id" >> "$GITHUB_ENV"
-echo "service listening on localhost:$PORT with the e2e-folder workspace and its terminal"
+# The routine is due on the 28th at 23:59 UTC, so no run starts while the flow is on screen.
+team_id="$("$bin" --json team create e2e-team | jq -r '.result.id')"
+test -n "$team_id"
+bot_id="$("$bin" --json team bot add e2e-team e2e-bot --agent claude --job 'Checks the e2e folder.' | jq -r '.result.id')"
+test -n "$bot_id"
+routine_id="$("$bin" --json team routine add e2e-team e2e-routine --bot e2e-bot \
+  --prompt 'Check the e2e folder.' --time 23:59 --cadence monthly --month-day 28 --zone UTC \
+  | jq -r '.result.id')"
+test -n "$routine_id"
+echo "service listening on localhost:$PORT with the e2e-folder workspace, its terminal and the e2e-team routine"

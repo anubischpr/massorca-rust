@@ -98,7 +98,12 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     }
     ShellSnapshot {
         projects,
-        usage: Vec::new(),
+        usage: super::usage::rings(
+            state.loaded,
+            state.usage_offered,
+            state.usage.as_ref(),
+            super::usage::now_ms(),
+        ),
         status: StatusBarModel {
             waiting: count_in(state, AgentState::Waiting),
             running: count_in(state, AgentState::Running),

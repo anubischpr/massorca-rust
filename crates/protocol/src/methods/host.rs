@@ -97,6 +97,16 @@ pub struct HostPort {
     /// The agent session whose current run uses the terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Where the port is opened on the host (decision 0131): the last `http(s)` URL with this port that the terminal
+    /// printed, else `http://` and `connect_host`. Absent from services before `port-forward/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// `url` was printed by the terminal, not guessed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub url_printed: bool,
+    /// An open forward (`host.forward`) targets this port.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forwarded: bool,
 }
 
 /// One live terminal's ports status.
@@ -132,6 +142,9 @@ mod ports_tests {
                 terminal_id: "t-1".to_owned(),
                 workspace_id: "w-1".to_owned(),
                 session_id: Some("s-1".to_owned()),
+                url: None,
+                url_printed: false,
+                forwarded: false,
             }],
             terminals: vec![
                 PortTerminal {
@@ -179,6 +192,17 @@ mod ports_tests {
                 .unwrap()
                 .contains_key("session_id")
         );
+        let printed = HostPort {
+            url: Some("https://localhost:3000/app".to_owned()),
+            url_printed: true,
+            forwarded: true,
+            ..answer.ports[0].clone()
+        };
+        let value = serde_json::to_value(&printed).unwrap();
+        assert_eq!(value["url"], "https://localhost:3000/app");
+        assert_eq!(value["url_printed"], true);
+        assert_eq!(value["forwarded"], true);
+        assert_eq!(serde_json::from_value::<HostPort>(value).unwrap(), printed);
         let older: PortTerminal =
             serde_json::from_value(json!({ "terminal_id": "t-3", "workspace_id": "w-1" })).unwrap();
         assert!(!older.unverifiable && !older.partial);

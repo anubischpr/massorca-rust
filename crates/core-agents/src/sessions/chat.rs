@@ -25,6 +25,8 @@ use super::{
     AgentError, Agents, Change, LiveRuns, RunRef, activity_of, gone, lock, not_live, running,
     write_files,
 };
+use crate::attachments::{self, Attachment};
+use crate::chat::adapter::PromptImage;
 use crate::chat::journal::{self, ChatActivity, JournalState, JournalWriter};
 use crate::chat::pipe::{self, Line, PipeSpec};
 use crate::chat::{
@@ -55,6 +57,8 @@ pub(crate) struct ChatRun {
     adapter: Mutex<Box<dyn ChatAdapter>>,
     /// A queued prompt is being sent (decision 0084).
     pub(crate) delivering: AtomicBool,
+    /// How the run's kind names an attached file, `{path}` for its path (decision 0172).
+    mention: Option<String>,
 }
 
 /// The first events of a chat stream, and the journal position they bring the client to.
@@ -183,6 +187,7 @@ impl Agents {
         workspace_id: &str,
         cwd: &str,
         mut adapter: Box<dyn ChatAdapter>,
+        mention: Option<String>,
     ) -> Result<Arc<ChatRun>, AgentError> {
         if !plan.files.is_empty() {
             crate::credentials::create_agents_dir(self.profile_dir())?;
@@ -224,6 +229,7 @@ impl Agents {
             pipe,
             adapter: Mutex::new(adapter),
             delivering: AtomicBool::new(false),
+            mention,
         });
         lock(&self.inner.chat_runs).insert(session.to_owned(), Arc::clone(&run));
         Ok(run)
@@ -282,33 +288,51 @@ impl Agents {
 
     /// Opens a turn with the person's `text` in the journal, then writes it to the run.
     fn send_chat_text(&self, session: &str, run: &ChatRun, text: &str) -> Result<(), AgentError> {
-        self.send_chat_prompt(session, run, text, true).map(drop)
+        self.send_chat_prompt(session, run, text, &[], true)
+            .map(drop)
     }
 
-    /// Sends the person's `text` to a chat run (decision 0101, D7): while no turn runs and no request waits, it opens a
-    /// turn and is written; otherwise it is refused with `agent.busy`, unless `force`, which hands it to the CLI to hold
-    /// for its next turn (its turn opens when the running one ends). Returns the bytes written.
+    /// Sends the person's `text` and the `files` it names to a chat run (decision 0101, D7; decision 0172): while no turn
+    /// runs and no request waits, it opens a turn and is written; otherwise it is refused with `agent.busy`, unless
+    /// `force`, which hands it to the CLI to hold for its next turn (its turn opens when the running one ends). The files
+    /// are named in the text by the run's mention. Returns the bytes written.
     fn send_chat_prompt(
         &self,
         session: &str,
         run: &ChatRun,
         text: &str,
+        files: &[Attachment],
         force: bool,
     ) -> Result<usize, AgentError> {
+        let typed = attachments::with_mentions(text, run.mention.as_deref(), files);
+        // The mentions may take the text over the prompt limit, as on a terminal run (decision 0172).
+        crate::launch::check_prompt(&typed)?;
+        // The images are read, and the dialect checked, before the journal takes the prompt: a refusal opens no turn.
+        let images = Self::prompt_images(run, files)?;
         let mut refused = false;
+        let mut carried = true;
         let mut bytes = Vec::new();
         self.change_journal(session, |writer| {
             if !writer.busy() {
-                writer.start_turn(text)?;
+                writer.start_turn(&typed)?;
             } else if force {
                 // Shown at once; its turn ends with the running one (decision 0101, D7).
-                writer.hold_turn(text)?;
+                writer.hold_turn(&typed)?;
             } else {
                 refused = true;
                 return Ok(());
             }
             // Only a prompt the journal took is encoded: an adapter that holds prompts keeps no trace of a refused one.
-            bytes = lock(&run.adapter).encode_prompt(text);
+            let mut adapter = lock(&run.adapter);
+            let message = if images.is_empty() {
+                Some(adapter.encode_prompt(&typed))
+            } else {
+                adapter.encode_prompt_with_images(&typed, &images)
+            };
+            match message {
+                Some(message) => bytes = message,
+                None => carried = false,
+            }
             Ok(())
         })?;
         if refused {
@@ -317,6 +341,12 @@ impl Agents {
                 format!(
                     "session {session} is in the middle of a turn or waits for an answer; queue the prompt, or use force"
                 ),
+            ));
+        }
+        if !carried {
+            return Err(AgentError::new(
+                codes::AGENT_ATTACHMENT_UNSUPPORTED,
+                "this agent cannot take an image",
             ));
         }
         run.pipe.write(&bytes).map_err(|error| {
@@ -328,11 +358,34 @@ impl Agents {
         Ok(bytes.len())
     }
 
+    /// The images among `files`, read for the message that sends them (decision 0172): each goes as an image block,
+    /// read and base64 encoded, after the text. A dialect that cannot carry an image refuses them with
+    /// `agent.attachment_unsupported`. Both checks run before the journal takes the prompt: a refusal opens no turn.
+    fn prompt_images(run: &ChatRun, files: &[Attachment]) -> Result<Vec<PromptImage>, AgentError> {
+        let mut images = Vec::new();
+        for file in files {
+            if let attachments::Kind::Image { media_type } = file.kind {
+                images.push(PromptImage {
+                    media_type,
+                    data: attachments::image_data(file)?,
+                });
+            }
+        }
+        if !images.is_empty() && !lock(&run.adapter).carries_images() {
+            return Err(AgentError::new(
+                codes::AGENT_ATTACHMENT_UNSUPPORTED,
+                "this agent cannot take an image",
+            ));
+        }
+        Ok(images)
+    }
+
     /// `agent.prompt` on a chat session (decision 0101, D7): a stream-json user message, with receipt `sent_to_chat`.
     pub(super) fn chat_prompt(
         &self,
         row: &massorca_core_store::AgentSessionRow,
         text: &str,
+        files: &[Attachment],
         force: bool,
         lift_queue_pauses: bool,
     ) -> Result<PromptReceipt, AgentError> {
@@ -351,7 +404,7 @@ impl Agents {
                 ),
             ));
         }
-        let bytes = self.send_chat_prompt(&row.id, &run, text, force)?;
+        let bytes = self.send_chat_prompt(&row.id, &run, text, files, force)?;
         if lift_queue_pauses {
             self.lift_pauses(&row.id);
         }
@@ -367,13 +420,15 @@ impl Agents {
         &self,
         session: &str,
         text: &str,
+        files: &[Attachment],
         force: bool,
     ) -> Result<(), AgentError> {
         let run = self
             .chat_run(session)
             .filter(|run| !run.pipe.has_exited())
             .ok_or_else(|| not_live(session))?;
-        self.send_chat_prompt(session, &run, text, force).map(drop)
+        self.send_chat_prompt(session, &run, text, files, force)
+            .map(drop)
     }
 
     /// Applies `change` to the session's journal and announces the batch it made, under the journal lock. While the
