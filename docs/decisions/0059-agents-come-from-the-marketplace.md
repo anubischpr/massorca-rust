@@ -378,3 +378,29 @@ and its copied files are deleted. A sign-in is deleted when its terminal ends, w
 account shares. A sign-in again that turns out to be another account's login is stored as
 `conflict` and keeps its recorded identity. pv96 also separates host and WSL accounts; this service
 has no WSL account scope, so that part is not done.
+
+## Amendment 2026-11-27 (a timed-out check is not a verdict)
+
+A desktop test failed about 2 runs in 10 with its imported account left `unknown`: the import's
+`claude auth status --json` ran past the 10 s limit on a loaded machine, a run killed at the limit has
+no exit code, so the check read `unknown`, the import kept the account as `unknown` because its files
+existed, and nothing checked it again until an explicit `agent.accounts.check`.
+
+- **Not a verdict.** A check still running at its time limit is recorded internally as a timeout
+  (`CheckOutcome::TimedOut`), apart from every decided state. No protocol state is added. A program
+  that cannot start is still a verdict, `unknown`, and is not retried.
+- **Last known state.** A timeout stores nothing. The account keeps its last known state: an import
+  or a new sign-in is kept as `unknown`, as before; an undecided account stays undecided; an existing
+  account keeps its recorded state, and a sign-in again announces that state.
+- **Bounded retry.** The check is retried in the background after 2 s, 5 s and 15 s, at most one
+  retry in flight per account. Each retry applies its result through the same function as
+  `agent.accounts.check`, which announces a changed state with `agent.accounts_changed`. The first
+  decided run ends the retries; after three timeouts the state stays as it was.
+- **Never a decided verdict.** `signed_in`, `needs_sign_in`, `expired` and `conflict` are never
+  retried.
+- **Cancel and supersede.** A newer explicit check supersedes a waiting retry; removing the account,
+  or its package with its agent homes, cancels it. A retry stores nothing once it is superseded,
+  cancelled, or its account is being removed.
+- **Known limit.** A retry applies its result as an explicit check does, so an imported account whose
+  first check timed out is not compared with the kind's other logins (amendment 2026-11-24) when the
+  retry finds it signed in.

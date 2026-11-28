@@ -1060,7 +1060,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   - `signed_in` keeps the account decided, with the check's own identity, and clears its mark;
   - a check that cannot tell keeps the account decided as `unknown`, and clears its mark, while its
     declared files exist. A check cannot tell when the kind has no check, or when it did not finish
-    (a timeout, or a program that could not start). The account can then be activated;
+    (a timeout, or a program that could not start). The account can then be activated; a timeout
+    is also retried in the background (see Timed-out checks);
   - any other verdict (`expired`, or another exit) deletes the account, and so does a check that
     cannot tell when no declared file is left. Before a sign-in is deleted, the kind's
     `accounts.logout` runs against the home when it is declared (see Removal).
@@ -1121,8 +1122,9 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   output is read for at most one second after that, so a child that keeps the pipes open cannot
   hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
   An expired pattern match means `expired`; the signed-in exit means `signed_in`, with the identity
-  pattern's first group as the identity; another exit means `needs_sign_in`; a check that does not
-  finish means `unknown`. A captured identity is kept only when it is at most 256 characters with no
+  pattern's first group as the identity; another exit means `needs_sign_in`; a program that cannot
+  start means `unknown`. A check still running at the deadline is no verdict (see Timed-out checks
+  below). A captured identity is kept only when it is at most 256 characters with no
   control character. A different identity than the recorded one is `conflict`, and the recorded
   identity stays. The declaration has no way to name an offline failure, so a non-zero exit that is
   neither the signed-in exit nor an expired match stays `needs_sign_in`; a kind that cannot tell
@@ -1131,6 +1133,19 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   as a sign-in's end does (see Sign-in). A check of an account whose sign-in is open, or being
   decided, is refused with `agent.busy`; a check that decides an undecided account by signing it out
   answers `agent.account_not_found`, since the account is gone.
+- **Timed-out checks** (`check_retry.rs`, decision 0059 amendment 2026-11-27): a check stopped at its
+  time limit is `CheckOutcome::TimedOut`, not a verdict. Nothing is stored for it: the account keeps
+  its last known state (`unknown` for a new import or sign-in, which is kept as before; an undecided
+  account stays undecided; a sign-in again keeps its state and is announced with it). The check is
+  then retried in the background after 2 s, 5 s and 15 s (`CHECK_RETRY_DELAYS`), one retry thread per
+  account, holding only a weak handle on the service. Each retry runs the same body as
+  `agent.accounts.check` (`check_once`), so a decided result is stored the same way and a changed
+  state is announced with `agent.accounts_changed`; the retries stop at the first decided run, and
+  after the third timeout the state stays as it was. A decided verdict, `needs_sign_in` included, is
+  never retried. A newer `agent.accounts.check` supersedes a waiting retry, a removal (of the account
+  or of its package) cancels it, and a retry stores nothing once it is superseded, cancelled, or its
+  account is being removed. Unit tests set the time limit, the waits and a stand-in for the program
+  through `CheckSettings`.
 - **Import** copies the declared files into a new account (origin `import`), which stays undecided
   until its check decides it: a check that reports the login is not signed in deletes the new
   account without a sign-out, and the result is `failed`; any other result keeps it, and only then
