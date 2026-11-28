@@ -1158,6 +1158,36 @@ fn a_pick_change_between_two_agents_turns_chat_on_and_off(cx: &mut TestAppContex
     );
 }
 
+#[gpui::test]
+fn codex_offers_chat_when_the_kinds_advert_lists_chat_for_it(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Enabled),
+        ],
+    );
+    report_kind_chats(&rig, cx, vec![("codex", supported_chat())]);
+    rig._updates
+        .send(StoreUpdate::AgentChatOffered(true))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Terminal,
+        "Claude lists no chat in this advert"
+    );
+
+    pick_agent(cx, "Codex");
+    assert!(chat_availability(&rig, cx).is_available());
+    assert_eq!(
+        mode_of(&rig, cx),
+        StartMode::Chat,
+        "the advert, not a list of names, offers Chat"
+    );
+}
+
 #[test]
 fn the_chat_segment_is_off_with_its_reason_until_chat_is_available() {
     let off = mode_segments(&ChatAvailability::new(false, None));

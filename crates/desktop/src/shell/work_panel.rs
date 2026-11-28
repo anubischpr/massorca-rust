@@ -28,7 +28,7 @@ use super::Shell;
 use super::session_grid::pane_grid;
 use crate::model::regions::Region;
 use crate::model::session_ended::is_agent_run_terminal;
-use crate::model::terminals::new_terminal_params;
+use crate::model::terminals::{new_terminal_params, shell_setting};
 use crate::model::work_panel::{
     BROWSER_LATER, CloseStep, MARKDOWN_LATER, MOBILE_LATER, NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS,
     TerminalStrip, close_step, detached_text, new_terminal_grid, status_banner, terminal_strip,
@@ -38,6 +38,9 @@ use crate::service::{
     AttachRole, ConnectionState, Refusal, ServiceHandle, StoreState, StreamEnd, TerminalStream,
     TerminalStreamItem, feed_events,
 };
+
+/// The shell new terminals start (SET-01); empty uses the host default.
+const TERMINAL_SHELL_KEY: &str = "terminal.shell";
 
 /// One terminal's view: its surface, and the task that follows it through the bridge. Dropping
 /// the view detaches; the terminal keeps running.
@@ -237,7 +240,14 @@ impl Shell {
             return;
         };
         let (cols, rows) = self.work_panel_grid(cx);
-        let params = new_terminal_params(&workspace, cols, rows);
+        let shell_program = shell_setting(
+            self.store
+                .read(cx)
+                .state()
+                .config_value(TERMINAL_SHELL_KEY)
+                .map(|config| &config.value),
+        );
+        let params = new_terminal_params(&workspace, cols, rows, shell_program);
         let window_handle = window.window_handle();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {

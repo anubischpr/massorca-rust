@@ -317,7 +317,7 @@ fn footer_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
 }
 
 impl Shell {
-    /// Collapses a project's rows, or expands them again (A10). Kept for the app run only.
+    /// Collapses a project's rows, or expands them again (A10). The next start keeps the fold (SET-02).
     pub(super) fn toggle_project(&mut self, id: &str) {
         if !self.collapsed_projects.remove(id) {
             self.collapsed_projects.insert(id.to_owned());

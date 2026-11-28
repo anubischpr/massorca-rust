@@ -189,3 +189,51 @@ fn the_sync_buttons_stay_hidden_until_the_service_offers_git_sync(cx: &mut TestA
     }
     drop(rig);
 }
+
+/// The window loses the focus and gains it back.
+fn refocus(cx: &mut VisualTestContext) {
+    cx.deactivate_window();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+}
+
+fn git_fetches(rig: &mut Rig) -> Vec<String> {
+    let mut fetched = Vec::new();
+    while let Some(command) = rig.script.next() {
+        if let Command::GitFetch { params, reply } = command {
+            fetched.push(params.workspace);
+            let _ = reply.send(Ok(GitFetched::default()));
+        }
+    }
+    fetched
+}
+
+#[gpui::test]
+fn the_window_gaining_focus_fetches_the_shown_workspace_only_while_fetch_on_focus_is_on(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    open_panel(&rig, cx, true);
+    git_fetches(&mut rig);
+
+    refocus(cx);
+    assert!(
+        git_fetches(&mut rig).is_empty(),
+        "the setting is off by default"
+    );
+
+    rig.updates
+        .send(StoreUpdate::ConfigChanged(
+            massorca_protocol::methods::config::ConfigValue {
+                owner: "core".into(),
+                key: "git.fetch_on_focus".into(),
+                value: true.into(),
+                ..Default::default()
+            },
+        ))
+        .expect("the store listens");
+    cx.run_until_parked();
+    refocus(cx);
+
+    assert_eq!(git_fetches(&mut rig), vec!["w1".to_owned()]);
+}

@@ -65,3 +65,44 @@ installed CLI reports for the account, so the picker and the chat composer can r
 - Not in this version: the state-directory store that AG-23 names (the cache is in memory), the grouping of agy's
   effort variants (pv96's `groupAntigravityModelVariants`, so `agy` ids that differ only by effort are listed one by
   one), a Codex listing, and the desktop picker's use of `agent.models` (the desktop continues to read `agent.kinds`).
+
+## Amendment: versioned model labels (2026-11-26)
+
+The desktop shows a model choice's `label` as `agent.kinds` gives it, and the built-in declarations name only the family
+(`Opus`), so every chip read "Opus" with no version.
+
+- **What the vendor reports.** Claude's `list_models` rows carry `resolvedModel`, the model the alias runs now (for
+  example `opus` resolves to `claude-opus-5-5`). The catalog keeps it beside the listed row. `agy models` prints
+  `id<TAB>label` and names no resolved id; its label already names the model as the vendor shows it, so it is kept
+  as listed. Codex is not listed (see above); its declared choices are concrete versioned ids (`gpt-5.5`) whose labels
+  already carry the version.
+- **The label is derived, never looked up.** A resolved id of the shape `<vendor>-<family>-<n>[-<n>...]` (alphabetic
+  words, numbers of one to three digits, an optional trailing eight-digit date, an optional bracketed variant) reads as
+  the family title-cased and the numbers joined by dots: `claude-opus-5-5` is `Opus 5.5`, `claude-haiku-4-5-20251001`
+  is `Haiku 4.5`. Any other shape, or no resolved id, keeps the declared label. No table maps names to versions.
+- **Where it shows.** `agent.models` gives the declared row the derived label. `agent.kinds` gives
+  `model.choices[].label` the derived label from the catalog's last answered listing for the kind's default request
+  (its active account, else the usual home when the kind has never had an account). `agent.kinds` never starts a
+  listing for the usual home. A discovered row keeps the vendor's own label.
+- **`agent.kinds` lists in the background.** The owner must see the version without running anything, and the desktop
+  reads only `agent.kinds`. So when a detected, enabled kind that declares `model.discover` has an active account and
+  the cache holds no fresh answer for it, `agent.kinds` starts one listing on its own thread and answers at once. The
+  cache marks a background listing per (kind, account) until it ends, so repeated calls start no second one, and a
+  listing already running (from `agent.models`) is joined, not repeated. The listing runs as `agent.models` runs it:
+  the account's own home, the time limit, `not_signed_in` and the other failure rules. Only the active account is
+  listed this way, never the usual home, so a service whose `PATH` finds a vendor CLI never lists a home no account
+  names (the test harness runs the service on the developer's `PATH`, and its kinds with accounts are fake agents).
+- **The event.** No event announces a change to the kinds; the desktop reads them on connect and on extension events.
+  The narrowest agents event is `agent.accounts_changed` (id: the kind), so an answered background listing is
+  announced under it, and the desktop now reads the kinds again on that event too, which also keeps a kind's
+  `imported` mark current. A failed listing is not announced: the label stays declared, and the 30 second failure
+  window bounds how often a later `agent.kinds` retries. An answered listing is fresh for 10 minutes, so the re-read
+  it causes starts nothing.
+- **Guard and refusals.** The started mark is held by a guard that the listing's thread owns; dropping it ends the mark
+  however the thread ends, a panic included, so an account is never left without a later background listing. A
+  listing refused before it can run (an account with no usable home, a kind no longer enabled) is remembered beside
+  the cache for the 30 second failure window and never served as an answer; `agent.kinds` starts no attempt for it in
+  that window, and an account change drops the refusal. A kind whose active account has no usable home (its
+  `credentials.imported` is false) gets no background listing at all.
+- **No new field.** Nothing in the desktop, the CLI or the tests matches on a model's label, so `label` changes meaning
+  in place ("the label the vendor's current model reads as") and no `version` field is added. Wire: no shape change.

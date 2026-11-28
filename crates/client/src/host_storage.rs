@@ -27,6 +27,37 @@ pub trait HostStorage: Send + Sync {
     fn add(&self, record: &HostRecord, identity: &TlsIdentity) -> Result<(), ClientError>;
     /// Forgets a host and deletes its device key.
     fn remove(&self, name: &str) -> Result<HostRemoved, ClientError>;
+    /// How `name` is dialed when it has no direct network path (decision 0133). A store that never keeps a route, such
+    /// as the phone's, which cannot run ssh, keeps the default: every host is dialed directly.
+    fn route(&self, name: &str) -> Result<Option<SshRoute>, ClientError> {
+        let _ = name;
+        Ok(None)
+    }
+}
+
+/// A host dialed through OpenSSH's stdio forward, `ssh -W <forward> <ssh_target>` (decision 0133). SSH only carries
+/// the bytes: the TLS handshake inside it still checks the pinned server key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshRoute {
+    /// SSH destination, as ssh takes it: `[user@]host` or a `~/.ssh/config` alias.
+    pub ssh_target: String,
+    /// Extra `ssh` options, such as `-J bastion`, each one argument.
+    #[serde(default)]
+    pub ssh_args: Vec<String>,
+    /// The `host:port` the SSH target connects to. Defaults to the host's first address, which the server reported
+    /// and which its own machine reaches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<String>,
+}
+
+impl SshRoute {
+    /// The route as a reader would type it, for messages: `ssh -J bastion deploy@vps`. Holds no secret.
+    pub fn describe(&self) -> String {
+        let mut words = vec!["ssh".to_owned()];
+        words.extend(self.ssh_args.iter().cloned());
+        words.push(self.ssh_target.clone());
+        words.join(" ")
+    }
 }
 
 /// What the client remembers about one paired host. Holds no secret; the device key is a separate file.

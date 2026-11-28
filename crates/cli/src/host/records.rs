@@ -1,6 +1,6 @@
 //! `massorca host list|show|remove`: the hosts this client keeps, and forgetting one (decision 0046).
 
-use massorca_client::{DeviceRevocation, HostRecord, Hosts};
+use massorca_client::{DeviceRevocation, HostRecord, Hosts, SshRoute};
 use massorca_core_remote::bootstrap::{self, DEFAULT_REMOTE_DIR};
 use massorca_core_remote::ssh::SystemSsh;
 use massorca_profile::Profile;
@@ -55,11 +55,28 @@ pub fn list(profile: &Profile, output: Output) -> Result<(), CliError> {
     Ok(())
 }
 
+/// One host in full, with its SSH route when it has one (decision 0133).
+#[derive(Debug, Serialize)]
+pub struct HostDetail {
+    #[serde(flatten)]
+    pub record: HostRecord,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<SshRoute>,
+}
+
 /// `host show`: one host in full.
 pub fn show(profile: &Profile, name: &str, output: Output) -> Result<(), CliError> {
-    let record = Hosts::of(profile).get(name)?;
-    let lines = record_lines(&record);
-    output.success(&record, &lines);
+    let hosts = Hosts::of(profile);
+    let record = hosts.get(name)?;
+    let route = hosts.route(name)?;
+    let mut lines = record_lines(&record);
+    lines.push(format!(
+        "route: {}",
+        route
+            .as_ref()
+            .map_or_else(|| "direct".to_owned(), SshRoute::describe)
+    ));
+    output.success(&HostDetail { record, route }, &lines);
     Ok(())
 }
 

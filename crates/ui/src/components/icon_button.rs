@@ -274,8 +274,11 @@ impl RenderOnce for IconButton {
         }
 
         let name = self.name.clone();
+        // Tests find an icon button by its id, as `icon-button:<id>`, wherever a parent slot puts it.
+        let debug_id = format!("icon-button:{}", self.id);
         let mut root = div()
             .id(self.id.clone())
+            .debug_selector(move || debug_id)
             .role(Role::Button)
             .aria_label(name)
             .track_focus(&focus)

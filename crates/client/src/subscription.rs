@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use massorca_protocol::{ErrorBody, Message, codes};
+use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -22,7 +22,7 @@ pub enum StreamItem {
 pub struct Subscription {
     stream: u64,
     items: mpsc::Receiver<Item>,
-    outbound: mpsc::Sender<Message>,
+    outbound: mpsc::Sender<Frame>,
     finished: bool,
     lost: bool,
 }
@@ -31,7 +31,7 @@ impl Subscription {
     pub(crate) fn new(
         stream: u64,
         items: mpsc::Receiver<Item>,
-        outbound: mpsc::Sender<Message>,
+        outbound: mpsc::Sender<Frame>,
     ) -> Self {
         Self {
             stream,
@@ -98,9 +98,9 @@ impl Subscription {
 
     /// Asks the service to stop the stream. A full outbound queue is waited for on a task, so the cancel is not lost.
     fn send_cancel(&self) {
-        let cancel = Message::Cancel {
+        let cancel = Frame::Message(Message::Cancel {
             stream: self.stream,
-        };
+        });
         match self.outbound.try_send(cancel) {
             Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
             Err(mpsc::error::TrySendError::Full(cancel)) => {
