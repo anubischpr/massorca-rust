@@ -265,6 +265,12 @@ pub const AGENT_QUEUE_FULL: &str = "agent.queue_full";
 pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
 /// The request id belongs to a prompt the session already delivered, so it is not typed again (decision 0084).
 pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
+/// A file a prompt names is not a regular file inside the session's workspace, is over its size cap, or the prompt names
+/// more files than it may (decision 0172); the message names the file or the cap.
+pub const AGENT_ATTACHMENT_INVALID: &str = "agent.attachment_invalid";
+/// The run cannot take a file of that kind: an image on a terminal run, or an image type a chat run does not take
+/// (decision 0172); the message names the file.
+pub const AGENT_ATTACHMENT_UNSUPPORTED: &str = "agent.attachment_unsupported";
 /// The output of a released session could not be archived, so its terminal was kept (`agent.release`, decision 0090).
 pub const AGENT_ARCHIVE_FAILED: &str = "agent.archive_failed";
 /// `agent.chat.start` refused: the kind has no chat support, or its CLI version is outside the supported range. The

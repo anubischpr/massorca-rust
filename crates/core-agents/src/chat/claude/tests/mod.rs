@@ -9,7 +9,7 @@ use massorca_protocol::methods::chat::{ChatItemBody, MessageState, NoticeLevel};
 use serde_json::{Value, json};
 
 use super::ClaudeAdapter;
-use crate::chat::adapter::{ChatAdapter, JournalOp};
+use crate::chat::adapter::{ChatAdapter, JournalOp, PromptImage};
 
 pub(super) fn adapter() -> ClaudeAdapter {
     ClaudeAdapter::new()
@@ -120,5 +120,36 @@ fn a_prompt_is_one_stream_json_user_message() {
             "parent_tool_use_id": null,
             "session_id": ""
         })
+    );
+}
+
+#[test]
+fn an_image_prompt_is_one_user_message_with_the_text_then_one_image_block_each() {
+    let images = [PromptImage {
+        media_type: "image/png",
+        data: "Zm9vYmFy".to_owned(),
+    }];
+    let bytes = adapter()
+        .encode_prompt_with_images("look", &images)
+        .expect("claude takes images");
+    assert_eq!(
+        line(&bytes),
+        json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "text", "text": "look" },
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "Zm9vYmFy" } }
+            ] },
+            "parent_tool_use_id": null,
+            "session_id": ""
+        })
+    );
+    let only_images = adapter()
+        .encode_prompt_with_images("", &images)
+        .expect("claude takes images");
+    assert_eq!(
+        line(&only_images)["message"]["content"],
+        json!([{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "Zm9vYmFy" } }]),
+        "no text block for an empty text"
     );
 }
